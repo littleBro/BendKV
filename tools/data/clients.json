@@ -1,12 +1,6 @@
 {
  "go-redis-resp3": {
   "go-redis::[It] ACL Categories lists acl categories and subcategories": "unknown command 'acl'",
-  "go-redis::[It] Commands Functions Calls a function": "unknown subcommand 'load'. Try FUNCTION HELP",
-  "go-redis::[It] Commands Functions Calls a function as read-only": "unknown subcommand 'load'. Try FUNCTION HELP",
-  "go-redis::[It] Commands Functions Deletes a library": "unknown subcommand 'load'. Try FUNCTION HELP",
-  "go-redis::[It] Commands Functions Flushes all libraries": "unknown subcommand 'load'. Try FUNCTION HELP",
-  "go-redis::[It] Commands Functions Flushes all libraries asynchronously": "unknown subcommand 'load'. Try FUNCTION HELP",
-  "go-redis::[It] Commands Functions Kills a running function": "unknown subcommand 'kill'. Try FUNCTION HELP",
   "go-redis::[It] Commands streams group should XAck": "unknown command 'xadd'",
   "go-redis::[It] Commands streams group should XAutoClaim": "unknown command 'xadd'",
   "go-redis::[It] Commands streams group should XAutoClaim return deletedIDs": "unknown command 'xadd'",
@@ -147,14 +141,7 @@
   "tests.test_commands.TestRedisCommands::test_xreadgroup": "unknown command 'XADD'",
   "tests.test_commands.TestRedisCommands::test_xrevrange": "unknown command 'XADD'",
   "tests.test_commands.TestRedisCommands::test_xtrim": "unknown command 'XTRIM'",
-  "tests.test_commands.TestRedisCommands::test_xtrim_minlen_and_length_args": "unknown command 'XADD'",
-  "tests.test_function.TestFunction::test_fcall": "unknown subcommand 'LOAD'. Try FUNCTION HELP",
-  "tests.test_function.TestFunction::test_fcall_ro": "unknown subcommand 'LOAD'. Try FUNCTION HELP",
-  "tests.test_function.TestFunction::test_function_delete": "unknown subcommand 'LOAD'. Try FUNCTION HELP",
-  "tests.test_function.TestFunction::test_function_dump_restore": "unknown subcommand 'LOAD'. Try FUNCTION HELP",
-  "tests.test_function.TestFunction::test_function_flush": "unknown subcommand 'LOAD'. Try FUNCTION HELP",
-  "tests.test_function.TestFunction::test_function_list": "unknown subcommand 'LOAD'. Try FUNCTION HELP",
-  "tests.test_function.TestFunction::test_function_load": "unknown subcommand 'LOAD'. Try FUNCTION HELP"
+  "tests.test_commands.TestRedisCommands::test_xtrim_minlen_and_length_args": "unknown command 'XADD'"
  },
  "redis-py-resp3": {
   "tests.test_asyncio.test_commands.TestAsyncXreadXreadgroupMetricsExport::test_async_xread_exports_streaming_lag_metric[pool]": "unknown command 'XADD'",
@@ -269,13 +256,6 @@
   "tests.test_commands.TestRedisCommands::test_xreadgroup": "unknown command 'XADD'",
   "tests.test_commands.TestRedisCommands::test_xrevrange": "unknown command 'XADD'",
   "tests.test_commands.TestRedisCommands::test_xtrim": "unknown command 'XTRIM'",
-  "tests.test_commands.TestRedisCommands::test_xtrim_minlen_and_length_args": "unknown command 'XADD'",
-  "tests.test_function.TestFunction::test_fcall": "unknown subcommand 'LOAD'. Try FUNCTION HELP",
-  "tests.test_function.TestFunction::test_fcall_ro": "unknown subcommand 'LOAD'. Try FUNCTION HELP",
-  "tests.test_function.TestFunction::test_function_delete": "unknown subcommand 'LOAD'. Try FUNCTION HELP",
-  "tests.test_function.TestFunction::test_function_dump_restore": "unknown subcommand 'LOAD'. Try FUNCTION HELP",
-  "tests.test_function.TestFunction::test_function_flush": "unknown subcommand 'LOAD'. Try FUNCTION HELP",
-  "tests.test_function.TestFunction::test_function_list": "unknown subcommand 'LOAD'. Try FUNCTION HELP",
-  "tests.test_function.TestFunction::test_function_load": "unknown subcommand 'LOAD'. Try FUNCTION HELP"
+  "tests.test_commands.TestRedisCommands::test_xtrim_minlen_and_length_args": "unknown command 'XADD'"
  }
 }

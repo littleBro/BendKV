@@ -6804,6 +6804,179 @@ order.
 **Tests.** `tests/timing_test.py`, `tests/stats_test.py` and `tests/info_test.py` against
 Redis: commandstats, latencystats, errorstats and the slow log, unchanged.
 
+## 3zzzp. Functions: FUNCTION and FCALL
+
+**What was left.** After section 3zzzd BendKV ran Lua scripts, but not functions. It
+answered FUNCTION FLUSH as if there were nothing to flush, for the suites that clean up
+with it, every other subcommand of FUNCTION as unknown, and FCALL and FCALL_RO as
+unknown commands. An RDB file that held a library stopped the start. Redis's
+unit/functions passed 1 of the 90 tests Redis passes, and unit/scripting none: it runs
+its tests twice, functions first, and stopped in that half. This is the last pull
+request of issue 68.
+
+**The engine** (`src/lua/engine.c`: Functions, Functions' effects; `src/script.bend`).
+
+- Redis 7.0.15's `function_lua.c` and `functions.c` are ported into the engine. The
+  functions have a Lua state of their own beside the scripts', as Redis's engine of
+  functions does.
+- At load time the library API holds: `redis.register_function`, with positional and
+  named arguments, flags and a description, `redis.log`, and the version. Every error
+  is Redis's text.
+- The globals are protected as Redis protects them. A load sends the globals' lookups to
+  the library API, a call to the real globals, both through the globals' metatable,
+  which Redis leaves writable after a first load.
+- A load is held to 500 ms by a count hook, as FUNCTION LOAD is. A start's loads are held
+  to no time, as Redis holds none for a client it must obey.
+- RESTORE's libraries are made in a set of their own, then joined as Redis's
+  `libraryJoin` joins them: APPEND fails on a library or a function there already,
+  REPLACE replaces the libraries of the same names, and FLUSH swaps the sets.
+- FCALL runs a function as EVAL runs a script: on the same stack, as the same automaton
+  of steps (section 3zzzd). Its errors end with `script: <name>, on
+  @user_function:<line>.`
+- New effects:
+  - `Engine.fload`, a run of loads: FUNCTION LOAD's, RESTORE's and a start's. Its log
+    lines are steps, as a script's are;
+  - `fdelete` and `fflush`;
+  - `flist`, FUNCTION LIST's reply in either protocol;
+  - `fcodes`, the libraries' codes;
+  - `ffuncs`, the functions for the actor's mirror;
+  - `fcount` and `fmem`.
+- Only a load makes the functions' Lua state, so a server that runs no function makes
+  none. Redis makes an empty one at its start: INFO's `used_memory_vm_functions` is
+  32,768 there on Redis, and 0 on BendKV.
+
+**The shell** (`src/server.bend`: Scripts, The driver, The libraries at the start).
+
+- The parser reads FUNCTION's subcommands as Redis's `functionsCommand` reads them, with
+  their arities and errors in Redis's order. It reads FCALL and FCALL_RO as
+  `fcallCommandGeneric` does: a function not there first, then a number of keys that
+  does not read, is past the arguments or is negative.
+- The actor keeps a mirror of the engine's functions in the scripts' state (`Fni`): each
+  function's name in lower case with its flags, and the number of libraries. It is made
+  anew after each FUNCTION command that changes the libraries, and at the start.
+  - FCALL of a function not there is answered at once.
+  - The pause and maxmemory read a function's flags as `fcallGetCommandFlags` does.
+  - FUNCTION STATS answers from the mirror, while a function runs too: its name, its
+    caller's command, and its time as the driver last read it.
+- FUNCTION LOAD, DELETE, FLUSH, LIST, DUMP and RESTORE run in the driver, in their turn
+  among the scripts, as an EXEC's commands do. FUNCTION KILL is one of the commands a
+  busy group lets run. It ends a function that has not written, and refuses an EVAL, as
+  SCRIPT KILL refuses a function, with Redis's errors.
+- **DUMP and RESTORE** (`src/rdb.bend`: Libraries of functions). The payload is Redis's
+  `rdbSaveFunctions`: each library's code after FUNCTION2 (245), then version 10 and the
+  CRC64. It is written without LZF, as DUMP's are (section 3zzu). RESTORE checks the
+  version and the CRC64 (`verify`, DUMP's). It then reads, while more than the last ten
+  bytes are left, FUNCTION2 records, and also FUNCTION (246) records of 7.0's release
+  candidates. Those keep the library's name and engine apart from the code, which Redis
+  puts back as a `#!` line, each part cut at its first NUL.
+- **The files:**
+  - The append-only file gets each FUNCTION command that changed the libraries as a
+    command, as Redis propagates it. The entries ride in the mirror's state until the
+    group's write, before the group's own entries.
+  - A rewrite starts with the FUNCTION LOAD of each library, as `rewriteFunctions`
+    writes them before the databases.
+  - SAVE writes the libraries after the AUX fields, as `rdbSaveRio` does.
+- **The start:**
+  - From the append-only file, the start runs its FUNCTION commands in the engine, in
+    the file's order, and replays the other entries. A refused entry's number counts
+    them all, and the check is aof.bend's own over the others: no law changes.
+  - A command that fails logs Redis's line for an error to the client that loads the
+    file (`afterErrorReply`), and the start goes on.
+  - From the RDB file, the load keeps the libraries' codes and the start makes them in
+    turn, before the load's last line ("Done loading RDB"). One that cannot be made
+    stops the start with Redis's lines.
+- **INFO:** `number_of_functions`, `number_of_libraries`, `used_memory_vm_functions`,
+  `used_memory_functions`, and the totals of both engines.
+  - They are read with the mirror, after each change of the libraries, so a function's
+    run moves `used_memory_vm_functions` only at the next change.
+  - Reading them after every script would cost every EVAL an effect, as section 3zzzd
+    counted.
+
+**Found on the way**, each by a test of Redis's or of the new `tests/function_test.py`:
+
+- A function's name, or a library's escaped in its `#!lua name=` line, with a NUL in it
+  passed the name check. `functionsVerifyName` checks an sds over all its bytes, and the
+  engine checked the C string up to its first NUL. The end of a shebang line is now
+  found as Redis's `strchr` finds it, at the first NUL at the latest, for EVAL's
+  shebang too.
+- A library's `redis.log` line was left in the load's answer, before the library's name
+  or the error.
+- FUNCTION LOAD's error for an unknown option ends with the code, and Redis's
+  `addReplyErrorFormat` drops the CRs and LFs that end it before it turns the others into
+  spaces. The parser turned them all into spaces.
+- The answers of the commands that came in one group with a long script waited for the
+  script's end. unit/scripting's test of a false dead client, run on functions, hung on
+  it. This was a fault of section 3zzzd's driver, and its pull request carries the fix
+  (section 3zzzd: past `lua-time-limit`).
+
+**What Redis 7.0.15 does that a reader may not expect** (each kept as Redis does it):
+
+- BUSY for a function says "running a script" too, and names FUNCTION KILL
+  (`shared.slowscripterr`).
+- FUNCTION RESTORE's error for a bad payload is DUMP's: "DUMP payload version or
+  checksum are wrong".
+- LOAD quotes the library's name in "Library 'x' already exists"; RESTORE's join does not
+  ("Library x already exists").
+- A start whose RDB file holds a library that cannot be made exits with 0. Redis stops
+  as for a read that fails and runs redis-check-rdb on the file. The check reads the
+  libraries without making them, finds the file whole, and exits 0 ("RDB looks OK!").
+  BendKV's start exits 0 there too, and 1 for a file whose library does not read.
+
+**Where BendKV differs.**
+
+- FUNCTION LIST and FUNCTION DUMP give the libraries in the order they were loaded, and
+  a library's functions in the order they were registered. Redis's order follows its
+  dictionaries' hashes, seeded at random at each start, so no order of Redis's is
+  stable.
+- A FUNCTION command in a transaction is written to the append-only file before the
+  transaction's entries, not inside them. A file cut inside the transaction keeps the
+  command.
+- A start from the RDB file reads all of it, then makes its libraries. For a file with a
+  library that cannot be made and a key that does not read, the start's lines name the
+  key; Redis names the library, which comes first in its file.
+- `used_memory_vm_functions` is 0 until the first load, and as of the last change of
+  the libraries (above).
+- DEBUG RELOAD is not there: unit/functions' four tests of it fail.
+
+**What it costs** (section 76 of [PERFORMANCE.md](PERFORMANCE.md)). Nothing for the
+commands that are neither scripts nor functions: `make perfcheck`'s counts are #99's.
+FCALL_COST.
+
+**Tests.**
+
+- `tests/function_test.py` (new) runs 7 scenarios on BendKV and on Redis 7.0.15, each
+  with clients of its own, and compares the replies byte for byte (144 lines).
+  - A reply that lists libraries or functions is compared as a set, as Redis's order is
+    its hashes'.
+  - The scenarios: FUNCTION LOAD and each of its errors, with the library API at load
+    time; FCALL and FCALL_RO, each type a function returns in RESP2 and RESP3, KEYS and
+    ARGV, numkeys's errors and the flags; LIST, DELETE, FLUSH, STATS, KILL and HELP;
+    DUMP's bytes and RESTORE's policies, collisions and bad payloads, payloads made by
+    the test; functions in transactions, with WATCH and from a script; INFO's
+    statistics; a function past `busy-reply-threshold` (BUSY, FUNCTION STATS while it
+    runs, FUNCTION KILL, SCRIPT KILL refused, UNKILLABLE).
+  - It also restores each server's payload on the other: Redis's with LZF on BendKV,
+    and BendKV's on Redis.
+  - `tests/run_tests.sh` runs it in every server mode.
+- `tests/rdb_test.py` has a new part for libraries in the file. Both servers start from
+  Redis's file (with LZF and without), from BendKV's, and from one of 7.0's release
+  candidates (FUNCTION) with the same libraries. Each server stops alike, with the same
+  lines and exit codes, on a file whose library does not compile, a library twice, a
+  function twice, one cut short, or one with no metadata.
+- `tests/aof_redis_test.py`: FUNCTION LOAD, DELETE and RESTORE, FCALL and a transaction
+  in the stream; each server starts from the other's file with the same libraries.
+- `tests/rewrite_test.py`: the rewritten file holds Redis's base, its FUNCTION LOADs in
+  any order, and both start from it with the libraries.
+- Client suites: redis-py 8.1.0's 7 tests of functions pass in each protocol (2,640 of
+  the 2,753 tests Redis passes), and go-redis v9.23.0's 6 (433 of 460). Their entries are
+  off `tools/data/clients.json`; none is added.
+- Redis's suite ([COMPATIBILITY.md](COMPATIBILITY.md)): 1,512 of the 1,677 tests Redis
+  passes (90.2%; 1,318 before), and 1,511 of the 1,565 in what BendKV has (96.5%).
+  - unit/functions passes all the 90 Redis passes; its other four use DEBUG RELOAD.
+  - unit/scripting passes 103 of 110: it now runs past its half of functions into its
+    half of EVAL. Each of the other seven needs replication, streams, ACL or CLUSTER.
+  - unit/pause passes all 14, and unit/introspection 27 of 28.
+
 ## 4. Where a request's time goes, and hiding the memory waits
 
 With the eight patches, BendKV ran fewer instructions on GET and SET than Redis, missed

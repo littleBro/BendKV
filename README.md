@@ -17,10 +17,10 @@ throughput of Redis 7.0.15 on the same machine, with half its memory for small v
 > blocking commands, transactions, pub/sub and keyspace notifications, the keyspace, several databases,
 > connection commands, CLIENT LIST, INFO, KILL, PAUSE and UNPAUSE, MONITOR, the slow log
 > and the latency monitor, the server's administrative commands, an append-only file and
-> its rewrite, maxmemory and its eviction, RESP3). The goal now is a
-> drop-in replacement for a single Redis node, measured by Redis's own test suite: of the
-> 1,677 tests Redis 7.0.15 passes against a server it did not start, BendKV passes 1,318,
-> and 1,316 of the 1,365 in what it implements
+> its rewrite, maxmemory and its eviction, Lua scripts and functions, RESP3). The goal
+> now is a drop-in replacement for a single Redis node, measured by Redis's own test
+> suite: of the 1,677 tests Redis 7.0.15 passes against a server it did not start,
+> BendKV passes 1,512, and 1,511 of the 1,565 in what it implements
 > ([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)). Do not use it for data you cannot
 > lose.
 
@@ -353,9 +353,8 @@ translation stays in the trusted base.
   with AUTH and SETNAME), AUTH, SELECT, QUIT, RESET (which selects database 0 again, and
   RESP2),
   CLIENT (ID, GETNAME, SETNAME, REPLY ON/OFF/SKIP, NO-EVICT, TRACKING, CACHING, GETREDIR,
-  TRACKINGINFO, UNBLOCK (TIMEOUT or ERROR), LIST, INFO, KILL, PAUSE, UNPAUSE, HELP),
-  FUNCTION FLUSH. A client
-  must authenticate where Redis asks it to: once a command's name and number of arguments
+  TRACKINGINFO, UNBLOCK (TIMEOUT or ERROR), LIST, INFO, KILL, PAUSE, UNPAUSE, HELP). A
+  client must authenticate where Redis asks it to: once a command's name and number of arguments
   are checked, before it runs (a syntax error is NOAUTH for a client that has not
   authenticated); a client is authenticated as it connects, and at RESET, when there is
   no password then, and by AUTH and HELLO's AUTH, and nothing else changes it.
@@ -392,7 +391,33 @@ translation stays in the trusted base.
   declared. Where BendKV differs: a script runs once the group of requests that brought it has run
   (no client can tell the order of requests that came together), SCRIPT DEBUG is not
   there, and the four fixed scripts of the file are read as commands (FINDINGS.md, section
-  3zzzd). FUNCTION and FCALL are not there yet.
+  3zzzd).
+- **Functions:** FUNCTION (LOAD, DELETE, FLUSH, LIST, STATS, KILL, DUMP, RESTORE, HELP),
+  FCALL and FCALL_RO, on the same engine, as Redis 7.0.15 runs them:
+  - **Libraries.** They are loaded as Redis loads them: the `#!lua name=` line, and
+    `redis.register_function` with its positional and named arguments and its flags,
+    with Redis's errors for each. The library API holds at load time, the globals are
+    protected, and a load past 500 ms fails.
+  - **Running.** A function runs as a script runs: its calls, BUSY past
+    `busy-reply-threshold`, FUNCTION KILL, and FUNCTION STATS while it runs. FCALL_RO
+    refuses a function that may write.
+  - **DUMP and RESTORE.** FUNCTION DUMP writes the libraries in Redis's payload, without
+    LZF, as DUMP does. FUNCTION RESTORE reads Redis's payloads, with LZF and the records
+    of 7.0's release candidates, with APPEND, REPLACE and FLUSH.
+  - **Persistence.** The libraries go to the append-only file as the FUNCTION commands
+    that made them. A rewrite starts with the FUNCTION LOAD of each, SAVE writes them
+    into the RDB file, and the start makes them from either file, as Redis does. INFO's
+    memory section shows them.
+
+  Where BendKV differs:
+  - FUNCTION LIST and DUMP give the libraries in the order they were loaded, and a
+    library's functions in the order they were registered. Redis's order follows its
+    dictionaries' hashes, seeded at random at each start.
+  - A FUNCTION command in a transaction is written to the append-only file before the
+    transaction, not inside it.
+  - INFO's `used_memory_vm_functions` is 0 until the first load, where Redis makes an
+    empty Lua state at its start. It counts the functions' memory as of the last change
+    of the libraries (FINDINGS.md, section 3zzzp).
 - **CLIENT PAUSE and CLIENT UNPAUSE**, as Redis 7.0.15 runs them: a pause of the
   commands that write or may be replicated (WRITE: PFCOUNT and PUBLISH too, and an EXEC
   whose transaction queued one) or of every command (ALL), for a timeout in ms; a second
@@ -496,9 +521,9 @@ translation stays in the trusted base.
   process, its parameters, its connections, commands and bytes (with the instantaneous
   rates sampled every 100 ms, as Redis's cron samples them), its memory (`used_memory` is
   what its heap's live values hold, as Redis's is what its allocator handed out; Memory,
-  below), its keys, its evictions, its append-only file, its scripts (the engine's memory,
-  the scripts cached); for what BendKV does not have (replication, forks, functions) they
-  are what Redis shows when it has none. The
+  below), its keys, its evictions, its append-only file, its scripts and functions (the
+  engine's memory, the scripts cached, the functions and libraries); for what BendKV does
+  not have (replication, forks) they are what Redis shows when it has none. The
   statistics per command count as Redis counts them: each command's and subcommand's
   calls, the calls refused before they run (a wrong number of arguments by Redis's arity,
   a client that must authenticate first, a command refused for memory) and the calls
@@ -546,8 +571,8 @@ translation stays in the trusted base.
   stops the start with Redis's reason. With `appendonly yes` the append-only file is
   loaded and the RDB file left aside, as in Redis. What BendKV cannot do (modules, ACL
   users, renamed commands, the background, a cluster, a replica, TLS, a supervisor to
-  signal, Redis 7's multi-part append-only file, or an RDB file that holds a stream, a
-  module's data or functions, to load) stops the start with a line saying so.
+  signal, Redis 7's multi-part append-only file, or an RDB file that holds a stream or a
+  module's data, to load) stops the start with a line saying so.
 - **Protocol:** pipelining, partial packets, inline commands with quoting,
   binary-safe values; requests framed as Redis 7.0.15 frames them (a length as `string2ll`
   reads it, with no `0` before its first digit, a count of 0 or less skipped down to
@@ -575,21 +600,22 @@ translation stays in the trusted base.
   naming the entry and the byte it starts at, the file left as it was, where Redis stops
   at an unknown command. BGREWRITEAOF, and the cron's rewrites as the file grows
   (`auto-aof-rewrite-percentage`, `auto-aof-rewrite-min-size`), write the file again
-  as Redis writes its base: the commands that make the databases as they are when it
-  starts, then the entries appended meanwhile, into a temporary file renamed onto the
-  file; without a fork, the databases being values, a slice at a time between the
-  groups of requests the server answers meanwhile; with INFO's fields of a rewrite
-  (FINDINGS.md, section 3zv). The RDB file as Redis 7.0.15 writes it (`REDIS0010` and
-  its AUX fields, each database's SELECTDB and RESIZEDB, each key's EXPIRETIME_MS and
-  value as DUMP writes it, EOF and the CRC64, or eight zero bytes with `rdbchecksum
-  no`): SAVE writes it into `temp-<pid>.rdb`, syncs it, renames it onto `dbfilename` and
+  as Redis writes its base: the FUNCTION LOAD of each library, the commands that make the
+  databases as they are when it starts, then the entries appended meanwhile, into a
+  temporary file renamed onto the file; without a fork, the databases being values, a
+  slice at a time between the groups of requests the server answers meanwhile; with
+  INFO's fields of a rewrite (FINDINGS.md, section 3zv). The RDB file as Redis 7.0.15
+  writes it (`REDIS0010` and its AUX fields, the libraries of functions, each database's
+  SELECTDB and RESIZEDB, each key's EXPIRETIME_MS and value as DUMP writes it, EOF and
+  the CRC64, or eight zero bytes with `rdbchecksum no`): SAVE writes it into `temp-<pid>.rdb`, syncs it, renames it onto `dbfilename` and
   syncs the directory, as Redis's `rdbSave` does, with its replies and log lines;
   SHUTDOWN saves it (above), and FLUSHALL with save points saves the emptied
   databases, as Redis 7.0's does; LASTSAVE and INFO's `rdb_last_save_time`,
   `rdb_saves`, `rdb_last_bgsave_status` and `rdb_last_load_keys_loaded` and `_expired`
   follow it. The start reads every version from 1 to 10, every encoding Redis 7.0.15
-  reads but a stream's and a module's, AUX fields it does not know, and drops the keys
-  whose time has passed, counting them. Where BendKV differs: no BGSAVE and no save at
+  reads but a stream's and a module's, the libraries of functions (and those of 7.0's
+  release candidates), AUX fields it does not know, and drops the keys whose time has
+  passed, counting them. Where BendKV differs: no BGSAVE and no save at
   the save points (BendKV's default `save` is empty, where Redis's is `3600 1 300 100 60
   10000`, and its start warns of save points set), nor on SIGTERM or SIGINT (above);
   `rdb_changes_since_last_save` stays 0; no LZF written; no IDLE or FREQ written, and
@@ -606,8 +632,7 @@ translation stays in the trusted base.
   takes several times Redis's time (PERFORMANCE.md, section 67; FINDINGS.md, section
   3zzzc).
 
-Not yet: streams, Lua
-functions (FUNCTION, FCALL), CONFIG REWRITE (it answers as Redis does without a configuration file),
+Not yet: streams, CONFIG REWRITE (it answers as Redis does without a configuration file),
 BGSAVE and saves at the save points. Times in ms are limited to 14 digits.
 
 ## Performance
@@ -858,8 +883,8 @@ away.
 | `src/lolwut.bend` | 470 |  | no |
 | `src/rdb.bend` | 2,100 |  | no |
 | `src/resp.bend` | 880 |  | no |
-| `src/script.bend` | 27 |  | no |
-| `src/server.bend` | 9,900 |  | no |
+| `src/script.bend` | 51 |  | no |
+| `src/server.bend` | 11,000 |  | no |
 | `src/startup.bend` | 460 |  | no |
 | `proof/LAWS.bend` | 920 | 20 |  |
 | `proof/SPEC.bend` | 370 |  |  |
