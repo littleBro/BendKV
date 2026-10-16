@@ -153,6 +153,15 @@ def cases(rnd):
     add("set of 513 integers", False, [cmd("SADD", "k", *[str(i * 7) for i in range(513)])])
     add("set of strings", False, [cmd("SADD", "k", "a", "b", "1")])
     add("set shrunk from 64 bits", False, [cmd("SADD", "k", "1", "2", "5000000000"), cmd("SREM", "k", "5000000000")])
+    add("set of 10 strings", False, [cmd("SADD", "k", *["m%07d" % i for i in range(10)])])
+    add("set of 128 strings of 64 bytes", False, [cmd("SADD", "k", *[("m%07d" % i) * 8 for i in range(128)])])
+    add("set of 129 strings", False, [cmd("SADD", "k", *["m%07d" % i for i in range(129)])])
+    add("set of a 65-byte member", False, [cmd("SADD", "k", "a", "x" * 65, "1")])
+    add("set of 127 integers and a string", False, [cmd("SADD", "k", *[str(i) for i in range(127)]), cmd("SADD", "k", "s")])
+    add("set of 128 integers and a string", False, [cmd("SADD", "k", *[str(i) for i in range(128)]), cmd("SADD", "k", "s")])
+    add("set of strings with members taken out", False, [cmd("SADD", "k", *["m%07d" % i for i in range(50)]),
+                                                         cmd("SREM", "k", *["m%07d" % i for i in range(0, 50, 3)])])
+    add("set of the bytes of members", False, [cmd("SADD", "k", b"", b"\x00", b"\xff", b"\r\n", b"\x00" * 64)])
     add("sorted set small", True, [cmd("ZADD", "k", "1", "a", "1.5", "b", "-2", "c", "inf", "d", "-inf", "e", "-0", "f",
                                        "9007199254740993", "g", "4611686018427387904", "h", "4611686018427387905", "i",
                                        "1e300", "j", "0.1", "k", "123", "12", "5e-324", "l", "-1.7976931348623157e308", "m")])
