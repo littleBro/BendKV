@@ -38,11 +38,14 @@ import ./resp.bend as P
 import ./batch.bend as B
 import ./aof.bend as A
 import ./session.bend as S
+import ./acl.bend as U
 import ./config.bend as C
 import ./startup.bend as T
 import ./info.bend as I
 import ./rdb.bend as D
 import ./command.bend as M
+import ./float.bend as F
+import ./hll.bend as H
 
 # a batch from a connection in the state cn (B.Job: its commands, and
 # the hashes of their keys, for the hints of batch.bend, with the words
@@ -128,6 +131,724 @@ def ans.len(+a: Ans) -> Nat:
     case _:
       0n
 
+# The count of changes
+# --------------------
+# Redis counts the changes made to the data since the last save
+# (server.dirty: INFO's rdb_changes_since_last_save, which the save points
+# read, Background saves): each write adds what it changed as it changes
+# it, a key set, an element pushed, a member or a key removed, each key a
+# FLUSHALL emptied, and a save that ends well takes away those it holds.
+# BendKV counts a call's changes once it has run, from its reply, by the
+# rule of its command (R.stat.dirty, from tools/gen_commands.py's DIRTY),
+# and for some rules a weight (dw.cmd) read from its arguments and from
+# the databases before it: the pairs of MSET and HSET, the elements of a
+# push, whether a STORE's destination was there, the keys of FLUSHDB and
+# FLUSHALL, the elements LTRIM drops, whether SETBIT's bit changes or its
+# value grows, whether GETEX's key had a time to lose. A call refused or
+# failed changes nothing. The fast way counts a batch once it has run
+# (run_put): a batch of one code whose rule reads nothing (GET) or only
+# its calls and the errors its replies were looked at for anyway (INCR) is
+# counted without a walk of its replies (dirty.quick), any other with one
+# (dirty.batch); a batch with a code that takes a weight reads its calls'
+# weights before it runs, from the databases as the batch found them
+# (fast.run.w, run_put.w), and no other batch reads anything more before
+# it runs. The general way counts each call as it runs (gen.count.d). A
+# client served later by a push (Blocked clients) counts what Redis counts
+# for it: the elements BLMPOP and BZMPOP took, and BZPOPMIN's and
+# BZPOPMAX's one; BLPOP, BRPOP, BLMOVE and BRPOPLPUSH, served so, count
+# none in Redis 7.0.15. Where BendKV counts otherwise (README, "Where
+# BendKV differs"): SET with GET counts its reply (none for a key not
+# there with NX or without it, one for a key there with NX); ZADD and
+# GEOADD without NX or CH count each pair, those whose score was there
+# unchanged too; BITFIELD counts each SET and INCRBY that OVERFLOW FAIL
+# did not refuse, those that leave the bits as they were too; PFADD counts
+# one where Redis counts each register that changes, and one for a new
+# key; PFCOUNT and PFDEBUG count none; a call of the fast way reads the
+# databases as its batch found them, not as the calls before it in the
+# batch left them.
+
+# a reply that is an error; the integer of one that is a positive one (0
+# for any other)
+def d.err(+r: R.Reply) -> Bool:
+  match r:
+    case R.RError{+m}:
+      True{}
+    case _:
+      False{}
+
+def d.int(+r: R.Reply) -> Nat:
+  match r:
+    case R.RInt{R.IPos{+n}}:
+      n
+    case _:
+      0n
+
+# the replies of a list (a loop: List.length is no loop, and the count of
+# a batch of one code is a loop of its own only when all it calls is one,
+# dirty.one)
+def d.len(+xs: List<&2, R.Reply>, +acc: Nat) -> Nat:
+  match xs:
+    case Nil{}:
+      acc
+    case Con{+x, +rest}:
+      d.len(rest, 1n+acc)
+
+# SET's: OK, or the value before (GET); none for a SET that NX or XX
+# refused
+def d.ok(+r: R.Reply) -> Nat:
+  match r:
+    case R.RStatus{+s}:
+      1n
+    case R.RBulk{+s}:
+      1n
+    case _:
+      0n
+
+def d.bulk(+r: R.Reply) -> Nat:
+  match r:
+    case R.RBulk{+s}:
+      1n
+    case _:
+      0n
+
+# a pop of a list or a set: an element, or those of a count
+def d.pop(+r: R.Reply) -> Nat:
+  match r:
+    case R.RBulk{+s}:
+      1n
+    case R.RArray{+xs}:
+      d.len(xs, 0n)
+    case R.RSet{+xs}:
+      d.len(xs, 0n)
+    case _:
+      0n
+
+# LMPOP and ZMPOP: the elements in the second item of [key, elements]
+def d.second(+xs: List<&2, R.Reply>) -> Nat:
+  match xs:
+    case Con{+k, Con{R.RArray{+ys}, +rest}}:
+      d.len(ys, 0n)
+    case _:
+      0n
+
+def d.mpop(+r: R.Reply) -> Nat:
+  match r:
+    case R.RArray{+xs}:
+      d.second(xs)
+    case _:
+      0n
+
+# ZPOPMIN and ZPOPMAX: a member and its score, flat, or the pairs of a
+# count
+def d.zpop(+r: R.Reply) -> Nat:
+  match r:
+    case R.RArray{+xs}:
+      Nat.div(d.len(xs, 0n), 2n)
+    case R.RPairs{+xs}:
+      d.len(xs, 0n)
+    case _:
+      0n
+
+# BLPOP and BZPOPMIN that found an element at once
+def d.bpop(+r: R.Reply) -> Nat:
+  match r:
+    case R.RArray{+xs}:
+      1n
+    case _:
+      0n
+
+def d.pos(+r: R.Reply) -> Nat:
+  Bool.pick(Nat, Nat.is_eq(d.int(r), 0n), 0n, 1n)
+
+def d.store(+r: R.Reply, +w: Nat) -> Nat:
+  match r:
+    case R.RInt{R.IPos{+n}}:
+      Bool.pick(Nat, Nat.is_eq(n, 0n), w, 1n)
+    case _:
+      0n
+
+def d.nstore(+r: R.Reply, +w: Nat) -> Nat:
+  match r:
+    case R.RInt{R.IPos{+n}}:
+      Bool.pick(Nat, Nat.is_eq(n, 0n), w, n)
+    case _:
+      0n
+
+# ZADD and GEOADD: the pairs (w), or the integer it answers with NX or CH
+# (w 0); the weight for the score of INCR (and ZINCRBY's: dw.zincr)
+def d.zadd(+r: R.Reply, +w: Nat) -> Nat:
+  match r:
+    case R.RInt{R.IPos{+n}}:
+      Bool.pick(Nat, Nat.is_eq(w, 0n), n, w)
+    case R.RDbl{+s}:
+      w
+    case R.RBulk{+s}:
+      w
+    case _:
+      0n
+
+# (a loop, as d.len)
+def d.nulls(+xs: List<&2, R.Reply>, +acc: Nat) -> Nat:
+  match xs:
+    case Nil{}:
+      acc
+    case Con{R.RNull{}, +rest}:
+      d.nulls(rest, 1n+acc)
+    case Con{+x, +rest}:
+      d.nulls(rest, acc)
+
+def d.bitfield(+r: R.Reply, +w: Nat) -> Nat:
+  match r:
+    case R.RArray{+xs}:
+      Nat.sub(w, d.nulls(xs, 0n))
+    case _:
+      0n
+
+# a call's changes by its command's rule (tools/gen_commands.py's
+# DIRTY_RULES), its reply r and its weight w
+def dirty.of(+rule: Nat, +r: R.Reply, +w: Nat) -> Nat:
+  match rule:
+    case 0n:
+      0n
+    case 1n:
+      Bool.pick(Nat, d.err(r), 0n, 1n)
+    case 2n:
+      d.int(r)
+    case 3n:
+      d.ok(r)
+    case 4n:
+      d.bulk(r)
+    case 5n:
+      d.pop(r)
+    case 6n:
+      d.mpop(r)
+    case 7n:
+      d.zpop(r)
+    case 8n:
+      d.bpop(r)
+    case 9n:
+      d.pos(r)
+    case 10n:
+      Bool.pick(Nat, d.err(r), 0n, w)
+    case 11n:
+      Bool.pick(Nat, Nat.is_eq(d.int(r), 0n), 0n, w)
+    case 12n:
+      d.store(r, w)
+    case 13n:
+      d.nstore(r, w)
+    case 14n:
+      d.zadd(r, w)
+    case 15n:
+      d.bitfield(r, w)
+    case _:
+      w
+
+# a call of code k: none for one refused or failed (class 1 or 2)
+def dirty.call.if(ran: Bool, +k: Nat, +r: R.Reply, +w: Nat) -> Nat:
+  match ran:
+    case True{}:
+      dirty.of(R.stat.dirty(R.code.key(k)), r, w)
+    case False{}:
+      0n
+
+def dirty.call(+k: Nat, +r: R.Reply, +w: Nat) -> Nat:
+  dirty.call.if(Nat.is_eq(R.code.class(k), 0n), k, r, w)
+
+# the first of a call's replies (the general way runs a call as a batch
+# of one)
+def dirty.first(+k: Nat, +rs: List<&2, R.Reply>, +w: Nat) -> Nat:
+  match rs:
+    case Con{+r, +rest}:
+      dirty.call(k, r, w)
+    case Nil{}:
+      0n
+
+# a client served later by a push (bg.popped), its command's code k and
+# the reply it was sent: the elements of BLMPOP and BZMPOP, BZPOPMIN's
+# and BZPOPMAX's one (a key, a member and its score), none for the rest
+def d.three(+r: R.Reply) -> Nat:
+  match r:
+    case R.RArray{Con{+a, Con{+b, Con{+c, Nil{}}}}}:
+      1n
+    case _:
+      0n
+
+def dirty.served.of(+rule: Nat, +r: R.Reply) -> Nat:
+  match rule:
+    case 6n:
+      d.mpop(r)
+    case 8n:
+      d.three(r)
+    case _:
+      0n
+
+def dirty.served(+k: Nat, +r: R.Reply) -> Nat:
+  dirty.served.of(R.stat.dirty(R.code.key(k)), r)
+
+# The weights (rules 10 to 15): what a call changes, from its arguments
+# and the databases before it (ds, its client's database in focus)
+
+# whether k is there in the focus
+def dw.live(+ds: R.Ds, +k: String) -> Nat:
+  Bool.pick(Nat, R.ds.has(ds, k), 1n, 0n)
+
+def dw.dbs(+xs: List<&2, R.Db>) -> Nat:
+  match xs:
+    case Nil{}:
+      0n
+    case Con{+d, +rest}:
+      Nat.add(R.db.n(d), dw.dbs(rest))
+
+# GETEX: a time set on a key there, or PERSIST of a key with a time
+def dw.getex(+o: R.ExOpt, +m: Maybe<&2, KV.Item<KV.Val>>) -> Nat:
+  match o m:
+    case R.XPersist{} Some{KV.Item{v, +e}}:
+      Bool.pick(Nat, Nat.is_eq(e, 0n), 0n, 1n)
+    case R.XAt{+at, +ms, +v} Some{+it}:
+      1n
+    case _ _:
+      0n
+
+def dw.bit.at(+w: String, +off: Nat) -> Bool:
+  U32.is_ne(U32.and(U32.shrn(R.byte.at(w, Nat.div(off, 8n)), Nat.sub(7n, Nat.mod(off, 8n))), 1), 0)
+
+# SETBIT: a value made or grown, or a bit that changes
+def dw.bit(+off: Nat, +on: Bool, +m: Maybe<&2, KV.Item<KV.Val>>) -> Nat:
+  match m:
+    case Some{KV.Item{KV.VStr{+w}, +e}}:
+      Bool.pick(Nat, Bool.or(Nat.is_le(String.length(w), Nat.div(off, 8n)), Bool.xor(dw.bit.at(w, off), on)), 1n, 0n)
+    case Some{+it}:
+      0n
+    case None{}:
+      1n
+
+# BITFIELD: its SETs and INCRBYs
+def dw.bf(+ops: List<&2, R.BfOp>) -> Nat:
+  match ops:
+    case Nil{}:
+      0n
+    case Con{R.BfGet{+s, +b, +o}, +rest}:
+      dw.bf(rest)
+    case Con{+x, +rest}:
+      1n+dw.bf(rest)
+
+# LTRIM: the elements out of its range, of the list there
+def dw.kept(+sp: R.LSpan, +n: Nat) -> Nat:
+  match sp:
+    case R.LSpan{+s, +e}:
+      Nat.sub(n, Nat.add(Nat.sub(e, s), 1n))
+    case R.LNone{}:
+      n
+
+def dw.span(+ma: Maybe<&2, R.Int>, +mb: Maybe<&2, R.Int>, +n: Nat) -> Nat:
+  match ma mb:
+    case Some{+a} Some{+b}:
+      dw.kept(R.lspan(a, b, n), n)
+    case _ _:
+      0n
+
+def dw.trim(+a: String, +b: String, +m: Maybe<&2, KV.Item<KV.Val>>) -> Nat:
+  match m:
+    case Some{KV.Item{KV.VColl{KV.CList{+l}}, +e}}:
+      dw.span(R.lnum(a), R.lnum(b), KV.deq.len(l))
+    case _:
+      0n
+
+def dw.list(+l: R.LWrite, +k: String, +ds: R.Ds) -> Nat:
+  match l:
+    case R.LWPush{+left, +xs}:
+      List.length(&2, String, xs)
+    case R.LWPushX{+left, +xs}:
+      List.length(&2, String, xs)
+    case R.LWTrim{+a, +b}:
+      dw.trim(a, b, R.ds.ent(ds, k))
+    case R.LWNew{+left, +xs}:
+      Nat.add(dw.live(ds, k), List.length(&2, String, xs))
+    case _:
+      0n
+
+# ZADD with INCR (and ZINCRBY): what its pair changes of the entry m of
+# its key (INCR takes one pair): one for a member not there, or for a
+# score the increment changes, none for one it leaves as it was (an
+# increment of 0, or one too small for the score), as zsetAdd marks an
+# update only when the score is another; NX, XX, GT and LT, which leave
+# the member alone, answer nil, which counts none whatever this is. The
+# sum itself (R.zadd.score, of big numbers: about 5,000 instructions) is
+# made only when the doubles' fields leave it open (dw.zincr.kind): an
+# increment of 0 leaves the score as it was; a normal one whose exponent
+# is at least the score's less 52 is at least the score's last place
+# (ulp), and changes a finite score, as the sum then lies past halfway to
+# the score's next double (a match, not Bool.pick, so that no sum is made
+# but in the last case)
+def dw.zincr.sum(+c: F.F64, +d: F.F64) -> Nat:
+  Bool.pick(Nat, Cmp.is_eq(F.f64.cmp(R.zadd.score(True{}, c, d), c)), 0n, 1n)
+
+# 0 an increment of zero, 1 one at least the finite score's ulp, 2 one
+# to sum (the score's and the increment's high words, the increment's
+# low one: sign, 11 bits of exponent, 20 of the significand)
+def dw.zincr.kind(+ch: Nat, +dh: Nat, +dl: Nat) -> Nat:
+  +ec = Nat.mod(Nat.div(ch, 1048576n), 2048n)
+  +ed = Nat.mod(Nat.div(dh, 1048576n), 2048n)
+  Bool.pick(Nat, Bool.and(Nat.is_eq(Nat.mod(dh, 2147483648n), 0n), Nat.is_eq(dl, 0n)), 0n, Bool.pick(Nat, Bool.and(Bool.and(Nat.is_lt(ec, 2047n), Nat.is_lt(0n, ed)), Nat.is_le(ec, Nat.add(ed, 52n))), 1n, 2n))
+
+def dw.zincr.by(+kind: Nat, +c: F.F64, +d: F.F64) -> Nat:
+  match kind:
+    case 0n:
+      0n
+    case 1n:
+      1n
+    case _:
+      dw.zincr.sum(c, d)
+
+def dw.zincr.of(+c: F.F64, +d: F.F64) -> Nat:
+  match c d:
+    case F.F64{+ch, +cl} F.F64{+dh, +dl}:
+      dw.zincr.by(dw.zincr.kind(ch, dh, dl), F.F64{ch, cl}, F.F64{dh, dl})
+
+def dw.zincr.at(cur: Maybe<&2, F.F64>, +d: F.F64) -> Nat:
+  match cur:
+    case Some{+c}:
+      dw.zincr.of(c, d)
+    case None{}:
+      1n
+
+def dw.zincr(+ps: List<&2, R.ZPair>, +m: Maybe<&2, KV.Item<KV.Val>>) -> Nat:
+  match ps m:
+    case Con{R.ZPair{+sc, +mem}, rest} Some{KV.Item{KV.VColl{KV.CZset{+z}}, +e}}:
+      dw.zincr.at(KV.zset.score(mem, z), R.zadd.num(F.f64.parse(sc)))
+    case _ _:
+      1n
+
+def dw.zadd.if(incr: Bool, +nx: Bool, +ch: Bool, +ps: List<&2, R.ZPair>, +k: String, +ds: R.Ds) -> Nat:
+  match incr:
+    case True{}:
+      dw.zincr(ps, R.ds.ent(ds, k))
+    case False{}:
+      Bool.pick(Nat, Bool.or(nx, ch), 0n, List.length(&2, R.ZPair, ps))
+
+def dw.zadd(+o: R.ZOpts, +ps: List<&2, R.ZPair>, +k: String, +ds: R.Ds) -> Nat:
+  match o:
+    case R.ZOpts{+nx, +xx, +gt, +lt, +ch, +incr}:
+      dw.zadd.if(incr, nx, ch, ps, k, ds)
+
+# the members a ZADD of o and ps adds or changes in an empty sorted set
+# (the script of a new sorted set, ZWNew, runs it after its DEL), as
+# zaddGenericCommand counts added and updated
+def dw.zadded(st: R.ZAdd) -> Nat:
+  match st:
+    case R.ZAdd{z, +added, +upd, done, last}:
+      Nat.add(added, upd)
+    case R.ZAddNaN{}:
+      0n
+
+def dw.znew(+o: R.ZOpts, +ps: List<&2, R.ZPair>) -> Nat:
+  dw.zadded(R.zadd.go(ps, o, R.ZAdd{KV.zset.empty(), 0n, 0n, 0n, F.F64{0n, 0n}}))
+
+# RESTORE that answers OK, at now, its key there or not (gone: one when
+# it is, as a REPLACE deletes it): one for a key restored; for a time
+# already past (or one past LLONG_MAX, which the restore drops too) the
+# key deleted, if it was there, as restoreCommand counts a change only
+# when it deleted one
+def dw.restore.at(m: Maybe<&2, R.At>, +now: Nat, +gone: Nat) -> Nat:
+  match m:
+    case Some{+a}:
+      Bool.pick(Nat, R.at.past(a, now), gone, 1n)
+    case None{}:
+      gone
+
+def dw.restore.ms(+ms: Nat, +at: Bool, +now: Nat, +gone: Nat) -> Nat:
+  match ms:
+    case 0n:
+      1n
+    case 1n+q:
+      dw.restore.at(R.at.of(R.TmN{at, 1n+q}, now), now, gone)
+
+def dw.restore(+t: R.TmR, +k: String, +ds: R.Ds) -> Nat:
+  match t:
+    case R.TOk{R.TmN{+at, +ms}}:
+      dw.restore.ms(ms, at, R.ds.now(ds), dw.live(ds, k))
+    case R.TOk{R.TmB{+at, +neg, +hi, +lo}}:
+      dw.restore.at(R.at.of(R.TmB{at, neg, hi, lo}, R.ds.now(ds)), R.ds.now(ds), dw.live(ds, k))
+    case R.TBad{+r}:
+      0n
+
+# PFDEBUG: one for a GETREG or TODENSE of a sparse HyperLogLog, which it
+# makes dense (pfdebugCommand's server.dirty++)
+def dw.pfdebug(+sub: String, +m: Maybe<&2, KV.Item<KV.Val>>) -> Nat:
+  match m:
+    case Some{KV.Item{KV.VStr{+w}, +e}}:
+      +id = R.pfdebug.id(sub)
+      Bool.pick(Nat, Bool.and(Bool.or(Nat.is_eq(id, 1n), Nat.is_eq(id, 4n)), Bool.and(H.valid(w), H.is_sparse(w))), 1n, 0n)
+    case _:
+      0n
+
+# SMOVE: the member taken from src, and added to dst when dst lacks it
+# (none when src is dst)
+def dw.has(+m: Maybe<&2, KV.Item<KV.Val>>, +x: String) -> Bool:
+  match m:
+    case Some{KV.Item{KV.VColl{KV.CMems{+s}}, +e}}:
+      KV.mems.has(x, s)
+    case _:
+      False{}
+
+# (SMemNew: the script of a move to a key whose time had passed, EVAL's
+# alone, deletes dst first: that key there, then the member taken from
+# src and added to the new dst; none when src is dst, which the DEL took)
+def dw.smove(+ds: R.Ds, +s: String, +d: String, +w: R.SMem) -> Nat:
+  match w:
+    case R.SMem{+m}:
+      Bool.pick(Nat, Bool.and(Bool.not(String.eq(s, d)), dw.has(R.ds.ent(ds, s), m)), Bool.pick(Nat, dw.has(R.ds.ent(ds, d), m), 1n, 2n), 0n)
+    case R.SMemNew{+m}:
+      Nat.add(dw.live(ds, d), Bool.pick(Nat, Bool.and(Bool.not(String.eq(s, d)), dw.has(R.ds.ent(ds, s), m)), 2n, 0n))
+
+# LMOVE in the script of a move to a key whose time had passed (EVAL's
+# alone: dw.cmd's weight of an LMOVE counts for EVAL alone, LMOVE's rule
+# reads its reply): dst there, which the script deletes first, and the
+# element moved from a list src that is not dst (dst's DEL took it)
+def dw.is.list(+m: Maybe<&2, KV.Item<KV.Val>>) -> Bool:
+  match m:
+    case Some{KV.Item{KV.VColl{KV.CList{+l}}, +e}}:
+      True{}
+    case _:
+      False{}
+
+def dw.lmove(+ds: R.Ds, +s: String, +d: String) -> Nat:
+  Nat.add(dw.live(ds, d), Bool.pick(Nat, Bool.and(Bool.not(String.eq(s, d)), dw.is.list(R.ds.ent(ds, s))), 1n, 0n))
+
+def dw.upd(+op: R.UpdOp, +k: String, +ds: R.Ds) -> Nat:
+  match op:
+    case R.UGetEx{+o}:
+      dw.getex(o, R.ds.ent(ds, k))
+    case R.URange{+off, +s}:
+      Bool.pick(Nat, String.is_empty(s), 0n, 1n)
+    case R.USetBit{+off, +on}:
+      dw.bit(off, on, R.ds.ent(ds, k))
+    case R.UBitfield{+ops}:
+      dw.bf(ops)
+    case R.UHash{R.HWSet{+ps, +mset}}:
+      List.length(&2, KV.HPair, ps)
+    case R.UHash{R.HWNew{+ps}}:
+      Nat.add(dw.live(ds, k), List.length(&2, KV.HPair, ps))
+    case R.UList{+l}:
+      dw.list(l, k, ds)
+    case R.UMems{R.SWNew{+ms}}:
+      Nat.add(dw.live(ds, k), KV.mems.len(KV.mems.of(ms)))
+    case R.UZset{R.ZWAdd{+o, +ps}}:
+      dw.zadd(o, ps, k, ds)
+    case R.UZset{R.ZWNew{+o, +ps}}:
+      Nat.add(dw.live(ds, k), dw.znew(o, ps))
+    case R.UHll{R.HDebug{+sub}}:
+      dw.pfdebug(sub, R.ds.ent(ds, k))
+    case R.URestore{+p, +t, +rep, +ac}:
+      dw.restore(t, k, ds)
+    case _:
+      0n
+
+def dw.geo(+m: Maybe<&2, String>, +ds: R.Ds) -> Nat:
+  match m:
+    case Some{+d}:
+      dw.live(ds, d)
+    case None{}:
+      0n
+
+def dw.own(+o: R.SessOp, +ds: R.Ds) -> Nat:
+  match o:
+    case R.SFlushAll{}:
+      dw.dbs(R.ds.list(ds))
+    case R.SSortStore{+k, R.SortStore{+d, +so}}:
+      dw.live(ds, d)
+    case R.SGeoStore{+kind, +a}:
+      dw.geo(R.geo.dst(kind, a), ds)
+    case _:
+      0n
+
+def dw.cmd(+c: R.Cmd, +ds: R.Ds) -> Nat:
+  match c:
+    case R.MSet{+ps}:
+      List.length(&2, R.KVPair, ps)
+    case R.MSetNx{+ps}:
+      List.length(&2, R.KVPair, ps)
+    case R.FlushDb{}:
+      R.db.n(R.ds.focused(ds))
+    case R.Rename{+s, +d, +nx}:
+      Bool.pick(Nat, String.eq(s, d), 0n, 1n)
+    case R.BitOp{+op, +d, +srcs}:
+      dw.live(ds, d)
+    case R.SStore{+k, +d, +srcs}:
+      dw.live(ds, d)
+    case R.ZStore{+k, +d, +srcs}:
+      dw.live(ds, d)
+    case R.ZRangeStore{+d, +src, +q}:
+      dw.live(ds, d)
+    case R.SMv{+s, +d, +w}:
+      dw.smove(ds, s, d, w)
+    case R.LMove{+s, +d, +e}:
+      dw.lmove(ds, s, d)
+    case R.Upd{+k, +op}:
+      dw.upd(op, k, ds)
+    case R.Own{+o}:
+      dw.own(o, ds)
+    case _:
+      0n
+
+# whether the calls of code k take a weight: those that run (class 0) of
+# a command whose rule is past 9
+def dirty.weighs(+k: Nat) -> Bool:
+  Bool.and(Nat.is_eq(R.code.class(k), 0n), Nat.is_le(10n, R.stat.dirty(R.code.key(k))))
+
+# a call's weight, read only when its code takes one
+def dw.if(on: Bool, +c: R.Cmd, +ds: R.Ds) -> Nat:
+  match on:
+    case True{}:
+      dw.cmd(c, ds)
+    case False{}:
+      0n
+
+def dw.call(+k: Nat, +c: R.Cmd, +ds: R.Ds) -> Nat:
+  dw.if(dirty.weighs(k), c, ds)
+
+# (loops, as fast.run calls them before the batch runs: a call of one
+# that is no loop makes it keep its state across the call, FINDINGS.md,
+# section 7)
+def dirty.weighs.runs(+rs: List<&2, Nat>, +acc: Bool) -> Bool:
+  match rs:
+    case Nil{}:
+      acc
+    case Con{+r, +rest}:
+      dirty.weighs.runs(rest, Bool.or(acc, dirty.weighs(R.run.code(r))))
+
+# the weights of a batch's calls, in order, when one of its codes takes
+# one (else none: each is 0)
+def dirty.ws.of(+cs: List<&2, R.Cmd>, +ds: R.Ds) -> List<&2, Nat>:
+  match cs:
+    case Nil{}:
+      Nil{}
+    case Con{+c, +rest}:
+      dw.cmd(c, ds) <> dirty.ws.of(rest, ds)
+
+# A fast batch's rule, looked up once (fast.run): its one code's (0 for
+# one refused or failed, class 1 or 2), else 17 for a batch of several
+# codes of which none takes a weight, 18 when one does; then whether its
+# calls take weights (rules 10 to 16, and 18), and whether its count needs
+# a look at its replies (dirty.batch): not for a batch of one code whose
+# rule reads nothing (0), or only its calls and the errors its replies
+# were looked at for (1, risky: known); such a batch is counted by its
+# rule alone (none, or dirty.quick)
+def dirty.rule.k(+k: Nat) -> Nat:
+  Bool.pick(Nat, Nat.is_eq(R.code.class(k), 0n), R.stat.dirty(R.code.key(k)), 0n)
+
+def dirty.rule.t(+run: Nat, +runs: List<&2, Nat>) -> Nat:
+  match runs:
+    case Nil{}:
+      dirty.rule.k(R.run.code(run))
+    case _:
+      Bool.pick(Nat, dirty.weighs.runs(runs, False{}), 18n, 17n)
+
+def dirty.rule.tally(+t: R.Tally) -> Nat:
+  match t:
+    case R.Tally{+calls, +risky, +run, +runs}:
+      dirty.rule.t(run, runs)
+
+def dirty.weighs.of(+rule: Nat) -> Bool:
+  Bool.and(Nat.is_le(10n, rule), Bool.not(Nat.is_eq(rule, 17n)))
+
+def dirty.walks.of(+rule: Nat, +known: Bool) -> Bool:
+  Bool.not(Bool.or(Nat.is_eq(rule, 0n), Bool.and(Nat.is_eq(rule, 1n), known)))
+
+def tally.risky(+t: R.Tally) -> Bool:
+  match t:
+    case R.Tally{calls, +risky, run, runs}:
+      risky
+
+# the errors found among a batch's replies (a loop, as d.len)
+def errs.len(+xs: List<&2, R.Erred>, +acc: Nat) -> Nat:
+  match xs:
+    case Nil{}:
+      acc
+    case Con{+x, +rest}:
+      errs.len(rest, 1n+acc)
+
+# a batch of one code whose replies need no look, by its rule (1: its
+# calls less its errors, which the look for errors found anyway)
+def dirty.quick(+rule: Nat, +calls: Nat, +errs: Nat) -> Nat:
+  Bool.pick(Nat, Nat.is_eq(rule, 1n), Nat.sub(calls, errs), 0n)
+
+# A batch's changes, once it has run: its calls' codes (its tally's runs),
+# replies and weights, zipped; a batch of one code by its rule alone
+# (0: none; 1: one for each call that is no error, its errors counted
+# already when its replies needed a look, known; 3, SET's: its replies
+# that are OK or a value), else a call at a time
+def dirty.zip(+ks: List<&2, Nat>, +rs: List<&2, R.Reply>, +ws: List<&2, Nat>, +acc: Nat) -> Nat:
+  match ks rs ws:
+    case Con{+k, +kt} Con{+r, +rt} Con{+w, +wt}:
+      dirty.zip(kt, rt, wt, Nat.add(acc, dirty.call(k, r, w)))
+    case Con{+k, +kt} Con{+r, +rt} Nil{}:
+      dirty.zip(kt, rt, Nil{}, Nat.add(acc, dirty.call(k, r, 0n)))
+    case _ _ _:
+      acc
+
+def dirty.each(+rule: Nat, +rs: List<&2, R.Reply>, +ws: List<&2, Nat>, +acc: Nat) -> Nat:
+  match rs ws:
+    case Con{+r, +rt} Con{+w, +wt}:
+      dirty.each(rule, rt, wt, Nat.add(acc, dirty.of(rule, r, w)))
+    case Con{+r, +rt} Nil{}:
+      dirty.each(rule, rt, Nil{}, Nat.add(acc, dirty.of(rule, r, 0n)))
+    case _ _:
+      acc
+
+def dirty.oks(+rs: List<&2, R.Reply>, +acc: Nat) -> Nat:
+  match rs:
+    case Nil{}:
+      acc
+    case Con{+r, +rest}:
+      dirty.oks(rest, Nat.add(acc, d.ok(r)))
+
+def dirty.fine(+rs: List<&2, R.Reply>, +acc: Nat) -> Nat:
+  match rs:
+    case Nil{}:
+      acc
+    case Con{+r, +rest}:
+      dirty.fine(rest, Bool.pick(Nat, d.err(r), acc, 1n+acc))
+
+def dirty.one.known(known: Bool, +calls: Nat, +errs: Nat, +rs: List<&2, R.Reply>) -> Nat:
+  match known:
+    case True{}:
+      Nat.sub(calls, errs)
+    case False{}:
+      dirty.fine(rs, 0n)
+
+def dirty.one.rule(+rule: Nat, +known: Bool, +calls: Nat, +errs: Nat, +rs: List<&2, R.Reply>, +ws: List<&2, Nat>) -> Nat:
+  match rule:
+    case 0n:
+      0n
+    case 1n:
+      dirty.one.known(known, calls, errs, rs)
+    case 3n:
+      dirty.oks(rs, 0n)
+    case _:
+      dirty.each(rule, rs, ws, 0n)
+
+def dirty.one.if(ran: Bool, +k: Nat, +known: Bool, +calls: Nat, +errs: Nat, +rs: List<&2, R.Reply>, +ws: List<&2, Nat>) -> Nat:
+  match ran:
+    case True{}:
+      dirty.one.rule(R.stat.dirty(R.code.key(k)), known, calls, errs, rs, ws)
+    case False{}:
+      0n
+
+# a batch of one code (run): a loop of its own, as all it calls is one
+# (FINDINGS.md, section 7: flat_of), so that run_put, which calls it,
+# saves no frame around it
+def dirty.one(+calls: Nat, +run: Nat, +known: Bool, +errs: Nat, +rs: List<&2, R.Reply>, +ws: List<&2, Nat>) -> Nat:
+  +k = R.run.code(run)
+  dirty.one.if(Nat.is_eq(R.code.class(k), 0n), k, known, calls, errs, rs, ws)
+
+def dirty.batch(+calls: Nat, +run: Nat, +runs: List<&2, Nat>, +known: Bool, +errs: Nat, +rs: List<&2, R.Reply>, +ws: List<&2, Nat>) -> Nat:
+  match runs:
+    case Nil{}:
+      dirty.one(calls, run, known, errs, rs, ws)
+    case _:
+      dirty.zip(R.codes.runs(runs, Nil{}), rs, ws, 0n)
+
 # Statistics of a batch
 # ---------------------
 # INFO counts each call as Redis does (info.bend, Statistics): what it
@@ -198,9 +919,32 @@ def gen.errs(xs: Maybe<&2, List<&2, R.Erred>>, +rs1: List<&2, R.Reply>, +code: N
     case None{}:
       R.errs.zip(rs1, [code], Nil{})
 
-# one call's counts: whether it ran, its run, its error replies
+# one call's counts: whether it ran, its run, its error replies (and the
+# changes it made: The count of changes)
 def gen.count(srv: S.Srv, +code: Nat, ys: List<&2, R.Erred>) -> S.Srv:
   S.srv.errs(S.srv.ran(srv, R.code.calls(code, 1n), R.run.of(code, 1n), Nil{}, 0n, 0n), ys)
+
+def gen.count.d(srv: S.Srv, +code: Nat, ys: List<&2, R.Erred>, +n: Nat) -> S.Srv:
+  S.srv.errs(S.srv.ran.d(srv, R.code.calls(code, 1n), R.run.of(code, 1n), Nil{}, 0n, 0n, n), ys)
+
+# a call's changes once it ran: by its reply, from its weight w, when its
+# error was not known before it (xs none); else w, which is the count of
+# a command of the connection or the server whose client's replies are
+# held back, from the reply S.own_reply gives before it (bg.held.k), and
+# 0 for any other (a call refused or failed, which changes nothing)
+def dirty.ran(+xs: Maybe<&2, List<&2, R.Erred>>, +k: Nat, +rs1: List<&2, R.Reply>, +w: Nat) -> Nat:
+  match xs:
+    case None{}:
+      dirty.first(k, rs1, w)
+    case Some{ys}:
+      w
+
+def dirty.own(+m: Maybe<&2, R.Reply>, +k: Nat, +w: Nat) -> Nat:
+  match m:
+    case Some{+r}:
+      dirty.call(k, r, w)
+    case None{}:
+      0n
 
 def gen.err.of(m: Maybe<&2, R.Reply>, +code: Nat) -> List<&2, R.Erred>:
   match m:
@@ -507,16 +1251,44 @@ def waits.find(ws: Waits, m: Maybe<&2, String>, +ds: R.Ds, acc: Waits) -> Found:
 type Wk is Data:
   Wk{db: Nat, key: String, old: Bool}
 
+# a command queued in a transaction: the number of the batch it came in
+# (b) and its arguments as sent (an Av whose next request is the
+# command's)
+type Qa is Data:
+  Qa{b: Nat, a: Av}
+
+# the arguments of a transaction's commands (newest first), and how many
+# batches its client began since the transaction did (n: tx.front counts
+# them), so that EXEC reads the bytes of each batch once (bg.x.go)
+type Qs is Data:
+  Qs{n: Nat, avs: List<&2, Qa>}
+
 # the clients with a transaction or watched keys, a chain of them: each
 # with its id, whether it is in MULTI, whether a command was refused
 # while it queued (bad: EXECABORT), whether a key it watched was touched
 # (cas: EXEC answers a null array), the commands queued (newest first),
-# their codes and their arguments as sent (each an Av whose next request
-# is the command's), and the keys it watches. While a batch runs, its
-# client is the first of the chain, if it is in it (tx.front).
+# their codes and their arguments as sent (Qs), and the keys it watches.
+# While a batch runs, its client is the first of the chain, if it is in
+# it (tx.front).
 type Tx is Data:
   TxNone{}
-  TxOn{id: Nat, multi: Bool, bad: Bool, cas: Bool, cmds: List<&2, R.Cmd>, codes: List<&2, Nat>, avs: List<&2, Av>, keys: List<&2, Wk>, rest: Tx}
+  TxOn{id: Nat, multi: Bool, bad: Bool, cas: Bool, cmds: List<&2, R.Cmd>, codes: List<&2, Nat>, avs: Qs, keys: List<&2, Wk>, rest: Tx}
+
+def qs.put(a: Av, q: Qs) -> Qs:
+  match q:
+    case Qs{+n, xs}:
+      Qs{n, Qa{n, a} <> xs}
+
+def qs.next(q: Qs) -> Qs:
+  match q:
+    case Qs{n, xs}:
+      Qs{Nat.add(n, 1n), xs}
+
+# the commands' arguments in the order they were queued
+def qs.order(q: Qs) -> List<&2, Qa>:
+  match q:
+    case Qs{n, xs}:
+      List.reverse(&2, Qa, xs)
 
 def tx.on(+t: Tx) -> Bool:
   match t:
@@ -581,10 +1353,20 @@ def tx.rest(p: Tx & Tx) -> Tx:
   (one, others) = p
   others
 
-# the client of id n first in t, if it is in it
+# the client taken out (tx.take) with one batch more begun
+def tx.next(p: Tx & Tx) -> Tx & Tx:
+  (one, others) = p
+  match one:
+    case TxOn{i, mu, bd, cs, qs, qc, qa, wk, r}:
+      (TxOn{i, mu, bd, cs, qs, qc, qs.next(qa), wk, r}, others)
+    case TxNone{}:
+      (TxNone{}, others)
+
+# the client of id n first in t, if it is in it, as a batch of its
+# begins (one more batch, Qs)
 def tx.front(+n: Nat, t: Tx) -> Tx:
   +x = t
-  tx.put(tx.take(x, tx.is(n, x), n, TxNone{}))
+  tx.put(tx.next(tx.take(x, tx.is(n, x), n, TxNone{})))
 
 # t without the client of id n (its connection closed)
 def tx.drop(+n: Nat, t: Tx) -> Tx:
@@ -597,7 +1379,7 @@ def tx.open.of(mine: Bool, +n: Nat, t: Tx) -> Tx:
     case True{} TxOn{i, mu, bd, cs, qs, qc, qa, wk, r}:
       TxOn{i, True{}, bd, cs, qs, qc, qa, wk, r}
     case _ t0:
-      TxOn{n, True{}, False{}, False{}, Nil{}, Nil{}, Nil{}, Nil{}, t0}
+      TxOn{n, True{}, False{}, False{}, Nil{}, Nil{}, Qs{0n, Nil{}}, Nil{}, t0}
 
 def tx.open(+n: Nat, t: Tx) -> Tx:
   +x = t
@@ -617,12 +1399,12 @@ def tx.close(+n: Nat, t: Tx) -> Tx:
 
 # a command queued by the client first in t (in MULTI); none once the
 # transaction is to fail, as Redis keeps none then
-def tx.queued(skip: Bool, i: Nat, mu: Bool, bd: Bool, cs: Bool, qs: List<&2, R.Cmd>, qc: List<&2, Nat>, qa: List<&2, Av>, wk: List<&2, Wk>, r: Tx, c: R.Cmd, +code: Nat, a: Av) -> Tx:
+def tx.queued(skip: Bool, i: Nat, mu: Bool, bd: Bool, cs: Bool, qs: List<&2, R.Cmd>, qc: List<&2, Nat>, qa: Qs, wk: List<&2, Wk>, r: Tx, c: R.Cmd, +code: Nat, a: Av) -> Tx:
   match skip:
     case True{}:
       TxOn{i, mu, bd, cs, qs, qc, qa, wk, r}
     case False{}:
-      TxOn{i, mu, bd, cs, c <> qs, code <> qc, a <> qa, wk, r}
+      TxOn{i, mu, bd, cs, c <> qs, code <> qc, qs.put(a, qa), wk, r}
 
 def tx.queue(c: R.Cmd, +code: Nat, a: Av, t: Tx) -> Tx:
   match t:
@@ -711,7 +1493,7 @@ def tx.watch.of(mine: Bool, +n: Nat, +j: Nat, ks: List<&2, String>, +ds: R.Ds, t
     case True{} TxOn{i, mu, bd, False{}, qs, qc, qa, wk, r}:
       TxOn{i, mu, bd, False{}, qs, qc, qa, wk.add(ks, j, ds, R.ds.now(ds), wk), r}
     case _ t0:
-      TxOn{n, False{}, False{}, False{}, Nil{}, Nil{}, Nil{}, wk.add(ks, j, ds, R.ds.now(ds), Nil{}), t0}
+      TxOn{n, False{}, False{}, False{}, Nil{}, Nil{}, Qs{0n, Nil{}}, wk.add(ks, j, ds, R.ds.now(ds), Nil{}), t0}
 
 def tx.watch(+n: Nat, +j: Nat, ks: List<&2, String>, +ds: R.Ds, t: Tx) -> Tx:
   +x = t
@@ -773,7 +1555,7 @@ def wk.touch(ks: List<&2, Wk>, +j: Nat, +k: String, +here: Bool) -> Maybe<&2, Li
       wk.touch.at(wk.hit(j, k, w), w, here, wk.touch(rest, j, k, here))
 
 # a client after a touch: its keys, or dirty with none
-def tx.touched(m: Maybe<&2, List<&2, Wk>>, i: Nat, mu: Bool, bd: Bool, cs: Bool, qs: List<&2, R.Cmd>, qc: List<&2, Nat>, qa: List<&2, Av>, r: Tx) -> Tx:
+def tx.touched(m: Maybe<&2, List<&2, Wk>>, i: Nat, mu: Bool, bd: Bool, cs: Bool, qs: List<&2, R.Cmd>, qc: List<&2, Nat>, qa: Qs, r: Tx) -> Tx:
   match m:
     case Some{ks}:
       TxOn{i, mu, bd, cs, qs, qc, qa, ks, r}
@@ -1409,7 +2191,7 @@ def trk.off(+id: Nat, +cur: Tk, t: Trk) -> Trk:
 # CLIENT PAUSE (The pause, below), and a SHUTDOWN asked for in the group
 # (down: SHUTDOWN, below).
 type Cl is Data:
-  Cl{id: Nat, back: Chan(Ans), fd: U32, addr: String, laddr: String, since: Nat, name: String, db: Nat, noev: Bool, r3: Bool, tk: Tk}
+  Cl{id: Nat, back: Chan(Ans), fd: U32, addr: String, laddr: String, since: Nat, name: String, db: Nat, noev: Bool, r3: Bool, tk: Tk, user: String}
 
 # CLIENT PAUSE's pause (The pause, below): none, or one of the commands
 # that write (all: of every command) until a time (ms since 1970)
@@ -1519,13 +2301,13 @@ def cls.killed(+id: Nat, +cs: Cls) -> Bool:
 # a client's tracking (Tracking), read and set
 def cl.tk(+c: Cl) -> Tk:
   match c:
-    case Cl{id, back, fd, addr, laddr, since, name, db, noev, r3, +kt}:
+    case Cl{id, back, fd, addr, laddr, since, name, db, noev, r3, +kt, user}:
       kt
 
 def cl.tk.set(kt: Tk, c: Cl) -> Cl:
   match c:
-    case Cl{id, back, fd, addr, laddr, since, name, db, noev, r3, t0}:
-      Cl{id, back, fd, addr, laddr, since, name, db, noev, r3, kt}
+    case Cl{id, back, fd, addr, laddr, since, name, db, noev, r3, t0, user}:
+      Cl{id, back, fd, addr, laddr, since, name, db, noev, r3, kt, user}
 
 def cl.tk.of(+m: Maybe<&2, Cl>) -> Tk:
   match m:
@@ -1550,6 +2332,40 @@ def cls.tk.set(+id: Nat, kt: Tk, cs: Cls) -> Cls:
   +c = cs
   cls.tk.put(id, kt, cls.get(id, c), c)
 
+# a client's user (ACL), read and set
+def cl.user(+c: Cl) -> String:
+  match c:
+    case Cl{id, back, fd, addr, laddr, since, name, db, noev, r3, kt, +user}:
+      user
+
+def cl.user.set(+u: String, c: Cl) -> Cl:
+  match c:
+    case Cl{id, back, fd, addr, laddr, since, name, db, noev, r3, kt, user}:
+      Cl{id, back, fd, addr, laddr, since, name, db, noev, r3, kt, u}
+
+def cl.user.of(+m: Maybe<&2, Cl>) -> String:
+  match m:
+    case Some{+c}:
+      cl.user(c)
+    case None{}:
+      "default"
+
+# the user of the client of id (default when there is none)
+def cls.user(+id: Nat, +cs: Cls) -> String:
+  cl.user.of(cls.get(id, cs))
+
+def cls.user.put(+id: Nat, +u: String, m: Maybe<&2, Cl>, cs: Cls) -> Cls:
+  match m:
+    case Some{c}:
+      cls.put(id, cl.user.set(u, c), cs)
+    case None{}:
+      cs
+
+# the client of id logged in as the user of name u
+def cls.user.set(+id: Nat, +u: String, cs: Cls) -> Cls:
+  +c = cs
+  cls.user.put(id, u, cls.get(id, c), c)
+
 # the client of id's connection ended: out of the registry, and of the
 # killed, its tracking off (Tracking: its ids stay in the table)
 def cls.left.of(+id: Nat, +kt: Tk, cs: Cls) -> Cls:
@@ -1570,13 +2386,13 @@ def cls.kills(cs: Cls) -> List<&2, U32> & Cls:
 # a client's name, database and protocol set from its connection
 def cl.conn(+cn: S.Conn, c: Cl) -> Cl:
   match c:
-    case Cl{id, back, fd, addr, laddr, since, name, db, noev, r3, kt}:
-      Cl{id, back, fd, addr, laddr, since, S.conn.name(cn), S.conn.db(cn), noev, S.conn.r3(cn), kt}
+    case Cl{id, back, fd, addr, laddr, since, name, db, noev, r3, kt, user}:
+      Cl{id, back, fd, addr, laddr, since, S.conn.name(cn), S.conn.db(cn), noev, S.conn.r3(cn), kt, user}
 
 def cl.noev(on: Bool, c: Cl) -> Cl:
   match c:
-    case Cl{id, back, fd, addr, laddr, since, name, db, noev, r3, kt}:
-      Cl{id, back, fd, addr, laddr, since, name, db, on, r3, kt}
+    case Cl{id, back, fd, addr, laddr, since, name, db, noev, r3, kt, user}:
+      Cl{id, back, fd, addr, laddr, since, name, db, on, r3, kt, user}
 
 def cls.with.if(+id: Nat, m: Maybe<&2, Cl>, +cn: S.Conn, cs: Cls) -> Cls:
   match m:
@@ -1723,15 +2539,17 @@ def ps.calm(+pb: Ps) -> Bool:
     case PsOf{+p}:
       ps.calm(p)
 
-# how a batch of a client with no subscription may run (group_job): 0 as
-# ps.calm lets it; 1 the fast way only when it writes no heeded key, while
-# the tracking has work but no client is in BCAST mode (Ps's bit 22 alone:
-# the keys of the tracking table are heeded keys, Tracking); 2 the
-# general way
+# how a batch of a client with no subscription may run (group_job), while
+# nothing else keeps the fast way off: 0 as ps.calm lets it; 1 the fast
+# way only when it writes no heeded key (heed.ok.of), while the tracking has
+# work but no client is in BCAST mode (Ps's bit 22: the keys of the
+# tracking table are heeded keys, Tracking); 3 as 0 and 4 as 1, but only
+# for a client that is not restricted, while some client is (bit 20:
+# ACL; bit 22 adds 1, bit 20 adds 3); 2 the general way
 def ps.gate(+pb: Ps) -> Nat:
   match pb:
     case Ps{reg, +ev, px, cs, own}:
-      Bool.pick(Nat, U32.is_eq(U32.and(ev, 3821010943), 0), Bool.pick(Nat, U32.is_eq(U32.and(ev, 4194304), 0), 0n, 1n), 2n)
+      Bool.pick(Nat, U32.is_eq(U32.and(ev, 3819962367), 0), Nat.add(Bool.pick(Nat, U32.is_eq(U32.and(ev, 4194304), 0), 0n, 1n), Bool.pick(Nat, U32.is_eq(U32.and(ev, 1048576), 0), 0n, 3n)), 2n)
     case PsOf{+p}:
       ps.gate(p)
 
@@ -1896,10 +2714,17 @@ def ps.heed.free(+cs: List<&2, R.Cmd>, +hs: List<&2, U32>, +pb: Ps) -> Bool:
     case PsOf{+p}:
       ps.heed.free(cs, hs, p)
 
+# whether the client of cn may run a batch the fast way while some
+# client is restricted (ACL): as S.ready lets it, and it is not
+# restricted (each of its calls is checked, the general way)
+def acl.ready(+cn: S.Conn, +srv: S.Srv) -> Bool:
+  Bool.and(S.ready(cn, srv), Bool.not(S.srv.restricted(srv, S.conn.id(cn))))
+
 # whether a batch of database commands may run the fast way while some
-# client waits or watches (group_job): its client may run it so, is in
-# no MULTI (looked for only while some client has a transaction or
-# watches keys) and none of its commands may write a heeded key
+# client waits or watches (group_job): its client may run it so (ready:
+# S.ready, or acl.ready while some client is restricted), is in no MULTI
+# (looked for only while some client has a transaction or watches keys)
+# and none of its commands may write a heeded key
 def heed.ok.of(ready: Bool, +n: Nat, +t: Tx, +cs: List<&2, R.Cmd>, +hs: List<&2, U32>, +pb: Ps) -> Bool:
   match ready t:
     case False{} _:
@@ -1908,9 +2733,6 @@ def heed.ok.of(ready: Bool, +n: Nat, +t: Tx, +cs: List<&2, R.Cmd>, +hs: List<&2,
       ps.heed.free(cs, hs, pb)
     case True{} t0:
       Bool.and(Bool.not(tx.in.multi(t0, n, False{})), ps.heed.free(cs, hs, pb))
-
-def heed.ok(+cn: S.Conn, +srv: S.Srv, +t: Tx, +cs: List<&2, R.Cmd>, +hs: List<&2, U32>, +pb: Ps) -> Bool:
-  heed.ok.of(S.ready(cn, srv), S.conn.id(cn), t, cs, hs, pb)
 
 def ps.heed.stir(+c: R.Cmd, +pb: Ps) -> Bool:
   match pb:
@@ -2432,7 +3254,7 @@ def reg.reproto.if(ch: Bool, +id: Nat, +back: Chan(Ans), +r3: Bool, r: Reg) -> R
 
 def ps.reproto(+cn: S.Conn, m: Maybe<&2, Cl>, r: Reg) -> Reg:
   match m:
-    case Some{Cl{id, +back, fd, addr, laddr, since, name, db, noev, +r3, kt}}:
+    case Some{Cl{id, +back, fd, addr, laddr, since, name, db, noev, +r3, kt, user}}:
       +now = S.conn.r3(cn)
       reg.reproto.if(Bool.xor(r3, now), S.conn.id(cn), back, now, r)
     case None{}:
@@ -2458,6 +3280,34 @@ def ps.cls(+pb: Ps) -> Cls:
       cs
     case PsOf{+p}:
       ps.cls(p)
+
+# the user of the client of id (ACL), and the client logged in as the
+# user of name u
+def ps.user(+id: Nat, +pb: Ps) -> String:
+  cls.user(id, ps.cls(pb))
+
+def ps.user.set(+id: Nat, +u: String, pb: Ps) -> Ps:
+  match pb:
+    case Ps{reg, ev, px, cs, own}:
+      Ps{reg, ev, px, cls.user.set(id, u, cs), own}
+    case PsOf{p}:
+      ps.user.set(id, u, p)
+
+# whether some client is restricted (Ps's bit 20: ACL), and that bit set
+# as the server's restricted clients are (on)
+def ps.acl.on(+pb: Ps) -> Bool:
+  match pb:
+    case Ps{reg, +ev, px, cs, own}:
+      U32.is_ne(U32.and(ev, 1048576), 0)
+    case PsOf{+p}:
+      ps.acl.on(p)
+
+def ps.acl.at(pb: Ps, on: Bool) -> Ps:
+  match pb:
+    case Ps{reg, ev, px, cs, own}:
+      Ps{reg, U32.or(U32.and(ev, 4293918719), Bool.pick(U32, on, 1048576, 0)), px, cs, own}
+    case PsOf{p}:
+      ps.acl.at(p, on)
 
 # The monitors in Pub/Sub's state (MONITOR, below): whether some client
 # monitors, whether the client of id does, the client of id made one
@@ -2501,7 +3351,7 @@ def ps.mon.push(+id: Nat, +out: String, pb: Ps) -> Ps:
 # the address of the client of id, as a line shows it
 def cl.addr.or(m: Maybe<&2, Cl>) -> String:
   match m:
-    case Some{Cl{id, back, fd, addr, laddr, since, name, db, noev, r3, kt}}:
+    case Some{Cl{id, back, fd, addr, laddr, since, name, db, noev, r3, kt, user}}:
       addr
     case None{}:
       "?:0"
@@ -2525,7 +3375,7 @@ def cl.mon.unix(unix: Bool, +addr: String) -> String:
 
 def cl.mon.or(m: Maybe<&2, Cl>) -> String:
   match m:
-    case Some{Cl{id, back, fd, +addr, +laddr, since, name, db, noev, r3, kt}}:
+    case Some{Cl{id, back, fd, +addr, +laddr, since, name, db, noev, r3, kt, user}}:
       cl.mon.unix(String.eq(addr, laddr), addr)
     case None{}:
       "?:0"
@@ -2540,7 +3390,7 @@ def ps.mon.addr(+id: Nat, +pb: Ps) -> String:
 # the name of the client of id (CLIENT SETNAME's), "" for none
 def cl.name.or(m: Maybe<&2, Cl>) -> String:
   match m:
-    case Some{Cl{id, back, fd, addr, laddr, since, name, db, noev, r3, kt}}:
+    case Some{Cl{id, back, fd, addr, laddr, since, name, db, noev, r3, kt, user}}:
       name
     case None{}:
       ""
@@ -2740,14 +3590,53 @@ def mem.bits(+srv: S.Srv, +ev: U32) -> U32:
   +m = S.srv.mm(srv)
   U32.or(U32.or(U32.or(U32.and(ev, 603979776), Bool.pick(U32, Nat.is_lt(0n, S.mm.max(m)), 268435456, 0)), Bool.pick(U32, S.mm.lfu(m), 134217728, 0)), Bool.pick(U32, S.mm.kick(m), 67108864, 0))
 
+# whether the writes are refused (MISCONF: Background saves): a
+# background save failed (rdb_last_bgsave_status err) while save points
+# are set and stop-writes-on-bgsave-error is yes (info.bend:
+# rdb.misconf), as the server's state has it now, which each command of
+# the general way reads (bg.go), as Redis's processCommand calls
+# writeCommandsDeniedByDiskError for each command: a CONFIG SET that
+# lifts or restores it counts for the commands after it in its batch
+def srv.misconf(+srv: S.Srv) -> Bool:
+  I.rdb.misconf(S.srv.rdb(srv))
+
+# bit 19: the same, kept in Ps's ev once a batch has run (ps.tune) and by
+# the actor after each step and each save, only to keep the fast way off
+# (ps.calm) while the writes are refused; no keyspace event has it
+# (ps.loud)
+def misconf.bit(+srv: S.Srv) -> U32:
+  Bool.pick(U32, srv.misconf(srv), 524288, 0)
+
+# whether the server has restricted clients (ACL), and Ps's bit 20 for
+# them (the gate's classes 3 and 4: ps.gate), set at once when a client's
+# user changes (bg.user) and after each batch of the general way
+def acl.on(+srv: S.Srv) -> Bool:
+  S.srv.acl.any(srv)
+
+def acl.bit(+srv: S.Srv) -> U32:
+  Bool.pick(U32, acl.on(srv), 1048576, 0)
+
 def ps.tune(pb: Ps, +srv: S.Srv) -> Ps:
   match pb:
     case Ps{RegNone{}, +ev, px, +cs, own}:
-      Ps{RegNone{}, U32.or(cls.bit(cs), mem.bits(srv, ev)), px, cs, own}
+      Ps{RegNone{}, U32.or(U32.or(U32.or(cls.bit(cs), mem.bits(srv, ev)), misconf.bit(srv)), acl.bit(srv)), px, cs, own}
     case Ps{RegOn{c, p, sh, cl, n}, +ev, px, +cs, own}:
-      Ps{RegOn{c, p, sh, cl, n}, U32.or(U32.or(ev.of(srv), cls.bit(cs)), mem.bits(srv, ev)), px, cs, own}
+      Ps{RegOn{c, p, sh, cl, n}, U32.or(U32.or(U32.or(U32.or(ev.of(srv), cls.bit(cs)), mem.bits(srv, ev)), misconf.bit(srv)), acl.bit(srv)), px, cs, own}
     case PsOf{p}:
       ps.tune(p, srv)
+
+# bit 19 as the server's state has it now (after a save that ended)
+def ps.misconf.set(pb: Ps, +srv: S.Srv) -> Ps:
+  match pb:
+    case Ps{reg, ev, px, cs, own}:
+      Ps{reg, U32.or(U32.and(ev, 4294443007), misconf.bit(srv)), px, cs, own}
+    case PsOf{p}:
+      ps.misconf.set(p, srv)
+
+# whether a background save runs, or a group's BGSAVE took a snapshot for
+# one (Background saves: Redis's child_type RDB)
+def bg.on(+srv: S.Srv) -> Bool:
+  I.bgs.on(I.rdb.bg(S.srv.rdb(srv)))
 
 # an eviction's outcome (Eviction: Evd's res) in Ps: 0 none, the heap
 # within maxmemory; 1 one that ran out of time (bit 26: the actor goes on
@@ -3292,7 +4181,7 @@ def iv.broken(+id: Nat, +back: Chan(Ans), +r3: Bool, +rd: Nat, +cur: Nat, +out: 
 
 def iv.redir.of(m: Maybe<&2, Cl>, +rd: Nat, +id: Nat, +back: Chan(Ans), +r3: Bool, +p: Pl, +cur: Nat, +out: Maybe<&2, Nat>, v: Iv) -> Iv:
   match m:
-    case Some{Cl{+rid, +rback, fd, addr, laddr, since, name, db, noev, +rr3, kt}}:
+    case Some{Cl{+rid, +rback, fd, addr, laddr, since, name, db, noev, +rr3, kt, user}}:
       iv.put(True{}, rid, rback, rr3, p, id, cur, out, v)
     case None{}:
       iv.broken(id, back, r3, rd, cur, out, v)
@@ -3308,7 +4197,7 @@ def iv.to(+rd: Nat, +id: Nat, +back: Chan(Ans), +r3: Bool, +p: Pl, +cur: Nat, +o
 # command runs (0: none), out as iv.route reads it
 def iv.send(+c: Cl, +p: Pl, +cur: Nat, +out: Maybe<&2, Nat>, v: Iv) -> Iv:
   match c:
-    case Cl{+id, +back, fd, addr, laddr, since, name, db, noev, +r3, +kt}:
+    case Cl{+id, +back, fd, addr, laddr, since, name, db, noev, +r3, +kt, user}:
       iv.to(tk.redir(kt), id, back, r3, p, cur, out, v)
 
 # a key of the table that changed: each of its clients that hears of it
@@ -3400,7 +4289,7 @@ def iv.key(+k: String, +cur: Nat, +bc: Bool, v: Iv) -> Iv:
 # emptied (trackingInvalidateKeysOnFlush)
 def iv.null.of(m: Maybe<&2, Cl>, +cur: Nat, v: Iv) -> Iv:
   match m:
-    case Some{Cl{+id, +back, fd, addr, laddr, since, name, db, noev, +r3, +kt}}:
+    case Some{Cl{+id, +back, fd, addr, laddr, since, name, db, noev, +r3, +kt, user}}:
       iv.to(tk.redir(kt), id, back, r3, PlNull{r3}, cur, None{}, v)
     case None{}:
       v
@@ -3593,9 +4482,11 @@ def ps.pend.put(xs: List<&2, R.Reply>, pb: Ps) -> Ps:
 # whose command runs, as Redis serves it: BLMOVE and BRPOPLPUSH change
 # their destination (lmoveHandlePush signals it; the key they popped from
 # was signalled by the push that made it ready, as serveClientBlockedOnList
-# says); BLMPOP's pop (listElementsRemoved), BZPOPMIN's, BZPOPMAX's and
-# BZMPOP's (genericZpopCommand) signal the key they popped from, and
-# BLPOP's and BRPOP's (form 1) do not. The invalidations the served
+# says), unless it holds another type: then they answer WRONGTYPE, change
+# nothing and signal nothing (ok is False); BLMPOP's pop
+# (listElementsRemoved), BZPOPMIN's, BZPOPMAX's and BZMPOP's
+# (genericZpopCommand) signal the key they popped from, and BLPOP's and
+# BRPOP's (form 1) do not. The invalidations the served
 # client gets after its reply (pend, newest first); those it gets as
 # another's go on its channel, before its reply (iv.route). Those for the
 # client out, whose command served it, go after that client's reply, with
@@ -3611,10 +4502,17 @@ def ps.trk.popped(on: Bool, +ks: List<&2, String>, +id: Nat, +out: Maybe<&2, Nat
     case _ _:
       pb
 
-def ps.trk.served.go(+pc: R.Cmd, +form: Nat, +id: Nat, +out: Maybe<&2, Nat>, pb: Ps) -> Ps:
+def ps.trk.moved(on: Bool, +d: String, +id: Nat, +out: Maybe<&2, Nat>, pb: Ps) -> Ps:
+  match on:
+    case True{}:
+      iv.ps(iv.key.as(d, id, out, True{}, iv.of(pb)))
+    case False{}:
+      pb
+
+def ps.trk.served.go(+pc: R.Cmd, +form: Nat, ok: Bool, +id: Nat, +out: Maybe<&2, Nat>, pb: Ps) -> Ps:
   match pc:
     case R.LMove{s, +d, e}:
-      iv.ps(iv.key.as(d, id, out, True{}, iv.of(pb)))
+      ps.trk.moved(ok, d, id, out, pb)
     case R.LMPop{+ks, l, n}:
       ps.trk.popped(Bool.not(Nat.is_eq(form, 1n)), ks, id, out, pb)
     case R.ZMPop{+ks, m, n}:
@@ -3632,20 +4530,20 @@ def pd.mk(p: List<&2, R.Reply> & Ps, old: List<&2, R.Reply>) -> Pd:
   (late, pb) = p
   pd.of(ps.pend.take(pb), late, old)
 
-def pd.aside(p: List<&2, R.Reply> & Ps, +pc: R.Cmd, +form: Nat, +id: Nat, +out: Nat) -> Pd:
+def pd.aside(p: List<&2, R.Reply> & Ps, +pc: R.Cmd, +form: Nat, ok: Bool, +id: Nat, +out: Nat) -> Pd:
   (old, pb) = p
-  pd.mk(ps.own.take(ps.trk.served.go(pc, form, id, Some{out}, pb)), old)
+  pd.mk(ps.own.take(ps.trk.served.go(pc, form, ok, id, Some{out}, pb)), old)
 
-def ps.trk.served.if(on: Bool, +pc: R.Cmd, +form: Nat, +id: Nat, +out: Nat, pb: Ps) -> Pd:
+def ps.trk.served.if(on: Bool, +pc: R.Cmd, +form: Nat, ok: Bool, +id: Nat, +out: Nat, pb: Ps) -> Pd:
   match on:
     case True{}:
-      pd.aside(ps.pend.take(pb), pc, form, id, out)
+      pd.aside(ps.pend.take(pb), pc, form, ok, id, out)
     case False{}:
       Pd{Nil{}, pb}
 
-def ps.trk.served(+pc: R.Cmd, +form: Nat, +id: Nat, +out: Nat, pb: Ps) -> Pd:
+def ps.trk.served(+pc: R.Cmd, +form: Nat, ok: Bool, +id: Nat, +out: Nat, pb: Ps) -> Pd:
   +p = pb
-  ps.trk.served.if(ps.trk.hot(p), pc, form, id, out, p)
+  ps.trk.served.if(ps.trk.hot(p), pc, form, ok, id, out, p)
 
 # The end of a group (Redis's beforeSleep): the keys changed under each
 # BCAST prefix to the clients that listen to it, each of them but the
@@ -4489,7 +5387,7 @@ def ps.evs(es: List<&2, Ev>, +me: Nat, pb: Ps) -> Ps:
 
 # whether keyspace events are to be sent: a class of them is on (bits 0
 # to 14; the bits past theirs say other things, and no event goes out for
-# them: trk.bits, dn.bit, mem.bits)
+# them: trk.bits, dn.bit, mem.bits, misconf.bit)
 def ps.loud(+pb: Ps) -> Bool:
   match pb:
     case Ps{reg, +ev, px, cs, own}:
@@ -4603,12 +5501,13 @@ def bg.sw(ch: Bool, +r3: Bool, rs1: List<&2, R.Reply>) -> List<&2, R.Reply>:
     case False{}:
       rs1
 
-def bg.done(+r0: Bool, d: S.Logged, p: Pre, rs: List<&2, R.Reply>, es: List<&2, A.Ent>, ws: Waits, up: List<&2, Up>, tx: Tx, pb: Ps) -> LRun:
+def bg.done(+r0: Bool, +w: Nat, d: S.Logged, p: Pre, rs: List<&2, R.Reply>, es: List<&2, A.Ent>, ws: Waits, up: List<&2, Up>, tx: Tx, pb: Ps) -> LRun:
   match d p:
-    case S.Logged{+rs1, e, +conn, srv, ds} Pre{+code, xs}:
+    case S.Logged{+rs1, e, +conn, srv, ds} Pre{+code, +xs}:
+      +n = dirty.ran(xs, code, rs1, w)
       +ys = gen.errs(xs, rs1, code)
       +r3 = S.conn.r3(conn)
-      LRun{List.reverse.go(&2, R.Reply, bg.sw(Bool.xor(r0, r3), r3, rs1), rs), A.ents.onto(e, es), conn, gen.count(srv, code, ys), ds, ws, up, tx, pb}
+      LRun{List.reverse.go(&2, R.Reply, bg.sw(Bool.xor(r0, r3), r3, rs1), rs), A.ents.onto(e, es), conn, gen.count.d(srv, code, ys, n), ds, ws, up, tx, pb}
 
 # A call that runs while its client's replies are held back has its reply
 # counted as Redis has it. A command of the database runs with them on,
@@ -4618,26 +5517,32 @@ def bg.done(+r0: Bool, d: S.Logged, p: Pre, rs: List<&2, R.Reply>, es: List<&2, 
 # only one, so the databases go on unshared. A command of the connection
 # or of the server runs as it is (CLIENT REPLY ON and RESET answer all the
 # same), its reply as Redis has it taken from S.own_reply before.
-def bg.held(d: S.Logged, conn: S.Conn, +code: Nat, rs: List<&2, R.Reply>, es: List<&2, A.Ent>, ws: Waits, up: List<&2, Up>, tx: Tx, pb: Ps) -> LRun:
+def bg.held(+w: Nat, d: S.Logged, conn: S.Conn, +code: Nat, rs: List<&2, R.Reply>, es: List<&2, A.Ent>, ws: Waits, up: List<&2, Up>, tx: Tx, pb: Ps) -> LRun:
   match d:
     case S.Logged{+rs1, e, c1, srv, ds}:
-      LRun{rs, A.ents.onto(e, es), conn, gen.count(srv, code, R.errs.zip(rs1, [code], Nil{})), ds, ws, up, tx, pb}
+      +n = dirty.first(code, rs1, w)
+      LRun{rs, A.ents.onto(e, es), conn, gen.count.d(srv, code, R.errs.zip(rs1, [code], Nil{}), n), ds, ws, up, tx, pb}
 
 def bg.held.k(+k: S.Role, +c: R.Cmd, +code: Nat, rs: List<&2, R.Reply>, es: List<&2, A.Ent>, +conn: S.Conn, +srv: S.Srv, ds: R.Ds, ws: Waits, up: List<&2, Up>, tx: Tx, pb: Ps) -> LRun:
   match k:
     case S.KSess{+o}:
       +d = ds
       +p = gen.pre.own(o, code, conn, srv, d)
-      bg.done(S.conn.r3(conn), S.run_log(conn, srv, B.Mixed{[c], Nil{}}, d), p, rs, es, ws, up, tx, pb)
+      +n = dirty.own(S.own_reply(o, S.conn.on(conn), srv, d), code, dw.call(code, c, d))
+      bg.done(S.conn.r3(conn), n, S.run_log(conn, srv, B.Mixed{[c], Nil{}}, d), p, rs, es, ws, up, tx, pb)
     case _:
-      bg.held(S.run_log(S.conn.on(conn), srv, B.Mixed{[c], Nil{}}, ds), S.next_conn(False{}, c, conn, srv), code, rs, es, ws, up, tx, pb)
+      +d = ds
+      +w = dw.call(code, c, d)
+      bg.held(w, S.run_log(S.conn.on(conn), srv, B.Mixed{[c], Nil{}}, d), S.next_conn(False{}, c, conn, srv), code, rs, es, ws, up, tx, pb)
 
 def bg.run.go(held: Bool, +ok: Bool, +k: S.Role, +c: R.Cmd, +code: Nat, rs: List<&2, R.Reply>, es: List<&2, A.Ent>, +conn: S.Conn, +srv: S.Srv, ds: R.Ds, ws: Waits, up: List<&2, Up>, tx: Tx, pb: Ps) -> LRun:
   match held:
     case True{}:
       bg.held.k(k, c, code, rs, es, conn, srv, ds, ws, up, tx, pb)
     case False{}:
-      bg.done(S.conn.r3(conn), S.run_log(conn, srv, B.Mixed{[c], Nil{}}, ds), gen.pre(ok, c, code), rs, es, ws, up, tx, pb)
+      +d = ds
+      +w = dw.if(Bool.and(ok, dirty.weighs(code)), c, d)
+      bg.done(S.conn.r3(conn), w, S.run_log(conn, srv, B.Mixed{[c], Nil{}}, d), gen.pre(ok, c, code), rs, es, ws, up, tx, pb)
 
 # a command run while some client has a transaction or watches keys, or
 # keyspace events are to be sent: its effects touch the keys watched
@@ -4821,7 +5726,7 @@ def bg.popped(w: Waits, r: R.Reply & (List<&2, A.Eff> & R.Ds), rs: List<&2, R.Re
       (e, ds) = q
       +y = S.blk.shape(S.blk.form(b), x)
       +left = ws
-      bg.popped.up(ps.trk.served(pc, S.blk.form(b), id, S.conn.id(conn), pb), back, c0, c1, y, cmds, codes, av, e, ds, rs, es, conn, waits.count(left, S.srv.served(bg.errs(srv, code, y), id)), left, up, tx, pc, pre)
+      bg.popped.up(ps.trk.served(pc, S.blk.form(b), Bool.not(R.r_is_err(y)), id, S.conn.id(conn), pb), back, c0, c1, y, cmds, codes, av, e, ds, rs, es, conn, waits.count(left, S.srv.served(S.srv.dirtied(bg.errs(srv, code, y), dirty.served(code, y)), id)), left, up, tx, pc, pre)
     case WaitNone{}:
       (x, q) = r
       (e, ds) = q
@@ -4977,12 +5882,19 @@ def bg.unblock(+n: Nat, +err: Bool, +code: Nat, g: LRun) -> LRun:
 # MULTI, flagging the transaction: MONITOR); or start a rewrite of the
 # append-only file (BGREWRITEAOF: The rewrite of the append-only file); or
 # refuse a command past maxmemory (Memory: in MULTI, flagging the
-# transaction); or hold a command back while clients are paused (The
-# pause); stop the server (SHUTDOWN, after a save or not), or refuse
-# SHUTDOWN and SAVE in MULTI (SHUTDOWN); save (SAVE), or save once the
-# group has run (FLUSHALL with save points: The RDB file); a command that
-# does not run (after a QUIT, or before the client authenticates) runs as
-# the session runs it.
+# transaction), or one that writes while a background save that failed
+# stops the writes (MISCONF: Background saves, the same way); or hold a
+# command back while clients are paused (The pause); stop the server
+# (SHUTDOWN, after a save or not), or refuse SHUTDOWN and SAVE in MULTI
+# (SHUTDOWN); save (SAVE), or save once the group has run (FLUSHALL with
+# save points: The RDB file); start a background save, now or once the
+# rewrite ends (BGSAVE: Background saves); or refuse a command its
+# client's user may not run (in MULTI, flagging the transaction), log its
+# client in (AUTH, HELLO), or run a subcommand of ACL that reaches the
+# clients (ACL); or answer an XREAD with BLOCK that would wait, as BendKV
+# blocks on no stream yet (in MULTI it does not wait: the session answers
+# it a null array, as Redis does); a command that does not run (after a
+# QUIT, or before the client authenticates) runs as the session runs it.
 type Sh is Data:
   ShRun{}
   ShWait{b: S.Blk}
@@ -5007,11 +5919,18 @@ type Sh is Data:
   ShMonDeny{inm: Bool}
   ShRewrite{}
   ShOom{inm: Bool}
+  ShMisconf{inm: Bool}
   ShPause{}
   ShDown{save: Bool, nosave: Bool, force: Bool}
   ShNoMulti{}
   ShSave{}
   ShFlush{}
+  ShBgsave{sched: Bool}
+  ShNoPerm{v: U.Verdict, inm: Bool}
+  ShAuth{}
+  ShHello{}
+  ShAcl{k: Nat}
+  ShNoBlock{}
 
 def sh.blk(b: S.Blk, +ds: R.Ds) -> Sh:
   +x = b
@@ -5025,6 +5944,11 @@ def abort.why(+m: String) -> String:
 # the error past maxmemory (Redis's shared.oomerr)
 def oom.msg() -> String:
   "OOM command not allowed when used memory > 'maxmemory'."
+
+# the error while a background save that failed stops the writes
+# (Redis's shared.bgsaveerr: Background saves)
+def misconf.msg() -> String:
+  "MISCONF Redis is configured to save RDB snapshots, but it's currently unable to persist to disk. Commands that may modify the data set are disabled, because this instance is configured to report errors during writes if RDB snapshotting fails (stop-writes-on-bgsave-error option). Please check the Redis logs for details about the RDB error."
 
 def sh.refused(+c: R.Cmd, +code: Nat) -> Sh:
   match c:
@@ -5053,14 +5977,30 @@ def sh.down(+sd: R.Sd) -> Sh:
     case R.SdBad{}:
       ShDown{False{}, False{}, False{}}
 
+# BGSAVE's SCHEDULE (the parser lets nothing else through)
+def sh.sched(+a: List<&2, String>) -> Bool:
+  match a:
+    case Nil{}:
+      False{}
+    case _:
+      True{}
+
 def sh.admin(+k: Nat, +a: List<&2, String>) -> Sh:
   match k:
     case 4n:
       sh.down(R.sd.flags(a))
     case 15n:
       ShSave{}
+    case 16n:
+      ShBgsave{sh.sched(a)}
     case _:
       ShRun{}
+
+# ACL's subcommands that reach the clients (ShAcl: ACL): DELUSER, SETUSER
+# and WHOAMI, by R.acl_id's numbers; the others run as the session runs
+# them
+def sh.acl(+k: Nat) -> Sh:
+  Bool.pick(Sh, Bool.or(Nat.is_eq(k, 2n), Bool.or(Nat.is_eq(k, 11n), Nat.is_eq(k, 13n))), ShAcl{k}, ShRun{})
 
 # a command of a client with no open transaction, that may run
 def sh.plain(+c: R.Cmd, +code: Nat, +ds: R.Ds) -> Sh:
@@ -5084,7 +6024,9 @@ def sh.plain(+c: R.Cmd, +code: Nat, +ds: R.Ds) -> Sh:
     case R.Own{R.SClientSetName{n}}:
       ShConn{}
     case R.Own{R.SHello{a}}:
-      ShConn{}
+      ShHello{}
+    case R.Own{R.SAuth{a}}:
+      ShAuth{}
     case R.Own{R.SSelect{d}}:
       ShConn{}
     case R.Own{R.SMonitor{}}:
@@ -5095,6 +6037,10 @@ def sh.plain(+c: R.Cmd, +code: Nat, +ds: R.Ds) -> Sh:
       sh.admin(k, a)
     case R.Own{R.SFlushAll{}}:
       ShFlush{}
+    case R.Own{R.SAcl{+k, a}}:
+      sh.acl(k)
+    case R.Own{R.SXRead{q}}:
+      Bool.pick(Sh, R.xread.waits(q, R.ds.focused(ds)), ShNoBlock{}, ShRun{})
     case R.Own{R.SBad{R.RError{+m}}}:
       sh.abort.if(Nat.is_eq(R.code.key(code), R.stat.top(162n)), m)
     case _:
@@ -5269,11 +6215,30 @@ def sh.oomy(+inm: Bool, +c: R.Cmd, +code: Nat) -> Bool:
   Bool.and(Bool.not(Nat.is_eq(R.code.class(code), 1n)),
     Bool.or(R.stat.denyoom(R.code.key(code)), Bool.and(inm, sh.oom.multi(c))))
 
-def sh.of.run(rej: Bool, may: Bool, subd: Bool, inm: Bool, mon: Bool, held: Bool, +c: R.Cmd, +code: Nat, +ds: R.Ds) -> Sh:
-  match rej:
+# While a background save that failed stops the writes (srv.misconf:
+# Background saves), Redis refuses, right after the refusal past
+# maxmemory, a command that writes and PING (writeCommandsDeniedByDiskError
+# in processCommand), never one the parser refused; in MULTI the
+# transaction is flagged. EXEC is refused when its transaction queued one
+# that writes (bg.exec).
+def sh.misconfy(+code: Nat) -> Bool:
+  +key = R.code.key(code)
+  Bool.and(Bool.not(Nat.is_eq(R.code.class(code), 1n)), Bool.or(R.stat.write(key), Nat.is_eq(key, R.stat.top(1n))))
+
+def sh.mis(mc: Bool, +code: Nat) -> Bool:
+  match mc:
     case True{}:
-      ShOom{inm}
+      sh.misconfy(code)
     case False{}:
+      False{}
+
+def sh.of.run(rej: Bool, mis: Bool, may: Bool, subd: Bool, inm: Bool, mon: Bool, held: Bool, +c: R.Cmd, +code: Nat, +ds: R.Ds) -> Sh:
+  match rej mis:
+    case True{} _:
+      ShOom{inm}
+    case False{} True{}:
+      ShMisconf{inm}
+    case False{} False{}:
       sh.of.may(may, subd, inm, mon, held, c, code, ds)
 
 # SHUTDOWN and SAVE in MULTI are refused (NO_MULTI) once the client may
@@ -5283,21 +6248,32 @@ def sh.of.run(rej: Bool, may: Bool, subd: Bool, inm: Bool, mon: Bool, held: Bool
 def sh.nomulti(+code: Nat) -> Bool:
   Bool.and(R.stat.nomulti(R.code.key(code)), Bool.not(Nat.is_eq(R.code.class(code), 1n)))
 
-def sh.of.nm(nm: Bool, +m: Bool, subd: Bool, +i: Bool, mon: Bool, oom: Bool, held: Bool, +c: R.Cmd, +code: Nat, +ds: R.Ds) -> Sh:
+# A command its client's user may not run (v: ACL, bg.acl.check) is refused
+# once the client may run commands and SHUTDOWN and SAVE in MULTI were
+# refused, before the rest, as processCommand checks ACL right after
+# NO_MULTI
+def sh.of.acl(v: U.Verdict, rej: Bool, mis: Bool, may: Bool, subd: Bool, inm: Bool, mon: Bool, held: Bool, +c: R.Cmd, +code: Nat, +ds: R.Ds) -> Sh:
+  match v:
+    case U.VOk{}:
+      sh.of.run(rej, mis, may, subd, inm, mon, held, c, code, ds)
+    case U.VNo{w, at, o}:
+      ShNoPerm{U.VNo{w, at, o}, inm}
+
+def sh.of.nm(nm: Bool, +m: Bool, subd: Bool, +i: Bool, mon: Bool, oom: Bool, mc: Bool, held: Bool, v: U.Verdict, +c: R.Cmd, +code: Nat, +ds: R.Ds) -> Sh:
   match nm:
     case True{}:
       ShNoMulti{}
     case False{}:
-      sh.of.run(Bool.and(m, Bool.and(oom, sh.oomy(i, c, code))), m, subd, i, mon, held, c, code, ds)
+      sh.of.acl(v, Bool.and(m, Bool.and(oom, sh.oomy(i, c, code))), Bool.and(m, sh.mis(mc, code)), m, subd, i, mon, held, c, code, ds)
 
-def sh.of(quit: Bool, may: Bool, inm: Bool, subd: Bool, mon: Bool, oom: Bool, held: Bool, +c: R.Cmd, +code: Nat, +ds: R.Ds) -> Sh:
+def sh.of(quit: Bool, may: Bool, inm: Bool, subd: Bool, mon: Bool, oom: Bool, mc: Bool, held: Bool, v: U.Verdict, +c: R.Cmd, +code: Nat, +ds: R.Ds) -> Sh:
   match quit:
     case True{}:
       ShRun{}
     case False{}:
       +m = may
       +i = inm
-      sh.of.nm(Bool.and(m, Bool.and(i, sh.nomulti(code))), m, subd, i, mon, oom, held, c, code, ds)
+      sh.of.nm(Bool.and(m, Bool.and(i, sh.nomulti(code))), m, subd, i, mon, oom, mc, held, v, c, code, ds)
 
 # the client's transaction state, changed (its client first in the chain)
 def bg.open(+id: Nat, g: LRun) -> LRun:
@@ -5470,12 +6446,13 @@ def red.put(st: Red, a: String) -> String:
     case _:
       a
 
-def red.hello.opts(xs: List<&2, String>, +st: Red) -> List<&2, String>:
+# HELLO's options from xs on, n of them, read in state st
+def red.hello.opts(xs: List<&2, String>, +n: Nat, +st: Red) -> List<&2, String>:
   match xs:
     case Nil{}:
       Nil{}
-    case Con{+a, +rest}:
-      red.put(st, a) <> red.hello.opts(rest, red.step(st, a, List.length(&2, String, rest)))
+    case Con{+a, rest}:
+      red.put(st, a) <> red.hello.opts(rest, Nat.sub(n, 1n), red.step(st, a, Nat.sub(n, 1n)))
 
 # whether HELLO's version is one Redis reads its options after: 2 or 3
 def red.ver(l: R.LL) -> Bool:
@@ -5488,7 +6465,8 @@ def red.ver(l: R.LL) -> Bool:
 def red.hello.ver(ok: Bool, h: String, v: String, rest: List<&2, String>) -> List<&2, String>:
   match ok:
     case True{}:
-      h <> v <> red.hello.opts(rest, RedOpt{})
+      +r = rest
+      h <> v <> red.hello.opts(r, List.length(&2, String, r), RedOpt{})
     case False{}:
       h <> v <> rest
 
@@ -5508,9 +6486,27 @@ def red.of(auth: Bool, hello: Bool, xs: List<&2, String>) -> List<&2, String>:
     case False{} False{}:
       xs
 
+# a command line with its arguments from the n-th on redacted
+def red.from(xs: List<&2, String>, +n: Nat) -> List<&2, String>:
+  match xs:
+    case Nil{}:
+      Nil{}
+    case Con{x, rest}:
+      Bool.pick(String, Nat.is_eq(n, 0n), red.word(), x) <> red.from(rest, Nat.sub(n, 1n))
+
+# ACL SETUSER's arguments redacted from its user on, as aclCommand
+# redacts them (on: ACL SETUSER; the slow log's, as ACL is administrative
+# and no monitor sees it)
+def red.setuser(on: Bool, +key: Nat, xs: List<&2, String>) -> List<&2, String>:
+  match on:
+    case True{}:
+      red.from(xs, 2n)
+    case False{}:
+      red.of(Nat.is_eq(key, R.stat.top(102n)), Nat.is_eq(key, R.stat.top(101n)), xs)
+
 # a call's arguments as a line shows them (key: its command's)
 def mon.redact(+key: Nat, xs: List<&2, String>) -> List<&2, String>:
-  red.of(Nat.is_eq(key, R.stat.top(102n)), Nat.is_eq(key, R.stat.top(101n)), xs)
+  red.setuser(Nat.is_eq(key, R.stat.sub.acl(11n)), key, xs)
 
 # CONFIG SET's parameters that Redis flags sensitive (SENSITIVE_CONFIG),
 # whose values it redacts, case aside
@@ -5574,10 +6570,14 @@ def mon.seen.sh(+may: Bool, +sh: Sh, +code: Nat) -> Bool:
       False{}
     case ShOom{i}:
       False{}
+    case ShMisconf{i}:
+      False{}
     case ShPause{}:
       False{}
     case ShNoMulti{}:
       False{}
+    case ShNoPerm{v, i}:
+      Nat.is_eq(R.code.key(code), R.stat.top(162n))
     case _:
       mon.ran(may, code)
 
@@ -5708,22 +6708,25 @@ def bg.feed(seen: Bool, +id: Nat, +k: Nat, +m0: S.Mute, a: Av, ar: Av, g: LRun) 
       fed.held(bg.feed(seen, id, k, m0, a, ar, h))
 
 # The commands EXEC runs: each one's line, the client's own kept for after
-# EXEC's array (mine, newest first)
+# EXEC's array (mine, newest first); and whether an error came after the
+# last call (err: a command refused at EXEC, whose error Redis adds out of
+# call(), so that EXEC's own call() counts it as failed when no call
+# follows)
 type Xr is Data:
-  Xr{g: LRun, mine: List<&2, String>}
+  Xr{g: LRun, mine: List<&2, String>, err: Bool}
 
 def bg.x.fed(+id: Nat, +k: Nat, +m0: S.Mute, got: Got, g: LRun, mine: List<&2, String>) -> Xr:
   match got g:
     case Got{args, rest} LRun{rs, es, +conn, srv, +ds, ws, up, tx, +pb}:
       +line = mon.line(R.ds.now(ds), S.conn.db(conn), ps.mon.addr(id, pb), mon.redact(R.code.key(k), args))
-      Xr{LRun{rs, es, conn, srv, ds, ws, up, tx, ps.mon.push(id, "+" ++ line ++ "\r\n", pb)}, mon.add(mon.self(ps.mon.is(id, pb), m0, conn), line, mine)}
+      Xr{LRun{rs, es, conn, srv, ds, ws, up, tx, ps.mon.push(id, "+" ++ line ++ "\r\n", pb)}, mon.add(mon.self(ps.mon.is(id, pb), m0, conn), line, mine), False{}}
     case Got{args, rest} LHeld{h}:
-      Xr{LHeld{h}, mine}
+      Xr{LHeld{h}, mine, False{}}
 
 def bg.x.feed.on(on: Bool, +id: Nat, +k: Nat, +m0: S.Mute, a: Av, g: LRun, mine: List<&2, String>) -> Xr:
   match on:
     case False{}:
-      Xr{g, mine}
+      Xr{g, mine, False{}}
     case True{}:
       bg.x.fed(id, k, m0, av.get(a), g, mine)
 
@@ -5732,7 +6735,7 @@ def bg.x.feed(ran: Bool, +id: Nat, +k: Nat, +m0: S.Mute, a: Av, g: LRun, mine: L
     case LRun{rs, es, conn, srv, ds, ws, up, tx, +pb}:
       bg.x.feed.on(Bool.and(ran, ps.mon.any(pb)), id, k, m0, a, LRun{rs, es, conn, srv, ds, ws, up, tx, pb}, mine)
     case LHeld{h}:
-      Xr{LHeld{h}, mine}
+      Xr{LHeld{h}, mine, False{}}
 
 # the client's own lines of EXEC's commands (newest first), after EXEC's
 # reply
@@ -5769,10 +6772,10 @@ def bg.monitor(+id: Nat, +back: Chan(Ans), +code: Nat, g: LRun) -> LRun:
       LHeld{h}
 
 # BGREWRITEAOF, as Redis 7.0.15's bgrewriteaofCommand answers it: while a
-# rewrite runs, refused; in EXEC, scheduled (the cron starts it); else
-# started: the server's state says it runs from the group's time, and the
-# actor starts it once the group is answered (The rewrite of the
-# append-only file)
+# rewrite runs, refused; in EXEC, or while a background save runs,
+# scheduled (the cron starts it); else started: the server's state says
+# it runs from the group's time, and the actor starts it once the group
+# is answered (The rewrite of the append-only file)
 def bg.rw.go(g: LRun) -> LRun:
   match g:
     case LRun{rs, es, conn, srv, +ds, ws, up, tx, pb}:
@@ -5799,7 +6802,46 @@ def bg.rewrite.if(on: Bool, exec: Bool, +code: Nat, g: LRun) -> LRun:
 def bg.rewrite(exec: Bool, +code: Nat, g: LRun) -> LRun:
   match g:
     case LRun{rs, es, conn, +srv, ds, ws, up, tx, pb}:
-      bg.rewrite.if(S.srv.rw.on(srv), exec, code, LRun{rs, es, conn, srv, ds, ws, up, tx, pb})
+      bg.rewrite.if(S.srv.rw.on(srv), Bool.or(exec, bg.on(srv)), code, LRun{rs, es, conn, srv, ds, ws, up, tx, pb})
+    case LHeld{h}:
+      LHeld{h}
+
+# BGSAVE, as Redis 7.0.15's bgsaveCommand answers it (Background saves):
+# while a save runs (or a BGSAVE of the group took its snapshot),
+# refused; while a rewrite runs, or in EXEC, scheduled with SCHEDULE (in
+# EXEC always: the cron starts it), else refused; else started: a
+# snapshot of the databases as they are, the save counted (rdb_saves) at
+# the group's second, and the actor starts it once the group is answered
+def bg.bg.go(g: LRun) -> LRun:
+  match g:
+    case LRun{rs, es, conn, srv, +ds, ws, up, tx, pb}:
+      +xs = R.ds.list(ds)
+      LRun{rs, es, conn, S.srv.bg.go(srv, Nat.div(R.ds.now(ds), 1000n), dw.dbs(xs), Some{xs}, False{}), ds, ws, up, tx, pb}
+    case LHeld{h}:
+      LHeld{h}
+
+def bg.bg.later(g: LRun) -> LRun:
+  match g:
+    case LRun{rs, es, conn, srv, ds, ws, up, tx, pb}:
+      LRun{rs, es, conn, S.srv.bg.later(srv), ds, ws, up, tx, pb}
+    case LHeld{h}:
+      LHeld{h}
+
+def bg.bgsave.if(on: Bool, busy: Bool, sched: Bool, +code: Nat, g: LRun) -> LRun:
+  match on busy sched:
+    case True{} _ _:
+      bg.say(R.RError{"ERR Background save already in progress"}, code, g)
+    case False{} True{} True{}:
+      bg.say(R.RStatus{"Background saving scheduled"}, code, bg.bg.later(g))
+    case False{} True{} False{}:
+      bg.say(R.RError{"ERR Another child process is active (AOF?): can't BGSAVE right now. Use BGSAVE SCHEDULE in order to schedule a BGSAVE whenever possible."}, code, g)
+    case False{} False{} _:
+      bg.say(R.RStatus{"Background saving started"}, code, bg.bg.go(g))
+
+def bg.bgsave(+exec: Bool, +sched: Bool, +code: Nat, g: LRun) -> LRun:
+  match g:
+    case LRun{rs, es, conn, +srv, ds, ws, up, tx, pb}:
+      bg.bgsave.if(bg.on(srv), Bool.or(S.srv.rw.on(srv), exec), Bool.or(sched, exec), code, LRun{rs, es, conn, srv, ds, ws, up, tx, pb})
     case LHeld{h}:
       LHeld{h}
 
@@ -5870,12 +6912,22 @@ def tx.flat(xs: List<&2, A.Ent>, acc: List<&2, A.Eff>) -> List<&2, A.Eff>:
 def tx.effs(e1: List<&2, A.Ent>, es: List<&2, A.Ent>) -> List<&2, A.Ent>:
   List.reverse.go(&2, A.Ent, A.tx.wrap(tx.flat(e1, Nil{})), es)
 
+# EXEC counted as failed when an error came after its last call (Xr's
+# err): Redis's incrCommandStatsOnError at the end of EXEC's call() sees
+# an error reply since the last call's end
+def bg.x.failed(e: Bool, +code: Nat, g: LRun) -> LRun:
+  match e g:
+    case True{} LRun{rs, es, conn, +srv, ds, ws, up, tx, pb}:
+      LRun{rs, es, conn, S.srv.failed(srv, code), ds, ws, up, tx, pb}
+    case _ other:
+      other
+
 def bg.exec.done(rs: List<&2, R.Reply>, es: List<&2, A.Ent>, +m0: S.Mute, +mi: S.Mute, +code: Nat, x: Xr) -> LRun:
   match x:
-    case Xr{LRun{rs1, es1, +conn1, srv1, ds1, ws1, up1, tx1, pb}, mine}:
+    case Xr{LRun{rs1, es1, +conn1, srv1, ds1, ws1, up1, tx1, pb}, mine, e}:
       +conn2 = Bool.pick(S.Conn, mute.same(S.conn.mode(conn1), mi), conn.mode.set(m0, conn1), conn1)
-      mon.after(mine, bg.say(R.RArray{List.reverse(&2, R.Reply, rs1)}, code, LRun{rs, tx.effs(es1, es), conn2, srv1, ds1, ws1, up1, tx1, pb}))
-    case Xr{LHeld{h}, mine}:
+      mon.after(mine, bg.x.failed(e, code, bg.say(R.RArray{List.reverse(&2, R.Reply, rs1)}, code, LRun{rs, tx.effs(es1, es), conn2, srv1, ds1, ws1, up1, tx1, pb})))
+    case Xr{LHeld{h}, mine, e}:
       LHeld{h}
 
 # A command of Pub/Sub. SUBSCRIBE and its kin: their replies sent
@@ -6048,12 +7100,12 @@ def cl.line.of(m: Mine, +mo: Bool, +sub: Bool, +x: TxIs, +b: Bool, +wa: Nat, c: 
   match m:
     case Mine{+ch, +pa, +sh}:
       match c:
-        case Cl{id, back, fd, +addr, +laddr, +since, name, db, +noev, r3, +kt}:
+        case Cl{id, back, fd, +addr, +laddr, +since, name, db, +noev, r3, +kt, user}:
           match w:
             case Them{}:
-              R.client.line(R.ClLine{id, addr, laddr, U32.to_nat(fd), name, cl.secs(now, since), cl.secs(now, at), cl.flags(mo, sub, x, b, kt, String.eq(addr, laddr), noev), db, List.length(&2, String, ch), List.length(&2, String, pa), List.length(&2, String, sh), cl.multi(x), 0n, wa, cl.cmd.of(word), tk.line.redir(kt), r3})
+              R.client.line(R.ClLine{id, addr, laddr, U32.to_nat(fd), name, cl.secs(now, since), cl.secs(now, at), cl.flags(mo, sub, x, b, kt, String.eq(addr, laddr), noev), db, List.length(&2, String, ch), List.length(&2, String, pa), List.length(&2, String, sh), cl.multi(x), 0n, wa, cl.cmd.of(word), user, tk.line.redir(kt), r3})
             case Me{i, +cn, cmd, qbuf, argv, ex}:
-              R.client.line(R.ClLine{id, addr, laddr, U32.to_nat(fd), S.conn.name(cn), cl.secs(now, since), 0n, cl.flags(mo, sub, x, b, kt, String.eq(addr, laddr), noev), S.conn.db(cn), List.length(&2, String, ch), List.length(&2, String, pa), List.length(&2, String, sh), cl.multi(x), qbuf, argv, cmd, tk.line.redir(kt), S.conn.r3(cn)})
+              R.client.line(R.ClLine{id, addr, laddr, U32.to_nat(fd), S.conn.name(cn), cl.secs(now, since), 0n, cl.flags(mo, sub, x, b, kt, String.eq(addr, laddr), noev), S.conn.db(cn), List.length(&2, String, ch), List.length(&2, String, pa), List.length(&2, String, sh), cl.multi(x), qbuf, argv, cmd, user, tk.line.redir(kt), S.conn.r3(cn)})
 
 def cl.line.mk(m: Mine, +mo: Bool, +sub: Bool, +x: TxIs, +b: Bool, +wa: Nat, c: Cl, +now: Nat, mk: U32 & Nat, w: Who) -> String:
   (word, at) = mk
@@ -6079,12 +7131,12 @@ def cl.tx(+w: Who, +id: Nat, +tx: Tx) -> TxIs:
 # client c's line, ended by a newline
 def cl.line(c: Cl, +now: Nat, +w: Who, +ws: Waits, +tx: Tx, +pb: Ps) -> String:
   match c:
-    case Cl{+id, +back, fd, addr, laddr, since, name, db, noev, r3, kt}:
-      cl.line.mk(mine.or(ps.mine(id, pb)), ps.mon.is(id, pb), ps.has(id, pb), cl.tx(w, id, tx), waits.has(id, ws), waits.argv(id, ws), Cl{id, back, fd, addr, laddr, since, name, db, noev, r3, kt}, now, Chan.marked(Ans, back), w) ++ "\n"
+    case Cl{+id, +back, fd, addr, laddr, since, name, db, noev, r3, kt, user}:
+      cl.line.mk(mine.or(ps.mine(id, pb)), ps.mon.is(id, pb), ps.has(id, pb), cl.tx(w, id, tx), waits.has(id, ws), waits.argv(id, ws), Cl{id, back, fd, addr, laddr, since, name, db, noev, r3, kt, user}, now, Chan.marked(Ans, back), w) ++ "\n"
 
 def cl.id(+c: Cl) -> Nat:
   match c:
-    case Cl{+id, back, fd, addr, laddr, since, name, db, noev, r3, kt}:
+    case Cl{+id, back, fd, addr, laddr, since, name, db, noev, r3, kt, user}:
       id
 
 # the registry's clients, in the order of their ids (as Redis lists them
@@ -6224,12 +7276,12 @@ def id.is(m: Maybe<&2, Nat>, +n: Nat) -> Bool:
 # that kills)
 def cl.picked(f: R.Kill, c: Cl, +me: Nat, +pb: Ps) -> Bool:
   match f c:
-    case R.Kill{a, l, i, +ty, +skip} Cl{+id, back, fd, +addr, +laddr, since, name, db, noev, r3, kt}:
-      Bool.and(Bool.and(Bool.and(opt.is(a, addr), opt.is(l, laddr)), Bool.and(id.is(i, id), cl.typed(ty, id, pb))), Bool.not(Bool.and(skip, Nat.is_eq(id, me))))
+    case R.Kill{a, l, i, +ty, +skip, u} Cl{+id, back, fd, +addr, +laddr, since, name, db, noev, r3, kt, +user}:
+      Bool.and(Bool.and(Bool.and(Bool.and(opt.is(a, addr), opt.is(l, laddr)), Bool.and(id.is(i, id), cl.typed(ty, id, pb))), opt.is(u, user)), Bool.not(Bool.and(skip, Nat.is_eq(id, me))))
 
 def cl.fd(+c: Cl) -> U32:
   match c:
-    case Cl{id, back, +fd, addr, laddr, since, name, db, noev, r3, kt}:
+    case Cl{id, back, +fd, addr, laddr, since, name, db, noev, r3, kt, user}:
       fd
 
 # the clients a filter picks
@@ -6480,27 +7532,39 @@ def save.hold(+d: Nat, +id: Nat, +back: Chan(Ans), +c: R.Cmd, +code: Nat, rest: 
     case LHeld{h}:
       LHeld{h}
 
-# SAVE: counted as it runs (rdb_saves), its client waits for the save
+# SAVE: refused while a background save runs (saveCommand), else
+# counted as it runs (rdb_saves), its client waiting for the save
+def bg.save.if(on: Bool, +id: Nat, +back: Chan(Ans), +c: R.Cmd, +code: Nat, rest: List<&2, R.Cmd>, more: List<&2, Nat>, av: Av, g: LRun) -> LRun:
+  match on g:
+    case True{} g0:
+      bg.say(R.RError{"ERR Background save already in progress"}, code, g0)
+    case False{} LRun{rs, es, conn, srv, ds, ws, up, tx, pb}:
+      save.hold(1n, id, back, c, code, rest, more, av, LRun{rs, es, conn, S.srv.rdb.save(srv), ds, ws, up, tx, pb})
+    case False{} LHeld{h}:
+      LHeld{h}
+
 def bg.save(+id: Nat, +back: Chan(Ans), +c: R.Cmd, +code: Nat, rest: List<&2, R.Cmd>, more: List<&2, Nat>, av: Av, g: LRun) -> LRun:
   match g:
-    case LRun{rs, es, conn, srv, ds, ws, up, tx, pb}:
-      save.hold(1n, id, back, c, code, rest, more, av, LRun{rs, es, conn, S.srv.rdb.save(srv), ds, ws, up, tx, pb})
+    case LRun{rs, es, conn, +srv, ds, ws, up, tx, pb}:
+      bg.save.if(bg.on(srv), id, back, c, code, rest, more, av, LRun{rs, es, conn, srv, ds, ws, up, tx, pb})
     case LHeld{h}:
       LHeld{h}
 
-# FLUSHALL that ran: with save points, the shell saves the empty
-# databases once the group has run
+# FLUSHALL that ran: the background save that runs dropped once the
+# group is answered (killRDBChild: Background saves); with save points,
+# the shell saves the empty databases once the group has run, and the
+# changes counted until then are taken away once it has (rdbSave's)
 def bg.flushall.if(on: Bool, g: LRun) -> LRun:
   match on g:
     case True{} LRun{rs, es, conn, srv, ds, ws, up, tx, +pb}:
-      LRun{rs, es, conn, S.srv.rdb.flushed(srv, True{}), ds, ws, up, tx, ps.down.set(Nat.max(1n, ps.down(pb)), pb)}
+      LRun{rs, es, conn, S.srv.rdb.flush.mark(S.srv.rdb.flushed(srv, True{})), ds, ws, up, tx, ps.down.set(Nat.max(1n, ps.down(pb)), pb)}
     case _ g0:
       g0
 
 def bg.flushall(g: LRun) -> LRun:
   match g:
     case LRun{rs, es, conn, +srv, ds, ws, up, tx, pb}:
-      bg.flushall.if(save.points(srv), LRun{rs, es, conn, srv, ds, ws, up, tx, pb})
+      bg.flushall.if(save.points(srv), LRun{rs, es, conn, S.srv.bg.killing(srv), ds, ws, up, tx, pb})
     case LHeld{h}:
       LHeld{h}
 
@@ -6624,6 +7688,13 @@ def pause.holds(+p: Pz, +mon: Bool, +c: R.Cmd, +code: Nat, +id: Nat, +tx: Tx) ->
       False{}
     case PzOn{+all, end}:
       Bool.and(Bool.not(Bool.or(mon, Nat.is_eq(R.code.class(code), 1n))), Bool.or(all, Bool.or(code.pausable(code), pause.exec(c, id, tx))))
+
+# whether a SHUTDOWN that saves ran earlier in the group (ps.down 1, the
+# server's S.srv.rdb.shut set) and holds a command (code) back until its
+# save's result is known, as a pause of every command would: but a
+# monitor's, and one the parser refused (The RDB file: SHUTDOWN)
+def down.holds(+srv: S.Srv, +pb: Ps, +mon: Bool, +code: Nat) -> Bool:
+  Bool.and(Bool.and(Nat.is_eq(ps.down(pb), 1n), S.srv.rdb.shut(srv)), Bool.not(Bool.or(mon, Nat.is_eq(R.code.class(code), 1n))))
 
 # the clients the pause held back (hit: whether the first of ws is one),
 # in the order they came, their batches to go on (up, newest first), from
@@ -6954,6 +8025,23 @@ def bg.x.trk(on: Bool, +id: Nat, +code: Nat, +a: Av, g: LRun) -> LRun:
     case _ g0:
       g0
 
+# CLIENT KILL with USER options: the error of the first user the server
+# does not keep, as Redis answers it when it reads that option; else the
+# error after the options (e), or the kill (f)
+def bg.kill.or(e: Maybe<&2, R.Reply>, f: R.Kill, +me: Nat, +code: Nat, g: LRun) -> LRun:
+  match e:
+    case Some{r}:
+      bg.say(r, code, g)
+    case None{}:
+      bg.kill(False{}, f, me, code, g)
+
+def bg.kill.users(m: Maybe<&2, String>, f: R.Kill, e: Maybe<&2, R.Reply>, +me: Nat, +code: Nat, g: LRun) -> LRun:
+  match m:
+    case Some{+u}:
+      bg.say(R.e_no_user(u), code, g)
+    case None{}:
+      bg.kill.or(e, f, me, code, g)
+
 def bg.client(+id: Nat, op: R.ClOp, +argv: Nat, +inb: Nat, +ex: Maybe<&2, Nat>, +code: Nat, g: LRun) -> LRun:
   match op:
     case R.CoList{+ty, ids}:
@@ -6963,7 +8051,13 @@ def bg.client(+id: Nat, op: R.ClOp, +argv: Nat, +inb: Nat, +ex: Maybe<&2, Nat>, 
     case R.CoKill{f}:
       bg.kill(False{}, f, id, code, g)
     case R.CoKillAddr{a}:
-      bg.kill(True{}, R.Kill{Some{a}, None{}, None{}, 0n, False{}}, id, code, g)
+      bg.kill(True{}, R.Kill{Some{a}, None{}, None{}, 0n, False{}, None{}}, id, code, g)
+    case R.CoKillUsers{us, f, e}:
+      match g:
+        case LRun{rs, es, conn, +srv, ds, ws, up, tx, pb}:
+          bg.kill.users(S.cl.user.miss(us, srv), f, e, id, code, LRun{rs, es, conn, srv, ds, ws, up, tx, pb})
+        case LHeld{h}:
+          LHeld{h}
     case R.CoNoEvict{on}:
       bg.noev(id, on, code, g)
     case R.CoPause{+hi, +lo, +all}:
@@ -6980,6 +8074,302 @@ def bg.client(+id: Nat, op: R.ClOp, +argv: Nat, +inb: Nat, +ex: Maybe<&2, Nat>, 
       bg.trk.say(id, True{}, code, g)
     case R.CoBad{+r}:
       bg.say(r, code, g)
+
+# ACL
+# ---
+# The users and their rules are the session's (acl.bend, session.bend);
+# the server knows each client's user (Cl.user: default from the start,
+# AUTH and HELLO's AUTH log a client in, RESET logs it out) and which
+# clients are restricted, their user not allowed every command, key and
+# channel (the session's Acl.rcl), so that it checks their calls as
+# Redis 7.0.15's processCommand does: after NOAUTH and NO_MULTI, before
+# the rest (bg.acl.check, sh.of: ShNoPerm). While some client is restricted
+# (Ps's bit 20), a batch of a restricted client runs the general way
+# (acl.ready), a command at a time; EXEC checks each command it runs again
+# (bg.x.go). A call refused, and an AUTH that failed, go to the ACL LOG
+# with the client's line. ACL WHOAMI answers the client's user; ACL
+# SETUSER sets which clients of its user are restricted, and closes those
+# subscribed to a channel the user may no longer have; ACL DELUSER closes
+# the clients of the users it removed, the client itself after its reply.
+
+# whether a call is checked before the shell decides what to do with it
+# (bg.go): while some client is restricted (on: Ps's bit 20), a call of a
+# restricted client that may make it (NOAUTH comes first) and that the
+# parser did not refuse (processCommand refuses those before); its
+# arguments are then read from the batch's bytes (av.if), so that the
+# calls after it find theirs read
+def bg.acl.on(on: Bool, +id: Nat, +k: Nat, +may: Bool, +srv: S.Srv) -> Bool:
+  match on:
+    case True{}:
+      Bool.and(may, Bool.and(Bool.not(Nat.is_eq(R.code.class(k), 1n)), S.srv.restricted(srv, id)))
+    case False{}:
+      False{}
+
+# the check: the user's verdict on the call of code k and its command line
+def bg.acl.check(on: Bool, +id: Nat, +srv: S.Srv, +pb: Ps, +k: Nat, +a: Av) -> U.Verdict:
+  match on:
+    case True{}:
+      S.srv.acl.check(srv, ps.user(id, pb), R.code.key(k), av.now(a))
+    case False{}:
+      U.VOk{}
+
+# a SORT (or SORT_RO) whose BY has a pattern or that has a GET, of a
+# client whose user may not read every key, runs as its error instead
+# (U.acl.sort.err), as sortCommandGeneric answers it: a call that failed
+def bg.acl.sort.of(m: Maybe<&2, String>, +c: R.Cmd) -> R.Cmd:
+  match m:
+    case Some{e}:
+      R.Own{R.SReply{R.RError{e}}}
+    case None{}:
+      c
+
+def bg.acl.sort(on: Bool, +id: Nat, +srv: S.Srv, +pb: Ps, +k: Nat, +a: Av, +c: R.Cmd) -> R.Cmd:
+  match on:
+    case True{}:
+      bg.acl.sort.of(S.srv.acl.sort(srv, ps.user(id, pb), R.code.key(k), av.now(a)), c)
+    case False{}:
+      c
+
+# An entry of the ACL LOG, as addACLLogEntry writes one: the context
+# (multi in MULTI, and while EXEC runs its transaction), and the client's
+# line then (client-info): its CLIENT LIST line, without the newline,
+# whose command is the call's, or EXEC while EXEC runs its transaction
+# (x: its commands queued; Redis keeps EXEC the last command then, and
+# EXEC's argument as the arguments' bytes)
+def maybe.is(+x: Maybe<&2, Nat>) -> Bool:
+  match x:
+    case Some{n}:
+      True{}
+    case None{}:
+      False{}
+
+def acl.ctx(+inm: Bool) -> String:
+  Bool.pick(String, inm, "multi", "toplevel")
+
+def acl.me(+id: Nat, +cn: S.Conn, +code: Nat, +inb: Nat, +a: Av, +x: Maybe<&2, Nat>) -> Who:
+  match x:
+    case Some{+n}:
+      Me{id, cn, "exec", inb, 4n, Some{n}}
+    case None{}:
+      Me{id, cn, cl.cmd.of(U32.from_nat(code)), inb, S.cl.argv(av.now(a), 0n), None{}}
+
+def acl.info(+id: Nat, +now: Nat, +me: Who, +ws: Waits, +tx: Tx, +pb: Ps) -> String:
+  +s = cl.line.or(cls.get(id, ps.cls(pb)), now, me, ws, tx, pb)
+  String.take(s, Nat.sub(String.length(s), 1n))
+
+# the entry for a call of the client of id that its user may not make (v:
+# the reason, and what it named), in MULTI or not (inm)
+def bg.acl.log(+id: Nat, +v: U.Verdict, +inm: Bool, +x: Maybe<&2, Nat>, +inb: Nat, +code: Nat, +a: Av, g: LRun) -> LRun:
+  match g:
+    case LRun{rs, es, +conn, srv, +ds, +ws, up, +tx, +pb}:
+      +now = R.ds.now(ds)
+      +info = acl.info(id, now, acl.me(id, conn, code, inb, a, x), ws, tx, pb)
+      LRun{rs, es, conn, S.srv.acl.log(srv, U.Ent{1n, U.verdict.why(v), acl.ctx(inm), U.verdict.obj(v), ps.user(id, pb), now, info}), ds, ws, up, tx, pb}
+    case LHeld{h}:
+      LHeld{h}
+
+# the entry for an AUTH that failed (reason auth, its command as the
+# client typed it, the user it tried), as ACLAuthenticateUser adds it
+def bg.auth.log(+id: Nat, +u: String, +x: Maybe<&2, Nat>, +inb: Nat, +code: Nat, +a: Av, g: LRun) -> LRun:
+  match g:
+    case LRun{rs, es, +conn, srv, +ds, +ws, up, +tx, +pb}:
+      +now = R.ds.now(ds)
+      +argv = av.now(a)
+      +info = acl.info(id, now, acl.me(id, conn, code, inb, a, x), ws, tx, pb)
+      LRun{rs, es, conn, S.srv.acl.log(srv, U.Ent{1n, "auth", acl.ctx(maybe.is(x)), S.arg.first(argv), u, now, info}), ds, ws, up, tx, pb}
+    case LHeld{h}:
+      LHeld{h}
+
+# a call its client's user may not make (ShNoPerm), refused as
+# processCommand refuses it: NOPERM, a refused call, and an entry; in
+# MULTI its transaction is flagged, and EXEC itself aborts it, as
+# rejectCommand calls execCommandAbort for EXEC
+def bg.noperm.say(exec: Bool, +id: Nat, +m: String, +inm: Bool, +code: Nat, g: LRun) -> LRun:
+  match exec:
+    case True{}:
+      bg.one(R.Own{R.SBad{R.RError{"EXECABORT Transaction discarded because of: " ++ abort.why(m)}}}, R.code.refused(code), bg.close(id, g))
+    case False{}:
+      bg.one(R.Own{R.SBad{R.RError{m}}}, R.code.refused(code), bg.oom.tx(inm, g))
+
+def bg.noperm(+id: Nat, +v: U.Verdict, +inm: Bool, +inb: Nat, +code: Nat, +a: Av, g: LRun) -> LRun:
+  bg.noperm.say(Nat.is_eq(R.code.key(code), R.stat.top(162n)), id, U.verdict.err(v), inm, code, bg.acl.log(id, v, inm, None{}, inb, code, a, g))
+
+# the client of id logged in as the user of name n (AUTH, HELLO's AUTH;
+# RESET: default): in the registry, among the restricted clients or not,
+# and Ps's bit 20 as the server's restricted clients are now, for the
+# commands after it in its batch and the batches after it
+def bg.user(+id: Nat, +n: String, g: LRun) -> LRun:
+  match g:
+    case LRun{rs, es, conn, srv, ds, ws, up, tx, pb}:
+      +s1 = S.srv.acl.client(srv, id, n)
+      LRun{rs, es, conn, s1, ds, ws, up, tx, ps.acl.at(ps.user.set(id, n, pb), acl.on(s1))}
+    case LHeld{h}:
+      LHeld{h}
+
+# what an AUTH did (S.Login): logged its client in as its user, failed
+# (an entry), or neither (its other errors); x: EXEC runs it
+def bg.login(+id: Nat, l: S.Login, +x: Maybe<&2, Nat>, +inb: Nat, +code: Nat, +a: Av, g: LRun) -> LRun:
+  match l:
+    case S.LgIn{+u}:
+      bg.user(id, u, g)
+    case S.LgFail{+u}:
+      bg.auth.log(id, u, x, inb, code, a, g)
+    case S.LgNone{}:
+      g
+
+def bg.logins(+id: Nat, ls: List<&2, S.Login>, +x: Maybe<&2, Nat>, +inb: Nat, +code: Nat, +a: Av, g: LRun) -> LRun:
+  match ls:
+    case Nil{}:
+      g
+    case Con{l, rest}:
+      bg.logins(id, rest, x, inb, code, a, bg.login(id, l, x, inb, code, a, g))
+
+# AUTH, run as the session runs it, then its login (the server before it
+# read for it, as AUTH changes no user)
+def bg.auth(+id: Nat, +c: R.Cmd, +code: Nat, +inb: Nat, +a: Av, +x: Maybe<&2, Nat>, g: LRun) -> LRun:
+  match c g:
+    case R.Own{R.SAuth{+args}} LRun{rs, es, conn, +srv, ds, ws, up, tx, pb}:
+      bg.login(id, S.auth.login(args, srv), x, inb, code, a, bg.one(c, code, LRun{rs, es, conn, srv, ds, ws, up, tx, pb}))
+    case _ g0:
+      bg.one(c, code, g0)
+
+# HELLO, run as the session runs it, then its AUTHs' logins in turn: each
+# logs its client in, one that failed (the last) adds an entry
+def bg.hello(+id: Nat, +c: R.Cmd, +code: Nat, +inb: Nat, +a: Av, +x: Maybe<&2, Nat>, g: LRun) -> LRun:
+  match c g:
+    case R.Own{R.SHello{+args}} LRun{rs, es, +conn, +srv, ds, ws, up, tx, pb}:
+      bg.logins(id, List.reverse(&2, S.Login, S.hello.logins(srv, conn, args)), x, inb, code, a, bg.conned(bg.one(c, code, LRun{rs, es, conn, srv, ds, ws, up, tx, pb})))
+    case _ g0:
+      bg.conned(bg.one(c, code, g0))
+
+# ACL WHOAMI: the client's user
+def bg.whoami(+id: Nat, +code: Nat, g: LRun) -> LRun:
+  match g:
+    case LRun{rs, es, conn, srv, ds, ws, up, tx, +pb}:
+      bg.say(R.RBulk{ps.user(id, pb)}, code, LRun{rs, es, conn, srv, ds, ws, up, tx, pb})
+    case LHeld{h}:
+      LHeld{h}
+
+# the clients of the user of name n, and of the users of names ns
+def cl.of.user(xs: List<&2, Cl>, +n: String) -> List<&2, Cl>:
+  match xs:
+    case Nil{}:
+      Nil{}
+    case Con{+c, rest}:
+      +r = cl.of.user(rest, n)
+      Bool.pick(List<&2, Cl>, String.eq(cl.user(c), n), c <> r, r)
+
+def name.in(+n: String, +ns: List<&2, String>) -> Bool:
+  match ns:
+    case Nil{}:
+      False{}
+    case Con{+x, +rest}:
+      Bool.or(String.eq(x, n), name.in(n, rest))
+
+def cl.of.users(xs: List<&2, Cl>, +ns: List<&2, String>) -> List<&2, Cl>:
+  match xs:
+    case Nil{}:
+      Nil{}
+    case Con{+c, rest}:
+      +r = cl.of.users(rest, ns)
+      Bool.pick(List<&2, Cl>, name.in(cl.user(c), ns), c <> r, r)
+
+# each of the clients cs of the user of name n restricted or not, as the
+# user is now
+def acl.clients(cs: List<&2, Cl>, +n: String, srv: S.Srv) -> S.Srv:
+  match cs:
+    case Nil{}:
+      srv
+    case Con{+c, rest}:
+      acl.clients(rest, n, S.srv.acl.client(srv, cl.id(c), n))
+
+# whether a client's subscriptions (m) are not all ones user u may keep
+def acl.lost(+u: U.User, m: Maybe<&2, Mine>) -> Bool:
+  match m:
+    case Some{Mine{ch, pa, sh}}:
+      Bool.not(U.acl.keeps(u, List.append(&2, String, ch, sh), pa))
+    case None{}:
+      False{}
+
+def acl.subs.lost(vs: List<&2, Cl>, +u: U.User, +pb: Ps) -> List<&2, Cl>:
+  match vs:
+    case Nil{}:
+      Nil{}
+    case Con{+c, rest}:
+      +r = acl.subs.lost(rest, u, pb)
+      Bool.pick(List<&2, Cl>, acl.lost(u, ps.mine(cl.id(c), pb)), c <> r, r)
+
+def acl.revoked.if(on: Bool, +u: U.User, vs: List<&2, Cl>, +pb: Ps) -> List<&2, Cl>:
+  match on:
+    case True{}:
+      acl.subs.lost(vs, u, pb)
+    case False{}:
+      Nil{}
+
+# the clients vs of a user that ACL SETUSER changed from old to new to
+# close: when the user may no longer have a channel it had, those with a
+# subscription it may not keep (ACLKillPubsubClientsIfNeeded)
+def acl.revoked(old: Maybe<&2, U.User>, new: Maybe<&2, U.User>, vs: List<&2, Cl>, +pb: Ps) -> List<&2, Cl>:
+  match old new:
+    case Some{+o} Some{+u}:
+      acl.revoked.if(U.acl.revokes(o, u), u, vs, pb)
+    case _ _:
+      Nil{}
+
+# after kills (bg.kills): the client itself, if it was one, closed after
+# its reply
+def bg.killed.self(p: Bool & LRun) -> LRun:
+  (self, g) = p
+  match self:
+    case True{}:
+      bg.self.kill(g)
+    case False{}:
+      g
+
+# the clients of the user of name n after ACL SETUSER changed it from
+# old (none: it made it): each restricted or not as the user is now, and
+# those subscribed to a channel it may no longer have closed
+def bg.set.user(+me: Nat, +n: String, old: Maybe<&2, U.User>, g: LRun) -> LRun:
+  match g:
+    case LRun{rs, es, conn, srv, ds, ws, up, tx, +pb}:
+      +vs = cl.of.user(cls.all(ps.cls(pb)), n)
+      +s1 = acl.clients(vs, n, srv)
+      bg.killed.self(bg.kills(acl.revoked(old, U.acl.user(S.srv.acl(s1), n), vs, pb), me, LRun{rs, es, conn, s1, ds, ws, up, tx, ps.acl.at(pb, acl.on(s1))}))
+    case LHeld{h}:
+      LHeld{h}
+
+def bg.setuser(+id: Nat, +c: R.Cmd, +code: Nat, g: LRun) -> LRun:
+  match c g:
+    case R.Own{R.SAcl{k, Con{+n, rules}}} LRun{rs, es, conn, +srv, ds, ws, up, tx, pb}:
+      bg.set.user(id, n, U.acl.user(S.srv.acl(srv), n), bg.one(c, code, LRun{rs, es, conn, srv, ds, ws, up, tx, pb}))
+    case _ g0:
+      bg.one(c, code, g0)
+
+# after ACL DELUSER: the clients of the users it removed closed (the
+# client itself after its reply), and the users forgotten
+def bg.users.gone(+me: Nat, g: LRun) -> LRun:
+  match g:
+    case LRun{rs, es, conn, +srv, ds, ws, up, tx, +pb}:
+      bg.killed.self(bg.kills(cl.of.users(cls.all(ps.cls(pb)), U.acl.gone(S.srv.acl(srv))), me, LRun{rs, es, conn, S.srv.acl.cleared(srv), ds, ws, up, tx, pb}))
+    case LHeld{h}:
+      LHeld{h}
+
+# ACL's subcommands that reach the clients (sh.acl, and in EXEC):
+# WHOAMI (13), SETUSER (11) and DELUSER (2); any other runs as the session
+# runs it
+def bg.acl.op(+id: Nat, +k: Nat, +c: R.Cmd, +code: Nat, g: LRun) -> LRun:
+  match k:
+    case 13n:
+      bg.whoami(id, code, g)
+    case 11n:
+      bg.setuser(id, c, code, g)
+    case 2n:
+      bg.users.gone(id, bg.one(c, code, g))
+    case _:
+      bg.one(c, code, g)
+
+# The commands of EXEC
+# --------------------
 
 # a command of EXEC: as it runs outside of a transaction, but that no
 # client waits (a blocking command answers as for a client that may not
@@ -7011,7 +8401,7 @@ def bg.x.echo(ping: Bool, +id: Nat, +m: String, +c: R.Cmd, +code: Nat, g: LRun) 
     case False{}:
       bg.one(c, code, g)
 
-def bg.x.cmd(may: Bool, +id: Nat, +back: Chan(Ans), +inb: Nat, +n: Nat, +c: R.Cmd, +code: Nat, g: LRun) -> LRun:
+def bg.x.cmd(may: Bool, +id: Nat, +back: Chan(Ans), +inb: Nat, +n: Nat, +c: R.Cmd, +code: Nat, +av: Av, g: LRun) -> LRun:
   match may c:
     case True{} R.Own{R.SUnblock{+n, +e}}:
       bg.unblock(n, e, code, g)
@@ -7021,6 +8411,8 @@ def bg.x.cmd(may: Bool, +id: Nat, +back: Chan(Ans), +inb: Nat, +n: Nat, +c: R.Cm
       bg.say(R.RError{"ERR MONITOR isn't allowed for DENY BLOCKING client"}, code, g)
     case True{} R.Own{R.SRewrite{}}:
       bg.rewrite(True{}, code, g)
+    case True{} R.Own{R.SAdmin{16n, +a}}:
+      bg.bgsave(True{}, sh.sched(a), code, g)
     case True{} R.Own{R.SFlushAll{}}:
       bg.flushall(bg.one(c, code, g))
     case True{} R.Own{R.SPub{+k, a}}:
@@ -7035,33 +8427,143 @@ def bg.x.cmd(may: Bool, +id: Nat, +back: Chan(Ans), +inb: Nat, +n: Nat, +c: R.Cm
       bg.x.pong(id, "", c, code, g)
     case True{} R.Echo{+m}:
       bg.x.echo(Nat.is_eq(R.code.key(code), R.stat.top(1n)), id, m, c, code, g)
+    case True{} R.Own{R.SAuth{x}}:
+      bg.auth(id, c, code, inb, av, Some{n}, g)
+    case True{} R.Own{R.SHello{x}}:
+      bg.hello(id, c, code, inb, av, Some{n}, g)
+    case True{} R.Own{R.SAcl{+k, x}}:
+      bg.acl.op(id, k, c, code, g)
     case _ _:
       bg.one(c, code, g)
 
-def bg.x.go(+id: Nat, +back: Chan(Ans), +inb: Nat, +n: Nat, cmds: List<&2, R.Cmd>, codes: List<&2, Nat>, avs: List<&2, Av>, x: Xr) -> Xr:
-  match cmds codes avs x:
-    case Con{+c, rest} Con{+k, more} Con{+a, ar} Xr{LRun{rs, es, +conn, +srv, ds, ws, up, tx, +pb}, mine}:
+# a command of EXEC run (bg.x.go)
+def bg.x.one(+id: Nat, +back: Chan(Ans), +inb: Nat, +n: Nat, +c: R.Cmd, +k: Nat, +a: Av, x: Xr) -> Xr:
+  match x:
+    case Xr{LRun{rs, es, +conn, +srv, ds, ws, up, tx, +pb}, mine, e}:
       +may = S.may(S.kind(c), conn, srv)
       +rk = bg.x.rk(id, may, k, pb)
-      bg.x.go(id, back, inb, n, rest, more, ar, bg.x.feed(mon.ran(may, k), id, k, S.conn.mode(conn), a, bg.x.trk(rk, id, k, a, bg.x.cmd(may, id, back, inb, n, c, k, LRun{rs, es, conn, S.srv.call(srv, id, av.arg(a)), ds, ws, up, tx, pb})), mine))
+      bg.x.feed(mon.ran(may, k), id, k, S.conn.mode(conn), a, bg.x.trk(rk, id, k, a, bg.x.cmd(may, id, back, inb, n, c, k, a, LRun{rs, es, conn, S.srv.call(srv, id, av.arg(a)), ds, ws, up, tx, pb})), mine)
+    case Xr{LHeld{h}, mine, e}:
+      Xr{LHeld{h}, mine, e}
+
+# Exec's arguments. A queued command's arguments are read from the bytes
+# of its batch (P.argvs) only when something reads them: the check of a
+# restricted client (ACL), the tracking of a client that tracks keys, a
+# monitor. The memo keeps those of the batch read last, from its last
+# command read on (XmAt: the batch's number, the command's request in it,
+# and the arguments from that request on), so that the next command of
+# the same batch is a drop away, and a batch's bytes are read once: EXEC
+# of a transaction queued before its client was restricted read the
+# whole batch again for each of its commands, quadratic in their number.
+type Xm is Data:
+  XmNone{}
+  XmAt{b: Nat, n: Nat, xs: List<&2, List<&2, String>>}
+
+# whether the memo holds the arguments of request n of batch b, or of one
+# before it in that batch
+def xm.same(+m: Xm, +b: Nat, +n: Nat) -> Bool:
+  match m:
+    case XmAt{+b0, +n0, xs}:
+      Bool.and(Nat.is_eq(b0, b), Nat.is_le(n0, n))
+    case XmNone{}:
+      False{}
+
+def xm.of(same: Bool, m: Xm, +b: Nat, +raw: String, +n: Nat) -> Xm:
+  match same m:
+    case True{} XmAt{b0, n0, xs}:
+      XmAt{b, n, List.drop(&2, List<&2, String>, xs, Nat.sub(n, n0))}
+    case _ _:
+      XmAt{b, n, List.drop(&2, List<&2, String>, P.argvs(raw), n)}
+
+# the memo once the arguments of a command of batch b (a) are read
+def xm.read(m: Xm, +b: Nat, +a: Av) -> Xm:
+  match a:
+    case AvRaw{+raw, +n}:
+      +m0 = m
+      xm.of(xm.same(m0, b, n), m0, b, raw, n)
+    case AvArgs{xs}:
+      m
+
+# the arguments of that command, read
+def xm.av(+m: Xm, a: Av) -> Av:
+  match m a:
+    case XmAt{b, n, +xs} AvRaw{raw, k}:
+      AvArgs{xs}
+    case _ a0:
+      a0
+
+def xm.if(need: Bool, m: Xm, +b: Nat, +a: Av) -> Xm:
+  match need:
+    case True{}:
+      xm.read(m, b, a)
+    case False{}:
+      m
+
+def xm.av.if(need: Bool, +m: Xm, a: Av) -> Av:
+  match need:
+    case True{}:
+      xm.av(m, a)
+    case False{}:
+      a
+
+# an error of EXEC's array that no call answered: with the replies, and
+# counted as an error reply alone (no call, as Redis's addReplyErrorFormat
+# out of call())
+def bg.x.err(+m: String, g: LRun) -> LRun:
+  match g:
+    case LRun{rs, es, +conn, +srv, ds, ws, up, tx, pb}:
+      LRun{S.put(S.say(S.conn.mode(conn), R.RError{m}), rs), es, S.step_conn(conn, srv), S.srv.erred(srv, m), ds, ws, up, tx, pb}
+    case LHeld{h}:
+      LHeld{h}
+
+# a command of EXEC that its user may no longer run: NOPERM with why
+# (U.verdict.exec), an entry in context multi, and no call: the error is
+# counted alone, and EXEC fails if no call comes after it (Xr's err)
+def bg.x.denied(+v: U.Verdict, +id: Nat, +inb: Nat, +n: Nat, +k: Nat, +a: Av, x: Xr) -> Xr:
+  match x:
+    case Xr{g, mine, e}:
+      Xr{bg.x.err(U.verdict.exec(v), bg.acl.log(id, v, True{}, Some{n}, inb, k, a, g)), mine, True{}}
+
+def bg.x.acl(v: U.Verdict, +id: Nat, +back: Chan(Ans), +inb: Nat, +n: Nat, +c: R.Cmd, +k: Nat, +a: Av, x: Xr) -> Xr:
+  match v:
+    case U.VOk{}:
+      bg.x.one(id, back, inb, n, c, k, a, x)
+    case U.VNo{w, at, o}:
+      bg.x.denied(U.VNo{w, at, o}, id, inb, n, k, a, x)
+
+# EXEC's commands in turn, each checked again (ACL), as execCommand
+# checks each, in case the rules changed since it was queued: while some
+# client is restricted (Ps's bit 20) and its client is (ck), its user's
+# verdict. Its arguments are read when the check, the tracking or a
+# monitor reads them (Exec's arguments, m)
+def bg.x.go(+id: Nat, +back: Chan(Ans), +inb: Nat, +n: Nat, cmds: List<&2, R.Cmd>, codes: List<&2, Nat>, avs: List<&2, Qa>, m: Xm, x: Xr) -> Xr:
+  match cmds codes avs x:
+    case Con{+c, rest} Con{+k, more} Con{Qa{+b, a0}, ar} Xr{LRun{rs, es, +conn, +srv, ds, ws, up, tx, +pb}, mine, e}:
+      +ck = Bool.and(ps.acl.on(pb), S.srv.restricted(srv, id))
+      +may = S.may(S.kind(c), conn, srv)
+      +need = Bool.or(ck, Bool.or(bg.x.rk(id, may, k, pb), Bool.and(mon.ran(may, k), ps.mon.any(pb))))
+      +a1 = a0
+      +m1 = xm.if(need, m, b, a1)
+      +a = xm.av.if(need, m1, a1)
+      bg.x.go(id, back, inb, n, rest, more, ar, m1, bg.x.acl(bg.acl.check(ck, id, srv, pb, k, a), id, back, inb, n, bg.acl.sort(ck, id, srv, pb, k, a, c), k, a, Xr{LRun{rs, es, conn, srv, ds, ws, up, tx, pb}, mine, e}))
     case _ _ _ x0:
       x0
 
-def bg.exec.run(+id: Nat, +back: Chan(Ans), +inb: Nat, +code: Nat, +cmds: List<&2, R.Cmd>, codes: List<&2, Nat>, avs: List<&2, Av>, g: LRun) -> LRun:
+def bg.exec.run(+id: Nat, +back: Chan(Ans), +inb: Nat, +code: Nat, +cmds: List<&2, R.Cmd>, codes: List<&2, Nat>, avs: List<&2, Qa>, g: LRun) -> LRun:
   match g:
     case LRun{rs, es, +conn, srv, ds, ws, up, tx, pb}:
       +m0 = S.conn.mode(conn)
       +mi = exec.mode(m0)
-      bg.exec.done(rs, es, m0, mi, code, bg.x.go(id, back, inb, List.length(&2, R.Cmd, cmds), cmds, codes, avs, Xr{LRun{Nil{}, Nil{}, conn.mode.set(mi, conn), srv, ds, ws, up, tx, pb}, Nil{}}))
+      bg.exec.done(rs, es, m0, mi, code, bg.x.go(id, back, inb, List.length(&2, R.Cmd, cmds), cmds, codes, avs, XmNone{}, Xr{LRun{Nil{}, Nil{}, conn.mode.set(mi, conn), srv, ds, ws, up, tx, pb}, Nil{}, False{}}))
     case LHeld{h}:
       LHeld{h}
 
-def bg.exec.if(late: Bool, +id: Nat, +back: Chan(Ans), +inb: Nat, +code: Nat, qs: List<&2, R.Cmd>, qc: List<&2, Nat>, qa: List<&2, Av>, g: LRun) -> LRun:
+def bg.exec.if(late: Bool, +id: Nat, +back: Chan(Ans), +inb: Nat, +code: Nat, qs: List<&2, R.Cmd>, qc: List<&2, Nat>, qa: Qs, g: LRun) -> LRun:
   match late:
     case True{}:
       bg.say(R.RNullA{}, code, g)
     case False{}:
-      bg.exec.run(id, back, inb, code, List.reverse(&2, R.Cmd, qs), List.reverse(&2, Nat, qc), List.reverse(&2, Av, qa), g)
+      bg.exec.run(id, back, inb, code, List.reverse(&2, R.Cmd, qs), List.reverse(&2, Nat, qc), qs.order(qa), g)
 
 # EXEC of a transaction taken out of the chain (mine): EXECABORT when a
 # command was refused while it queued, a null array when a watched key
@@ -7083,6 +8585,23 @@ def tx.denyoom(+t: Tx) -> Bool:
     case TxNone{}:
       False{}
 
+# while a background save that failed stops the writes, an EXEC whose
+# transaction queued a command that writes is refused, as Redis's
+# processCommand refuses it (its queued flags hold CMD_WRITE)
+def codes.write(+ks: List<&2, Nat>) -> Bool:
+  match ks:
+    case Nil{}:
+      False{}
+    case Con{+k, rest}:
+      Bool.or(R.stat.write(R.code.key(k)), codes.write(rest))
+
+def tx.writes.if(on: Bool, +t: Tx) -> Bool:
+  match on t:
+    case True{} TxOn{i, mu, bad, cas, cs, +qc, qa, wk, r}:
+      codes.write(qc)
+    case _ _:
+      False{}
+
 def bg.exec.go(mine: Tx, others: Tx, +id: Nat, +back: Chan(Ans), +inb: Nat, +code: Nat, rs: List<&2, R.Reply>, es: List<&2, A.Ent>, conn: S.Conn, srv: S.Srv, +ds: R.Ds, ws: Waits, up: List<&2, Up>, pb: Ps) -> LRun:
   match mine:
     case TxOn{i, mu, True{}, cs, qs, qc, qa, wk, r}:
@@ -7094,16 +8613,19 @@ def bg.exec.go(mine: Tx, others: Tx, +id: Nat, +back: Chan(Ans), +inb: Nat, +cod
     case TxNone{}:
       bg.say(R.RError{"ERR EXEC without MULTI"}, code, LRun{rs, es, conn, srv, ds, ws, up, others, pb})
 
-def bg.exec.oom(oom: Bool, mine: Tx, others: Tx, +id: Nat, +back: Chan(Ans), +inb: Nat, +code: Nat, rs: List<&2, R.Reply>, es: List<&2, A.Ent>, conn: S.Conn, srv: S.Srv, +ds: R.Ds, ws: Waits, up: List<&2, Up>, pb: Ps) -> LRun:
-  match oom:
-    case True{}:
+def bg.exec.oom(oom: Bool, mis: Bool, mine: Tx, others: Tx, +id: Nat, +back: Chan(Ans), +inb: Nat, +code: Nat, rs: List<&2, R.Reply>, es: List<&2, A.Ent>, conn: S.Conn, srv: S.Srv, +ds: R.Ds, ws: Waits, up: List<&2, Up>, pb: Ps) -> LRun:
+  match oom mis:
+    case True{} _:
       bg.one(R.Own{R.SBad{R.RError{"EXECABORT Transaction discarded because of: " ++ abort.why(oom.msg())}}}, R.code.refused(code), LRun{rs, es, conn, srv, ds, ws, up, others, pb})
-    case False{}:
+    case False{} True{}:
+      bg.one(R.Own{R.SBad{R.RError{"EXECABORT Transaction discarded because of: " ++ abort.why(misconf.msg())}}}, R.code.refused(code), LRun{rs, es, conn, srv, ds, ws, up, others, pb})
+    case False{} False{}:
       bg.exec.go(mine, others, id, back, inb, code, rs, es, conn, srv, ds, ws, up, pb)
 
 def bg.exec.of(p: Tx & Tx, +id: Nat, +back: Chan(Ans), +inb: Nat, +code: Nat, rs: List<&2, R.Reply>, es: List<&2, A.Ent>, conn: S.Conn, srv: S.Srv, +ds: R.Ds, ws: Waits, up: List<&2, Up>, +pb: Ps) -> LRun:
   (+mine, others) = p
-  bg.exec.oom(Bool.and(ps.oom.is(pb), tx.denyoom(mine)), mine, others, id, back, inb, code, rs, es, conn, srv, ds, ws, up, pb)
+  +sv = srv
+  bg.exec.oom(Bool.and(ps.oom.is(pb), tx.denyoom(mine)), tx.writes.if(srv.misconf(sv), mine), mine, others, id, back, inb, code, rs, es, conn, sv, ds, ws, up, pb)
 
 def bg.exec(+id: Nat, +back: Chan(Ans), +inb: Nat, +code: Nat, g: LRun) -> LRun:
   match g:
@@ -7129,13 +8651,15 @@ def bg.exec(+id: Nat, +back: Chan(Ans), +inb: Nat, +code: Nat, g: LRun) -> LRun:
 # "Errors trying to SHUTDOWN. Check logs.", the rest of its batch going
 # on (its client waited for the save, as SAVE's does). As that save may
 # fail, the group goes on after such a SHUTDOWN without FORCE, its end
-# and ticks too, as after a SAVE: when the save ends well and the server
-# stops, the replies of the requests after it are not sent, and what they
-# wrote is in the files, written and not acknowledged, as a crash may
-# leave a write (Redis would not have run them). The registry of clients
-# keeps what the group asked for (ps.down), and bits 23 and 24 of Ps's ev
-# keep the batches after it off the fast way; the shell acts on it once
-# the group is run (db_group, aof_reply).
+# and ticks too, but its other clients' commands after it are held back
+# as a pause of every command holds them (down.holds): Redis saves and
+# exits within SHUTDOWN, so none of them runs, and none of what they
+# would write reaches either file. When the save ends well the server
+# stops and they are never answered; when it fails, they go on after
+# SHUTDOWN's client, in the order they came (grp.saved.down). The
+# registry of clients keeps what the group asked for (ps.down), and bits
+# 23 and 24 of Ps's ev keep the batches after it off the fast way; the
+# shell acts on it once the group is run (db_group, aof_reply).
 def bg.down.at(+d: Nat, g: LRun) -> LRun:
   match g:
     case LRun{rs, es, conn, srv, ds, ws, up, tx, pb}:
@@ -7195,7 +8719,7 @@ def bg.cmd(+id: Nat, +back: Chan(Ans), +inb: Nat, sh: Sh, +c: R.Cmd, +code: Nat,
     case ShUnwatch{}:
       bg.one(c, code, bg.unwatch(id, g))
     case ShReset{}:
-      bg.conned(bg.one(c, code, bg.trk.off(id, bg.unsub.all(id, bg.close(id, g)))))
+      bg.user(id, "default", bg.conned(bg.one(c, code, bg.trk.off(id, bg.unsub.all(id, bg.close(id, g))))))
     case ShQueue{}:
       bg.queue(c, code, a, g)
     case ShRefuse{}:
@@ -7216,6 +8740,8 @@ def bg.cmd(+id: Nat, +back: Chan(Ans), +inb: Nat, sh: Sh, +c: R.Cmd, +code: Nat,
       bg.rewrite(False{}, code, g)
     case ShOom{inm}:
       bg.one(R.Own{R.SBad{R.RError{oom.msg()}}}, R.code.refused(code), bg.oom.tx(inm, g))
+    case ShMisconf{inm}:
+      bg.one(R.Own{R.SBad{R.RError{misconf.msg()}}}, R.code.refused(code), bg.oom.tx(inm, g))
     case ShMonDeny{inm}:
       bg.one(R.Own{R.SBad{R.RError{"ERR Replica can't interact with the keyspace"}}}, R.code.refused(code), bg.mon.bad(inm, g))
     case ShPause{}:
@@ -7229,22 +8755,89 @@ def bg.cmd(+id: Nat, +back: Chan(Ans), +inb: Nat, sh: Sh, +c: R.Cmd, +code: Nat,
     case ShFlush{}:
       +l = g
       bg.flushall(bg.one.serve(bg.stir(c, l), c, code, l))
+    case ShBgsave{+sched}:
+      bg.bgsave(False{}, sched, code, g)
+    case ShNoPerm{v, +inm}:
+      bg.noperm(id, v, inm, inb, code, a, g)
+    case ShAuth{}:
+      bg.auth(id, c, code, inb, a, None{}, g)
+    case ShHello{}:
+      bg.hello(id, c, code, inb, a, None{}, g)
+    case ShAcl{+k}:
+      bg.acl.op(id, k, c, code, g)
+    case ShNoBlock{}:
+      bg.say(R.RError{"ERR BendKV does not block on streams yet"}, code, g)
+
+# the word a request of hash h leaves in its key's word w under an LFU
+# policy, at the minute min, r its random number
+def use.lfu.word(+h: U32, +w: U32, +min: U32, +r: U32, +lf: Nat, +dt: Nat) -> U32:
+  Bool.pick(U32, U32.is_eq(U32.and(h, 4293918720), R.stat.mark.restore()), S.lfu.word(min, 5), S.lfu.use(w, min, r, lf, dt))
+
+# whether a batch's keys are marked as its calls run, each once its
+# check lets it through, rather than before the batch runs (bg.used):
+# its client is restricted (ACL), as Redis marks a key only as the
+# command, which its user may run, looks it up
+def bg.marks(+cn: S.Conn, +srv: S.Srv, +pb: Ps) -> Bool:
+  Bool.and(ps.acl.on(pb), S.srv.restricted(srv, S.conn.id(cn)))
+
+# the hint of a call as the parser writes it (resp.bend, req.hash): the
+# hash of its first argument after its name (its arguments as sent come
+# name first) when its command touches its first key and it runs, under
+# its code
+def bg.hint(+k: Nat, +a: Av) -> U32:
+  R.stat.hash(Bool.pick(U32, Bool.and(Nat.is_eq(R.code.class(k), 0n), R.stat.touch(R.code.key(k))), B.args_hash(List.drop(&2, String, av.now(a), 1n)), 0), k)
+
+# the word a call of hint h leaves in its key's word at now, as use.lru
+# and use.lfu leave it
+def bg.mark.word(lfu: Bool, +h: U32, +now: Nat, +srv: S.Srv) -> U32:
+  match lfu srv:
+    case True{} S.Srv{pass, cfg, info, +mm}:
+      +w = Mem.cell(h)
+      use.lfu.word(h, w, S.acc.min(now), KV.mix(U32.xor(U32.xor(h, w), U32.from_nat(now))), S.mm.lfl(mm), S.mm.lfd(mm))
+    case False{} _:
+      S.acc.lru(now)
+
+# the channel of a batch marked again as it was, its key's word of hash
+# h set to v on the way (Mem.touch gives back the mark's word)
+def mark.again.of(+back: Chan(Ans), m: U32 & Nat, +h: U32, +v: U32) -> Chan(Ans):
+  (w, at) = m
+  Chan.mark(Ans, back, Mem.touch(w, h, v), at)
+
+def mark.again(+back: Chan(Ans), +h: U32, +v: U32) -> Chan(Ans):
+  mark.again.of(back, Chan.marked(Ans, back), h, v)
+
+# a call's key marked used as it runs (mk: its batch's keys are marked so,
+# and its check let it through), before it runs
+def bg.mark.call(mk: Bool, +back: Chan(Ans), +k: Nat, +a: Av, +srv: S.Srv, +ds: R.Ds, +pb: Ps) -> Chan(Ans):
+  match mk:
+    case True{}:
+      +h = bg.hint(k, a)
+      mark.again(back, h, bg.mark.word(ps.lfu(pb), h, R.ds.now(ds), srv))
+    case False{}:
+      back
 
 # a batch the general way: a command at a time, until its client waits;
 # after each, its line to the monitors (MONITOR), the arguments of the
-# batch's requests as sent (the Fed's Av) read once a line needs them
-def bg.go(+id: Nat, +back: Chan(Ans), +inb: Nat, cmds: List<&2, R.Cmd>, codes: List<&2, Nat>, f: Fed) -> LRun:
+# batch's requests as sent (the Fed's Av) read once a line needs them.
+# um: its keys are marked as its calls run, each once its check let it
+# through (bg.marks), its arguments then read
+def bg.go(+um: Bool, +id: Nat, +back: Chan(Ans), +inb: Nat, cmds: List<&2, R.Cmd>, codes: List<&2, Nat>, f: Fed) -> LRun:
   match cmds codes f:
     case Con{+c, +rest} Con{+k, +more} Fed{LRun{rs, es, +conn, +srv, +ds, ws, up, +tx, +pb}, +av}:
       +q = S.conn.quit(conn)
       +may = S.may(S.kind(c), conn, srv)
       +mo = ps.mon.is(id, pb)
-      +sh = sh.of(q, may, tx.multi(id, tx), Bool.and(ps.has(id, pb), Bool.not(S.conn.r3(conn))), mo, ps.oom.is(pb), pause.holds(ps.pz(pb), mo, c, k, id, tx), c, k, ds)
+      +ck = bg.acl.on(ps.acl.on(pb), id, k, may, srv)
+      +av1 = av.if(Bool.or(ck, um), av)
+      +c1 = bg.acl.sort(ck, id, srv, pb, k, av1, c)
+      +v = bg.acl.check(ck, id, srv, pb, k, av1)
+      +bk = bg.mark.call(Bool.and(um, Bool.and(may, U.verdict.ok(v))), back, k, av1, srv, ds, pb)
+      +sh = sh.of(q, may, tx.multi(id, tx), Bool.and(ps.has(id, pb), Bool.not(S.conn.r3(conn))), mo, ps.oom.is(pb), srv.misconf(srv), Bool.or(pause.holds(ps.pz(pb), mo, c, k, id, tx), down.holds(srv, pb, mo, k)), v, c1, k, ds)
       +pre = bg.trk.pre(id, k, sh, q, may, pb)
-      +a = trk.pre.av(pre, av)
+      +a = trk.pre.av(pre, av1)
       +ar = av.rest(a)
-      +g1 = bg.cmd(id, back, inb, sh, c, k, rest, more, a, ar, LRun{rs, es, conn, S.srv.call(srv, id, av.arg(a)), ds, ws, up, tx, pb})
-      bg.go(id, back, inb, rest, more, bg.feed(mon.seen(q, may, sh, k), id, k, S.conn.mode(conn), a, ar, bg.trk.after(pre, id, k, a, g1)))
+      +g1 = bg.cmd(id, bk, inb, sh, c1, k, rest, more, a, ar, LRun{rs, es, conn, S.srv.call(srv, id, av.arg(a)), ds, ws, up, tx, pb})
+      bg.go(um, id, back, inb, rest, more, bg.feed(mon.seen(q, may, sh, k), id, k, S.conn.mode(conn), a, ar, bg.trk.after(pre, id, k, a, g1)))
     case _ _ Fed{g0, av}:
       g0
 
@@ -7287,11 +8880,11 @@ def bg.put(+back: Chan(Ans), +inb: Nat, g: LRun, outs: List<&2, Sigma<&2, &2, Ch
     case LHeld{LHeld{h}}:
       bg.put(back, inb, h, outs)
 
-def bg.batch(+cn: S.Conn, +back: Chan(Ans), +inb: Nat, raw: String, cmds: List<&2, R.Cmd>, codes: List<&2, Nat>, g: Grp) -> Grp:
+def bg.batch(+um: Bool, +cn: S.Conn, +back: Chan(Ans), +inb: Nat, raw: String, cmds: List<&2, R.Cmd>, codes: List<&2, Nat>, g: Grp) -> Grp:
   match g:
     case Grp{outs, es, srv, ds, ws, up, tx, pb}:
       +id = S.conn.id(cn)
-      bg.put(back, inb, bg.go(id, back, inb, cmds, codes, Fed{LRun{Nil{}, es, cn, srv, ds, ws, up, tx.front(id, tx), pb}, AvRaw{raw, 0n}}), outs)
+      bg.put(back, inb, bg.go(um, id, back, inb, cmds, codes, Fed{LRun{Nil{}, es, cn, srv, ds, ws, up, tx.front(id, tx), pb}, AvRaw{raw, 0n}}), outs)
 
 # the last of codes, else k
 def codes.last(+ks: List<&2, Nat>, +k: Nat) -> Nat:
@@ -7314,9 +8907,9 @@ def mark.up(+back: Chan(Ans), +codes: List<&2, Nat>) -> Chan(Ans):
 # an unblocked client's batch, on: on its database, after its reply
 def bg.up(u: Up, g: Grp) -> Grp:
   match u g:
-    case Up{+back, +conn, rs, cmds, +codes, av} Grp{outs, es, srv, ds, ws, up, tx, pb}:
+    case Up{+back, +conn, rs, cmds, +codes, av} Grp{outs, es, +srv, ds, ws, up, tx, +pb}:
       +id = S.conn.id(conn)
-      bg.put(mark.up(back, codes), 0n, bg.go(id, back, 0n, cmds, codes, Fed{LRun{rs, es, conn, srv, R.ds.focus(S.conn.db(conn), ds), ws, up, tx.front(id, tx), pb}, av}), outs)
+      bg.put(mark.up(back, codes), 0n, bg.go(bg.marks(conn, srv, pb), id, back, 0n, cmds, codes, Fed{LRun{rs, es, conn, srv, R.ds.focus(S.conn.db(conn), ds), ws, up, tx.front(id, tx), pb}, av}), outs)
 
 def bg.ups.run(us: List<&2, Up>, g: Grp) -> Grp:
   match us:
@@ -7409,7 +9002,8 @@ def grp.end(g: Grp) -> Grp:
 # batch dropped, and its connection answered Bye, after any answer before
 def grp.gone(+id: Nat, +back: Chan(Ans), outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, srv: S.Srv, ds: R.Ds, +ws: Waits, +up: List<&2, Up>, tx: Tx, pb: Ps) -> Grp:
   +left = waits.rest(waits.take(ws, waits.is(id, ws), id, WaitNone{}))
-  Grp{(back, Bye{}) <> outs, es, waits.count(left, S.srv.gone(srv, id)), ds, left, ups.drop(up, ups.is(id, up), id), tx.drop(id, tx), ps.drop(id, pb)}
+  +sv = S.srv.left(srv, id)
+  Grp{(back, Bye{}) <> outs, es, waits.count(left, sv), ds, left, ups.drop(up, ups.is(id, up), id), tx.drop(id, tx), ps.acl.at(ps.drop(id, pb), acl.on(sv))}
 
 # Memory
 # ------
@@ -7423,8 +9017,8 @@ def grp.gone(+id: Nat, +back: Chan(Ans), outs: List<&2, Sigma<&2, &2, Chan(Ans),
 
 # Eviction
 # --------
-# While the heap's live bytes, less those a rewrite's snapshot still holds
-# of the keys evicted while it runs (Mm's debt), are past maxmemory, the
+# While the heap's live bytes are past maxmemory (while a rewrite or a
+# background save runs, the memory as mem.seen counts it), the
 # actor picks a key by the policy and deletes it as the sweep of expired
 # keys deletes one (a DEL in the append-only file; the WATCHes of the key
 # touched; "evicted" to the keyspace's subscribers), counts it
@@ -7444,10 +9038,10 @@ def grp.gone(+id: Nat, +back: Chan(Ans), outs: List<&2, Sigma<&2, &2, Chan(Ans),
 # that may take memory refused (FAIL). A CONFIG SET that changes
 # maxmemory starts an eviction at once (Mm's kick), with Redis's warning
 # when the heap is past the new value. While a rewrite of the append-only
-# file runs, its snapshot holds what an eviction frees: an evicted key
-# counts as freed by MEMORY USAGE's estimate (the debt, paid when the
-# rewrite ends). INFO's evicted_keys and the times past maxmemory count as
-# Redis's do (I.info.evicted).
+# file or a background save runs, its snapshot holds what an eviction
+# frees, and what each write replaces: the memory is counted by the keys
+# instead (mem.seen). INFO's evicted_keys and the times past maxmemory
+# count as Redis's do (I.info.evicted).
 
 # 2^47: volatile-ttl's score is it less the time a key expires at (ms)
 def evict.far() -> Nat:
@@ -7640,40 +9234,31 @@ def evict.rand.key(+vol: Bool, +d: R.Db, +c: Nat, +r: U32, +now: Nat) -> Maybe<&
       List.head(&2, String, KV.sample(KV.Val, t, r, 1n, now, 2n, 1048576n))
 
 # what is asked of a database: whether it holds key k as the policy takes
-# keys (with a time, when vol); MEMORY USAGE's estimate of key k; a random
-# policy's key of it, by r
+# keys (with a time, when vol); a random policy's key of it, by r
 type Ask is Data:
   AskHas{vol: Bool, k: String}
-  AskEst{k: String}
   AskKey{vol: Bool, r: U32, now: Nat}
 
-# its answer: a truth, a number or a key
+# its answer: a truth or a key
 type Ans1 is Data:
-  A1{b: Bool, n: Nat, k: Maybe<&2, String>}
+  A1{b: Bool, k: Maybe<&2, String>}
 
 def a1.b(a: Ans1) -> Bool:
   match a:
-    case A1{b, n, k}:
+    case A1{b, k}:
       b
-
-def a1.n(a: Ans1) -> Nat:
-  match a:
-    case A1{b, n, k}:
-      n
 
 def a1.k(a: Ans1) -> Maybe<&2, String>:
   match a:
-    case A1{b, n, k}:
+    case A1{b, k}:
       k
 
 def evict.ask(+a: Ask, +d: R.Db) -> Ans1:
   match a:
     case AskHas{+vol, +k}:
-      A1{evict.has.ent(vol, R.db.ent(d, k)), 0n, None{}}
-    case AskEst{+k}:
-      A1{False{}, S.mem.est(k, R.db.ent(d, k)), None{}}
+      A1{evict.has.ent(vol, R.db.ent(d, k)), None{}}
     case AskKey{+vol, +r, +now}:
-      A1{False{}, 0n, evict.rand.key(vol, d, evict.count(vol, d), r, now)}
+      A1{False{}, evict.rand.key(vol, d, evict.count(vol, d), r, now)}
 
 # what the n-th of xs answers (none past the last)
 def evict.ask.nth(+a: Ask, +n: Nat, +xs: List<&2, R.Db>) -> Ans1:
@@ -7683,7 +9268,7 @@ def evict.ask.nth(+a: Ask, +n: Nat, +xs: List<&2, R.Db>) -> Ans1:
     case 1n+m Con{d, +rest}:
       evict.ask.nth(a, m, rest)
     case _ Nil{}:
-      A1{False{}, 0n, None{}}
+      A1{False{}, None{}}
 
 # where database j is to the focus, the i-th: 0 before it, 1 it, 2 after
 def evict.where(+j: Nat, +i: Nat) -> Nat:
@@ -7845,60 +9430,64 @@ def evict.del(+j: Nat, +k: String, ds: R.Ds) -> R.Ds:
   +i = R.ds.index(x)
   R.ds.focus(i, evict.del.focused(k, R.ds.focus(j, x)))
 
-# a pick and the debt of its key: MEMORY USAGE's estimate of it, while a
-# rewrite runs (rws)
-type Ed is Data:
-  Ed{mm: S.Mm, g: Vic, debt: Nat}
+def evict.pick.of(mm: S.Mm, +ds: R.Ds, +start: U32) -> Ep:
+  +m = mm
+  evict.pick(S.mm.pol(m), m, ds, dbs.count(ds), R.ds.now(ds), start)
 
-# (a match, not Bool.pick, so that no estimate is made without a rewrite)
-def evict.est(rws: Bool, +j: Nat, +k: String, +ds: R.Ds) -> Nat:
-  match rws:
-    case True{}:
-      a1.n(evict.ask.ds(AskEst{k}, j, ds))
-    case False{}:
-      0n
-
-def evict.debt(p: Ep, +rws: Bool, +ds: R.Ds) -> Ed:
+# the key picked deleted: its DEL with the others
+def evict.done(p: Ep, pass: String, cfg: List<&2, C.CItem>, info: I.Info, ds: R.Ds, es: List<&2, A.Ent>, +n: Nat) -> Ev1:
   match p:
     case Ep{mm, Vic{+j, +k}}:
-      Ed{mm, Vic{j, k}, evict.est(rws, j, k, ds)}
+      EvOne{Evs{S.Srv{pass, cfg, info, mm}, evict.del(j, k, ds), A.EOne{A.EDb{j, R.Del{[k]}}} <> es, 1n+n}}
     case Ep{mm, VicNone{}}:
-      Ed{mm, VicNone{}, 0n}
-
-def evict.pick.of(+rws: Bool, mm: S.Mm, +ds: R.Ds, +start: U32) -> Ed:
-  +m = mm
-  evict.debt(evict.pick(S.mm.pol(m), m, ds, dbs.count(ds), R.ds.now(ds), start), rws, ds)
-
-# the key picked deleted: its DEL with the others, the server's debt up
-def evict.done(p: Ed, pass: String, cfg: List<&2, C.CItem>, info: I.Info, ds: R.Ds, es: List<&2, A.Ent>, +n: Nat) -> Ev1:
-  match p:
-    case Ed{mm, Vic{+j, +k}, +debt}:
-      EvOne{Evs{S.Srv{pass, cfg, info, S.mm.owe(mm, debt)}, evict.del(j, k, ds), A.EOne{A.EDb{j, R.Del{[k]}}} <> es, 1n+n}}
-    case Ed{mm, VicNone{}, debt}:
       EvNone{Evs{S.Srv{pass, cfg, info, mm}, ds, es, n}}
 
-# one key evicted (rws: while a rewrite runs)
-def evict.one(x: Evs, +rws: Bool) -> Ev1:
+def evict.one(x: Evs) -> Ev1:
   match x:
     case Evs{S.Srv{pass, cfg, +info, mm}, +ds, es, +n}:
-      evict.done(evict.pick.of(rws, mm, ds, I.info.start(info)), pass, cfg, info, ds, es, n)
+      evict.done(evict.pick.of(mm, ds, I.info.start(info)), pass, cfg, info, ds, es, n)
 
-# whether the heap's used bytes, less the debt, are past maxmemory (none
-# with maxmemory 0)
-def evict.over(+used: Nat, +srv: S.Srv) -> Bool:
+# the keys of the databases (DBSIZE's, summed)
+def ds.keys(+ds: R.Ds) -> Nat:
+  match ds:
+    case R.Ds{+d, +pre, +post}:
+      Nat.add(R.db.n(d), Nat.add(dw.dbs(pre), dw.dbs(post)))
+
+# The memory the eviction and the refusal past maxmemory go by: the
+# heap's used bytes; while a rewrite or a background save runs (rws), no
+# more than the heap when the job took its snapshot and the keys made
+# since, each at the average size then, less those gone since (S.mm.snap,
+# S.mm.view), as Redis's parent counts what it allocates (its used_memory,
+# which performEvictions and getMaxmemoryState read) and not the pages its
+# child's snapshot keeps: the snapshot holds every value a write replaces
+# or deletes, and the heap with it. So a write that replaces values with
+# values of the same size costs nothing, a key made counts, and each key
+# evicted or deleted counts less; a value that grows in place counts once
+# the job has ended (a match, not Bool.pick, so that no key is counted
+# without a job). INFO shows the heap as it is.
+def mem.seen(rws: Bool, +used: Nat, +srv: S.Srv, +ds: R.Ds) -> Nat:
+  match rws:
+    case True{}:
+      Nat.min(used, S.srv.view(srv, ds.keys(ds)))
+    case False{}:
+      used
+
+# whether the memory seen (mem.seen) is past maxmemory (none with
+# maxmemory 0)
+def evict.over(+seen: Nat, +srv: S.Srv) -> Bool:
   +max = S.srv.max(srv)
-  Bool.and(Nat.is_lt(0n, max), Nat.is_lt(max, Nat.sub(used, S.srv.debt(srv))))
+  Bool.and(Nat.is_lt(0n, max), Nat.is_lt(max, seen))
 
-def evs.over(+used: Nat, +x: Evs) -> Bool:
+def evs.over(+used: Nat, rws: Bool, +x: Evs) -> Bool:
   match x:
-    case Evs{+srv, ds, es, n}:
-      evict.over(used, srv)
+    case Evs{+srv, +ds, es, n}:
+      evict.over(mem.seen(rws, used, srv, ds), srv)
 
 # the heap's reading kept in the server's state, for INFO (S.srv.heap)
-def evs.heap(+used: Nat, x: Evs) -> Evs:
+def evs.heap(+used: Nat, +act: Nat, x: Evs) -> Evs:
   match x:
     case Evs{srv, ds, es, n}:
-      Evs{S.srv.heap(srv, used), ds, es, n}
+      Evs{S.srv.heap(srv, used, act), ds, es, n}
 
 # an eviction's outcome: 0 the heap within maxmemory (EVICT_OK), 1 keys
 # left to evict when its time ran out (EVICT_RUNNING), 2 none left that
@@ -7906,16 +9495,17 @@ def evs.heap(+used: Nat, x: Evs) -> Evs:
 type Evd is Data:
   Evd{res: Nat, x: Evs}
 
-# evicting while the heap is past maxmemory (over), a key at a time, the
-# heap read after each; each 16 keys the time since the start (s0, u0)
-# looked at, against lim (us)
+# evicting while the memory is past maxmemory (over), a key at a time,
+# the heap read after each (rws: while a rewrite or a background save
+# runs, mem.seen); each 16 keys the time since the start (s0, u0) looked
+# at, against lim (us)
 @unsafe
 def evict.loop(over: Bool, x: Evs, +rws: Bool, +s0: U32, +u0: U32, +lim: Nat) -> IO(Evd):
   match over:
     case False{}:
       IO.pure(Evd, Evd{0n, x})
     case True{}:
-      evict.next(evict.one(x, rws), rws, s0, u0, lim)
+      evict.next(evict.one(x), rws, s0, u0, lim)
 
 @unsafe
 def evict.next(r: Ev1, +rws: Bool, +s0: U32, +u0: U32, +lim: Nat) -> IO(Evd):
@@ -7948,16 +9538,18 @@ def evict.timed(up: Bool, x: Evs, +rws: Bool, +s0: U32, +u0: U32, +lim: Nat) -> 
 def evict.heap(x: Evs, +rws: Bool, +s0: U32, +u0: U32, +lim: Nat) -> IO(Evd):
   do IO<Evd>:
     h : Nat & Nat <- IO.heap()
-    evict.heap.at(heap.used(h), x, rws, s0, u0, lim)
+    evict.heap.of(h, x, rws, s0, u0, lim)
 
 @unsafe
-def evict.heap.at(+used: Nat, x: Evs, +rws: Bool, +s0: U32, +u0: U32, +lim: Nat) -> IO(Evd):
-  +y = evs.heap(used, x)
-  evict.loop(evs.over(used, y), y, rws, s0, u0, lim)
+def evict.heap.at(+used: Nat, +act: Nat, x: Evs, +rws: Bool, +s0: U32, +u0: U32, +lim: Nat) -> IO(Evd):
+  +y = evs.heap(used, act, x)
+  evict.loop(evs.over(used, rws, y), y, rws, s0, u0, lim)
 
-def heap.used(h: Nat & Nat) -> Nat:
-  (used, act) = h
-  used
+# the heap's reading taken apart, for evict.heap.at
+@unsafe
+def evict.heap.of(h: Nat & Nat, x: Evs, +rws: Bool, +s0: U32, +u0: U32, +lim: Nat) -> IO(Evd):
+  (u, a) = h
+  evict.heap.at(u, a, x, rws, s0, u0, lim)
 
 # the evicted keys' events (expired's: ps.swept)
 def ev.e() -> U32:
@@ -8032,13 +9624,14 @@ def ps.mem.was(+pb: Ps) -> Bool:
     case PsOf{+p}:
       ps.mem.was(p)
 
-# the memory seen to before a group (w: S.srv.mem.what of the heap's
-# used bytes, read at the clock's s0, u0): nothing within maxmemory; a
-# CONFIG SET's change of maxmemory first (its warning, Mm's kick cleared);
-# the eviction (rws: whether a rewrite runs; pid, the server's, for the
-# log); the group's state after it
+# the memory seen to before a group (w: S.srv.mem.what of the memory as
+# the eviction sees it, mem.seen of the heap's used bytes read at the
+# clock's s0, u0): nothing within maxmemory; a CONFIG SET's change of
+# maxmemory first (its warning, Mm's kick cleared); the eviction (rws:
+# whether a rewrite or a background save runs; pid, the server's, for
+# the log); the group's state after it
 @unsafe
-def mem.run.w(w: Nat, +used: Nat, +s0: U32, +u0: U32, srv: S.Srv, ds: R.Ds, ws: Waits, tx: Tx, pb: Ps, +rws: Bool, +pid: U32) -> IO(Grp):
+def mem.run.w(w: Nat, +seen: Nat, +s0: U32, +u0: U32, srv: S.Srv, ds: R.Ds, ws: Waits, tx: Tx, pb: Ps, +rws: Bool, +pid: U32) -> IO(Grp):
   match w:
     case 0n:
       +p = pb
@@ -8046,16 +9639,16 @@ def mem.run.w(w: Nat, +used: Nat, +s0: U32, +u0: U32, srv: S.Srv, ds: R.Ds, ws: 
     case 1n:
       +sv = srv
       do IO<Grp>:
-        Unit <- mem.warn.if(evict.over(used, sv), sv, Nat.sub(used, S.srv.debt(sv)), pid)
-        mem.run.k(used, s0, u0, S.srv.kicked(sv), ds, ws, tx, pb, rws, pid)
+        Unit <- mem.warn.if(evict.over(seen, sv), sv, seen, pid)
+        mem.run.k(seen, s0, u0, S.srv.kicked(sv), ds, ws, tx, pb, rws, pid)
     case _:
       +sv = srv
       evict.go(S.srv.pol(sv), Evs{sv, ds, Nil{}, 0n}, ws, tx, pb, rws, s0, u0, evict.limit(S.srv.ten(sv)))
 
 @unsafe
-def mem.run.k(+used: Nat, +s0: U32, +u0: U32, srv: S.Srv, ds: R.Ds, ws: Waits, tx: Tx, pb: Ps, +rws: Bool, +pid: U32) -> IO(Grp):
+def mem.run.k(+seen: Nat, +s0: U32, +u0: U32, srv: S.Srv, ds: R.Ds, ws: Waits, tx: Tx, pb: Ps, +rws: Bool, +pid: U32) -> IO(Grp):
   +sv = srv
-  mem.run.w(S.srv.mem.what(sv, used), used, s0, u0, sv, ds, ws, tx, pb, rws, pid)
+  mem.run.w(S.srv.mem.what(sv, seen), seen, s0, u0, sv, ds, ws, tx, pb, rws, pid)
 
 # the eviction under policy pol: none under noeviction (EVICT_FAIL)
 @unsafe
@@ -8069,10 +9662,12 @@ def evict.go(+pol: Nat, x: Evs, ws: Waits, tx: Tx, pb: Ps, +rws: Bool, +s0: U32,
         IO.pure(Grp, mem.done(d, ws, tx, pb))
 
 @unsafe
-def mem.run(h: Nat & Nat, +s0: U32, +u0: U32, srv: S.Srv, ds: R.Ds, ws: Waits, tx: Tx, pb: Ps, +rws: Bool, +pid: U32) -> IO(Grp):
-  (u, act) = h
+def mem.run(h: Nat & Nat, +s0: U32, +u0: U32, srv: S.Srv, +ds: R.Ds, ws: Waits, tx: Tx, pb: Ps, +rws: Bool, +pid: U32) -> IO(Grp):
+  (u, a) = h
   +used = u
-  mem.run.k(used, s0, u0, S.srv.heap(srv, used), ds, ws, tx, pb, rws, pid)
+  +act = a
+  +sv = S.srv.heap(srv, used, act)
+  mem.run.k(mem.seen(rws, used, sv, ds), s0, u0, sv, ds, ws, tx, pb, rws, pid)
 
 # a group of requests taken at t, its memory seen to (w: mem.need): with
 # maxmemory, the heap read and the eviction (mem.run); without it, the
@@ -8098,7 +9693,7 @@ def db_mem(+w: Nat, qs: List<&1, Req>, t: U32 & U32, srv: S.Srv, ds: R.Ds, ws: W
       +k = U32.sub(Clock.us(u0), u0)
       do IO<Unit>:
         h : Nat & Nat <- IO.heap()
-        g : Grp <- mem.run(h, s0, u0, srv, R.ds.at(clock.ms.of(s0, u0), ds), ws, tx, pb, rw.runs(w2), rw.pid(w2))
+        g : Grp <- mem.run(h, s0, u0, srv, R.ds.at(clock.ms.of(s0, u0), ds), ws, tx, pb, rw.busy(w2), rw.pid(w2))
         db_group(group_from(False{}, qs, g, s0, k), w2, reqs)
 
 # The database actor
@@ -8134,40 +9729,125 @@ def errs.put(xs: List<&2, R.Erred>, srv: S.Srv) -> S.Srv:
 # file, its effects put before the group's. Not in the encoded bytes: a
 # '-' also begins a line of a reply that is no error (a bulk "-5", a
 # negative score), and an answer of many chunks is read from its start
-# for each index of a line.
-def run_put(outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, back: Chan(Ans), t: R.Tally, +inb: Nat, d: S.Fin, up: List<&2, Up>, pb: Ps) -> Grp:
-  match t d:
-    case R.Tally{+calls, False{}, +run, runs} S.Fin{rs, cn, srv, ds}:
+# for each index of a line. Its changes are counted by its rule alone
+# (none, or dirty.quick), or by a walk of its replies (walk:
+# dirty.one.rule, for a batch of one code; dirty.batch for one of
+# several), the rule looked up once for the batch (fast.run:
+# dirty.rule.tally); a batch with a code that takes a weight goes to
+# run_put.w with its weights. Each has one caller (fast.run.w), whose
+# segment it stays in: a def called from two places is entered through
+# the work loop (FINDINGS.md, section 7; PERFORMANCE.md, section 72).
+def run_put(walk: Bool, +rule: Nat, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, back: Chan(Ans), t: R.Tally, +inb: Nat, d: S.Fin, up: List<&2, Up>, pb: Ps) -> Grp:
+  match walk t d:
+    case False{} R.Tally{+calls, False{}, +run, runs} S.Fin{rs, cn, srv, ds}:
       +a = ans_of(rs, cn)
       +outb = ans.len(a)
-      Grp{(back, a) <> outs, es, S.srv.ran(srv, calls, run, runs, inb, outb), ds, WaitNone{}, up, TxNone{}, pb}
+      Grp{(back, a) <> outs, es, S.srv.ran.d(srv, calls, run, runs, inb, outb, 0n), ds, WaitNone{}, up, TxNone{}, pb}
+    case True{} R.Tally{+calls, False{}, +run, Nil{}} S.Fin{+rs, cn, srv, ds}:
+      +n = dirty.one.rule(rule, False{}, calls, 0n, rs, Nil{})
+      +a = ans_of(rs, cn)
+      +outb = ans.len(a)
+      Grp{(back, a) <> outs, es, S.srv.ran.d(srv, calls, run, Nil{}, inb, outb, n), ds, WaitNone{}, up, TxNone{}, pb}
+    case True{} R.Tally{+calls, False{}, +run, +runs} S.Fin{+rs, cn, srv, ds}:
+      +n = dirty.batch(calls, run, runs, False{}, 0n, rs, Nil{})
+      +a = ans_of(rs, cn)
+      +outb = ans.len(a)
+      Grp{(back, a) <> outs, es, S.srv.ran.d(srv, calls, run, runs, inb, outb, n), ds, WaitNone{}, up, TxNone{}, pb}
+    case False{} R.Tally{+calls, True{}, +run, Nil{}} S.Fin{+rs, cn, srv, ds}:
+      +xs = R.errs.one(rs, R.run.code(run), Nil{})
+      +n = dirty.quick(rule, calls, errs.len(xs, 0n))
+      +a = ans_of(rs, cn)
+      +outb = ans.len(a)
+      Grp{(back, a) <> outs, es, errs.put(xs, S.srv.ran.d(srv, calls, run, Nil{}, inb, outb, n)), ds, WaitNone{}, up, TxNone{}, pb}
+    case True{} R.Tally{+calls, True{}, +run, Nil{}} S.Fin{+rs, cn, srv, ds}:
+      +xs = R.errs.one(rs, R.run.code(run), Nil{})
+      +n = dirty.one.rule(rule, True{}, calls, errs.len(xs, 0n), rs, Nil{})
+      +a = ans_of(rs, cn)
+      +outb = ans.len(a)
+      Grp{(back, a) <> outs, es, errs.put(xs, S.srv.ran.d(srv, calls, run, Nil{}, inb, outb, n)), ds, WaitNone{}, up, TxNone{}, pb}
+    case _ R.Tally{+calls, True{}, +run, +runs} S.Fin{+rs, cn, srv, ds}:
+      +xs = R.errs.zip(rs, R.codes.runs(runs, Nil{}), Nil{})
+      +n = dirty.batch(calls, run, runs, True{}, errs.len(xs, 0n), rs, Nil{})
+      +a = ans_of(rs, cn)
+      +outb = ans.len(a)
+      Grp{(back, a) <> outs, es, errs.put(xs, S.srv.ran.d(srv, calls, run, runs, inb, outb, n)), ds, WaitNone{}, up, TxNone{}, pb}
+
+# the same for a batch with a code that takes a weight, ws its calls'
+# weights (fast.run.w): its replies walked
+def run_put.w(outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, back: Chan(Ans), t: R.Tally, +inb: Nat, ws: List<&2, Nat>, d: S.Fin, up: List<&2, Up>, pb: Ps) -> Grp:
+  match t d:
+    case R.Tally{+calls, False{}, +run, +runs} S.Fin{+rs, cn, srv, ds}:
+      +n = dirty.batch(calls, run, runs, False{}, 0n, rs, ws)
+      +a = ans_of(rs, cn)
+      +outb = ans.len(a)
+      Grp{(back, a) <> outs, es, S.srv.ran.d(srv, calls, run, runs, inb, outb, n), ds, WaitNone{}, up, TxNone{}, pb}
     case R.Tally{+calls, True{}, +run, Nil{}} S.Fin{+rs, cn, srv, ds}:
       +xs = R.errs.one(rs, R.run.code(run), Nil{})
+      +n = dirty.batch(calls, run, Nil{}, True{}, errs.len(xs, 0n), rs, ws)
       +a = ans_of(rs, cn)
       +outb = ans.len(a)
-      Grp{(back, a) <> outs, es, errs.put(xs, S.srv.ran(srv, calls, run, Nil{}, inb, outb)), ds, WaitNone{}, up, TxNone{}, pb}
+      Grp{(back, a) <> outs, es, errs.put(xs, S.srv.ran.d(srv, calls, run, Nil{}, inb, outb, n)), ds, WaitNone{}, up, TxNone{}, pb}
     case R.Tally{+calls, True{}, +run, +runs} S.Fin{+rs, cn, srv, ds}:
       +xs = R.errs.zip(rs, R.codes.runs(runs, Nil{}), Nil{})
+      +n = dirty.batch(calls, run, runs, True{}, errs.len(xs, 0n), rs, ws)
       +a = ans_of(rs, cn)
       +outb = ans.len(a)
-      Grp{(back, a) <> outs, es, errs.put(xs, S.srv.ran(srv, calls, run, runs, inb, outb)), ds, WaitNone{}, up, TxNone{}, pb}
+      Grp{(back, a) <> outs, es, errs.put(xs, S.srv.ran.d(srv, calls, run, runs, inb, outb, n)), ds, WaitNone{}, up, TxNone{}, pb}
 
-def group_put(outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, back: Chan(Ans), t: R.Tally, +inb: Nat, d: S.Logged, up: List<&2, Up>, pb: Ps) -> Grp:
-  match t d:
-    case R.Tally{+calls, False{}, +run, runs} S.Logged{rs, e, cn, srv, ds}:
+def group_put(walk: Bool, +rule: Nat, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, back: Chan(Ans), t: R.Tally, +inb: Nat, d: S.Logged, up: List<&2, Up>, pb: Ps) -> Grp:
+  match walk t d:
+    case False{} R.Tally{+calls, False{}, +run, runs} S.Logged{rs, e, cn, srv, ds}:
       +a = ans_of(rs, cn)
       +outb = ans.len(a)
-      Grp{(back, a) <> outs, A.ents.onto(e, es), S.srv.ran(srv, calls, run, runs, inb, outb), ds, WaitNone{}, up, TxNone{}, pb}
+      Grp{(back, a) <> outs, A.ents.onto(e, es), S.srv.ran.d(srv, calls, run, runs, inb, outb, 0n), ds, WaitNone{}, up, TxNone{}, pb}
+    case True{} R.Tally{+calls, False{}, +run, Nil{}} S.Logged{+rs, e, cn, srv, ds}:
+      +n = dirty.one.rule(rule, False{}, calls, 0n, rs, Nil{})
+      +a = ans_of(rs, cn)
+      +outb = ans.len(a)
+      Grp{(back, a) <> outs, A.ents.onto(e, es), S.srv.ran.d(srv, calls, run, Nil{}, inb, outb, n), ds, WaitNone{}, up, TxNone{}, pb}
+    case True{} R.Tally{+calls, False{}, +run, +runs} S.Logged{+rs, e, cn, srv, ds}:
+      +n = dirty.batch(calls, run, runs, False{}, 0n, rs, Nil{})
+      +a = ans_of(rs, cn)
+      +outb = ans.len(a)
+      Grp{(back, a) <> outs, A.ents.onto(e, es), S.srv.ran.d(srv, calls, run, runs, inb, outb, n), ds, WaitNone{}, up, TxNone{}, pb}
+    case False{} R.Tally{+calls, True{}, +run, Nil{}} S.Logged{+rs, e, cn, srv, ds}:
+      +xs = R.errs.one(rs, R.run.code(run), Nil{})
+      +n = dirty.quick(rule, calls, errs.len(xs, 0n))
+      +a = ans_of(rs, cn)
+      +outb = ans.len(a)
+      Grp{(back, a) <> outs, A.ents.onto(e, es), errs.put(xs, S.srv.ran.d(srv, calls, run, Nil{}, inb, outb, n)), ds, WaitNone{}, up, TxNone{}, pb}
+    case True{} R.Tally{+calls, True{}, +run, Nil{}} S.Logged{+rs, e, cn, srv, ds}:
+      +xs = R.errs.one(rs, R.run.code(run), Nil{})
+      +n = dirty.one.rule(rule, True{}, calls, errs.len(xs, 0n), rs, Nil{})
+      +a = ans_of(rs, cn)
+      +outb = ans.len(a)
+      Grp{(back, a) <> outs, A.ents.onto(e, es), errs.put(xs, S.srv.ran.d(srv, calls, run, Nil{}, inb, outb, n)), ds, WaitNone{}, up, TxNone{}, pb}
+    case _ R.Tally{+calls, True{}, +run, +runs} S.Logged{+rs, e, cn, srv, ds}:
+      +xs = R.errs.zip(rs, R.codes.runs(runs, Nil{}), Nil{})
+      +n = dirty.batch(calls, run, runs, True{}, errs.len(xs, 0n), rs, Nil{})
+      +a = ans_of(rs, cn)
+      +outb = ans.len(a)
+      Grp{(back, a) <> outs, A.ents.onto(e, es), errs.put(xs, S.srv.ran.d(srv, calls, run, runs, inb, outb, n)), ds, WaitNone{}, up, TxNone{}, pb}
+
+def group_put.w(outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, back: Chan(Ans), t: R.Tally, +inb: Nat, ws: List<&2, Nat>, d: S.Logged, up: List<&2, Up>, pb: Ps) -> Grp:
+  match t d:
+    case R.Tally{+calls, False{}, +run, +runs} S.Logged{+rs, e, cn, srv, ds}:
+      +n = dirty.batch(calls, run, runs, False{}, 0n, rs, ws)
+      +a = ans_of(rs, cn)
+      +outb = ans.len(a)
+      Grp{(back, a) <> outs, A.ents.onto(e, es), S.srv.ran.d(srv, calls, run, runs, inb, outb, n), ds, WaitNone{}, up, TxNone{}, pb}
     case R.Tally{+calls, True{}, +run, Nil{}} S.Logged{+rs, e, cn, srv, ds}:
       +xs = R.errs.one(rs, R.run.code(run), Nil{})
+      +n = dirty.batch(calls, run, Nil{}, True{}, errs.len(xs, 0n), rs, ws)
       +a = ans_of(rs, cn)
       +outb = ans.len(a)
-      Grp{(back, a) <> outs, A.ents.onto(e, es), errs.put(xs, S.srv.ran(srv, calls, run, Nil{}, inb, outb)), ds, WaitNone{}, up, TxNone{}, pb}
+      Grp{(back, a) <> outs, A.ents.onto(e, es), errs.put(xs, S.srv.ran.d(srv, calls, run, Nil{}, inb, outb, n)), ds, WaitNone{}, up, TxNone{}, pb}
     case R.Tally{+calls, True{}, +run, +runs} S.Logged{+rs, e, cn, srv, ds}:
       +xs = R.errs.zip(rs, R.codes.runs(runs, Nil{}), Nil{})
+      +n = dirty.batch(calls, run, runs, True{}, errs.len(xs, 0n), rs, ws)
       +a = ans_of(rs, cn)
       +outb = ans.len(a)
-      Grp{(back, a) <> outs, A.ents.onto(e, es), errs.put(xs, S.srv.ran(srv, calls, run, runs, inb, outb)), ds, WaitNone{}, up, TxNone{}, pb}
+      Grp{(back, a) <> outs, A.ents.onto(e, es), errs.put(xs, S.srv.ran.d(srv, calls, run, runs, inb, outb, n)), ds, WaitNone{}, up, TxNone{}, pb}
 
 # A batch's client's channel is marked with the code of its last command
 # and the group's time (Clients: CLIENT LIST's cmd and idle): the fast way
@@ -8225,11 +9905,6 @@ def use.lru(+hs: List<&2, U32>, +w: U32, k: U32) -> U32:
     case Con{+h, +rest}:
       use.lru(rest, w, Mem.touch(k, h, w))
 
-# the word a request of hash h leaves in its key's word w under an LFU
-# policy, at the minute min, r its random number
-def use.lfu.word(+h: U32, +w: U32, +min: U32, +r: U32, +lf: Nat, +dt: Nat) -> U32:
-  Bool.pick(U32, U32.is_eq(U32.and(h, 4293918720), R.stat.mark.restore()), S.lfu.word(min, 5), S.lfu.use(w, min, r, lf, dt))
-
 def use.lfu(+hs: List<&2, U32>, +now: Nat, +min: U32, +lf: Nat, +dt: Nat, +i: U32, k: U32) -> U32:
   match hs:
     case Nil{}:
@@ -8238,16 +9913,36 @@ def use.lfu(+hs: List<&2, U32>, +now: Nat, +min: U32, +lf: Nat, +dt: Nat, +i: U3
       +w = Mem.cell(h)
       use.lfu(rest, now, min, lf, dt, U32.add(i, 2654435769), Mem.touch(k, h, use.lfu.word(h, w, min, KV.mix(U32.xor(U32.xor(h, w), U32.xor(U32.from_nat(now), i))), lf, dt)))
 
+# the batch's keys marked used before it runs, unless its calls mark
+# them (um)
+def use.lru.if(um: Bool, +hs: List<&2, U32>, +w: U32) -> U32:
+  match um:
+    case True{}:
+      0
+    case False{}:
+      use.lru(hs, w, 0)
+
+def use.lfu.if(um: Bool, +hs: List<&2, U32>, +now: Nat, +min: U32, +lf: Nat, +dt: Nat) -> U32:
+  match um:
+    case True{}:
+      0
+    case False{}:
+      use.lfu(hs, now, min, lf, dt, 0, 0)
+
 # a batch the general way, its keys marked used first (lfu: under an LFU
-# policy) and its client's channel marked with its last command (mark.hs)
+# policy), but those of a restricted client's batch, which its calls mark
+# (bg.marks), and its client's channel marked with its last command
+# (mark.hs)
 def bg.used(lfu: Bool, +cn: S.Conn, +back: Chan(Ans), +inb: Nat, raw: String, cmds: List<&2, R.Cmd>, +hs: List<&2, U32>, g: Grp) -> Grp:
   match lfu g:
-    case False{} Grp{outs, es, srv, +ds, ws, up, tx, pb}:
+    case False{} Grp{outs, es, +srv, +ds, ws, up, tx, +pb}:
       +now = R.ds.now(ds)
-      bg.batch(cn, mark.hs(back, hs, now, use.lru(hs, S.acc.lru(now), 0)), inb, raw, cmds, R.codes.of(hs), Grp{outs, es, srv, ds, ws, up, tx, pb})
-    case True{} Grp{outs, es, S.Srv{pass, cfg, info, +mm}, +ds, ws, up, tx, pb}:
+      +um = bg.marks(cn, srv, pb)
+      bg.batch(um, cn, mark.hs(back, hs, now, use.lru.if(um, hs, S.acc.lru(now))), inb, raw, cmds, R.codes.of(hs), Grp{outs, es, srv, ds, ws, up, tx, pb})
+    case True{} Grp{outs, es, S.Srv{pass, cfg, info, +mm}, +ds, ws, up, tx, +pb}:
       +now = R.ds.now(ds)
-      bg.batch(cn, mark.hs(back, hs, now, use.lfu(hs, now, S.acc.min(now), S.mm.lfl(mm), S.mm.lfd(mm), 0, 0)), inb, raw, cmds, R.codes.of(hs), Grp{outs, es, S.Srv{pass, cfg, info, mm}, ds, ws, up, tx, pb})
+      +um = Bool.and(ps.acl.on(pb), S.mm.restricted(mm, S.conn.id(cn)))
+      bg.batch(um, cn, mark.hs(back, hs, now, use.lfu.if(um, hs, now, S.acc.min(now), S.mm.lfl(mm), S.mm.lfd(mm))), inb, raw, cmds, R.codes.of(hs), Grp{outs, es, S.Srv{pass, cfg, info, mm}, ds, ws, up, tx, pb})
 
 # (after a SHUTDOWN that stops the server, every client's: SHUTDOWN)
 def ps.killed(+id: Nat, +pb: Ps) -> Bool:
@@ -8269,12 +9964,30 @@ def job.slow(+cn: S.Conn, +back: Chan(Ans), +inb: Nat, raw: String, cmds: List<&
 
 # a batch the fast way, without the append-only file or with it (log)
 
+# (w: a code of the batch takes a weight, whose weights are read from the
+# databases before it runs: The count of changes; a batch of any other
+# reads nothing more before it runs)
+def fast.run.w(w: Bool, +walk: Bool, +rule: Nat, log: Bool, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, back: Chan(Ans), t: R.Tally, +inb: Nat, cn: S.Conn, srv: S.Srv, cmds: List<&2, R.Cmd>, hs: List<&2, U32>, ds: R.Ds, up: List<&2, Up>, pb: Ps) -> Grp:
+  match w log:
+    case False{} True{}:
+      group_put(walk, rule, outs, es, back, t, inb, S.run_log.plain(True{}, cn, srv, cmds, hs, ds), up, pb)
+    case False{} False{}:
+      run_put(walk, rule, outs, es, back, t, inb, S.run.plain(True{}, cn, srv, cmds, hs, ds), up, pb)
+    case True{} True{}:
+      +cs = cmds
+      +d = ds
+      +ws = dirty.ws.of(cs, d)
+      group_put.w(outs, es, back, t, inb, ws, S.run_log.plain(True{}, cn, srv, cs, hs, d), up, pb)
+    case True{} False{}:
+      +cs = cmds
+      +d = ds
+      +ws = dirty.ws.of(cs, d)
+      run_put.w(outs, es, back, t, inb, ws, S.run.plain(True{}, cn, srv, cs, hs, d), up, pb)
+
 def fast.run(+log: Bool, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, back: Chan(Ans), t: R.Tally, +inb: Nat, cn: S.Conn, srv: S.Srv, cmds: List<&2, R.Cmd>, hs: List<&2, U32>, ds: R.Ds, up: List<&2, Up>, pb: Ps) -> Grp:
-  match log:
-    case True{}:
-      group_put(outs, es, back, t, inb, S.run_log.plain(True{}, cn, srv, cmds, hs, ds), up, pb)
-    case False{}:
-      run_put(outs, es, back, t, inb, S.run.plain(True{}, cn, srv, cmds, hs, ds), up, pb)
+  +tl = t
+  +rule = dirty.rule.tally(tl)
+  fast.run.w(dirty.weighs.of(rule), dirty.walks.of(rule, tally.risky(tl)), rule, log, outs, es, back, tl, inb, cn, srv, cmds, hs, ds, up, pb)
 
 # a batch the fast way, its keys marked used first (Access; lfu: under an
 # LFU policy)
@@ -8315,23 +10028,32 @@ def group.heeded(ok: Bool, +log: Bool, ws: Waits, tx: Tx, outs: List<&2, Sigma<&
     case False{}:
       job.slow(cn, back, inb, raw, cmds, hs, Grp{outs, es, srv, ds, ws, up, tx, pb})
 
-def group.heed(+log: Bool, ws: Waits, +tx: Tx, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, +cn: S.Conn, +cmds: List<&2, R.Cmd>, +hs: List<&2, U32>, back: Chan(Ans), +tl: U32, +inb: Nat, raw: String, +srv: S.Srv, ds: R.Ds, up: List<&2, Up>, +pb: Ps) -> Grp:
-  group.heeded(heed.ok(cn, srv, tx, cmds, hs, pb), log, ws, tx, outs, es, cn, cmds, hs, back, tl, inb, raw, srv, ds, up, pb)
+# (ready: whether its client may run it so, S.ready or acl.ready, which
+# group_job's arms give, so that group.heeded has this one caller)
+def group.heed(ready: Bool, +log: Bool, ws: Waits, +tx: Tx, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, +cn: S.Conn, +cmds: List<&2, R.Cmd>, +hs: List<&2, U32>, back: Chan(Ans), +tl: U32, +inb: Nat, raw: String, +srv: S.Srv, ds: R.Ds, up: List<&2, Up>, +pb: Ps) -> Grp:
+  group.heeded(heed.ok.of(ready, S.conn.id(cn), tx, cmds, hs, pb), log, ws, tx, outs, es, cn, cmds, hs, back, tl, inb, raw, srv, ds, up, pb)
 
 # a batch from a client with no subscription: the fast way while no
 # keyspace event is to be sent and no client waits, has a transaction or
 # watches a key (calm 0: ps.gate); while some client does, or the
 # tracking has work (calm 1), the fast way for a batch of database
 # commands that writes no heeded key, from a client in no MULTI
-# (group.heeded)
+# (group.heeded); while some client is restricted (calm 3 and 4), the
+# same for a client that is not (acl.ready)
 def group_job(+log: Bool, job: B.Job, ws: Waits, tx: Tx, calm: Nat, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, +cn: S.Conn, back: Chan(Ans), +tl: U32, +inb: Nat, raw: String, +srv: S.Srv, ds: R.Ds, up: List<&2, Up>, pb: Ps) -> Grp:
   match job ws tx calm:
     case B.Plain{cmds, hs} WaitNone{} TxNone{} 0n:
       fast(log, S.ready(cn, srv), outs, es, cn, cmds, hs, back, tl, inb, raw, srv, ds, up, pb)
+    case B.Plain{cmds, hs} WaitNone{} TxNone{} 3n:
+      fast(log, acl.ready(cn, srv), outs, es, cn, cmds, hs, back, tl, inb, raw, srv, ds, up, pb)
     case B.Plain{cmds, +hs} w t 2n:
       job.slow(cn, back, inb, raw, cmds, hs, Grp{outs, es, srv, ds, w, up, t, pb})
+    case B.Plain{cmds, hs} w t 3n:
+      group.heed(acl.ready(cn, srv), log, w, t, outs, es, cn, cmds, hs, back, tl, inb, raw, srv, ds, up, pb)
+    case B.Plain{cmds, hs} w t 4n:
+      group.heed(acl.ready(cn, srv), log, w, t, outs, es, cn, cmds, hs, back, tl, inb, raw, srv, ds, up, pb)
     case B.Plain{cmds, hs} w t c:
-      group.heed(log, w, t, outs, es, cn, cmds, hs, back, tl, inb, raw, srv, ds, up, pb)
+      group.heed(S.ready(cn, srv), log, w, t, outs, es, cn, cmds, hs, back, tl, inb, raw, srv, ds, up, pb)
     case B.Mixed{cmds, +hs} w t c:
       job.slow(cn, back, inb, raw, cmds, hs, Grp{outs, es, srv, ds, w, up, t, pb})
 
@@ -8474,10 +10196,12 @@ def group_req(+log: Bool, q: Req, g: Grp) -> Grp:
     case Gone{+id, +back} Grp{outs, es, srv, ds, +ws, +up, tx, pb}:
       grp.gone(id, back, outs, es, srv, ds, ws, up, tx, pb)
     case Left{+id, back} Grp{outs, es, srv, ds, ws, up, tx, pb}:
-      Grp{(back, Bye{}) <> outs, es, S.srv.gone(srv, id), ds, ws, up, tx.drop(id, tx), ps.left(id, ps.drop(id, pb))}
+      +sv = S.srv.left(srv, id)
+      Grp{(back, Bye{}) <> outs, es, sv, ds, ws, up, tx.drop(id, tx), ps.acl.at(ps.left(id, ps.drop(id, pb)), acl.on(sv))}
     case Join{+id, +back, fd, addr, laddr} Grp{outs, es, +srv, +ds, ws, up, tx, pb}:
       +now = R.ds.now(ds)
-      Grp{(back, Ans{None{}, S.conn_join(id, srv)}) <> outs, es, srv, ds, ws, up, tx, ps.join(id, Cl{id, Chan.mark(Ans, back, 0, now), fd, cl.at(srv, addr), cl.at(srv, laddr), now, "", 0n, False{}, False{}, TkOff{}}, pb)}
+      +sv = S.srv.acl.client(srv, id, "default")
+      Grp{(back, Ans{None{}, S.conn_join(id, srv)}) <> outs, es, sv, ds, ws, up, tx, ps.acl.at(ps.join(id, Cl{id, Chan.mark(Ans, back, 0, now), fd, cl.at(srv, addr), cl.at(srv, laddr), now, "", 0n, False{}, False{}, TkOff{}, "default"}, pb), acl.on(sv))}
 
 # the clock (IO.clock: s and us since 1970) in ms
 def clock.ms(t: U32 & U32) -> Nat:
@@ -8685,20 +10409,53 @@ def group_from(+log: Bool, qs: List<&1, Req>, g: Grp, +s0: U32, +k: U32) -> Grp:
 type RwRun is Data:
   RwRun{snap: Maybe<&2, A.Snap>, tmp: String, size: Nat, pend: List<&2, String>, pn: Nat, buf: List<&2, String>}
 
+# what the actor asks of a background save's writer (Background saves:
+# bgw.loop), which holds its temporary file open: bytes appended, and the
+# file synced after them when sync; the file's last bytes appended, the
+# file synced and closed
+type BgW is Data:
+  BgPut{bytes: String, sync: Bool}
+  BgEnd{bytes: String}
+
+# the writer's answer: done, or the operation that failed (as rdbSave's
+# err_op names it) and why
+type BgA is Data:
+  BgOk{}
+  BgBad{op: String, msg: String}
+
+# the channels to the writer and back
+type BgCh is Data:
+  BgCh{to: Chan(BgW), back: Chan(BgA)}
+
+# a background save that runs (Background saves): what is left of its
+# snapshot to write (None: all of it is, the file's end is next), the
+# CRC64 of its bytes so far (with rdbchecksum yes when it started: sum),
+# the bytes written to its temporary file, the bytes not yet written
+# (newest first: they go to the file 64 KB at a time) and how many, the
+# parameters it keeps from its start (I.BgCf: the file it is renamed
+# onto, dbfilename when it started, its pace and its syncs, as Redis's
+# child keeps them from the fork), and the channels to its writer
+type BgRun is Data:
+  BgRun{w: Maybe<&2, D.FW>, c: D.C, sum: Bool, size: Nat, pend: List<&2, String>, pn: Nat, cf: I.BgCf, ch: BgCh}
+
 # the file's path (appendfilename with appendonly no, which the rewrite
 # writes all the same), whether the server appends to it (appendonly
 # yes), the server's pid (the temporary file's name, the log's lines),
 # when the cron looks next (ms, each 100 ms as Redis's serverCron), the
 # cron's limit after failures in a row (Redis's aofRewriteLimited: its
 # next delay in minutes, and the second it holds until, 0 for none), the
-# time of the group after which the last slice was written (ms), and the
-# rewrite that runs. RwOf, a state that holds a state, is never
-# built: it makes Rw a type that holds itself, which the compiler makes a
-# node of its own, so that it travels as one word, as Pub/Sub's state
-# does; flat, it would be eighteen words in every frame of the actor's
-# loop, and the widest frame sets the registers of every function.
+# time of the group after which the last slice was written (ms), the
+# rewrite that runs, the background save that runs (Background saves),
+# and when the next slice of either may go (ms, and us past it: with
+# rdb-key-save-delay, its delay for each key of the slices before, as
+# Redis's child sleeps that long after each key it writes). RwOf, a state
+# that holds a state, is never built: it makes Rw a type that holds
+# itself, which the compiler makes a node of its own, so that it travels
+# as one word, as Pub/Sub's state does; flat, it would be twenty-one words
+# in every frame of the actor's loop, and the widest frame sets the
+# registers of every function.
 type Rw is Data:
-  Rw{path: String, aof: Bool, pid: U32, cron: Nat, delay: Nat, until: Nat, last: Nat, run: Maybe<&2, RwRun>}
+  Rw{path: String, aof: Bool, pid: U32, cron: Nat, delay: Nat, until: Nat, last: Nat, run: Maybe<&2, RwRun>, bg: Maybe<&2, BgRun>, next: Nat, carry: Nat}
   RwOf{r: Rw}
 
 # what a step of a rewrite reads and changes: the server's state (INFO's
@@ -8708,7 +10465,7 @@ type Rx is Data:
   Rx{srv: S.Srv, ds: R.Ds, sel: Nat, rw: Rw}
 
 def rw.new(+path: String, +aof: Bool, +pid: U32) -> Rw:
-  Rw{path, aof, pid, 0n, 0n, 0n, 0n, None{}}
+  Rw{path, aof, pid, 0n, 0n, 0n, 0n, None{}, None{}, 0n, 0n}
 
 def run.is(+m: Maybe<&2, RwRun>) -> Bool:
   match m:
@@ -8717,21 +10474,59 @@ def run.is(+m: Maybe<&2, RwRun>) -> Bool:
     case None{}:
       False{}
 
-# whether a rewrite runs
+def bgr.is(+m: Maybe<&2, BgRun>) -> Bool:
+  match m:
+    case Some{r}:
+      True{}
+    case None{}:
+      False{}
+
+# whether a rewrite runs; a background save; either (the actor takes the
+# requests that wait without waiting for one, and an eviction counts what
+# the snapshot holds of a key it frees: Eviction)
 def rw.runs(+rw: Rw) -> Bool:
   match rw:
-    case Rw{path, aof, pid, cron, delay, until, last, +run}:
+    case Rw{path, aof, pid, cron, delay, until, last, +run, bg, next, carry}:
       run.is(run)
     case RwOf{+r}:
       rw.runs(r)
 
-# what the actor does about a rewrite once a group is answered, at now
-# (the group's time, ms): 0 nothing; 1 start the one the group started
-# (the server's state says one runs, and none does); 2 the next slice of
-# the one that runs, once 4 ms have passed since the last one (under a
-# load that never lets the actor wait, the rewrite takes a small part of
-# its time; while no request waits the actor writes slices one after
-# another); 3 the cron's look
+def rw.saving(+rw: Rw) -> Bool:
+  match rw:
+    case Rw{path, aof, pid, cron, delay, until, last, run, +bg, next, carry}:
+      bgr.is(bg)
+    case RwOf{+r}:
+      rw.saving(r)
+
+def rw.busy(+rw: Rw) -> Bool:
+  match rw:
+    case Rw{path, aof, pid, cron, delay, until, last, +run, +bg, next, carry}:
+      Bool.or(run.is(run), bgr.is(bg))
+    case RwOf{+r}:
+      rw.busy(r)
+
+# whether the next slice may go at now (ms)
+def rw.due(+rw: Rw, +now: Nat) -> Bool:
+  match rw:
+    case Rw{path, aof, pid, cron, delay, until, last, run, bg, +next, carry}:
+      Nat.is_le(next, now)
+    case RwOf{+r}:
+      rw.due(r, now)
+
+# what the background save asks of the actor (info.bend: bgs.ask)
+def bg.ask(+srv: S.Srv) -> Nat:
+  I.bgs.ask(I.rdb.bg(S.srv.rdb(srv)))
+
+# what the actor does about a rewrite or a background save once a group
+# is answered, at now (the group's time, ms): 0 nothing; 1 start the
+# rewrite the group started (the server's state says one runs, and none
+# does); 2 the next slice of the rewrite that runs, once 4 ms have passed
+# since the last one (under a load that never lets the actor wait, the
+# rewrite takes a small part of its time; while no request waits the
+# actor writes slices one after another), and its pace allows it; 3 the
+# cron's look; 6 start the background save a group's BGSAVE took a
+# snapshot for; 7 the next slice of the background save that runs, as 2;
+# 8 drop the background save (a FLUSHALL of the group)
 def rw.what.idle(on: Bool, +cron: Nat, +now: Nat) -> Nat:
   match on:
     case True{}:
@@ -8739,17 +10534,31 @@ def rw.what.idle(on: Bool, +cron: Nat, +now: Nat) -> Nat:
     case False{}:
       Bool.pick(Nat, Nat.is_le(cron, now), 3n, 0n)
 
-def rw.what.of(runs: Bool, +srv: S.Srv, +cron: Nat, +last: Nat, +now: Nat) -> Nat:
-  match runs:
-    case True{}:
-      Bool.pick(Nat, Nat.is_le(Nat.add(last, 4n), now), 2n, 0n)
-    case False{}:
+def rw.what.slice(+w: Nat, +last: Nat, +next: Nat, +now: Nat) -> Nat:
+  Bool.pick(Nat, Bool.and(Nat.is_le(Nat.add(last, 4n), now), Nat.is_le(next, now)), w, 0n)
+
+def rw.what.job(runs: Bool, saving: Bool, +srv: S.Srv, +cron: Nat, +last: Nat, +next: Nat, +now: Nat) -> Nat:
+  match runs saving:
+    case True{} _:
+      rw.what.slice(2n, last, next, now)
+    case False{} True{}:
+      rw.what.slice(7n, last, next, now)
+    case False{} False{}:
       rw.what.idle(S.srv.rw.on(srv), cron, now)
+
+def rw.what.of(+ask: Nat, runs: Bool, saving: Bool, +srv: S.Srv, +cron: Nat, +last: Nat, +next: Nat, +now: Nat) -> Nat:
+  match ask:
+    case 0n:
+      rw.what.job(runs, saving, srv, cron, last, next, now)
+    case 1n:
+      6n
+    case _:
+      8n
 
 def rw.what(+rw: Rw, +srv: S.Srv, +now: Nat) -> Nat:
   match rw:
-    case Rw{path, aof, pid, +cron, delay, until, +last, +run}:
-      rw.what.of(run.is(run), srv, cron, last, now)
+    case Rw{path, aof, pid, +cron, delay, until, +last, +run, +bg, +next, carry}:
+      rw.what.of(bg.ask(srv), run.is(run), bgr.is(bg), srv, cron, last, next, now)
     case RwOf{+r}:
       rw.what(r, srv, now)
 
@@ -8763,8 +10572,8 @@ def run.keep(m: Maybe<&2, RwRun>, +bytes: String) -> Maybe<&2, RwRun>:
 
 def rw.keep(rw: Rw, +bytes: String) -> Rw:
   match rw:
-    case Rw{path, aof, pid, cron, delay, until, last, run}:
-      Rw{path, aof, pid, cron, delay, until, last, run.keep(run, bytes)}
+    case Rw{path, aof, pid, cron, delay, until, last, run, bg, next, carry}:
+      Rw{path, aof, pid, cron, delay, until, last, run.keep(run, bytes), bg, next, carry}
     case RwOf{r}:
       rw.keep(r, bytes)
 
@@ -8777,7 +10586,7 @@ def rw.keep(rw: Rw, +bytes: String) -> Rw:
 def db_loop(srv: S.Srv, ds: R.Ds, ws: Waits, tx: Tx, pb: Ps, rw: Rw, +reqs: Chan(Req)) -> IO(Unit):
   +w = rw
   +p = pb
-  db_wait(Bool.or(rw.runs(w), ps.evicting(p)), srv, ds, ws, tx, p, w, reqs)
+  db_wait(Bool.or(rw.busy(w), ps.evicting(p)), srv, ds, ws, tx, p, w, reqs)
 
 @unsafe
 def db_wait(runs: Bool, srv: S.Srv, ds: R.Ds, ws: Waits, tx: Tx, pb: Ps, rw: Rw, +reqs: Chan(Req)) -> IO(Unit):
@@ -8805,7 +10614,22 @@ def db_busy(qs: List<&1, Req>, srv: S.Srv, ds: R.Ds, ws: Waits, tx: Tx, pb: Ps, 
 
 # while no request waits: an eviction to go on with runs as a group of no
 # request, after a turn of the event loop (as Redis's evictionTimeProc
-# runs in its loop's turn); else the rewrite's slice
+# runs in its loop's turn); else the slice of the job that runs (a
+# rewrite, a background save), when its pace allows it (due), else a
+# millisecond's wait (rdb-key-save-delay)
+@unsafe
+def db_idle.go(due: Bool, +w: Nat, srv: S.Srv, ds: R.Ds, ws: Waits, tx: Tx, pb: Ps, rw: Rw, +reqs: Chan(Req)) -> IO(Unit):
+  match due:
+    case True{}:
+      do IO<Unit>:
+        p : Maybe<&1, File> & Rx <- step.go(w, Rx{srv, ds, 0n, rw}, None{})
+        Unit <- IO.sleep(0)
+        db_stepped(p, ws, tx, pb, reqs)
+    case False{}:
+      do IO<Unit>:
+        Unit <- IO.sleep(1)
+        db_loop(srv, ds, ws, tx, pb, rw, reqs)
+
 @unsafe
 def db_idle(ev: Bool, srv: S.Srv, ds: R.Ds, ws: Waits, tx: Tx, pb: Ps, rw: Rw, +reqs: Chan(Req)) -> IO(Unit):
   match ev:
@@ -8815,12 +10639,15 @@ def db_idle(ev: Bool, srv: S.Srv, ds: R.Ds, ws: Waits, tx: Tx, pb: Ps, rw: Rw, +
         t : U32 & U32 <- IO.clock()
         db_mem(2n, Nil{}, t, srv, ds, ws, tx, pb, rw, reqs)
     case False{}:
-      +d = ds
       do IO<Unit>:
         t : U32 & U32 <- IO.clock()
-        p : Maybe<&1, File> & Rx <- step.go(idle.step(d, clock.ms(t)), Rx{srv, d, 0n, rw}, None{})
-        Unit <- IO.sleep(0)
-        db_stepped(p, ws, tx, pb, reqs)
+        db_idle.at(clock.ms(t), srv, ds, ws, tx, pb, rw, reqs)
+
+@unsafe
+def db_idle.at(+ms: Nat, srv: S.Srv, ds: R.Ds, ws: Waits, tx: Tx, pb: Ps, rw: Rw, +reqs: Chan(Req)) -> IO(Unit):
+  +d = ds
+  +w = rw
+  db_idle.go(rw.due(w, ms), idle.step(d, ms), srv, d, ws, tx, pb, w, reqs)
 
 @unsafe
 def db_serve(srv: S.Srv, ds: R.Ds, ws: Waits, tx: Tx, pb: Ps, rw: Rw, +reqs: Chan(Req), m: Maybe<&1, Req>) -> IO(Unit):
@@ -8902,9 +10729,12 @@ def db_shut.end(ok: Bool, +force: Bool, +ok1: Bool, +srv: S.Srv, outs: List<&2, 
     case False{} True{}:
       down.forced(srv, down.lg(srv, rw))
     case False{} False{}:
+      +on = bg.on(srv)
       do IO<Unit>:
         Unit <- down.cant(down.lg(srv, rw))
-        db_group(grp.saved(ok1, outs, S.srv.rw.stop(srv), ds, ws, tx, pb), rw.with(rw, None{}), reqs)
+        t : U32 & U32 <- IO.clock()
+        Unit <- down.bg.end(on, down.lg(srv, rw))
+        db_group(grp.saved.down(ok1, outs, down.bg.stop(on, S.srv.rw.stop(srv), clock.secs(t)), ds, ws, tx, pb), rw.stopped(rw), reqs)
 
 @unsafe
 def db_shut(p: S.Srv & Bool, +force: Bool, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, +ds: R.Ds, ws: Waits, tx: Tx, pb: Ps, +rw: Rw, +reqs: Chan(Req)) -> IO(Unit):
@@ -8913,6 +10743,7 @@ def db_shut(p: S.Srv & Bool, +force: Bool, outs: List<&2, Sigma<&2, &2, Chan(Ans
   do IO<Unit>:
     Unit <- log(lg, 3, "User requested shutdown...")
     Unit <- down.sd(S.srv.cfg(srv))
+    Unit <- down.bgsave(bg.on(srv), bgr.ch(rw.bg(rw)), lg, rw.pid(rw))
     Unit <- down.rewrite(rw.runs(rw), lg, rw.tmp(rw))
     ok : Bool <- down.final(lg, srv, ds, rw.pid(rw))
     db_shut.end(ok, force, ok1, srv, outs, ds, ws, tx, pb, rw, reqs)
@@ -8936,10 +10767,10 @@ def db_after(w: Nat, srv: S.Srv, ds: R.Ds, ws: Waits, tx: Tx, pb: Ps, rw: Rw, +r
 def db_stepped(p: Maybe<&1, File> & Rx, ws: Waits, tx: Tx, pb: Ps, +reqs: Chan(Req)) -> IO(Unit):
   (m, x) = p
   match x:
-    case Rx{srv, ds, sel, rw}:
+    case Rx{+srv, ds, sel, rw}:
       do IO<Unit>:
         Unit <- file.end(m)
-        db_loop(srv, ds, ws, tx, pb, rw, reqs)
+        db_loop(srv, ds, ws, tx, ps.misconf.set(pb, srv), rw, reqs)
 
 # the sockets of the clients CLIENT KILL took shut down (TCP.kill), before
 # the group's answers go out
@@ -9066,28 +10897,30 @@ def got.bytes(+xs: List<&2, String>, +acc: Nat) -> Nat:
 # read with what came since is several; the batch holds the bytes they
 # were read from, whole (the parser takes them and gives them back, so
 # that nothing shares them), which go to the actor with the batch
-def parse_in(rest: String, got: List<&2, String>) -> P.Batch:
+def parse_in(rest: P.Tail, got: List<&2, String>) -> P.Batch:
   match rest got:
-    case SNil{} Con{x, Nil{}}:
+    case P.TailNone{} Con{x, Nil{}}:
       P.parse_read(x)
     case r g:
-      P.parse_runs(r ++ glue(g, SNil{}))
+      P.parse_tail(r, glue(g, SNil{}))
 
 # the connection's loop: rest is the unparsed tail of what came before
-# (at most one incomplete request); got holds the pieces read since,
-# newest first, have counts their bytes (up to need), and the tail needs
-# need more bytes before a parse can make progress, so a large value is
-# parsed once, not once per read; cn is the connection's state, as the
-# actor gave it back after the last batch. Bytes cross as they are, one
-# Char each (recv_raw, send_raw): a String of them is a packed buffer.
+# (at most one incomplete request; of a long one, the arguments read so
+# far and the bytes from its bulk not whole yet: P.Tail); got holds the
+# pieces read since, newest first, have counts their bytes (up to need),
+# and the tail needs need more bytes before a parse can make progress, so
+# a large value is parsed once, not once per read; cn is the connection's
+# state, as the actor gave it back after the last batch. Bytes cross as
+# they are, one Char each (recv_raw, send_raw): a String of them is a
+# packed buffer.
 @unsafe
-def conn_loop(s: Socket, rest: String, got: List<&2, String>, have: Nat, need: Nat, +ln: Link, cn: S.Conn) -> IO(Unit):
+def conn_loop(s: Socket, rest: P.Tail, got: List<&2, String>, have: Nat, need: Nat, +ln: Link, cn: S.Conn) -> IO(Unit):
   do IO<Unit>:
     m : Socket & Result<&1, &1, U32 & String, String> <- TCP.recv_raw(s, 65536)
     conn_got(m, rest, got, have, need, ln, cn)
 
 @unsafe
-def conn_got(m: Socket & Result<&1, &1, U32 & String, String>, rest: String, got: List<&2, String>, have: Nat, need: Nat, +ln: Link, cn: S.Conn) -> IO(Unit):
+def conn_got(m: Socket & Result<&1, &1, U32 & String, String>, rest: P.Tail, got: List<&2, String>, have: Nat, need: Nat, +ln: Link, cn: S.Conn) -> IO(Unit):
   (s, r) = m
   match r:
     case Fail{e}:
@@ -9096,7 +10929,7 @@ def conn_got(m: Socket & Result<&1, &1, U32 & String, String>, rest: String, got
       conn_data(s, Nat.is_eq(String.length(x), 0n), x, rest, got, have, need, ln, cn)
 
 @unsafe
-def conn_data(s: Socket, eof: Bool, +x: String, rest: String, got: List<&2, String>, have: Nat, +need: Nat, +ln: Link, cn: S.Conn) -> IO(Unit):
+def conn_data(s: Socket, eof: Bool, +x: String, rest: P.Tail, got: List<&2, String>, have: Nat, +need: Nat, +ln: Link, cn: S.Conn) -> IO(Unit):
   match eof:
     case True{}:
       conn_end(s, ln)
@@ -9105,7 +10938,7 @@ def conn_data(s: Socket, eof: Bool, +x: String, rest: String, got: List<&2, Stri
       conn_more(s, rest, x <> got, h, need, ln, cn, Nat.is_lt(h, need))
 
 @unsafe
-def conn_more(s: Socket, rest: String, +got: List<&2, String>, have: Nat, need: Nat, +ln: Link, cn: S.Conn, wait: Bool) -> IO(Unit):
+def conn_more(s: Socket, rest: P.Tail, +got: List<&2, String>, have: Nat, need: Nat, +ln: Link, cn: S.Conn, wait: Bool) -> IO(Unit):
   match wait:
     case True{}:
       conn_loop(s, rest, got, have, need, ln, cn)
@@ -9126,7 +10959,7 @@ def conn_batch(s: Socket, batch: P.Batch, +inb: Nat, +ln: Link, cn: S.Conn) -> I
       conn_send(s, ln, cn, reqs, tl, err, rest, need, inb, raw)
 
 @unsafe
-def conn_send(s: Socket, +ln: Link, cn: S.Conn, reqs: List<&2, B.Req>, tl: U32, err: Maybe<&2, String>, rest: String, need: Nat, +inb: Nat, raw: String) -> IO(Unit):
+def conn_send(s: Socket, +ln: Link, cn: S.Conn, reqs: List<&2, B.Req>, tl: U32, err: Maybe<&2, String>, rest: P.Tail, need: Nat, +inb: Nat, raw: String) -> IO(Unit):
   match reqs:
     case Nil{}:
       conn_err(s, ln, cn, err, rest, need)
@@ -9163,7 +10996,7 @@ def live.wants(+job: B.Job) -> Bool:
 # a batch that wants them. Each arm sends and waits itself: a step both
 # called would be a segment of its own, entered on every batch.
 @unsafe
-def conn_job(live: Bool, s: Socket, +ln: Link, job: B.Job, cn: S.Conn, n: U32, +inb: Nat, raw: String, err: Maybe<&2, String>, rest: String, need: Nat) -> IO(Unit):
+def conn_job(live: Bool, s: Socket, +ln: Link, job: B.Job, cn: S.Conn, n: U32, +inb: Nat, raw: String, err: Maybe<&2, String>, rest: P.Tail, need: Nat) -> IO(Unit):
   match live ln:
     case False{} Link{db, +back, post, tl, id}:
       do IO<Unit>:
@@ -9182,12 +11015,12 @@ def conn_job(live: Bool, s: Socket, +ln: Link, job: B.Job, cn: S.Conn, n: U32, +
 # are and the words of their codes (R.tl.add), and the bytes they came in
 # (how many, and the bytes themselves)
 @unsafe
-def conn_ask(s: Socket, +ln: Link, cn: S.Conn, rs: List<&2, B.Req>, tl: U32, err: Maybe<&2, String>, rest: String, need: Nat, +inb: Nat, raw: String) -> IO(Unit):
+def conn_ask(s: Socket, +ln: Link, cn: S.Conn, rs: List<&2, B.Req>, tl: U32, err: Maybe<&2, String>, rest: P.Tail, need: Nat, +inb: Nat, raw: String) -> IO(Unit):
   +job = B.job(B.unzip(rs, Nil{}, Nil{}))
   conn_job(live.wants(job), s, ln, job, cn, tl, inb, raw, err, rest, need)
 
 @unsafe
-def conn_ans(s: Socket, +ln: Link, got: Maybe<&1, Ans>, err: Maybe<&2, String>, rest: String, need: Nat) -> IO(Unit):
+def conn_ans(s: Socket, +ln: Link, got: Maybe<&1, Ans>, err: Maybe<&2, String>, rest: P.Tail, need: Nat) -> IO(Unit):
   match got:
     case None{}:
       conn_end(s, ln)
@@ -9207,7 +11040,7 @@ def conn_ans(s: Socket, +ln: Link, got: Maybe<&1, Ans>, err: Maybe<&2, String>, 
       conn_end(s, ln)
 
 @unsafe
-def conn_put(s: Socket, +ln: Link, post: Bool, out: String, cn: S.Conn, err: Maybe<&2, String>, rest: String, need: Nat) -> IO(Unit):
+def conn_put(s: Socket, +ln: Link, post: Bool, out: String, cn: S.Conn, err: Maybe<&2, String>, rest: P.Tail, need: Nat) -> IO(Unit):
   match post:
     case True{}:
       do IO<Unit>:
@@ -9219,7 +11052,7 @@ def conn_put(s: Socket, +ln: Link, post: Bool, out: String, cn: S.Conn, err: May
         conn_sent(m, ln, cn, err, rest, need)
 
 @unsafe
-def conn_sent(m: Socket & Result<&1, &1, U32 & String, Unit>, +ln: Link, cn: S.Conn, err: Maybe<&2, String>, rest: String, need: Nat) -> IO(Unit):
+def conn_sent(m: Socket & Result<&1, &1, U32 & String, Unit>, +ln: Link, cn: S.Conn, err: Maybe<&2, String>, rest: P.Tail, need: Nat) -> IO(Unit):
   (s, r) = m
   match r:
     case Fail{e}:
@@ -9230,11 +11063,11 @@ def conn_sent(m: Socket & Result<&1, &1, U32 & String, Unit>, +ln: Link, cn: S.C
 # after a QUIT, the connection closes once its replies are out; the rest
 # of what it sent is not read
 @unsafe
-def conn_quit(s: Socket, +ln: Link, +cn: S.Conn, err: Maybe<&2, String>, rest: String, need: Nat) -> IO(Unit):
+def conn_quit(s: Socket, +ln: Link, +cn: S.Conn, err: Maybe<&2, String>, rest: P.Tail, need: Nat) -> IO(Unit):
   conn_quit.if(S.conn.quit(cn), s, ln, cn, err, rest, need)
 
 @unsafe
-def conn_quit.if(quit: Bool, s: Socket, +ln: Link, cn: S.Conn, err: Maybe<&2, String>, rest: String, need: Nat) -> IO(Unit):
+def conn_quit.if(quit: Bool, s: Socket, +ln: Link, cn: S.Conn, err: Maybe<&2, String>, rest: P.Tail, need: Nat) -> IO(Unit):
   match quit:
     case True{}:
       conn_end(s, ln)
@@ -9310,7 +11143,7 @@ def conn_oops(on: Bool, s: Socket, +ln: Link, msg: String) -> IO(Unit):
         conn_drop(s, ln)
 
 @unsafe
-def conn_err(s: Socket, +ln: Link, cn: S.Conn, err: Maybe<&2, String>, rest: String, need: Nat) -> IO(Unit):
+def conn_err(s: Socket, +ln: Link, cn: S.Conn, err: Maybe<&2, String>, rest: P.Tail, need: Nat) -> IO(Unit):
   match err:
     case None{}:
       conn_loop(s, rest, Nil{}, 0n, need, ln, cn)
@@ -9364,7 +11197,7 @@ def conn_gone.p(p: Socket & Bool, +ln: Link) -> IO(Unit):
 # the replies of a Hold sent: then the watch put out (a first Hold), or
 # out already (a Hold while the client waits)
 @unsafe
-def conn_held.new(m: Socket & Result<&1, &1, U32 & String, Unit>, +ln: Link, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: String) -> IO(Unit):
+def conn_held.new(m: Socket & Result<&1, &1, U32 & String, Unit>, +ln: Link, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: P.Tail) -> IO(Unit):
   (s, r) = m
   match r:
     case Fail{e}:
@@ -9373,7 +11206,7 @@ def conn_held.new(m: Socket & Result<&1, &1, U32 & String, Unit>, +ln: Link, got
       conn_watch(s, ln, got, have, need, err, rest)
 
 @unsafe
-def conn_held.out(m: Socket & Result<&1, &1, U32 & String, Unit>, +ln: Link, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: String) -> IO(Unit):
+def conn_held.out(m: Socket & Result<&1, &1, U32 & String, Unit>, +ln: Link, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: P.Tail) -> IO(Unit):
   (s, r) = m
   match r:
     case Fail{e}:
@@ -9384,7 +11217,7 @@ def conn_held.out(m: Socket & Result<&1, &1, U32 & String, Unit>, +ln: Link, got
       conn_wait(s, ln, got, have, need, err, rest)
 
 @unsafe
-def conn_held(m: Socket & Result<&1, &1, U32 & String, Unit>, watch: Bool, +ln: Link, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: String) -> IO(Unit):
+def conn_held(m: Socket & Result<&1, &1, U32 & String, Unit>, watch: Bool, +ln: Link, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: P.Tail) -> IO(Unit):
   match watch:
     case True{}:
       conn_held.new(m, ln, got, have, need, err, rest)
@@ -9392,7 +11225,7 @@ def conn_held(m: Socket & Result<&1, &1, U32 & String, Unit>, watch: Bool, +ln: 
       conn_held.out(m, ln, got, have, need, err, rest)
 
 @unsafe
-def conn_hold(s: Socket, +ln: Link, post: Bool, watch: Bool, out: Maybe<&2, String>, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: String) -> IO(Unit):
+def conn_hold(s: Socket, +ln: Link, post: Bool, watch: Bool, out: Maybe<&2, String>, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: P.Tail) -> IO(Unit):
   match post out:
     case _ None{}:
       conn_held.on(s, watch, ln, got, have, need, err, rest)
@@ -9406,7 +11239,7 @@ def conn_hold(s: Socket, +ln: Link, post: Bool, watch: Bool, out: Maybe<&2, Stri
         conn_held(m, watch, ln, got, have, need, err, rest)
 
 @unsafe
-def conn_held.on(s: Socket, watch: Bool, +ln: Link, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: String) -> IO(Unit):
+def conn_held.on(s: Socket, watch: Bool, +ln: Link, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: P.Tail) -> IO(Unit):
   match watch:
     case True{}:
       conn_watch(s, ln, got, have, need, err, rest)
@@ -9414,7 +11247,7 @@ def conn_held.on(s: Socket, watch: Bool, +ln: Link, got: List<&2, String>, have:
       conn_wait(s, ln, got, have, need, err, rest)
 
 @unsafe
-def conn_watch(s: Socket, +ln: Link, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: String) -> IO(Unit):
+def conn_watch(s: Socket, +ln: Link, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: P.Tail) -> IO(Unit):
   match ln:
     case Link{db, +back, post, tl, id}:
       do IO<Unit>:
@@ -9422,7 +11255,7 @@ def conn_watch(s: Socket, +ln: Link, got: List<&2, String>, have: Nat, need: Nat
         conn_wait(s2, ln, got, have, need, err, rest)
 
 @unsafe
-def conn_wait(s: Socket, +ln: Link, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: String) -> IO(Unit):
+def conn_wait(s: Socket, +ln: Link, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: P.Tail) -> IO(Unit):
   match ln:
     case Link{db, +back, post, tl, id}:
       do IO<Unit>:
@@ -9430,7 +11263,7 @@ def conn_wait(s: Socket, +ln: Link, got: List<&2, String>, have: Nat, need: Nat,
         conn_woke(s, ln, m, got, have, need, err, rest)
 
 @unsafe
-def conn_woke(s: Socket, +ln: Link, m: Maybe<&1, Ans>, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: String) -> IO(Unit):
+def conn_woke(s: Socket, +ln: Link, m: Maybe<&1, Ans>, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: P.Tail) -> IO(Unit):
   match m:
     case None{}:
       conn_end(s, ln)
@@ -9455,7 +11288,7 @@ def conn_woke(s: Socket, +ln: Link, m: Maybe<&1, Ans>, got: List<&2, String>, ha
 
 # bytes that came while the client waits, kept; or its close
 @unsafe
-def conn_came.on(eof: Bool, s: Socket, +ln: Link, +x: String, got: List<&2, String>, have: Nat, +need: Nat, err: Maybe<&2, String>, rest: String) -> IO(Unit):
+def conn_came.on(eof: Bool, s: Socket, +ln: Link, +x: String, got: List<&2, String>, have: Nat, +need: Nat, err: Maybe<&2, String>, rest: P.Tail) -> IO(Unit):
   match eof:
     case True{}:
       conn_gone(s, ln)
@@ -9463,7 +11296,7 @@ def conn_came.on(eof: Bool, s: Socket, +ln: Link, +x: String, got: List<&2, Stri
       conn_watch(s, ln, x <> got, Nat.add(have, count_upto(need, x)), need, err, rest)
 
 @unsafe
-def conn_came(r: Socket & Result<&1, &1, U32 & String, String>, +ln: Link, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: String) -> IO(Unit):
+def conn_came(r: Socket & Result<&1, &1, U32 & String, String>, +ln: Link, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: P.Tail) -> IO(Unit):
   (s, x) = r
   match x:
     case Fail{e}:
@@ -9474,7 +11307,7 @@ def conn_came(r: Socket & Result<&1, &1, U32 & String, String>, +ln: Link, got: 
 # the batch's answer: the watch taken back (a Ready it put dropped), the
 # replies sent, then what came meanwhile read on, as after any batch
 @unsafe
-def conn_unwatched.drop(s: Socket, +ln: Link, out: Maybe<&2, String>, cn: S.Conn, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: String) -> IO(Unit):
+def conn_unwatched.drop(s: Socket, +ln: Link, out: Maybe<&2, String>, cn: S.Conn, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: P.Tail) -> IO(Unit):
   match ln:
     case Link{db, +back, post, tl, id}:
       do IO<Unit>:
@@ -9482,7 +11315,7 @@ def conn_unwatched.drop(s: Socket, +ln: Link, out: Maybe<&2, String>, cn: S.Conn
         conn_resume(s, ln, out, cn, got, have, need, err, rest)
 
 @unsafe
-def conn_unwatched(p: Socket & Bool, +ln: Link, out: Maybe<&2, String>, cn: S.Conn, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: String) -> IO(Unit):
+def conn_unwatched(p: Socket & Bool, +ln: Link, out: Maybe<&2, String>, cn: S.Conn, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: P.Tail) -> IO(Unit):
   (s, taken) = p
   match taken:
     case True{}:
@@ -9491,7 +11324,7 @@ def conn_unwatched(p: Socket & Bool, +ln: Link, out: Maybe<&2, String>, cn: S.Co
       conn_unwatched.drop(s, ln, out, cn, got, have, need, err, rest)
 
 @unsafe
-def conn_resume(s: Socket, +ln: Link, out: Maybe<&2, String>, cn: S.Conn, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: String) -> IO(Unit):
+def conn_resume(s: Socket, +ln: Link, out: Maybe<&2, String>, cn: S.Conn, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: P.Tail) -> IO(Unit):
   match ln out:
     case Link{db, back, post, tl, id} None{}:
       conn_after(s, ln, cn, got, have, need, err, rest)
@@ -9505,7 +11338,7 @@ def conn_resume(s: Socket, +ln: Link, out: Maybe<&2, String>, cn: S.Conn, got: L
         conn_resent(m, ln, cn, got, have, need, err, rest)
 
 @unsafe
-def conn_resent(m: Socket & Result<&1, &1, U32 & String, Unit>, +ln: Link, cn: S.Conn, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: String) -> IO(Unit):
+def conn_resent(m: Socket & Result<&1, &1, U32 & String, Unit>, +ln: Link, cn: S.Conn, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: P.Tail) -> IO(Unit):
   (s, r) = m
   match r:
     case Fail{e}:
@@ -9514,7 +11347,7 @@ def conn_resent(m: Socket & Result<&1, &1, U32 & String, Unit>, +ln: Link, cn: S
       conn_after(s, ln, cn, got, have, need, err, rest)
 
 @unsafe
-def conn_after.q(quit: Bool, s: Socket, +ln: Link, +cn: S.Conn, +got: List<&2, String>, +have: Nat, +need: Nat, err: Maybe<&2, String>, rest: String) -> IO(Unit):
+def conn_after.q(quit: Bool, s: Socket, +ln: Link, +cn: S.Conn, +got: List<&2, String>, +have: Nat, +need: Nat, err: Maybe<&2, String>, rest: P.Tail) -> IO(Unit):
   match quit err:
     case True{} _:
       conn_end(s, ln)
@@ -9524,7 +11357,7 @@ def conn_after.q(quit: Bool, s: Socket, +ln: Link, +cn: S.Conn, +got: List<&2, S
       conn_more(s, rest, got, have, need, ln, cn, Nat.is_lt(have, need))
 
 @unsafe
-def conn_after(s: Socket, +ln: Link, +cn: S.Conn, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: String) -> IO(Unit):
+def conn_after(s: Socket, +ln: Link, +cn: S.Conn, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: P.Tail) -> IO(Unit):
   conn_after.q(S.conn.quit(cn), s, ln, cn, got, have, need, err, rest)
 
 # A subscribed client
@@ -9545,7 +11378,7 @@ def conn_after(s: Socket, +ln: Link, +cn: S.Conn, got: List<&2, String>, have: N
 
 # a push before a batch's answer, written, then the wait for the answer
 @unsafe
-def conn_ans.wait(s: Socket, +ln: Link, err: Maybe<&2, String>, rest: String, need: Nat) -> IO(Unit):
+def conn_ans.wait(s: Socket, +ln: Link, err: Maybe<&2, String>, rest: P.Tail, need: Nat) -> IO(Unit):
   match ln:
     case Link{db, +back, post, tl, id}:
       do IO<Unit>:
@@ -9553,7 +11386,7 @@ def conn_ans.wait(s: Socket, +ln: Link, err: Maybe<&2, String>, rest: String, ne
         conn_ans(s, ln, got, err, rest, need)
 
 @unsafe
-def conn_pushed(m: Socket & Result<&1, &1, U32 & String, Unit>, +ln: Link, err: Maybe<&2, String>, rest: String, need: Nat) -> IO(Unit):
+def conn_pushed(m: Socket & Result<&1, &1, U32 & String, Unit>, +ln: Link, err: Maybe<&2, String>, rest: P.Tail, need: Nat) -> IO(Unit):
   (s, r) = m
   match r:
     case Fail{e}:
@@ -9562,7 +11395,7 @@ def conn_pushed(m: Socket & Result<&1, &1, U32 & String, Unit>, +ln: Link, err: 
       conn_ans.wait(s, ln, err, rest, need)
 
 @unsafe
-def conn_push(s: Socket, +ln: Link, post: Bool, out: String, err: Maybe<&2, String>, rest: String, need: Nat) -> IO(Unit):
+def conn_push(s: Socket, +ln: Link, post: Bool, out: String, err: Maybe<&2, String>, rest: P.Tail, need: Nat) -> IO(Unit):
   match post:
     case True{}:
       do IO<Unit>:
@@ -9577,7 +11410,7 @@ def conn_push(s: Socket, +ln: Link, post: Bool, out: String, err: Maybe<&2, Stri
 # connection then waits as a subscribed client while the answer says it
 # still has a subscription
 @unsafe
-def conn_sub.ans.wait(s: Socket, +ln: Link, err: Maybe<&2, String>, rest: String, need: Nat) -> IO(Unit):
+def conn_sub.ans.wait(s: Socket, +ln: Link, err: Maybe<&2, String>, rest: P.Tail, need: Nat) -> IO(Unit):
   match ln:
     case Link{db, +back, post, tl, id}:
       do IO<Unit>:
@@ -9585,7 +11418,7 @@ def conn_sub.ans.wait(s: Socket, +ln: Link, err: Maybe<&2, String>, rest: String
         conn_sub.ans(s, ln, got, err, rest, need)
 
 @unsafe
-def conn_sub.pushed(m: Socket & Result<&1, &1, U32 & String, Unit>, +ln: Link, err: Maybe<&2, String>, rest: String, need: Nat) -> IO(Unit):
+def conn_sub.pushed(m: Socket & Result<&1, &1, U32 & String, Unit>, +ln: Link, err: Maybe<&2, String>, rest: P.Tail, need: Nat) -> IO(Unit):
   (s, r) = m
   match r:
     case Fail{e}:
@@ -9594,7 +11427,7 @@ def conn_sub.pushed(m: Socket & Result<&1, &1, U32 & String, Unit>, +ln: Link, e
       conn_sub.ans.wait(s, ln, err, rest, need)
 
 @unsafe
-def conn_sub.ans.push(s: Socket, +ln: Link, post: Bool, out: String, err: Maybe<&2, String>, rest: String, need: Nat) -> IO(Unit):
+def conn_sub.ans.push(s: Socket, +ln: Link, post: Bool, out: String, err: Maybe<&2, String>, rest: P.Tail, need: Nat) -> IO(Unit):
   match post:
     case True{}:
       do IO<Unit>:
@@ -9606,7 +11439,7 @@ def conn_sub.ans.push(s: Socket, +ln: Link, post: Bool, out: String, err: Maybe<
         conn_sub.pushed(m, ln, err, rest, need)
 
 @unsafe
-def conn_sub.ans(s: Socket, +ln: Link, got: Maybe<&1, Ans>, err: Maybe<&2, String>, rest: String, need: Nat) -> IO(Unit):
+def conn_sub.ans(s: Socket, +ln: Link, got: Maybe<&1, Ans>, err: Maybe<&2, String>, rest: P.Tail, need: Nat) -> IO(Unit):
   match got:
     case Some{AnsSub{out, cn}}:
       conn_sub.put(s, ln, link.post(ln), out, cn, err, rest, need)
@@ -9618,7 +11451,7 @@ def conn_sub.ans(s: Socket, +ln: Link, got: Maybe<&1, Ans>, err: Maybe<&2, Strin
 # the answer's replies written, then the connection's end (QUIT), its
 # protocol error, or its wait as a subscribed client
 @unsafe
-def conn_sub.err(s: Socket, +ln: Link, cn: S.Conn, err: Maybe<&2, String>, rest: String, need: Nat) -> IO(Unit):
+def conn_sub.err(s: Socket, +ln: Link, cn: S.Conn, err: Maybe<&2, String>, rest: P.Tail, need: Nat) -> IO(Unit):
   match err:
     case None{}:
       conn_sub(s, rest, Nil{}, 0n, need, ln, cn)
@@ -9626,7 +11459,7 @@ def conn_sub.err(s: Socket, +ln: Link, cn: S.Conn, err: Maybe<&2, String>, rest:
       conn_oops(mute.on(S.conn.mode(cn)), s, ln, msg)
 
 @unsafe
-def conn_sub.quit.if(quit: Bool, s: Socket, +ln: Link, cn: S.Conn, err: Maybe<&2, String>, rest: String, need: Nat) -> IO(Unit):
+def conn_sub.quit.if(quit: Bool, s: Socket, +ln: Link, cn: S.Conn, err: Maybe<&2, String>, rest: P.Tail, need: Nat) -> IO(Unit):
   match quit:
     case True{}:
       conn_end(s, ln)
@@ -9634,11 +11467,11 @@ def conn_sub.quit.if(quit: Bool, s: Socket, +ln: Link, cn: S.Conn, err: Maybe<&2
       conn_sub.err(s, ln, cn, err, rest, need)
 
 @unsafe
-def conn_sub.quit(s: Socket, +ln: Link, +cn: S.Conn, err: Maybe<&2, String>, rest: String, need: Nat) -> IO(Unit):
+def conn_sub.quit(s: Socket, +ln: Link, +cn: S.Conn, err: Maybe<&2, String>, rest: P.Tail, need: Nat) -> IO(Unit):
   conn_sub.quit.if(S.conn.quit(cn), s, ln, cn, err, rest, need)
 
 @unsafe
-def conn_sub.sent(m: Socket & Result<&1, &1, U32 & String, Unit>, +ln: Link, cn: S.Conn, err: Maybe<&2, String>, rest: String, need: Nat) -> IO(Unit):
+def conn_sub.sent(m: Socket & Result<&1, &1, U32 & String, Unit>, +ln: Link, cn: S.Conn, err: Maybe<&2, String>, rest: P.Tail, need: Nat) -> IO(Unit):
   (s, r) = m
   match r:
     case Fail{e}:
@@ -9647,7 +11480,7 @@ def conn_sub.sent(m: Socket & Result<&1, &1, U32 & String, Unit>, +ln: Link, cn:
       conn_sub.quit(s, ln, cn, err, rest, need)
 
 @unsafe
-def conn_sub.put(s: Socket, +ln: Link, post: Bool, out: Maybe<&2, String>, cn: S.Conn, err: Maybe<&2, String>, rest: String, need: Nat) -> IO(Unit):
+def conn_sub.put(s: Socket, +ln: Link, post: Bool, out: Maybe<&2, String>, cn: S.Conn, err: Maybe<&2, String>, rest: P.Tail, need: Nat) -> IO(Unit):
   match post out:
     case _ None{}:
       conn_sub.quit(s, ln, cn, err, rest, need)
@@ -9663,7 +11496,7 @@ def conn_sub.put(s: Socket, +ln: Link, post: Bool, out: Maybe<&2, String>, cn: S
 # A batch of a subscribed client to the actor (SubReq), as conn_job sends
 # any batch
 @unsafe
-def conn_sub.job(live: Bool, s: Socket, +ln: Link, job: B.Job, cn: S.Conn, n: U32, +inb: Nat, raw: String, err: Maybe<&2, String>, rest: String, need: Nat) -> IO(Unit):
+def conn_sub.job(live: Bool, s: Socket, +ln: Link, job: B.Job, cn: S.Conn, n: U32, +inb: Nat, raw: String, err: Maybe<&2, String>, rest: P.Tail, need: Nat) -> IO(Unit):
   match live ln:
     case False{} Link{db, +back, post, tl, id}:
       do IO<Unit>:
@@ -9679,12 +11512,12 @@ def conn_sub.job(live: Bool, s: Socket, +ln: Link, job: B.Job, cn: S.Conn, n: U3
         conn_sub.ans(s, ln, got, err, rest, need)
 
 @unsafe
-def conn_sub.ask(s: Socket, +ln: Link, cn: S.Conn, rs: List<&2, B.Req>, tl: U32, err: Maybe<&2, String>, rest: String, need: Nat, +inb: Nat, raw: String) -> IO(Unit):
+def conn_sub.ask(s: Socket, +ln: Link, cn: S.Conn, rs: List<&2, B.Req>, tl: U32, err: Maybe<&2, String>, rest: P.Tail, need: Nat, +inb: Nat, raw: String) -> IO(Unit):
   +job = B.job(B.unzip(rs, Nil{}, Nil{}))
   conn_sub.job(live.wants(job), s, ln, job, cn, tl, inb, raw, err, rest, need)
 
 @unsafe
-def conn_sub.send(s: Socket, +ln: Link, cn: S.Conn, reqs: List<&2, B.Req>, tl: U32, err: Maybe<&2, String>, rest: String, need: Nat, +inb: Nat, raw: String) -> IO(Unit):
+def conn_sub.send(s: Socket, +ln: Link, cn: S.Conn, reqs: List<&2, B.Req>, tl: U32, err: Maybe<&2, String>, rest: P.Tail, need: Nat, +inb: Nat, raw: String) -> IO(Unit):
   match reqs:
     case Nil{}:
       conn_sub.err(s, ln, cn, err, rest, need)
@@ -9701,7 +11534,7 @@ def conn_sub.batch(s: Socket, batch: P.Batch, +inb: Nat, +ln: Link, cn: S.Conn) 
 # bytes read once the watch fired, as conn_got, conn_data and conn_more
 # take them
 @unsafe
-def conn_sub.more(s: Socket, rest: String, +got: List<&2, String>, have: Nat, need: Nat, +ln: Link, cn: S.Conn, wait: Bool) -> IO(Unit):
+def conn_sub.more(s: Socket, rest: P.Tail, +got: List<&2, String>, have: Nat, need: Nat, +ln: Link, cn: S.Conn, wait: Bool) -> IO(Unit):
   match wait:
     case True{}:
       conn_sub(s, rest, got, have, need, ln, cn)
@@ -9710,7 +11543,7 @@ def conn_sub.more(s: Socket, rest: String, +got: List<&2, String>, have: Nat, ne
       conn_sub.batch(s, parse_in(rest, got), inb, ln, cn)
 
 @unsafe
-def conn_sub.data(s: Socket, eof: Bool, +x: String, rest: String, got: List<&2, String>, have: Nat, +need: Nat, +ln: Link, cn: S.Conn) -> IO(Unit):
+def conn_sub.data(s: Socket, eof: Bool, +x: String, rest: P.Tail, got: List<&2, String>, have: Nat, +need: Nat, +ln: Link, cn: S.Conn) -> IO(Unit):
   match eof:
     case True{}:
       conn_end(s, ln)
@@ -9719,7 +11552,7 @@ def conn_sub.data(s: Socket, eof: Bool, +x: String, rest: String, got: List<&2, 
       conn_sub.more(s, rest, x <> got, h, need, ln, cn, Nat.is_lt(h, need))
 
 @unsafe
-def conn_sub.got(m: Socket & Result<&1, &1, U32 & String, String>, rest: String, got: List<&2, String>, have: Nat, need: Nat, +ln: Link, cn: S.Conn) -> IO(Unit):
+def conn_sub.got(m: Socket & Result<&1, &1, U32 & String, String>, rest: P.Tail, got: List<&2, String>, have: Nat, need: Nat, +ln: Link, cn: S.Conn) -> IO(Unit):
   (s, r) = m
   match r:
     case Fail{e}:
@@ -9734,7 +11567,7 @@ def conn_sub.end(p: Socket & Bool, +ln: Link) -> IO(Unit):
   conn_end(s, ln)
 
 @unsafe
-def conn_sub.wsent(m: Socket & Result<&1, &1, U32 & String, Unit>, rest: String, got: List<&2, String>, have: Nat, need: Nat, +ln: Link, cn: S.Conn) -> IO(Unit):
+def conn_sub.wsent(m: Socket & Result<&1, &1, U32 & String, Unit>, rest: P.Tail, got: List<&2, String>, have: Nat, need: Nat, +ln: Link, cn: S.Conn) -> IO(Unit):
   (s, r) = m
   match r:
     case Fail{e}:
@@ -9746,7 +11579,7 @@ def conn_sub.wsent(m: Socket & Result<&1, &1, U32 & String, Unit>, rest: String,
 
 # a push written while the watch waits
 @unsafe
-def conn_sub.push(s: Socket, post: Bool, out: String, rest: String, got: List<&2, String>, have: Nat, need: Nat, +ln: Link, cn: S.Conn) -> IO(Unit):
+def conn_sub.push(s: Socket, post: Bool, out: String, rest: P.Tail, got: List<&2, String>, have: Nat, need: Nat, +ln: Link, cn: S.Conn) -> IO(Unit):
   match post:
     case True{}:
       do IO<Unit>:
@@ -9758,7 +11591,7 @@ def conn_sub.push(s: Socket, post: Bool, out: String, rest: String, got: List<&2
         conn_sub.wsent(m, rest, got, have, need, ln, cn)
 
 @unsafe
-def conn_sub.woke(s: Socket, m: Maybe<&1, Ans>, rest: String, got: List<&2, String>, have: Nat, need: Nat, +ln: Link, cn: S.Conn) -> IO(Unit):
+def conn_sub.woke(s: Socket, m: Maybe<&1, Ans>, rest: P.Tail, got: List<&2, String>, have: Nat, need: Nat, +ln: Link, cn: S.Conn) -> IO(Unit):
   match m:
     case Some{Ready{}}:
       do IO<Unit>:
@@ -9774,7 +11607,7 @@ def conn_sub.woke(s: Socket, m: Maybe<&1, Ans>, rest: String, got: List<&2, Stri
         conn_sub.end(p, ln)
 
 @unsafe
-def conn_sub.wait(s: Socket, rest: String, got: List<&2, String>, have: Nat, need: Nat, +ln: Link, cn: S.Conn) -> IO(Unit):
+def conn_sub.wait(s: Socket, rest: P.Tail, got: List<&2, String>, have: Nat, need: Nat, +ln: Link, cn: S.Conn) -> IO(Unit):
   match ln:
     case Link{db, +back, post, tl, id}:
       do IO<Unit>:
@@ -9782,7 +11615,7 @@ def conn_sub.wait(s: Socket, rest: String, got: List<&2, String>, have: Nat, nee
         conn_sub.woke(s, m, rest, got, have, need, ln, cn)
 
 @unsafe
-def conn_sub(s: Socket, rest: String, got: List<&2, String>, have: Nat, need: Nat, +ln: Link, cn: S.Conn) -> IO(Unit):
+def conn_sub(s: Socket, rest: P.Tail, got: List<&2, String>, have: Nat, need: Nat, +ln: Link, cn: S.Conn) -> IO(Unit):
   match ln:
     case Link{db, +back, post, tl, id}:
       do IO<Unit>:
@@ -9793,7 +11626,7 @@ def conn_sub(s: Socket, rest: String, got: List<&2, String>, have: Nat, need: Na
 # batch: its answer's replies written once the watch is taken back, then
 # what came meanwhile read on as a subscribed client
 @unsafe
-def conn_sub.after.q(quit: Bool, s: Socket, +ln: Link, +cn: S.Conn, +got: List<&2, String>, +have: Nat, +need: Nat, err: Maybe<&2, String>, rest: String) -> IO(Unit):
+def conn_sub.after.q(quit: Bool, s: Socket, +ln: Link, +cn: S.Conn, +got: List<&2, String>, +have: Nat, +need: Nat, err: Maybe<&2, String>, rest: P.Tail) -> IO(Unit):
   match quit err:
     case True{} _:
       conn_end(s, ln)
@@ -9803,11 +11636,11 @@ def conn_sub.after.q(quit: Bool, s: Socket, +ln: Link, +cn: S.Conn, +got: List<&
       conn_sub.more(s, rest, got, have, need, ln, cn, Nat.is_lt(have, need))
 
 @unsafe
-def conn_sub.after(s: Socket, +ln: Link, +cn: S.Conn, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: String) -> IO(Unit):
+def conn_sub.after(s: Socket, +ln: Link, +cn: S.Conn, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: P.Tail) -> IO(Unit):
   conn_sub.after.q(S.conn.quit(cn), s, ln, cn, got, have, need, err, rest)
 
 @unsafe
-def conn_sub.resent(m: Socket & Result<&1, &1, U32 & String, Unit>, +ln: Link, cn: S.Conn, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: String) -> IO(Unit):
+def conn_sub.resent(m: Socket & Result<&1, &1, U32 & String, Unit>, +ln: Link, cn: S.Conn, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: P.Tail) -> IO(Unit):
   (s, r) = m
   match r:
     case Fail{e}:
@@ -9816,7 +11649,7 @@ def conn_sub.resent(m: Socket & Result<&1, &1, U32 & String, Unit>, +ln: Link, c
       conn_sub.after(s, ln, cn, got, have, need, err, rest)
 
 @unsafe
-def conn_sub.resume(s: Socket, +ln: Link, out: Maybe<&2, String>, cn: S.Conn, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: String) -> IO(Unit):
+def conn_sub.resume(s: Socket, +ln: Link, out: Maybe<&2, String>, cn: S.Conn, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: P.Tail) -> IO(Unit):
   match ln out:
     case Link{db, back, post, tl, id} None{}:
       conn_sub.after(s, ln, cn, got, have, need, err, rest)
@@ -9830,7 +11663,7 @@ def conn_sub.resume(s: Socket, +ln: Link, out: Maybe<&2, String>, cn: S.Conn, go
         conn_sub.resent(m, ln, cn, got, have, need, err, rest)
 
 @unsafe
-def conn_sub.unwatched.drop(s: Socket, +ln: Link, out: Maybe<&2, String>, cn: S.Conn, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: String) -> IO(Unit):
+def conn_sub.unwatched.drop(s: Socket, +ln: Link, out: Maybe<&2, String>, cn: S.Conn, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: P.Tail) -> IO(Unit):
   match ln:
     case Link{db, +back, post, tl, id}:
       do IO<Unit>:
@@ -9838,7 +11671,7 @@ def conn_sub.unwatched.drop(s: Socket, +ln: Link, out: Maybe<&2, String>, cn: S.
         conn_sub.resume(s, ln, out, cn, got, have, need, err, rest)
 
 @unsafe
-def conn_sub.unwatched(p: Socket & Bool, +ln: Link, out: Maybe<&2, String>, cn: S.Conn, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: String) -> IO(Unit):
+def conn_sub.unwatched(p: Socket & Bool, +ln: Link, out: Maybe<&2, String>, cn: S.Conn, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: P.Tail) -> IO(Unit):
   (s, taken) = p
   match taken:
     case True{}:
@@ -9858,9 +11691,9 @@ def conn_sub.unwatched(p: Socket & Bool, +ln: Link, out: Maybe<&2, String>, cn: 
 def conn_start.of(m: Maybe<&1, Ans>, s: Socket, +ln: Link, +id: Nat) -> IO(Unit):
   match m:
     case Some{Ans{o, cn}}:
-      conn_loop(s, SNil{}, Nil{}, 0n, 1n, ln, cn)
+      conn_loop(s, P.TailNone{}, Nil{}, 0n, 1n, ln, cn)
     case _:
-      conn_loop(s, SNil{}, Nil{}, 0n, 1n, ln, S.conn_new(id))
+      conn_loop(s, P.TailNone{}, Nil{}, 0n, 1n, ln, S.conn_new(id))
 
 # the connection's client joins the actor's registry (Join: its socket's
 # fd and addresses, TCP.name) before its first batch, which waits for the
@@ -10034,17 +11867,21 @@ def hex8.go(n: Nat, +x: U32, acc: String) -> String:
     case 1n+m:
       hex8.go(m, U32.div(x, 16), SCon{T.hex.digit(U32.and(x, 15)), acc})
 
-def hex.word(r: Result<&1, &1, U32 & String, U32>) -> String:
+# a random word in 8 hex digits; one that getrandom could not give is
+# made from the clock and the pid (alt), as Redis seeds its random bytes
+# from them when /dev/urandom cannot be read (getRandomBytes): weaker,
+# but neither zero nor the same from one start to the next
+def hex.word(r: Result<&1, &1, U32 & String, U32>, +alt: U32) -> String:
   match r:
     case Done{+x}:
       hex8.go(8n, x, "")
     case Fail{e}:
-      "00000000"
+      hex8.go(8n, alt, "")
 
-def boot.of(+o1: String, +o2: String, +o3: String, +mem: String, h: Nat & Nat, run: String, rep: String, t: U32 & U32, +pid: U32, exe: String, conf: String) -> I.Boot:
+def boot.of(+o1: String, +o2: String, +o3: String, +mem: String, h: Nat & Nat, run: String, rep: String, key: String, t: U32 & U32, +pid: U32, exe: String, conf: String) -> I.Boot:
   (heap, act) = h
   (secs, us) = t
-  I.IBoot{T.trim(o1) ++ " " ++ T.trim(o2) ++ " " ++ T.trim(o3), U32.show(pid), run, rep, exe, conf, Nat.mul(nat.of(nth(1n, words.of(T.first(String.split(mem, '\n'))))), 1024n), secs, heap}
+  I.IBoot{T.trim(o1) ++ " " ++ T.trim(o2) ++ " " ++ T.trim(o3), U32.show(pid), run, rep, exe, conf, Nat.mul(nat.of(nth(1n, words.of(T.first(String.split(mem, '\n'))))), 1024n), secs, heap, key}
 
 @unsafe
 def proc.got(m: Result<&1, &1, U32 & String, File>) -> IO(String):
@@ -10063,6 +11900,11 @@ def proc.text(+path: String) -> IO(String):
     m : Result<&1, &1, U32 & String, File> <- File.open(path, "r")
     proc.got(m)
 
+def hex40.of(a: Result<&1, &1, U32 & String, U32>, b: Result<&1, &1, U32 & String, U32>, c: Result<&1, &1, U32 & String, U32>, d: Result<&1, &1, U32 & String, U32>, e: Result<&1, &1, U32 & String, U32>, t: U32 & U32, +pid: U32) -> String:
+  (secs, us) = t
+  +x = U32.xor(U32.xor(secs, U32.mul(us, 2654435761)), pid)
+  hex.word(a, KV.mix(x)) ++ hex.word(b, KV.mix(U32.add(x, 1))) ++ hex.word(c, KV.mix(U32.add(x, 2))) ++ hex.word(d, KV.mix(U32.add(x, 3))) ++ hex.word(e, KV.mix(U32.add(x, 4)))
+
 # 40 hex digits at random, as Redis's run and replication ids
 @unsafe
 def hex40() -> IO(String):
@@ -10072,7 +11914,9 @@ def hex40() -> IO(String):
     c : Result<&1, &1, U32 & String, U32> <- IO.random_u32()
     d : Result<&1, &1, U32 & String, U32> <- IO.random_u32()
     e : Result<&1, &1, U32 & String, U32> <- IO.random_u32()
-    return hex.word(a) ++ hex.word(b) ++ hex.word(c) ++ hex.word(d) ++ hex.word(e)
+    t : U32 & U32 <- IO.clock()
+    pid : U32 <- IO.pid()
+    return hex40.of(a, b, c, d, e, t, pid)
 
 # the facts now (the main thread's id is the pid)
 @unsafe
@@ -10099,8 +11943,10 @@ def boot.read(+pid: U32, +exe: String, +conf: String) -> IO(I.Boot):
     h : Nat & Nat <- IO.heap()
     run : String <- hex40()
     rep : String <- hex40()
+    k1 : String <- hex40()
+    k2 : String <- hex40()
     t : U32 & U32 <- IO.clock()
-    return boot.of(o1, o2, o3, mem, h, run, rep, t, pid, exe, conf)
+    return boot.of(o1, o2, o3, mem, h, run, rep, k1 ++ k2, t, pid, exe, conf)
 
 # INFO's account at the start, before the append-only file is read
 @unsafe
@@ -10272,7 +12118,7 @@ type St is Data:
 def st.runs(+st: St) -> Bool:
   match st:
     case St{srv, ds, sel, ws, tx, +pb, +rw}:
-      Bool.or(rw.runs(rw), ps.evicting(pb))
+      Bool.or(rw.busy(rw), ps.evicting(pb))
 
 def st.evicting(+st: St) -> Bool:
   match st:
@@ -10317,12 +12163,29 @@ def aof_idle(ev: Bool, st: St, f: File, +sync: Sync, +reqs: Chan(Req)) -> IO(Uni
         Unit <- IO.sleep(0)
         aof_take(Nil{}, st, f, sync, reqs)
     case False{}:
-      +x = st
       do IO<Unit>:
         t : U32 & U32 <- IO.clock()
-        p : File & St <- aof_rw(st.idle(x, clock.ms(t)), x, f)
+        aof_idle.at(clock.ms(t), st, f, sync, reqs)
+
+@unsafe
+def aof_idle.at(+ms: Nat, st: St, f: File, +sync: Sync, +reqs: Chan(Req)) -> IO(Unit):
+  +x = st
+  aof_idle.go(st.due(x, ms), st.idle(x, ms), x, f, sync, reqs)
+
+# the job's slice when its pace allows it, else a millisecond's wait
+# (db_idle)
+@unsafe
+def aof_idle.go(due: Bool, +w: Nat, st: St, f: File, +sync: Sync, +reqs: Chan(Req)) -> IO(Unit):
+  match due:
+    case True{}:
+      do IO<Unit>:
+        p : File & St <- aof_rw(w, st, f)
         Unit <- IO.sleep(0)
         aof_resume(p, sync, reqs)
+    case False{}:
+      do IO<Unit>:
+        Unit <- IO.sleep(1)
+        aof_loop(st, f, sync, reqs)
 
 def st.sel(+st: St) -> Nat:
   match st:
@@ -10364,7 +12227,7 @@ def aof_mem(+w: Nat, qs: List<&1, Req>, t: U32 & U32, srv: S.Srv, ds: R.Ds, ws: 
       +k = U32.sub(Clock.us(u0), u0)
       do IO<Unit>:
         h : Nat & Nat <- IO.heap()
-        g : Grp <- mem.run(h, s0, u0, srv, R.ds.at(clock.ms.of(s0, u0), ds), ws, tx, pb, rw.runs(w2), rw.pid(w2))
+        g : Grp <- mem.run(h, s0, u0, srv, R.ds.at(clock.ms.of(s0, u0), ds), ws, tx, pb, rw.busy(w2), rw.pid(w2))
         aof_group(group_from(True{}, qs, g, s0, k), sel, w2, f, sync, reqs)
 
 @unsafe
@@ -10493,8 +12356,9 @@ def aof_rw(w: Nat, st: St, f: File) -> IO(File & St):
 def aof_rw.back(p: Maybe<&1, File> & Rx, ws: Waits, tx: Tx, pb: Ps) -> IO(File & St):
   (m, x) = p
   match m x:
-    case Some{f} Rx{srv, ds, sel, rw}:
-      IO.pure(File & St, (f, St{srv, ds, sel, ws, tx, pb, rw}))
+    case Some{f} Rx{+srv, ds, sel, rw}:
+      +p2 = ps.misconf.set(pb, srv)
+      IO.pure(File & St, (f, St{srv, ds, sel, ws, tx, p2, rw}))
     case None{} _:
       IO.die(File & St, 1, "the append-only file has no handle after a step of its rewrite")
 
@@ -10559,9 +12423,12 @@ def aof_shut.end(ok: Bool, +force: Bool, +ok1: Bool, +srv: S.Srv, outs: List<&2,
     case False{} True{}:
       down.forced(srv, down.lg(srv, rw))
     case False{} False{}:
+      +on = bg.on(srv)
       do IO<Unit>:
         Unit <- down.cant(down.lg(srv, rw))
-        aof_group(grp.saved(ok1, List.reverse(&2, Sigma<&2, &2, Chan(Ans), _ => Ans>, outs), S.srv.rw.stop(srv), ds, ws, tx, pb), sel, rw.with(rw, None{}), f, sync, reqs)
+        t : U32 & U32 <- IO.clock()
+        Unit <- down.bg.end(on, down.lg(srv, rw))
+        aof_group(grp.saved.down(ok1, List.reverse(&2, Sigma<&2, &2, Chan(Ans), _ => Ans>, outs), down.bg.stop(on, S.srv.rw.stop(srv), clock.secs(t)), ds, ws, tx, pb), sel, rw.stopped(rw), f, sync, reqs)
 
 @unsafe
 def aof_shut.go(p: S.Srv & Bool, +force: Bool, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, +ds: R.Ds, +sel: Nat, ws: Waits, tx: Tx, pb: Ps, +rw: Rw, f: File, +sync: Sync, +reqs: Chan(Req)) -> IO(Unit):
@@ -10570,6 +12437,7 @@ def aof_shut.go(p: S.Srv & Bool, +force: Bool, outs: List<&2, Sigma<&2, &2, Chan
   do IO<Unit>:
     Unit <- log(lg, 3, "User requested shutdown...")
     Unit <- down.sd(S.srv.cfg(srv))
+    Unit <- down.bgsave(bg.on(srv), bgr.ch(rw.bg(rw)), lg, rw.pid(rw))
     Unit <- down.rewrite(rw.runs(rw), lg, rw.tmp(rw))
     g : File <- down.sync.f(f, lg)
     ok : Bool <- down.final(lg, srv, ds, rw.pid(rw))
@@ -10749,21 +12617,23 @@ def run.rest(+m: Maybe<&2, RwRun>) -> String:
     case None{}:
       ""
 
-# a slice of the snapshot taken: its commands encoded and kept
-def run.sliced(sl: A.Slice, +tmp: String, +size: Nat, pend: List<&2, String>, +pn: Nat, buf: List<&2, String>) -> RwRun:
+# a slice of the snapshot taken: its commands encoded and kept, and how
+# many (the pace counts them: rdb-key-save-delay)
+def run.sliced(sl: A.Slice, +tmp: String, +size: Nat, pend: List<&2, String>, +pn: Nat, buf: List<&2, String>) -> Maybe<&2, RwRun> & Nat:
   match sl:
-    case A.Slice{reqs, more}:
+    case A.Slice{+reqs, more}:
+      +k = List.length(&2, List<&2, String>, reqs)
       +b = A.encode(reqs)
-      RwRun{more, tmp, size, b <> pend, Nat.add(pn, String.length(b)), buf}
+      (Some{RwRun{more, tmp, size, b <> pend, Nat.add(pn, String.length(b)), buf}}, k)
 
-def run.slice(m: Maybe<&2, RwRun>, +want: Nat) -> Maybe<&2, RwRun>:
+def run.slice(m: Maybe<&2, RwRun>, +want: Nat) -> Maybe<&2, RwRun> & Nat:
   match m:
     case Some{RwRun{Some{s}, tmp, size, pend, pn, buf}}:
-      Some{run.sliced(A.rw.slice(s, want), tmp, size, pend, pn, buf)}
+      run.sliced(A.rw.slice(s, want), tmp, size, pend, pn, buf)
     case Some{RwRun{None{}, tmp, size, pend, pn, buf}}:
-      Some{RwRun{None{}, tmp, size, pend, pn, buf}}
+      (Some{RwRun{None{}, tmp, size, pend, pn, buf}}, 0n)
     case None{}:
-      None{}
+      (None{}, 0n)
 
 # what follows a slice: 0 nothing yet, 1 the bytes kept written (64 KB
 # of them), 2 the rewrite's end (all of the snapshot is taken)
@@ -10789,49 +12659,49 @@ def run.flushed(m: Maybe<&2, RwRun>, +n: Nat) -> Maybe<&2, RwRun>:
 
 def rw.path(+rw: Rw) -> String:
   match rw:
-    case Rw{+path, aof, pid, cron, delay, until, last, run}:
+    case Rw{+path, aof, pid, cron, delay, until, last, run, bg, next, carry}:
       path
     case RwOf{+r}:
       rw.path(r)
 
 def rw.pid(+rw: Rw) -> U32:
   match rw:
-    case Rw{path, aof, +pid, cron, delay, until, last, run}:
+    case Rw{path, aof, +pid, cron, delay, until, last, run, bg, next, carry}:
       pid
     case RwOf{+r}:
       rw.pid(r)
 
 def rw.tmp(+rw: Rw) -> String:
   match rw:
-    case Rw{path, aof, pid, cron, delay, until, last, +run}:
+    case Rw{path, aof, pid, cron, delay, until, last, +run, bg, next, carry}:
       run.tmp(run)
     case RwOf{+r}:
       rw.tmp(r)
 
 def rw.pending(+rw: Rw) -> String:
   match rw:
-    case Rw{path, aof, pid, cron, delay, until, last, +run}:
+    case Rw{path, aof, pid, cron, delay, until, last, +run, bg, next, carry}:
       run.pending(run)
     case RwOf{+r}:
       rw.pending(r)
 
 def rw.rest(+rw: Rw) -> String:
   match rw:
-    case Rw{path, aof, pid, cron, delay, until, last, +run}:
+    case Rw{path, aof, pid, cron, delay, until, last, +run, bg, next, carry}:
       run.rest(run)
     case RwOf{+r}:
       rw.rest(r)
 
 def rw.next(+rw: Rw) -> Nat:
   match rw:
-    case Rw{path, aof, pid, cron, delay, until, last, +run}:
+    case Rw{path, aof, pid, cron, delay, until, last, +run, bg, next, carry}:
       run.next(run)
     case RwOf{+r}:
       rw.next(r)
 
 def rw.size(+rw: Rw) -> Nat:
   match rw:
-    case Rw{path, aof, pid, cron, delay, until, last, +run}:
+    case Rw{path, aof, pid, cron, delay, until, last, +run, bg, next, carry}:
       run.size(run)
     case RwOf{+r}:
       rw.size(r)
@@ -10845,6 +12715,39 @@ def st.lg(+st: St) -> Log:
   match st:
     case St{+srv, ds, sel, ws, tx, pb, +rw}:
       down.lg(srv, rw)
+
+# a background save that runs (or that a BGSAVE of the group asked for):
+# its writer told to close its file (m: the channels to it, when one
+# runs) and its temporary file removed, as finishShutdown kills Redis's
+# child and removes its file; when the server goes on after all (its save
+# failed), the end of the child, as the cron's checkChildrenDone finds
+# it, and the save dropped (Background saves)
+@unsafe
+def down.bgsave(on: Bool, m: Maybe<&2, BgCh>, +lg: Log, +pid: U32) -> IO(Unit):
+  match on:
+    case False{}:
+      bgw.close(m)
+    case True{}:
+      do IO<Unit>:
+        Unit <- log(lg, 3, "There is a child saving an .rdb. Killing it!")
+        Unit <- bgw.close(m)
+        r : Result<&1, &1, U32 & String, Unit> <- File.unlink(rdb.tmp(pid))
+        IO.pure(Unit, Unit{})
+
+@unsafe
+def down.bg.end(on: Bool, +lg: Log) -> IO(Unit):
+  match on:
+    case False{}:
+      IO.pure(Unit, Unit{})
+    case True{}:
+      log(lg, 3, "Background saving terminated by signal 10")
+
+def down.bg.stop(on: Bool, srv: S.Srv, +now: Nat) -> S.Srv:
+  match on:
+    case True{}:
+      S.srv.bg.drop(srv, now)
+    case False{}:
+      srv
 
 # a rewrite that runs: its temporary file removed, as Redis kills its
 # child and removes its file
@@ -10940,6 +12843,7 @@ def down.stop(+srv: S.Srv, +rw: Rw, m: Maybe<&1, File>) -> IO(Unit):
   do IO<Unit>:
     Unit <- log(lg, 3, "User requested shutdown...")
     Unit <- down.sd(S.srv.cfg(srv))
+    Unit <- down.bgsave(bg.on(srv), bgr.ch(rw.bg(rw)), lg, rw.pid(rw))
     Unit <- down.rewrite(rw.runs(rw), lg, rw.tmp(rw))
     Unit <- down.sync(m, lg)
     down.exit(srv, lg)
@@ -10980,22 +12884,64 @@ def down.cant(+lg: Log) -> IO(Unit):
 # snapshot taken; with n more bytes in its temporary file
 def rw.with(rw: Rw, run: Maybe<&2, RwRun>) -> Rw:
   match rw:
-    case Rw{path, aof, pid, cron, delay, until, last, old}:
-      Rw{path, aof, pid, cron, delay, until, last, run}
+    case Rw{path, aof, pid, cron, delay, until, last, old, bg, next, carry}:
+      Rw{path, aof, pid, cron, delay, until, last, run, bg, next, carry}
     case RwOf{r}:
       rw.with(r, run)
 
-def rw.sliced(rw: Rw, +now: Nat, +want: Nat) -> Rw:
+# the same with run as a rewrite that starts, its pace from now
+def rw.begun(rw: Rw, run: Maybe<&2, RwRun>) -> Rw:
   match rw:
-    case Rw{path, aof, pid, cron, delay, until, last, run}:
-      Rw{path, aof, pid, cron, delay, until, now, run.slice(run, want)}
+    case Rw{path, aof, pid, cron, delay, until, last, old, bg, next, carry}:
+      Rw{path, aof, pid, cron, delay, until, last, run, bg, 0n, 0n}
     case RwOf{r}:
-      rw.sliced(r, now, want)
+      rw.begun(r, run)
+
+# the same with no job: the rewrite and the background save stopped (a
+# SHUTDOWN whose save failed); with run as the background save that runs
+def rw.stopped(rw: Rw) -> Rw:
+  match rw:
+    case Rw{path, aof, pid, cron, delay, until, last, run, bg, next, carry}:
+      Rw{path, aof, pid, cron, delay, until, last, None{}, None{}, 0n, 0n}
+    case RwOf{r}:
+      rw.stopped(r)
+
+def rw.bg.with(rw: Rw, m: Maybe<&2, BgRun>) -> Rw:
+  match rw:
+    case Rw{path, aof, pid, cron, delay, until, last, run, old, next, carry}:
+      Rw{path, aof, pid, cron, delay, until, last, run, m, next, carry}
+    case RwOf{r}:
+      rw.bg.with(r, m)
+
+# the pace of a rewrite or a background save, after a slice of k keys
+# (commands, for a rewrite) at the clock's ms, with rdb-key-save-delay dl
+# (us a key; 0 for none): when the next slice may go (ms) and the us past
+# it, as Redis's child sleeps dl us after each key
+def pace.owed(+next: Nat, +ms: Nat, +owed: Nat) -> Nat & Nat:
+  (Nat.add(Nat.max(next, ms), Nat.div(owed, 1000n)), Nat.mod(owed, 1000n))
+
+def pace.next(+next: Nat, +carry: Nat, +ms: Nat, +k: Nat, +dl: Nat) -> Nat & Nat:
+  pace.owed(next, ms, Nat.add(Nat.mul(k, dl), carry))
+
+def rw.paced(q: Nat & Nat, path: String, aof: Bool, pid: U32, cron: Nat, delay: Nat, until: Nat, +now: Nat, run: Maybe<&2, RwRun>, bg: Maybe<&2, BgRun>) -> Rw:
+  (nx, cy) = q
+  Rw{path, aof, pid, cron, delay, until, now, run, bg, nx, cy}
+
+def rw.sliced.of(p: Maybe<&2, RwRun> & Nat, path: String, aof: Bool, pid: U32, cron: Nat, delay: Nat, until: Nat, +now: Nat, bg: Maybe<&2, BgRun>, +next: Nat, +carry: Nat, +ms: Nat, +dl: Nat) -> Rw:
+  (run, +k) = p
+  rw.paced(pace.next(next, carry, ms, k, dl), path, aof, pid, cron, delay, until, now, run, bg)
+
+def rw.sliced(rw: Rw, +now: Nat, +want: Nat, +ms: Nat, +dl: Nat) -> Rw:
+  match rw:
+    case Rw{path, aof, pid, cron, delay, until, last, run, bg, +next, +carry}:
+      rw.sliced.of(run.slice(run, want), path, aof, pid, cron, delay, until, now, bg, next, carry, ms, dl)
+    case RwOf{r}:
+      rw.sliced(r, now, want, ms, dl)
 
 def rw.flushed(rw: Rw, +n: Nat) -> Rw:
   match rw:
-    case Rw{path, aof, pid, cron, delay, until, last, run}:
-      Rw{path, aof, pid, cron, delay, until, last, run.flushed(run, n)}
+    case Rw{path, aof, pid, cron, delay, until, last, run, bg, next, carry}:
+      Rw{path, aof, pid, cron, delay, until, last, run.flushed(run, n), bg, next, carry}
     case RwOf{r}:
       rw.flushed(r, n)
 
@@ -11045,15 +12991,34 @@ def rx.lg(+x: Rx) -> Log:
 # temporary file (made empty), and the database the file has selected one
 # that is not there, so that the file's next entry comes after a SELECT
 # of its own (Redis's aof_selected_db = -1)
+# a job takes its snapshot of the databases, the heap's used bytes then
+# used: the eviction counts the memory by the keys while it runs
+# (Eviction: mem.seen)
+def rx.snap(x: Rx, +used: Nat) -> Rx:
+  match x:
+    case Rx{srv, +ds, sel, rw}:
+      Rx{S.srv.snap(srv, used, ds.keys(ds)), ds, sel, rw}
+
 def rx.begin(x: Rx, +tmp: String) -> Rx:
   match x:
     case Rx{srv, +ds, sel, rw}:
-      Rx{srv, ds, R.ds.count(ds), rw.with(rw, Some{RwRun{Some{A.snap.of(ds)}, tmp, 0n, Nil{}, 0n, Nil{}}})}
+      Rx{srv, ds, R.ds.count(ds), rw.begun(rw, Some{RwRun{Some{A.snap.of(ds)}, tmp, 0n, Nil{}, 0n, Nil{}}})}
 
-def rx.slice(x: Rx, +want: Nat) -> Rx:
+# rdb-key-save-delay (us a key; 0 for none, as for a value below 1)
+def rx.delay(+x: Rx) -> Nat:
+  match x:
+    case Rx{+srv, ds, sel, rw}:
+      nat.of(C.config.get_value(S.srv.cfg(srv), "rdb-key-save-delay"))
+
+# the entries a slice reads: want, or one with a pace (a bucket is read
+# whole)
+def pace.want(+dl: Nat, +want: Nat) -> Nat:
+  Bool.pick(Nat, Nat.is_eq(dl, 0n), want, 1n)
+
+def rx.slice(x: Rx, +want: Nat, +ms: Nat, +dl: Nat) -> Rx:
   match x:
     case Rx{srv, +ds, sel, rw}:
-      Rx{srv, ds, sel, rw.sliced(rw, R.ds.now(ds), want)}
+      Rx{srv, ds, sel, rw.sliced(rw, R.ds.now(ds), pace.want(dl, want), ms, dl)}
 
 # whether n more bytes in the temporary file pass a multiple of 4 MB, with
 # aof-rewrite-incremental-fsync yes
@@ -11090,11 +13055,17 @@ def rx.go(x: Rx) -> Rx:
 # The cron
 # --------
 # Each 100 ms of the actor's time it looks, as Redis's serverCron does (at
-# hz 10) while no rewrite runs: a rewrite scheduled starts, and with
-# appendonly yes a file past auto-aof-rewrite-min-size grown by
+# hz 10) while no rewrite and no background save runs, in its order: a
+# rewrite scheduled starts, unless the limit after failures holds; else a
+# save point reached starts a background save (save's pairs of seconds
+# and changes: as many changes since the last save, and more seconds
+# since the last one that ended well; after a background save that
+# failed, only once 5 seconds have passed since it was tried,
+# CONFIG_BGSAVE_RETRY_DELAY), with Redis's line; else with appendonly yes
+# a file past auto-aof-rewrite-min-size grown by
 # auto-aof-rewrite-percentage (not 0) of its size after its last rewrite
-# (or at the start) is rewritten, both unless the limit after failures
-# holds.
+# (or at the start) is rewritten, unless the limit holds; else a BGSAVE
+# scheduled starts (after a failure, as the save points do).
 
 # the file's growth since its last rewrite, in percent, as Redis measures
 # it (a base of 0 as 1)
@@ -11153,9 +13124,34 @@ def lim.ask(want: Bool, +fails: Nat, +s: Nat, +delay: Nat, +until: Nat) -> RwLim
 
 # the cron's look: the state after it (its next look 100 ms on), what it
 # starts (0 nothing, 1 the rewrite scheduled, 2 one for the file's
-# growth), the growth, and the limit's wait to log (minutes; 0 none)
+# growth, 3 a background save for a save point, 4 the background save
+# scheduled), the growth, the limit's wait to log (minutes; 0 none), and
+# the save point reached (seconds, changes: info.bend, rdb.point)
 type RwLook is Data:
-  RwLook{x: Rx, go: Nat, grow: Nat, note: Nat}
+  RwLook{x: Rx, go: Nat, grow: Nat, note: Nat, pt: Maybe<&2, I.Pt>}
+
+def point.is(+m: Maybe<&2, I.Pt>) -> Bool:
+  match m:
+    case Some{p}:
+      True{}
+    case None{}:
+      False{}
+
+# the save point's line
+def point.say(m: Maybe<&2, I.Pt>) -> String:
+  match m:
+    case Some{I.Pt{+secs, +ch}}:
+      Nat.show(ch) ++ " changes in " ++ Nat.show(secs) ++ " seconds. Saving..."
+    case None{}:
+      ""
+
+# what the look starts, in serverCron's order
+def look.all(+go: Nat, +pt: Bool, +bsched: Bool) -> Nat:
+  match go:
+    case 1n:
+      1n
+    case _:
+      Bool.pick(Nat, pt, 3n, Bool.pick(Nat, Nat.is_eq(go, 2n), 2n, Bool.pick(Nat, bsched, 4n, 0n)))
 
 def look.go(held: Bool, sched: Bool, auto: Bool) -> Nat:
   match held sched auto:
@@ -11168,19 +13164,21 @@ def look.go(held: Bool, sched: Bool, auto: Bool) -> Nat:
     case False{} False{} False{}:
       0n
 
-def look.of(+sched: Bool, +auto: Bool, l: RwLim, +grow: Nat, srv: S.Srv, ds: R.Ds, +sel: Nat, path: String, +aof: Bool, +pid: U32, +now: Nat, +last: Nat, run: Maybe<&2, RwRun>) -> RwLook:
+def look.of(+sched: Bool, +auto: Bool, l: RwLim, +grow: Nat, pt: Maybe<&2, I.Pt>, +bsched: Bool, srv: S.Srv, ds: R.Ds, +sel: Nat, path: String, +aof: Bool, +pid: U32, +now: Nat, +last: Nat, run: Maybe<&2, RwRun>, bg: Maybe<&2, BgRun>, +next: Nat, +carry: Nat) -> RwLook:
   match l:
     case RwLim{held, +delay, +until, +note}:
-      RwLook{Rx{srv, ds, sel, Rw{path, aof, pid, Nat.add(now, 100n), delay, until, last, run}}, look.go(held, sched, auto), grow, note}
+      +p = pt
+      RwLook{Rx{srv, ds, sel, Rw{path, aof, pid, Nat.add(now, 100n), delay, until, last, run, bg, next, carry}}, look.all(look.go(held, sched, auto), point.is(p), bsched), grow, note, p}
 
 def rw.look(rw: Rw, +srv: S.Srv, +ds: R.Ds, +sel: Nat) -> RwLook:
   match rw:
-    case Rw{path, +aof, +pid, cron, +delay, +until, +last, run}:
+    case Rw{path, +aof, +pid, cron, +delay, +until, +last, run, bg, +next, +carry}:
       +now = R.ds.now(ds)
       +sched = S.srv.rw.sched(srv)
       +grow = rw.growth(S.srv.aof.size(srv), S.srv.aof.base(srv))
       +auto = rw.auto(aof, srv)
-      look.of(sched, auto, lim.ask(Bool.or(sched, auto), S.srv.rw.fails(srv), Nat.div(now, 1000n), delay, until), grow, srv, ds, sel, path, aof, pid, now, last, run)
+      +r = S.srv.rdb(srv)
+      look.of(sched, auto, lim.ask(Bool.or(sched, auto), S.srv.rw.fails(srv), Nat.div(now, 1000n), delay, until), grow, I.rdb.point(r, Nat.div(now, 1000n)), I.rdb.sched.go(r, Nat.div(now, 1000n)), srv, ds, sel, path, aof, pid, now, last, run, bg, next, carry)
     case RwOf{r}:
       rw.look(r, srv, ds, sel)
 
@@ -11208,6 +13206,11 @@ def st.idle(+st: St, +ms: Nat) -> Nat:
     case St{srv, +ds, sel, ws, tx, pb, rw}:
       idle.step(ds, ms)
 
+def st.due(+st: St, +ms: Nat) -> Bool:
+  match st:
+    case St{srv, ds, sel, ws, tx, pb, +rw}:
+      rw.due(rw, ms)
+
 @unsafe
 def step.say(+x: Rx, +level: U32, +msg: String) -> IO(Unit):
   log(rx.lg(x), level, msg)
@@ -11223,6 +13226,12 @@ def step.go(w: Nat, x: Rx, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx):
       step.cron(x, f)
     case 4n:
       step.slice(x, f, 32n)
+    case 6n:
+      step.bstart(x, f)
+    case 7n:
+      step.slice(x, f, 64n)
+    case 8n:
+      step.bkill(x, f)
     case _:
       step.slice(x, f, 256n)
 
@@ -11241,15 +13250,32 @@ def step.opened(m: Result<&1, &1, U32 & String, File>, +tmp: String, +x: Rx, f: 
       do IO<Maybe<&1, File> & Rx>:
         Unit <- File.close(t)
         Unit <- step.say(x, 2, "Background append only file rewriting started by pid " ++ U32.show(rx.pid(x)))
-        return (f, rx.begin(x, tmp))
+        h : Nat & Nat <- IO.heap()
+        return (f, rx.begin(rx.snap(x, Pair.fst(Nat, Nat, h)), tmp))
     case Fail{e}:
       step.fail(x, f, tmp, "Can't open the temporary file " ++ tmp ++ " for the AOF rewrite: " ++ err.msg(e))
 
-# a slice of want entries, then what follows it
+# a slice of want entries (one with a pace: rdb-key-save-delay, as the
+# background save that runs took it at its start, or as the rewrite's is
+# now) of the background save that runs, else of the rewrite, then what
+# follows it
 @unsafe
 def step.slice(+x: Rx, f: Maybe<&1, File>, +want: Nat) -> IO(Maybe<&1, File> & Rx):
-  +y = rx.slice(x, want)
-  step.sliced(rx.next(y), y, f)
+  do IO<Maybe<&1, File> & Rx>:
+    t : U32 & U32 <- IO.clock()
+    step.slice.at(rx.saving(x), x, f, want, clock.ms(t))
+
+@unsafe
+def step.slice.at(saving: Bool, +x: Rx, f: Maybe<&1, File>, +want: Nat, +ms: Nat) -> IO(Maybe<&1, File> & Rx):
+  match saving:
+    case True{}:
+      +dl = rx.bdelay(x)
+      +y = rx.bslice(x, want, ms, dl)
+      step.bsliced(rx.bnext(y), y, f)
+    case False{}:
+      +dl = rx.delay(x)
+      +y = rx.slice(x, want, ms, dl)
+      step.sliced(rx.next(y), y, f)
 
 @unsafe
 def step.sliced(w: Nat, +x: Rx, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx):
@@ -11454,22 +13480,28 @@ def step.note(note: Nat, +x: Rx) -> IO(Unit):
 @unsafe
 def step.look(l: RwLook, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx):
   match l:
-    case RwLook{+x, go, +grow, note}:
+    case RwLook{+x, go, +grow, note, pt}:
       do IO<Maybe<&1, File> & Rx>:
         Unit <- step.note(note, x)
-        step.look.go(go, grow, x, f)
+        step.look.go(go, grow, point.say(pt), x, f)
 
 @unsafe
-def step.look.go(go: Nat, +grow: Nat, +x: Rx, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx):
+def step.look.go(go: Nat, +grow: Nat, +line: String, +x: Rx, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx):
   match go:
     case 0n:
       IO.pure(Maybe<&1, File> & Rx, (f, x))
     case 1n:
       step.start(rx.go(x), f)
-    case _:
+    case 2n:
       do IO<Maybe<&1, File> & Rx>:
         Unit <- step.say(x, 2, "Starting automatic rewriting of AOF on " ++ Nat.show(grow) ++ "% growth")
         step.start(rx.go(x), f)
+    case 3n:
+      do IO<Maybe<&1, File> & Rx>:
+        Unit <- step.say(x, 2, line)
+        step.bstart(rx.bgo(x, False{}), f)
+    case _:
+      step.bstart(rx.bgo(x, True{}), f)
 
 # the file's handle a step of the actor without a file gives back (None)
 @unsafe
@@ -11815,7 +13847,7 @@ def rdb.wrote(p: File & Result<&1, &1, U32 & String, Unit>, more: Maybe<&2, D.FW
 @unsafe
 def rdb.write(f: File, sl: D.FSl, +sum: Bool, c: D.C) -> IO(File & RdbW):
   match sl:
-    case D.FSl{+b, more}:
+    case D.FSl{+b, k, more}:
       do IO<File & RdbW>:
         p : File & Result<&1, &1, U32 & String, Unit> <- File.write_raw(f, b)
         rdb.wrote(p, more, sum, rdb.crc(sum, b, c))
@@ -11888,7 +13920,7 @@ def rdb.opened(m: Result<&1, &1, U32 & String, File>, +lg: Log, +tmp: String, +n
       do IO<Bool>:
         t : U32 & U32 <- IO.clock()
         h : Nat & Nat <- IO.heap()
-        p : File & RdbW <- rdb.write(f, D.FSl{D.file.head(clock.secs(t), Pair.fst(Nat, Nat, h)), Some{D.FW{dbs, 0n, None{}}}}, sum, D.C{0, 0})
+        p : File & RdbW <- rdb.write(f, D.FSl{D.file.head(clock.secs(t), Pair.fst(Nat, Nat, h)), 0n, Some{D.FW{dbs, 0n, None{}}}}, sum, D.C{0, 0})
         rdb.written(p, lg, tmp, name)
 
 # the save of the databases dbs, as the parameters items say: whether it
@@ -11912,9 +13944,9 @@ def rdb.flush.save(on: Bool, +lg: Log, +srv: S.Srv, +pid: U32) -> IO(S.Srv):
       IO.pure(S.Srv, srv)
     case True{}:
       do IO<S.Srv>:
-        ok : Bool <- rdb.save(lg, pid, S.srv.cfg(srv), Nil{})
+        +ok : Bool <- rdb.save(lg, pid, S.srv.cfg(srv), Nil{})
         t : U32 & U32 <- IO.clock()
-        IO.pure(S.Srv, S.srv.rdb.flushed(S.srv.rdb.saved(srv, ok, clock.secs(t)), False{}))
+        IO.pure(S.Srv, S.srv.rdb.flush.done(S.srv.rdb.flushed(S.srv.rdb.saved(srv, ok, clock.secs(t)), False{}), ok))
 
 @unsafe
 def rdb.save.want(want: Bool, +lg: Log, +srv: S.Srv, +ds: R.Ds, +pid: U32) -> IO(S.Srv & Bool):
@@ -11925,7 +13957,7 @@ def rdb.save.want(want: Bool, +lg: Log, +srv: S.Srv, +ds: R.Ds, +pid: U32) -> IO
       do IO<S.Srv & Bool>:
         +ok : Bool <- rdb.save(lg, pid, S.srv.cfg(srv), rdb.fdbs(R.ds.list(ds)))
         t : U32 & U32 <- IO.clock()
-        IO.pure(S.Srv & Bool, (S.srv.rdb.paid(S.srv.rdb.saved(srv, ok, clock.secs(t))), ok))
+        IO.pure(S.Srv & Bool, (S.srv.rdb.clean(S.srv.rdb.paid(S.srv.rdb.saved(srv, ok, clock.secs(t))), ok), ok))
 
 @unsafe
 def rdb.saves(+lg: Log, +srv: S.Srv, +ds: R.Ds, +want: Bool, +pid: U32) -> IO(S.Srv & Bool):
@@ -11972,16 +14004,41 @@ def waits.saved(ws: Waits, hit: Bool, +ok: Bool, keep: Waits, up: List<&2, Up>, 
     case WaitOn{id, back, c0, c1, b, argv, code, db, until, cmds, codes, av, +rest} False{}:
       waits.saved(rest, waits.saving(rest), ok, WaitOn{id, back, c0, c1, b, argv, code, db, until, cmds, codes, av, keep}, up, srv)
 
+def grp.saved.go(ws: Waits, up: List<&2, Up>, srv: S.Srv, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, ds: R.Ds, tx: Tx, pb: Ps) -> Grp:
+  +w = ws
+  +s = srv
+  +p2 = ps.misconf.set(ps.down.set(0n, pb), s)
+  grp.end(Grp{outs, Nil{}, waits.count(w, s), ds, w, up, tx, p2})
+
 def grp.saved.of(p: Waits & (List<&2, Up> & S.Srv), outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, ds: R.Ds, tx: Tx, pb: Ps) -> Grp:
-  (+ws, q) = p
+  (ws, q) = p
   (up, srv) = q
-  grp.end(Grp{outs, Nil{}, waits.count(ws, srv), ds, ws, up, tx, ps.down.set(0n, pb)})
+  grp.saved.go(ws, up, srv, outs, ds, tx, pb)
 
 # once the shell has saved, the clients that waited go on: each
 # answered, its batch on at the end of a group of no request (grp.end),
 # whose answers go out after the group's (outs)
 def grp.saved(+ok: Bool, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, srv: S.Srv, ds: R.Ds, +ws: Waits, tx: Tx, pb: Ps) -> Grp:
   grp.saved.of(waits.saved(ws, waits.saving(ws), ok, WaitNone{}, Nil{}, srv), outs, ds, tx, pb)
+
+# a SHUTDOWN's save failed: as grp.saved, and then the clients its save
+# held back (down.holds) go on after them, in the order they came; but
+# while a pause holds, they wait for its end, as the pause's own do
+def saved.free(p: Waits & List<&2, Up>, srv: S.Srv) -> Waits & (List<&2, Up> & S.Srv):
+  (ws, up) = p
+  (ws, (up, srv))
+
+def grp.saved.free(on: Bool, p: Waits & (List<&2, Up> & S.Srv), outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, ds: R.Ds, tx: Tx, pb: Ps) -> Grp:
+  match on:
+    case True{}:
+      grp.saved.of(p, outs, ds, tx, pb)
+    case False{}:
+      (+ws, q) = p
+      (up, srv) = q
+      grp.saved.of(saved.free(waits.unpause(ws, waits.held(ws), WaitNone{}, up), srv), outs, ds, tx, pb)
+
+def grp.saved.down(+ok: Bool, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, srv: S.Srv, ds: R.Ds, +ws: Waits, tx: Tx, +pb: Ps) -> Grp:
+  grp.saved.free(pz.on(ps.pz(pb)), waits.saved(ws, waits.saving(ws), ok, WaitNone{}, Nil{}, srv), outs, ds, tx, pb)
 
 # The start: without an append-only file (and not in the short form), the
 # file loaded, as loadDataFromDisk loads it: a file not there is empty
@@ -12035,38 +14092,79 @@ def rdb.loaded(d: D.FLd, +t0: Nat, +lg: Log, info: I.Info, +more: Nat) -> IO(R.D
         Unit <- log(lg, 2, "DB loaded from disk: " ++ secs3(Nat.sub(t1, t0)) ++ " seconds")
         IO.pure(R.Ds & I.Info, (rdb.ds(dbs, more), I.info.rdb.loaded(info, ld, ex)))
 
-# the file's bytes, read until a read comes back empty; a read that fails
-# stops the start as a short read does
-@unsafe
-def rdb.read(f: File, got: List<&2, String>, +lg: Log) -> IO(File & String):
-  do IO<File & String>:
-    p : File & Result<&1, &1, U32 & String, String> <- File.read_raw(f, 16777216)
-    rdb.read.more(p, got, lg)
+# The file read in windows (issue #107): 1 MiB at a time, or as many bytes
+# as the window held when a value runs past it (the window doubles), so
+# that the start holds a window and the databases it fills, not the file
+# (the heap gives no memory back: a file read whole stayed resident). A
+# window's bytes the load has gone past go into the CRC64 before the next
+# one is read; its last bytes, up to EOF, once the load is done.
+def rdb.window() -> Nat:
+  1048576n
+
+def rdb.w.size(+left: Nat) -> U32:
+  U32.from_nat(Nat.max(rdb.window(), left))
+
+def rdb.w.crc(sum: Bool, +k: Nat, +w: String, c: D.C) -> D.C:
+  match sum:
+    case True{}:
+      D.crc.k(k, w, c)
+    case False{}:
+      c
 
 @unsafe
-def rdb.read.more(p: File & Result<&1, &1, U32 & String, String>, got: List<&2, String>, +lg: Log) -> IO(File & String):
+def rdb.w.more(eof: Bool, +x: String, f: File, r: D.FR, fail: D.FLd, c: D.C, +left: String, +base: Nat, +llen: Nat, +sum: Bool, +t0: Nat, +lg: Log, info: I.Info, +more: Nat) -> IO(R.Ds & I.Info):
+  match eof:
+    case True{}:
+      do IO<R.Ds & I.Info>:
+        Unit <- File.close(f)
+        rdb.loaded(fail, t0, lg, info, more)
+    case False{}:
+      +xlen = String.length(x)
+      +w = left ++ x
+      rdb.w.went(D.file.next(r, w, Nat.add(llen, xlen), xlen), f, c, w, base, Nat.add(llen, xlen), sum, t0, lg, info, more)
+
+@unsafe
+def rdb.w.read(p: File & Result<&1, &1, U32 & String, String>, r: D.FR, fail: D.FLd, c: D.C, +left: String, +base: Nat, +llen: Nat, +sum: Bool, +t0: Nat, +lg: Log, info: I.Info, +more: Nat) -> IO(R.Ds & I.Info):
+  (f, q) = p
+  match q:
+    case Fail{e}:
+      log.die(R.Ds & I.Info, lg, "Short read or OOM loading DB. Unrecoverable error, aborting now.")
+    case Done{+x}:
+      rdb.w.more(String.is_empty(x), x, f, r, fail, c, left, base, llen, sum, t0, lg, info, more)
+
+# the load s on the window w (wlen bytes, at the file's offset base), the
+# CRC64 of the bytes before it c
+@unsafe
+def rdb.w.went(s: D.FS, f: File, c: D.C, +w: String, +base: Nat, +wlen: Nat, +sum: Bool, +t0: Nat, +lg: Log, info: I.Info, +more: Nat) -> IO(R.Ds & I.Info):
+  match s:
+    case D.FEnd{d}:
+      do IO<R.Ds & I.Info>:
+        Unit <- File.close(f)
+        rdb.loaded(D.file.checked(d, c, w, base), t0, lg, info, more)
+    case D.FMore{+r, fail}:
+      +left = D.file.left(r)
+      +llen = String.length(left)
+      +used = Nat.sub(wlen, llen)
+      do IO<R.Ds & I.Info>:
+        p : File & Result<&1, &1, U32 & String, String> <- File.read_raw(f, rdb.w.size(llen))
+        rdb.w.read(p, r, fail, rdb.w.crc(sum, used, w, c), left, Nat.add(base, used), llen, sum, t0, lg, info, more)
+    case D.FGo{r}:
+      do IO<R.Ds & I.Info>:
+        Unit <- File.close(f)
+        rdb.loaded(D.file.end(D.FGo{r}), t0, lg, info, more)
+
+@unsafe
+def rdb.w.first(p: File & Result<&1, &1, U32 & String, String>, +t0: Nat, +lg: Log, +items: List<&2, C.CItem>, info: I.Info, +more: Nat) -> IO(R.Ds & I.Info):
   (f, r) = p
   match r:
     case Fail{e}:
-      log.die(File & String, lg, "Short read or OOM loading DB. Unrecoverable error, aborting now.")
+      log.die(R.Ds & I.Info, lg, "Short read or OOM loading DB. Unrecoverable error, aborting now.")
     case Done{+x}:
-      rdb.read.next(f, String.is_empty(x), x, got, lg)
-
-@unsafe
-def rdb.read.next(f: File, eof: Bool, x: String, got: List<&2, String>, +lg: Log) -> IO(File & String):
-  match eof:
-    case True{}:
-      IO.pure(File & String, (f, glue(got, SNil{})))
-    case False{}:
-      rdb.read(f, x <> got, lg)
-
-@unsafe
-def rdb.start.read(p: File & String, +t0: Nat, +lg: Log, +items: List<&2, C.CItem>, info: I.Info, +more: Nat) -> IO(R.Ds & I.Info):
-  (f, +s) = p
-  do IO<R.Ds & I.Info>:
-    Unit <- File.close(f)
-    t : U32 & U32 <- IO.clock()
-    rdb.loaded(D.file.load(s, 1n+more, clock.ms(t), String.eq(T.cfg(items, "rdbchecksum"), "yes")), t0, lg, info, more)
+      +xlen = String.length(x)
+      +sum = String.eq(T.cfg(items, "rdbchecksum"), "yes")
+      do IO<R.Ds & I.Info>:
+        t : U32 & U32 <- IO.clock()
+        rdb.w.went(D.file.first(x, xlen, 1n+more, clock.ms(t), sum), f, D.C{0, 0}, x, 0n, xlen, sum, t0, lg, info, more)
 
 @unsafe
 def rdb.start.none(none: Bool, +msg: String, +lg: Log, info: I.Info, +more: Nat) -> IO(R.Ds & I.Info):
@@ -12085,8 +14183,8 @@ def rdb.start.open(m: Result<&1, &1, U32 & String, File>, +lg: Log, +items: List
     case Done{f}:
       do IO<R.Ds & I.Info>:
         t0 : Nat <- IO.now()
-        p : File & String <- rdb.read(f, Nil{}, lg)
-        rdb.start.read(p, t0, lg, items, info, more)
+        p : File & Result<&1, &1, U32 & String, String> <- File.read_raw(f, U32.from_nat(rdb.window()))
+        rdb.w.first(p, t0, lg, items, info, more)
 
 # the databases at the start (1 + more of them), and the server's facts
 # with the keys the load loaded and found expired
@@ -12099,6 +14197,535 @@ def rdb.start(on: Bool, +lg: Log, +items: List<&2, C.CItem>, info: I.Info, +more
       do IO<R.Ds & I.Info>:
         m : Result<&1, &1, U32 & String, File> <- File.open(T.cfg(items, "dbfilename"), "r")
         rdb.start.open(m, lg, items, info, more)
+
+# Background saves
+# ----------------
+# BGSAVE (and the cron's: a save point reached, a BGSAVE scheduled)
+# writes the RDB file as Redis 7.0.15's child writes it (rdbSaveBackground,
+# rdbSave): the bytes SAVE writes (The RDB file on the disk, its AUX
+# fields the same: ctime and used-mem when the actor starts it), of the
+# databases as they were when the save started. Redis forks a child that
+# writes its memory as it was at the fork; BendKV's databases are values,
+# so the save keeps them as they are when it starts (the snapshot:
+# nothing copies them, the writes after it make new nodes where they
+# change shared ones, as Redis's child's pages are copied on write),
+# taken by BGSAVE at its place in its group (the server's state keeps it
+# until the group is answered: info.bend, Bgs) or by the cron, and the
+# actor writes them as it writes a rewrite (The rewrite of the
+# append-only file): a slice of a database at a time (D.file.slice),
+# after the groups it answers and while no request waits (The steps), to
+# temp-<pid>.rdb in the directory, 64 KB at a time, synced each 4 MB as it
+# is written with rdb-save-incremental-fsync yes; then the file's end, its
+# sync, the rename onto dbfilename and the directory's sync. Its lines are
+# Redis's parent's and child's, the child's with the role C (and the
+# server's pid): "Background saving started by pid", "DB saved on disk"
+# (C) and "Background saving terminated with success"; a save that fails
+# logs why (C) and "Background saving error". One that ends well is the
+# last save (LASTSAVE) and takes away from the count of changes those it
+# holds (The count of changes); one that fails makes
+# rdb_last_bgsave_status err, which with save points and
+# stop-writes-on-bgsave-error yes refuses the writes (MISCONF: Ps's bit
+# 19) until a save ends well. A FLUSHALL drops the save that runs once its
+# group is answered (and after its own save, with save points: Redis's
+# killRDBChild, whose child the cron finds ended after the command): its
+# temporary file removed, "Background saving terminated by signal 10",
+# the status as it was. A SHUTDOWN drops it before its own save ("There is
+# a child saving an .rdb. Killing it!": SHUTDOWN, above). One job runs at
+# a time, a rewrite or a save: BGSAVE while a rewrite runs is refused, or
+# scheduled (SCHEDULE, or in EXEC), BGREWRITEAOF while a save runs is
+# scheduled, and the cron starts what was scheduled once the job has
+# ended; SAVE while a save runs is refused. rdb-key-save-delay paces
+# both jobs, a key at a time (a command of the rewrite), as Redis's child
+# sleeps after each key it writes (pace.next). INFO shows the save's
+# progress after each slice, where Redis's child reports it once a
+# second at most; nothing of a fork (its time, its copy on write).
+
+def bgr.slice.of(sl: D.FSl, c: D.C, +sum: Bool, +size: Nat, pend: List<&2, String>, +pn: Nat, cf: I.BgCf, ch: BgCh) -> Maybe<&2, BgRun> & Nat:
+  match sl:
+    case D.FSl{+b, +k, more}:
+      (Some{BgRun{more, rdb.crc(sum, b, c), sum, size, b <> pend, Nat.add(pn, String.length(b)), cf, ch}}, k)
+
+# a slice of want entries taken: its bytes kept, its CRC made, and the
+# keys it holds
+def bgr.slice(m: Maybe<&2, BgRun>, +want: Nat) -> Maybe<&2, BgRun> & Nat:
+  match m:
+    case Some{BgRun{Some{w}, c, +sum, +size, pend, +pn, cf, ch}}:
+      bgr.slice.of(D.file.slice(w, want), c, sum, size, pend, pn, cf, ch)
+    case Some{BgRun{None{}, c, sum, size, pend, pn, cf, ch}}:
+      (Some{BgRun{None{}, c, sum, size, pend, pn, cf, ch}}, 0n)
+    case None{}:
+      (None{}, 0n)
+
+# what follows a slice: 0 nothing yet, 1 the bytes kept written (64 KB of
+# them), 2 the save's end (all of the snapshot is taken)
+def bgr.next(+m: Maybe<&2, BgRun>) -> Nat:
+  match m:
+    case Some{BgRun{None{}, c, sum, size, pend, pn, cf, ch}}:
+      2n
+    case Some{BgRun{Some{w}, c, sum, size, pend, +pn, cf, ch}}:
+      Bool.pick(Nat, Nat.is_le(65536n, pn), 1n, 0n)
+    case None{}:
+      0n
+
+# the bytes kept; the same, then the file's end (EOF and the CRC)
+def bgr.pending(+m: Maybe<&2, BgRun>) -> String:
+  match m:
+    case Some{BgRun{w, c, sum, size, +pend, pn, cf, ch}}:
+      strs.cat(pend, "")
+    case None{}:
+      ""
+
+def bgr.rest(+m: Maybe<&2, BgRun>) -> String:
+  match m:
+    case Some{BgRun{w, +c, +sum, size, +pend, pn, cf, ch}}:
+      strs.cat(pend, D.file.tail(sum, c))
+    case None{}:
+      ""
+
+def bgr.size(+m: Maybe<&2, BgRun>) -> Nat:
+  match m:
+    case Some{BgRun{w, c, sum, +size, pend, pn, cf, ch}}:
+      size
+    case None{}:
+      0n
+
+# the bytes kept written: n more in the temporary file
+def bgr.flushed(m: Maybe<&2, BgRun>, +n: Nat) -> Maybe<&2, BgRun>:
+  match m:
+    case Some{BgRun{w, c, sum, size, pend, pn, cf, ch}}:
+      Some{BgRun{w, c, sum, Nat.add(size, n), Nil{}, 0n, cf, ch}}
+    case None{}:
+      None{}
+
+def rw.bg(+rw: Rw) -> Maybe<&2, BgRun>:
+  match rw:
+    case Rw{path, aof, pid, cron, delay, until, last, run, +bg, next, carry}:
+      bg
+    case RwOf{+r}:
+      rw.bg(r)
+
+def rw.bsliced.of(p: Maybe<&2, BgRun> & Nat, path: String, aof: Bool, pid: U32, cron: Nat, delay: Nat, until: Nat, +now: Nat, run: Maybe<&2, RwRun>, +next: Nat, +carry: Nat, +ms: Nat, +dl: Nat) -> Rw & Nat:
+  (bg, +k) = p
+  (rw.paced(pace.next(next, carry, ms, k, dl), path, aof, pid, cron, delay, until, now, run, bg), k)
+
+def rw.bsliced(rw: Rw, +now: Nat, +want: Nat, +ms: Nat, +dl: Nat) -> Rw & Nat:
+  match rw:
+    case Rw{path, aof, pid, cron, delay, until, last, run, bg, +next, +carry}:
+      rw.bsliced.of(bgr.slice(bg, want), path, aof, pid, cron, delay, until, now, run, next, carry, ms, dl)
+    case RwOf{r}:
+      rw.bsliced(r, now, want, ms, dl)
+
+def rw.bflushed(rw: Rw, +n: Nat) -> Rw:
+  match rw:
+    case Rw{path, aof, pid, cron, delay, until, last, run, bg, next, carry}:
+      Rw{path, aof, pid, cron, delay, until, last, run, bgr.flushed(bg, n), next, carry}
+    case RwOf{r}:
+      rw.bflushed(r, n)
+
+# whether a background save runs
+def rx.saving(+x: Rx) -> Bool:
+  match x:
+    case Rx{srv, ds, sel, +rw}:
+      rw.saving(rw)
+
+def rx.bslice.of(p: Rw & Nat, srv: S.Srv, ds: R.Ds, +sel: Nat) -> Rx:
+  (rw, +k) = p
+  Rx{S.srv.bg.wrote(srv, k), ds, sel, rw}
+
+# the save's slice at the clock's ms: its keys counted as written (INFO's
+# current_save_keys_processed), its pace kept
+def rx.bslice(x: Rx, +want: Nat, +ms: Nat, +dl: Nat) -> Rx:
+  match x:
+    case Rx{srv, +ds, +sel, rw}:
+      rx.bslice.of(rw.bsliced(rw, R.ds.now(ds), pace.want(dl, want), ms, dl), srv, ds, sel)
+
+def rx.bnext(+x: Rx) -> Nat:
+  match x:
+    case Rx{srv, ds, sel, +rw}:
+      bgr.next(rw.bg(rw))
+
+def rx.bpending(+x: Rx) -> String:
+  match x:
+    case Rx{srv, ds, sel, +rw}:
+      bgr.pending(rw.bg(rw))
+
+def rx.brest(+x: Rx) -> String:
+  match x:
+    case Rx{srv, ds, sel, +rw}:
+      bgr.rest(rw.bg(rw))
+
+def rx.bflushed(x: Rx, +n: Nat) -> Rx:
+  match x:
+    case Rx{srv, ds, sel, rw}:
+      Rx{srv, ds, sel, rw.bflushed(rw, n)}
+
+# the parameters the save that runs kept from its start (I.BgCf), and
+# the channels to its writer
+def bgr.cf(+m: Maybe<&2, BgRun>) -> I.BgCf:
+  match m:
+    case Some{BgRun{w, c, sum, size, pend, pn, +cf, ch}}:
+      cf
+    case None{}:
+      I.bgcf.none()
+
+def bgr.ch(+m: Maybe<&2, BgRun>) -> Maybe<&2, BgCh>:
+  match m:
+    case Some{BgRun{w, c, sum, size, pend, pn, cf, +ch}}:
+      Some{ch}
+    case None{}:
+      None{}
+
+def rx.bcf(+x: Rx) -> I.BgCf:
+  match x:
+    case Rx{srv, ds, sel, +rw}:
+      bgr.cf(rw.bg(rw))
+
+def rx.bch(+x: Rx) -> Maybe<&2, BgCh>:
+  match x:
+    case Rx{srv, ds, sel, +rw}:
+      bgr.ch(rw.bg(rw))
+
+# whether n more bytes in the temporary file pass a multiple of 4 MB, with
+# rdb-save-incremental-fsync yes when the save started (Redis's child
+# syncs so: rioSetAutoSync)
+def rx.bautosync(+x: Rx, +n: Nat) -> Bool:
+  match x:
+    case Rx{srv, ds, sel, +rw}:
+      +m = rw.bg(rw)
+      +size = bgr.size(m)
+      Bool.and(Bool.not(Nat.is_eq(Nat.div(size, 4194304n), Nat.div(Nat.add(size, n), 4194304n))), I.bgcf.auto(bgr.cf(m)))
+
+# the file the save is renamed onto, and rdb-key-save-delay, as they were
+# when it started
+def rx.bname(+x: Rx) -> String:
+  I.bgcf.name(rx.bcf(x))
+
+def rx.bdelay(+x: Rx) -> Nat:
+  I.bgcf.delay(rx.bcf(x))
+
+# the parameters a save takes from its start (S.srv.bg.go took them, at
+# the BGSAVE or at the cron's look), before the actor makes its BgRun
+def rx.bcf0(+x: Rx) -> I.BgCf:
+  match x:
+    case Rx{+srv, ds, sel, rw}:
+      I.bgs.cf(I.rdb.bg(S.srv.rdb(srv)))
+
+# a background save the cron starts at its look: a snapshot of the
+# databases as they are, the save counted at the group's second (unsched:
+# it is the one scheduled, which is no more)
+def rx.bgo(x: Rx, +unsched: Bool) -> Rx:
+  match x:
+    case Rx{srv, +ds, sel, rw}:
+      +xs = R.ds.list(ds)
+      Rx{S.srv.bg.go(srv, Nat.div(R.ds.now(ds), 1000n), dw.dbs(xs), Some{xs}, unsched), ds, sel, rw}
+
+# the save begun: the databases of its snapshot to write, the file's head
+# kept (made at the clock's second, with the heap's used bytes) and its
+# CRC made (with rdbchecksum yes when it started), its parameters and its
+# writer's channels kept, its pace from now
+def rx.bbegin(x: Rx, dbs: List<&2, R.Db>, +head: String, +sum: Bool, cf: I.BgCf, ch: BgCh) -> Rx:
+  match x:
+    case Rx{srv, ds, sel, Rw{path, aof, pid, cron, delay, until, last, run, bg, next, carry}}:
+      Rx{srv, ds, sel, Rw{path, aof, pid, cron, delay, until, last, run, Some{BgRun{Some{D.FW{rdb.fdbs(dbs), 0n, None{}}}, rdb.crc(sum, head, D.C{0, 0}), sum, 0n, [head], String.length(head), cf, ch}}, 0n, 0n}}
+    case Rx{srv, ds, sel, RwOf{r}}:
+      rx.bbegin(Rx{srv, ds, sel, r}, dbs, head, sum, cf, ch)
+
+# the save begun at the clock's k, the heap's account h read then: the
+# eviction's view of the memory starts there (rx.snap)
+def rx.bbegun(h: Nat & Nat, k: U32 & U32, dbs: List<&2, R.Db>, ch: BgCh, +x: Rx) -> Rx:
+  (u, a) = h
+  +used = u
+  +cf = rx.bcf0(x)
+  rx.bbegin(rx.snap(x, used), dbs, D.file.head(clock.secs(k), used), I.bgcf.sum(cf), cf, ch)
+
+# the save ended at the second s, well or not (backgroundSaveDoneHandler),
+# or dropped
+def rx.bend(x: Rx, +well: Bool, +s: Nat) -> Rx:
+  match x:
+    case Rx{srv, ds, sel, rw}:
+      Rx{S.srv.bg.end(srv, well, s), ds, sel, rw.bg.with(rw, None{})}
+
+def rx.bdrop(x: Rx, +s: Nat) -> Rx:
+  match x:
+    case Rx{srv, ds, sel, rw}:
+      Rx{S.srv.bg.drop(srv, s), ds, sel, rw.bg.with(rw, None{})}
+
+# the child's lines: the log with the role C (and the server's pid)
+def rx.clg(+x: Rx) -> Log:
+  match x:
+    case Rx{+srv, ds, sel, +rw}:
+      log.of(S.srv.cfg(srv), rw.pid(rw))
+
+@unsafe
+def step.child(+x: Rx, +level: U32, +msg: String) -> IO(Unit):
+  log(rx.clg(x), level, msg)
+
+# The writer: a task of its own (IO.spawn) that holds the temporary file
+# open from the save's start to its end, as Redis's child holds its
+# descriptor: a file removed meanwhile is written all the same, and the
+# rename at the end fails, as Redis's does, where the file opened again by
+# its name for each 64 KB would be made anew, without its head, and put in
+# place of dbfilename. The actor sends it the bytes and waits for its
+# answer, as it waited for its own writes before; a save dropped closes
+# its channel, and the writer closes the file. Its last answer given, the
+# writer closes its own channel, and the actor the one of the answers,
+# once it has read it (a channel closed and empty is freed).
+@unsafe
+def bgw.fail(f: File, +op: String, e: U32 & String, +to: Chan(BgW), +back: Chan(BgA)) -> IO(Unit):
+  do IO<Unit>:
+    Unit <- File.close(f)
+    b : Bool <- Chan.send(BgA, back, BgBad{op, err.msg(e)})
+    Chan.close(BgW, to)
+
+@unsafe
+def bgw.answer(last: Bool, f: File, +to: Chan(BgW), +back: Chan(BgA)) -> IO(Unit):
+  match last:
+    case True{}:
+      do IO<Unit>:
+        Unit <- File.close(f)
+        b : Bool <- Chan.send(BgA, back, BgOk{})
+        Chan.close(BgW, to)
+    case False{}:
+      do IO<Unit>:
+        b : Bool <- Chan.send(BgA, back, BgOk{})
+        bgw.loop(f, to, back)
+
+# a sync's failure is rdbSaveRio's while the file is written (the
+# incremental sync), fsync's at its end, as rdbSave names them
+@unsafe
+def bgw.synced(q: File & Result<&1, &1, U32 & String, Unit>, last: Bool, +to: Chan(BgW), +back: Chan(BgA)) -> IO(Unit):
+  (f, r) = q
+  match r:
+    case Fail{e}:
+      bgw.fail(f, Bool.pick(String, last, "fsync", "rdbSaveRio"), e, to, back)
+    case Done{u}:
+      bgw.answer(last, f, to, back)
+
+@unsafe
+def bgw.sync(sync: Bool, last: Bool, f: File, +to: Chan(BgW), +back: Chan(BgA)) -> IO(Unit):
+  match sync:
+    case False{}:
+      bgw.answer(last, f, to, back)
+    case True{}:
+      do IO<Unit>:
+        q : File & Result<&1, &1, U32 & String, Unit> <- File.sync(f)
+        bgw.synced(q, last, to, back)
+
+@unsafe
+def bgw.wrote(p: File & Result<&1, &1, U32 & String, Unit>, sync: Bool, last: Bool, +to: Chan(BgW), +back: Chan(BgA)) -> IO(Unit):
+  (f, r) = p
+  match r:
+    case Fail{e}:
+      bgw.fail(f, "rdbSaveRio", e, to, back)
+    case Done{u}:
+      bgw.sync(sync, last, f, to, back)
+
+@unsafe
+def bgw.got(m: Maybe<&1, BgW>, f: File, +to: Chan(BgW), +back: Chan(BgA)) -> IO(Unit):
+  match m:
+    case None{}:
+      do IO<Unit>:
+        Unit <- File.close(f)
+        Chan.close(BgA, back)
+    case Some{BgPut{bytes, sync}}:
+      do IO<Unit>:
+        p : File & Result<&1, &1, U32 & String, Unit> <- File.write_raw(f, bytes)
+        bgw.wrote(p, sync, False{}, to, back)
+    case Some{BgEnd{bytes}}:
+      do IO<Unit>:
+        p : File & Result<&1, &1, U32 & String, Unit> <- File.write_raw(f, bytes)
+        bgw.wrote(p, True{}, True{}, to, back)
+
+@unsafe
+def bgw.loop(f: File, +to: Chan(BgW), +back: Chan(BgA)) -> IO(Unit):
+  do IO<Unit>:
+    m : Maybe<&1, BgW> <- Chan.recv(BgW, to)
+    bgw.got(m, f, to, back)
+
+# the writer told the save is dropped (a FLUSHALL, a SHUTDOWN): it closes
+# the file
+@unsafe
+def bgw.close(m: Maybe<&2, BgCh>) -> IO(Unit):
+  match m:
+    case Some{BgCh{to, back}}:
+      Chan.close(BgW, to)
+    case None{}:
+      IO.pure(Unit, Unit{})
+
+# the start: the snapshot the group's BGSAVE took (or the cron's), "Background
+# saving started by pid", the temporary file made empty and given to its
+# writer, the file's head kept to write
+@unsafe
+def step.bstart(x: Rx, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx):
+  match x:
+    case Rx{srv, ds, sel, rw}:
+      step.btake(S.srv.bg.taken(srv), ds, sel, rw, f)
+
+@unsafe
+def step.btake(p: Maybe<&2, List<&2, R.Db>> & S.Srv, ds: R.Ds, +sel: Nat, rw: Rw, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx):
+  (m, srv) = p
+  step.bopen(m, Rx{srv, ds, sel, rw}, f)
+
+@unsafe
+def step.bopen(m: Maybe<&2, List<&2, R.Db>>, +x: Rx, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx):
+  match m:
+    case None{}:
+      IO.pure(Maybe<&1, File> & Rx, (f, x))
+    case Some{dbs}:
+      +tmp = rdb.tmp(rx.pid(x))
+      do IO<Maybe<&1, File> & Rx>:
+        Unit <- step.say(x, 2, "Background saving started by pid " ++ U32.show(rx.pid(x)))
+        r : Result<&1, &1, U32 & String, File> <- File.open(tmp, "w")
+        step.bopened(r, tmp, dbs, x, f)
+
+@unsafe
+def step.bopened(r: Result<&1, &1, U32 & String, File>, +tmp: String, dbs: List<&2, R.Db>, +x: Rx, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx):
+  match r:
+    case Fail{e}:
+      do IO<Maybe<&1, File> & Rx>:
+        c : Result<&1, &1, U32 & String, String> <- IO.cwd()
+        Unit <- step.child(x, 3, "Failed opening the temp RDB file " ++ tmp ++ " (in server root dir " ++ env_or(c) ++ ") for saving: " ++ err.msg(e))
+        step.bfail(x, f)
+    case Done{t}:
+      do IO<Maybe<&1, File> & Rx>:
+        to : Chan(BgW) <- Chan.new(BgW, 1)
+        back : Chan(BgA) <- Chan.new(BgA, 1)
+        step.bwriter(t, to, back, dbs, x, f)
+
+@unsafe
+def step.bwriter(t: File, +to: Chan(BgW), +back: Chan(BgA), dbs: List<&2, R.Db>, +x: Rx, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx):
+  do IO<Maybe<&1, File> & Rx>:
+    Unit <- IO.spawn(Unit, bgw.loop(t, to, back))
+    k : U32 & U32 <- IO.clock()
+    h : Nat & Nat <- IO.heap()
+    return (f, rx.bbegun(h, k, dbs, BgCh{to, back}, x))
+
+# a save that failed (the child's line logged, its temporary file
+# removed): "Background saving error", the status err
+@unsafe
+def step.bfail(+x: Rx, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx):
+  do IO<Maybe<&1, File> & Rx>:
+    t : U32 & U32 <- IO.clock()
+    Unit <- step.say(x, 3, "Background saving error")
+    return (f, rx.bend(x, False{}, clock.secs(t)))
+
+# a write that failed, as rdbSave's werr: why, the file removed (its
+# writer closed it)
+@unsafe
+def step.bwerr(+x: Rx, f: Maybe<&1, File>, +tmp: String, +op: String, +msg: String) -> IO(Maybe<&1, File> & Rx):
+  do IO<Maybe<&1, File> & Rx>:
+    Unit <- step.child(x, 3, "Write error saving DB on disk(" ++ op ++ "): " ++ msg)
+    r : Result<&1, &1, U32 & String, Unit> <- File.unlink(tmp)
+    step.bfail(x, f)
+
+@unsafe
+def step.bsliced(w: Nat, +x: Rx, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx):
+  match w:
+    case 0n:
+      IO.pure(Maybe<&1, File> & Rx, (f, x))
+    case 1n:
+      step.bflush(x, f)
+    case _:
+      step.bfinish(x, f)
+
+# the writer's answer to w: n more bytes in the file, or at the end (last)
+# the file written whole, synced and closed, to rename; its channel of
+# answers closed after its last
+@unsafe
+def step.bsent(a: Maybe<&1, BgA>, +back: Chan(BgA), +n: Nat, last: Bool, +x: Rx, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx):
+  match a last:
+    case Some{BgOk{}} False{}:
+      IO.pure(Maybe<&1, File> & Rx, (f, rx.bflushed(x, n)))
+    case Some{BgOk{}} True{}:
+      do IO<Maybe<&1, File> & Rx>:
+        Unit <- Chan.close(BgA, back)
+        step.brename(x, f)
+    case Some{BgBad{+op, +msg}} _:
+      do IO<Maybe<&1, File> & Rx>:
+        Unit <- Chan.close(BgA, back)
+        step.bwerr(x, f, rdb.tmp(rx.pid(x)), op, msg)
+    case None{} _:
+      do IO<Maybe<&1, File> & Rx>:
+        Unit <- Chan.close(BgA, back)
+        step.bwerr(x, f, rdb.tmp(rx.pid(x)), "rdbSaveRio", "the writer is gone")
+
+@unsafe
+def step.bsend.to(m: Maybe<&2, BgCh>, w: BgW, +n: Nat, last: Bool, +x: Rx, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx):
+  match m:
+    case Some{BgCh{to, +back}}:
+      do IO<Maybe<&1, File> & Rx>:
+        b : Bool <- Chan.send(BgW, to, w)
+        a : Maybe<&1, BgA> <- Chan.recv(BgA, back)
+        step.bsent(a, back, n, last, x, f)
+    case None{}:
+      step.bwerr(x, f, rdb.tmp(rx.pid(x)), "rdbSaveRio", "the writer is gone")
+
+@unsafe
+def step.bsend(w: BgW, +n: Nat, last: Bool, +x: Rx, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx):
+  step.bsend.to(rx.bch(x), w, n, last, x, f)
+
+# the bytes kept appended to the temporary file, and synced after them
+# each 4 MB with rdb-save-incremental-fsync yes
+@unsafe
+def step.bflush(+x: Rx, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx):
+  +bytes = rx.bpending(x)
+  +n = String.length(bytes)
+  step.bsend(BgPut{bytes, rx.bautosync(x, n)}, n, False{}, x, f)
+
+# the end, as rdbSave ends: the bytes kept and the file's end written, the
+# file synced and closed (by its writer), renamed onto dbfilename (as it
+# was when the save started), the directory synced; "DB saved on disk"
+# (the child's) and "Background saving terminated with success"
+@unsafe
+def step.bfinish(+x: Rx, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx):
+  step.bsend(BgEnd{rx.brest(x)}, 0n, True{}, x, f)
+
+@unsafe
+def step.brename(+x: Rx, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx):
+  +tmp = rdb.tmp(rx.pid(x))
+  +name = rx.bname(x)
+  do IO<Maybe<&1, File> & Rx>:
+    q2 : Result<&1, &1, U32 & String, Unit> <- File.rename(tmp, name)
+    step.bfin.renamed(q2, tmp, name, x, f)
+
+@unsafe
+def step.bfin.renamed(r: Result<&1, &1, U32 & String, Unit>, +tmp: String, +name: String, +x: Rx, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx):
+  match r:
+    case Fail{e}:
+      do IO<Maybe<&1, File> & Rx>:
+        c : Result<&1, &1, U32 & String, String> <- IO.cwd()
+        Unit <- step.child(x, 3, "Error moving temp DB file " ++ tmp ++ " on the final destination " ++ name ++ " (in server root dir " ++ env_or(c) ++ "): " ++ err.msg(e))
+        u : Result<&1, &1, U32 & String, Unit> <- File.unlink(tmp)
+        step.bfail(x, f)
+    case Done{u}:
+      do IO<Maybe<&1, File> & Rx>:
+        d : Result<&1, &1, U32 & String, Unit> <- File.sync_dir(name)
+        step.bfin.dir(d, tmp, x, f)
+
+@unsafe
+def step.bfin.dir(d: Result<&1, &1, U32 & String, Unit>, +tmp: String, +x: Rx, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx):
+  match d:
+    case Fail{e}:
+      step.bwerr(x, f, tmp, "fsyncFileDir", err.msg(e))
+    case Done{u}:
+      do IO<Maybe<&1, File> & Rx>:
+        t : U32 & U32 <- IO.clock()
+        Unit <- step.child(x, 2, "DB saved on disk")
+        Unit <- step.say(x, 2, "Background saving terminated with success")
+        return (f, rx.bend(x, True{}, clock.secs(t)))
+
+# the save dropped (a FLUSHALL of the group: killRDBChild), its writer
+# told and its temporary file removed, as the cron finds Redis's child
+# killed
+@unsafe
+def step.bkill(+x: Rx, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx):
+  +tmp = rdb.tmp(rx.pid(x))
+  do IO<Maybe<&1, File> & Rx>:
+    Unit <- bgw.close(rx.bch(x))
+    r : Result<&1, &1, U32 & String, Unit> <- File.unlink(tmp)
+    t : U32 & U32 <- IO.clock()
+    Unit <- step.say(x, 3, "Background saving terminated by signal 10")
+    return (f, rx.bdrop(x, clock.secs(t)))
 
 # Serving
 # -------
@@ -12521,7 +15148,9 @@ def run(+items: List<&2, C.CItem>, +post: Bool, +aof: Maybe<&2, String>, +sync: 
 # bendkv PORT [post|send [FILE [always|everysec|no]]]: the port, whether
 # replies are posted (post or send; by default, posted when the process
 # may use two cores or more), the append-only file (any path) and how it
-# is synced (everysec by default). It listens on 127.0.0.1.
+# is synced (everysec by default). It listens on 127.0.0.1, and has no
+# save points (save ""): it loads no RDB file, so it saves none unless
+# asked (SAVE, BGSAVE, SHUTDOWN SAVE, or a CONFIG SET of save).
 
 def port_or(+p: String) -> U32:
   Maybe.default(&2, U32, U32.read(p), 6380)
@@ -12548,8 +15177,8 @@ def short.of(rest: List<&2, String>) -> Short:
     case Nil{}:
       Short{None{}, None{}, EverySec{}}
 
-# the parameters the short form starts with: its port, its directory, and
-# its append-only file and how it is synced
+# the parameters the short form starts with: its port, its directory, no
+# save points, and its append-only file and how it is synced
 def aof_sets(aof: Maybe<&2, String>, +sync: Sync) -> List<&2, String>:
   match aof:
     case None{}:
@@ -12558,7 +15187,7 @@ def aof_sets(aof: Maybe<&2, String>, +sync: Sync) -> List<&2, String>:
       List.append(&2, String, ["appendonly", "yes", "appendfsync", sync_note(sync)], Bool.pick(List<&2, String>, C.text.path(path), Nil{}, ["appendfilename", path]))
 
 def start_sets(+port: U32, dir: String, aof: Maybe<&2, String>, +sync: Sync) -> List<&2, String>:
-  List.append(&2, String, ["port", U32.show(port), "dir", dir], aof_sets(aof, sync))
+  List.append(&2, String, ["port", U32.show(port), "dir", dir, "save", ""], aof_sets(aof, sync))
 
 def env_or(r: Result<&1, &1, U32 & String, String>) -> String:
   match r:

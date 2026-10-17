@@ -9,10 +9,14 @@ bcastkeys each tracks in BCAST mode the prefix of redis-benchmark's keys
 ("key:"), and reads the invalidations of every key written; in mode
 events the first sets notify-keyspace-events to KEA and each subscribes
 to a channel of its own, which no event names, so that every batch runs
-a command at a time (the general way) and a write's events go to no one.
-Prints READY once all are in place.
+a command at a time (the general way) and a write's events go to no one;
+in mode acl each is logged in as a user that may only GET keys of its own
+(a restricted client: FINDINGS.md 3zzzh), and in mode acluser as the user
+bench (password pw), restricted as it may not run DEBUG, which the first
+makes, for redis-benchmark --user bench -a pw. Prints READY once all are
+in place.
 
-    python3 tools/idle_clients.py PORT blpop|watch|track|bcast|bcastkeys|events N
+    python3 tools/idle_clients.py PORT blpop|watch|track|bcast|bcastkeys|events|acl|acluser N
 """
 import select
 import socket
@@ -38,6 +42,20 @@ def main():
         elif mode == "watch":
             s.sendall(resp("WATCH", "idle:w:%d" % i))
             s.settimeout(5)
+            s.recv(64)
+        elif mode in ("acl", "acluser"):
+            # a client logged in as a restricted user: one that may only GET
+            # its own keys (acl), or one that may run all but DEBUG on every
+            # key (acluser: the user redis-benchmark --user bench -a pw logs
+            # in as)
+            s.settimeout(5)
+            if i == 0:
+                if mode == "acl":
+                    s.sendall(resp("ACL", "SETUSER", "idle", "on", "nopass", "~idle:*", "+get"))
+                else:
+                    s.sendall(resp("ACL", "SETUSER", "bench", "on", ">pw", "~*", "&*", "+@all", "-debug"))
+                s.recv(64)
+            s.sendall(resp("AUTH", "idle", "x") if mode == "acl" else resp("AUTH", "bench", "pw"))
             s.recv(64)
         elif mode == "events":
             s.settimeout(5)

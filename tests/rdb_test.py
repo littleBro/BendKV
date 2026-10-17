@@ -12,11 +12,12 @@ the same commands.
   every kind and encoding in several databases (strings of each length
   and integer encoding, lists of one node and of many, sets in an intset
   and in a table, hashes and sorted sets in a listpack and in a table or
-  a skiplist, values at their encodings' limits, HyperLogLogs, GEO, keys
-  with times, a key whose time passed before the save, databases left
-  empty between full ones); BendKV and Redis each start from it, and
-  every key of every database reads back the same from both (its type,
-  encoding, value and the time it expires at), with DBSIZE and INFO's
+  a skiplist, values at their encodings' limits, HyperLogLogs, GEO,
+  streams with entries deleted and groups, keys with times, a key whose
+  time passed before the save, databases left empty between full ones);
+  BendKV and Redis each start from it, and every key of every database
+  reads back the same from both (its type, encoding, value, a stream's
+  as its DUMP, and the time it expires at), with DBSIZE and INFO's
   rdb_last_load_keys_loaded and _expired, and the log's lines.
 - A file written here, as Redis 6 and before wrote them (version 9, the
   encodings Redis no longer writes: ziplists, zipmaps, quicklists of
@@ -24,13 +25,15 @@ the same commands.
   EXPIRETIME in seconds, IDLE and FREQ), with keys whose time has passed
   (dropped and counted), empty keys (skipped), AUX fields of every kind,
   and a checksum of 0: both start from it alike, logging the same lines.
-- The other way: BendKV runs the same commands, SAVEs, and Redis starts
-  from its file (redis-check-rdb finds it whole), and so does BendKV.
+- The other way: BendKV runs the same commands (and RESTOREs the streams
+  Redis made, BendKV having no stream command yet), SAVEs, and Redis
+  starts from its file (redis-check-rdb finds it whole), and so does
+  BendKV.
 - Both ways again with a database of 10,000 keys (more than a slice of
   BendKV's writer, 4,096) and a file past 16 MB (more than one read of
   BendKV's start), and collections of 10,000 members.
-- SAVE, LASTSAVE and INFO's persistence fields (but
-  rdb_changes_since_last_save, which BendKV does not keep yet), SAVE
+- SAVE, LASTSAVE and INFO's persistence fields (rdb_changes_since_last_save
+  among them: tests/bgsave_test.py counts each write's), SAVE
   refused in MULTI and with arguments, COMMAND INFO and DOCS, a SAVE that
   fails (a directory where its temporary file goes), its statistics and
   CONFIG RESETSTAT; a SAVE in a pipeline saves what came before it and
@@ -44,14 +47,16 @@ the same commands.
   append-only file both files are written, and the start reads the
   append-only file and leaves the RDB file aside; a SAVE with the
   append-only file, what comes after it in its pipeline and in another
-  client's requests reaching the append-only file.
+  client's requests reaching the append-only file; another client's
+  FLUSHALL in the group of a SHUTDOWN that saves, which never runs (the
+  files keep the key) unless the save fails.
 - Files that do not load: cut short, a wrong checksum, version 11, 0 and
   -1, a wrong signature, a database past the server's, a type that is
   none, an empty file, a directory, a module's data and a module's value:
   both servers refuse to start, with the same reason in their logs. A
-  stream and a library of functions, which Redis loads: BendKV refuses
-  them, saying why. A checksum of 0, and a wrong one with rdbchecksum no,
-  load on both.
+  library of functions, which Redis loads: BendKV refuses it, saying
+  why. A file of a stream loads on both. A checksum of 0, and a wrong
+  one with rdbchecksum no, load on both.
 - BendKV alone: the short form loads no RDB file.
 
     python3 tests/rdb_test.py --bendkv build/bendkv [--redis redis-server] [--dir build/rdb]
@@ -240,6 +245,11 @@ def dump_all(c, dbs=16):
             elif t == b"zset":
                 xs = flat(run(c, "ZRANGE", k, 0, -1, "WITHSCORES"))
                 v = list(zip(xs[0::2], xs[1::2]))
+            elif t == b"stream":
+                comp = flat(run(c, "CONFIG", "GET", "rdbcompression"))[1]
+                run(c, "CONFIG", "SET", "rdbcompression", "no")
+                v = run(c, "DUMP", k)
+                run(c, "CONFIG", "SET", "rdbcompression", comp)
             else:
                 v = None
             out.append((db, k, t, enc, exp, v))
@@ -290,6 +300,44 @@ def fill_cmds(seed):
             (0, cmd("PFADD", "hll2", *["e%d" % i for i in range(5000)])),
             (1, cmd("GEOADD", "geo", "13.361389", "38.115556", "Palermo", "15.087269", "37.502669", "Catania")),
             (7, cmd("SET", "", "empty key")), (7, cmd("SET", b"\x00\xff\r\n", b"\x00\xff"))]
+    return out
+
+
+def stream_cmds():
+    """the commands that make streams on Redis (BendKV has none of them
+    yet): entries of the master's fields and of their own, deleted and
+    trimmed, nodes of every size, groups with pending entries and
+    consumers, a stream with no entry, and one with a time"""
+    far = int(time.time() * 1000) + 10 ** 9
+    out = [(0, cmd("XADD", "st:a", "1-%d" % i, "f", str(i), "g", "v" * (i % 50))) for i in range(1, 400)]
+    out += [(0, cmd("XADD", "st:a", "2-%d" % i, "h", str(i))) for i in range(1, 50)]
+    out += [(0, cmd("XDEL", "st:a", "1-1", "1-7", "2-49", *["1-%d" % i for i in range(200, 300)])),
+            (0, cmd("XTRIM", "st:a", "MAXLEN", "=", 300)),
+            (0, cmd("XGROUP", "CREATE", "st:a", "g1", "0")), (0, cmd("XGROUP", "CREATE", "st:a", "7", "$")),
+            (0, cmd("XREADGROUP", "GROUP", "g1", "alice", "COUNT", 20, "STREAMS", "st:a", ">")),
+            (0, cmd("XREADGROUP", "GROUP", "g1", "bob", "COUNT", 5, "STREAMS", "st:a", ">")),
+            (0, cmd("XACK", "st:a", "g1", "1-110", "1-111")), (0, cmd("XGROUP", "CREATECONSUMER", "st:a", "7", "carol")),
+            (2, cmd("XGROUP", "CREATE", "st:empty", "g", "$", "MKSTREAM")),
+            (2, cmd("XADD", "st:ttl", "%d-%d" % (2 ** 64 - 1, 2 ** 64 - 2), "f", "v")),
+            (2, cmd("PEXPIREAT", "st:ttl", far))]
+    return out
+
+
+def stream_payloads(a, root):
+    """the streams of stream_cmds, as Redis DUMPs them with rdbcompression
+    no, and the times they expire at"""
+    r = Srv(a.redis, os.path.join(root, "streams"), "--save", "", "--rdbcompression", "no")
+    c = r.conn()
+    out = []
+    for db, x in stream_cmds():
+        run(c, "SELECT", db)
+        run(c, *x)
+    for db in (0, 2):
+        run(c, "SELECT", db)
+        for k in sorted(flat(run(c, "KEYS", "*"))):
+            out.append((db, k, run(c, "DUMP", k)[1], int(run(c, "PEXPIRETIME", k)[1])))
+    shut(c, "SHUTDOWN", "NOSAVE")
+    r.exit()
     return out
 
 
@@ -459,6 +507,10 @@ def redis_writes(a, root):
         r = Srv(a.redis, os.path.join(d, "redis"), "--save", "", "--rdbcompression", comp)
         c = r.conn()
         fill(c, 1)
+        for db, x in stream_cmds():
+            run(c, "SELECT", db)
+            run(c, *x)
+        run(c, "SELECT", 0)
         # a key whose time passes before the save, which the server may
         # still hold (its sweep has not run) and then writes with its time;
         # deleted after the save (DEL: BendKV's reads do not delete it)
@@ -579,9 +631,14 @@ def bendkv_writes(a, root):
     """BendKV runs the commands and SAVEs; Redis starts from its file, and
     BendKV too"""
     d = os.path.join(root, "bw")
+    sts = stream_payloads(a, d)
     b = Srv(a.bin, os.path.join(d, "bendkv"), "--save", "")
     c = b.conn()
     fill(c, 2)
+    for db, k, p, at in sts:
+        run(c, "SELECT", db)
+        same("RESTORE of Redis's stream %s" % k, run(c, "RESTORE", k, at if at > 0 else 0, p, *(["ABSTTL"] if at > 0 else [])), (b"+", b"OK"))
+    run(c, "SELECT", 0)
     run(c, "SET", "soon", "x", "PX", "1")
     time.sleep(0.05)
     same("SAVE (BendKV)", run(c, "SAVE"), (b"+", b"OK"))
@@ -655,6 +712,90 @@ def big(a, root):
             r.kill()
 
 
+def windows(a, root):
+    """a file read in windows of 1 MiB: values longer than a window, and
+    cuts and a wrong checksum past the first window, alike on both; and
+    BendKV's resident memory after a start from a file of 300,000 keys,
+    at most 1.3 times that of the same keys written by commands"""
+    d = os.path.join(root, "windows")
+    rnd = random.Random(11)
+    w = Srv(a.redis, os.path.join(d, "src"), "--save", "")
+    c = w.conn()
+    run(c, "SET", "a:first", "a key before the long values")
+    run(c, "SET", "s:long", rnd.randbytes(3 << 20))
+    for i in range(0, 60000, 1000):
+        run(c, "RPUSH", "l:long", *[rnd.randbytes(40) for _ in range(1000)])
+    for i in range(0, 120000, 2000):
+        run(c, "SADD", "set:long", *["member:%d" % j for j in range(i, i + 2000)])
+    for i in range(0, 30000, 1000):
+        run(c, "HSET", "h:long", *[x for j in range(i, i + 1000) for x in ("f%d" % j, rnd.randbytes(30))])
+    for i in range(0, 20000, 1000):
+        c.send([cmd("SET", "k:%d" % j, rnd.randbytes(rnd.randrange(1, 200))) for j in range(i, i + 1000)])
+        for _ in range(1000):
+            c.reply()
+    same("SAVE (the long values)", run(c, "SAVE"), (b"+", b"OK"))
+    live = unenc(dump_all(c, 1))
+    shut(c, "SHUTDOWN", "NOSAVE")
+    w.exit()
+    good = read(os.path.join(d, "src", "dump.rdb"))
+    check("the file of the long values runs past six windows", len(good) > 6 << 20, len(good))
+    got = []
+    for who, exe in (("bendkv", a.bin), ("redis", a.redis)):
+        dd = os.path.join(d, "whole", who)
+        os.makedirs(dd)
+        with open(os.path.join(dd, "dump.rdb"), "wb") as f:
+            f.write(good)
+        s = Srv(exe, dd, "--save", "")
+        got.append(s.code is None and dump_all(s.conn(), 1))
+        s.kill()
+    if got[0] is False or got[1] is False:
+        fail("both start from the file of the long values", got[0] is not False, got[1] is not False)
+    else:
+        same_dbs("BendKV and Redis from the file of the long values", got[0], got[1])
+        same_dbs("BendKV from it holds what was saved", unenc(got[0]), live)
+    at = good.index(b"s:long") + 1000000
+    short = ["Short read or OOM loading DB. Unrecoverable error, aborting now."]
+    for name, data, lines in (
+            ("cut a byte past the first window, in a long value", good[:(1 << 20) + 1], short),
+            ("cut half way", good[:len(good) // 2], short),
+            ("cut in its checksum", good[:-4], short),
+            ("a byte of a long value changed", good[:at] + bytes([good[at] ^ 0x5a]) + good[at + 1:],
+             ["Wrong RDB checksum expected: (", ") but got (", "). Aborting now."])):
+        res = []
+        for who, exe in (("bendkv", a.bin), ("redis", a.redis)):
+            dd = os.path.join(d, name.replace(" ", "-").replace(",", ""), who)
+            os.makedirs(dd)
+            with open(os.path.join(dd, "dump.rdb"), "wb") as f:
+                f.write(data)
+            s = Srv(exe, dd, "--save", "")
+            code = s.code if s.code is not None else "running"
+            log = s.log()
+            s.kill()
+            res.append((code, [l for l in lines if l in log], re.findall(r"Wrong RDB checksum expected: \(\w+\) but got \(\w+\)", log)))
+        same("a file %s: exit and log" % name, res[0], res[1])
+        check("a file %s: exit 1" % name, res[1][0] == 1, res[1])
+    # resident memory: the same keys written by commands, then loaded
+    dm = os.path.join(d, "memory")
+    m = Srv(a.bin, dm, "--save", "")
+    c = m.conn()
+    for i in range(0, 300000, 1000):
+        c.send([cmd("SET", "key:%d" % j, b"%0100d" % j) for j in range(i, i + 1000)])
+        for _ in range(1000):
+            c.reply()
+    written = int(info(c, "memory", "used_memory_rss"))
+    same("SAVE (300,000 keys)", run(c, "SAVE"), (b"+", b"OK"))
+    shut(c, "SHUTDOWN", "NOSAVE")
+    m.exit()
+    m = Srv(a.bin, dm, "--save", "")
+    c = m.conn()
+    started = int(info(c, "memory", "used_memory_rss"))
+    keys = run(c, "DBSIZE")
+    m.kill()
+    same("the 300,000 keys loaded", keys, (b":", b"300000"))
+    check("BendKV's resident memory after the start from the file: %.1f MB, against %.1f MB written" % (started / 2 ** 20, written / 2 ** 20),
+          started <= written * 1.3, (started, written))
+
+
 def temps(d):
     return sorted(f for f in os.listdir(d) if f.startswith("temp-"))
 
@@ -664,7 +805,7 @@ def scenario(c, log, d, pid):
     def fields():
         return [info(c, "persistence", x) for x in ("rdb_saves", "rdb_last_bgsave_status", "rdb_bgsave_in_progress",
                                                     "rdb_last_bgsave_time_sec", "rdb_current_bgsave_time_sec",
-                                                    "rdb_last_cow_size")]
+                                                    "rdb_last_cow_size", "rdb_changes_since_last_save")]
     dump = os.path.join(d, "dump.rdb")
     t0 = int(run(c, "LASTSAVE")[1])
     log("1 lastsave", t0 == int(info(c, "persistence", "rdb_last_save_time")), abs(t0 - time.time()) < 60, fields())
@@ -860,6 +1001,41 @@ def shutdowns_on(exe, root, log):
     s = fresh("aofsave", "--save", "", "--appendonly", "yes")
     after = run(s.conn(), "MGET", "a", "b", "c", "s")
     log("5 save restart", after == before, after[1][:3], talk(s.port, [["SHUTDOWN", "NOSAVE"]]), s.exit())
+    # a SHUTDOWN that saves and another client's FLUSHALL in one group (a
+    # pause holds both back): Redis saves and exits within SHUTDOWN, so the
+    # FLUSHALL never runs, and both files keep the key; with save points,
+    # with the append-only file too, and with SHUTDOWN SAVE
+    for name, args, down in (("hold", ("--save", "3600 1"), ["SHUTDOWN"]),
+                             ("hold-aof", ("--save", "3600 1", "--appendonly", "yes"), ["SHUTDOWN"]),
+                             ("hold-save", ("--save", ""), ["SHUTDOWN", "SAVE"])):
+        s = fresh(name, *args)
+        run(s.conn(), "SET", "k", "v")
+        ca, cb = s.conn(), s.conn()
+        hold = pause(s)
+        ca.send([cmd(*down)])
+        time.sleep(0.05)
+        cb.send([cmd("FLUSHALL")])
+        try:
+            rb = cb.reply()
+        except (EOFError, ConnectionResetError):
+            rb = "closed"
+        log("7 %s" % name, rb, s.exit())
+        s = fresh(name, *args)
+        log("7 %s restart" % name, talk(s.port, [["DBSIZE"]]), talk(s.port, [["SHUTDOWN", "NOSAVE"]]), s.exit())
+    # the same with a save that fails: SHUTDOWN answers its error, then the
+    # FLUSHALL runs and is answered
+    s = fresh("hold-fails", "--save", "3600 1")
+    os.mkdir(os.path.join(root, "hold-fails", "temp-%s.rdb" % s.pid()))
+    run(s.conn(), "SET", "k", "v")
+    ca, cb = s.conn(), s.conn()
+    hold = pause(s)
+    ca.send([cmd("SHUTDOWN")])
+    time.sleep(0.05)
+    cb.send([cmd("FLUSHALL")])
+    log("7 hold-fails", ca.reply(), cb.reply(), talk(s.port, [["DBSIZE"]]), s.p.poll())
+    for c in (hold, ca, cb):
+        c.sock.close()
+    log("7 hold-fails stop", talk(s.port, [["SHUTDOWN", "NOSAVE"]]), s.exit())
 
 
 def shutdowns(a, root):
@@ -935,7 +1111,8 @@ def races(a, root):
 
 
 def corrupt(a, root):
-    """files that do not load, and two that load on Redis alone"""
+    """files that do not load, one that loads on Redis alone, and one of a
+    stream, which loads on both"""
     d = os.path.join(root, "bad", "src")
     r = Srv(a.redis, d, "--save", "")
     c = r.conn()
@@ -1026,9 +1203,19 @@ def corrupt(a, root):
             got.append((s.code, s.has(line)))
             s.kill()
         same("%s: both stop, saying why" % name, got, [(codes[0], True), (codes[1], True)])
-    # a stream and a library: Redis loads them, BendKV says why it cannot
-    for name, data, line in (("a stream", stream, "BendKV has no streams: the RDB file holds a stream (key 'st'), which it cannot load"),
-                             ("a library of functions", func, "BendKV runs no functions: the RDB file holds a library of functions, which it cannot load")):
+    # a stream: both load it, and hold the same
+    xs = []
+    for who, exe in (("bendkv", a.bin), ("redis", a.redis)):
+        dd = os.path.join(root, "bad", "a-stream", who)
+        os.makedirs(dd)
+        with open(os.path.join(dd, "dump.rdb"), "wb") as f:
+            f.write(stream)
+        s = Srv(exe, dd, "--save", "", "--rdbcompression", "no")
+        xs.append((s.code, None if s.code is not None else run(s.conn(), "DUMP", "st")))
+        s.kill()
+    same("a file of a stream: both load it, and DUMP the same", xs[0], xs[1])
+    # a library: Redis loads it, BendKV says why it cannot
+    for name, data, line in (("a library of functions", func, "BendKV runs no functions: the RDB file holds a library of functions, which it cannot load"),):
         codes = []
         for who, exe in (("bendkv", a.bin), ("redis", a.redis)):
             dd = os.path.join(root, "bad", name.replace(" ", "-"), who)
@@ -1073,7 +1260,7 @@ def main():
     shutil.rmtree(root, ignore_errors=True)
     os.makedirs(root)
     try:
-        for part in (redis_writes, lzf_values, written_here, bendkv_writes, big, scenarios, unchecked, shutdowns, races, corrupt, short_form):
+        for part in (redis_writes, lzf_values, written_here, bendkv_writes, big, windows, scenarios, unchecked, shutdowns, races, corrupt, short_form):
             b0 = bad
             part(a, root)
             print("%s %s" % ("OK:  " if bad == b0 else "FAIL:", " ".join(part.__doc__.split())))

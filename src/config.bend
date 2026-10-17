@@ -261,7 +261,7 @@ def config.table() -> List<&2, CItem>:
     CItem{CParam{"tls-ciphers", "", False{}, False{}, False{}, False{}, CStr{True{}, VNone{}}, AppNone{}}, ""},
     CItem{CParam{"tls-ciphersuites", "", False{}, False{}, False{}, False{}, CStr{True{}, VNone{}}, AppNone{}}, ""},
     CItem{CParam{"dir", "", False{}, False{}, True{}, False{}, CSpec{XDir{}}, AppNone{}}, ""},
-    CItem{CParam{"save", "", False{}, False{}, False{}, True{}, CSpec{XSave{}}, AppNone{}}, ""},
+    CItem{CParam{"save", "", False{}, False{}, False{}, True{}, CSpec{XSave{}}, AppNone{}}, "3600 1 300 100 60 10000"},
     CItem{CParam{"client-output-buffer-limit", "", False{}, False{}, False{}, True{}, CSpec{XObuf{}}, AppNone{}}, "normal 0 0 0 slave 268435456 67108864 60 pubsub 33554432 8388608 60"},
     CItem{CParam{"oom-score-adj-values", "", False{}, False{}, False{}, True{}, CSpec{XOom{}}, AppNone{}}, "0 200 800"},
     CItem{CParam{"notify-keyspace-events", "", False{}, False{}, False{}, False{}, CSpec{XNotify{}}, AppNone{}}, ""},

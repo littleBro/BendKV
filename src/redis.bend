@@ -9,6 +9,8 @@ import ./float.bend as F
 import ./hll.bend as H
 import ./geo.bend as G
 import ./rdb.bend as D
+import ./sha.bend as Sha
+import ./stream.bend as X
 
 # Types
 # -----
@@ -58,10 +60,12 @@ type By is Data:
 # -inf), a map (RMap: its keys and values in turn), a set (RSet), pairs
 # (RPairs, each an RPair of two: ZRANGE's members and their scores, an
 # array of pairs in RESP3 and their items flat in RESP2), a verbatim text
-# (RVerb: INFO's), a push (RPush: Pub/Sub's), and a switch of the
-# protocol (RSw: its reply, the one in xs, and those after it in RESP3,
-# r3, or RESP2: HELLO's, RESET's). RESP2 writes RDbl and RVerb as RBulk,
-# and RMap, RSet, RPairs and RPush as RArray, so that its bytes are what
+# (RVerb: INFO's), a push (RPush: Pub/Sub's), a switch of the protocol
+# (RSw: its reply, the one in xs, and those after it in RESP3, r3, or
+# RESP2: HELLO's, RESET's), and a map of keys (RKMap, each an RKPair of
+# a key and its reply: XREAD's streams, an array of arrays of two in
+# RESP2 and a map in RESP3). RESP2 writes RDbl and RVerb as RBulk, and
+# RMap, RSet, RPairs and RPush as RArray, so that its bytes are what
 # they were. (A pair and a switch hold lists, which the encoder walks as
 # it walks an array's items.)
 type Reply is Data:
@@ -81,6 +85,8 @@ type Reply is Data:
   RVerb{s: String}
   RPush{xs: List<&2, Reply>}
   RSw{r3: Bool, xs: List<&2, Reply>}
+  RKMap{xs: List<&2, Reply>}
+  RKPair{xs: List<&2, Reply>}
 
 # a key and a value, for MSET
 type KVPair is Data:
@@ -290,6 +296,59 @@ type ZWrite is Data:
   ZWPop{max: Bool}
   ZWPopN{max: Bool, c: String}
 
+# A range of a stream's entries (XRANGE): its bounds, as XRANGE reads
+# them, and its count (0 for COUNT 0, which answers a null; past any
+# stream's when there is none); or such a range from its last entry back
+# (XREVRANGE). A read from the last entry holds the read it reverses, so
+# the compiler makes a range a node of its own, as ZQ is.
+type XQ is Data:
+  XQ{lo: KV.XId, hi: KV.XId, c: Nat}
+  XQRev{q: XQ}
+
+# XREAD of one key without BLOCK: the key, its ID as it came (read once
+# the key is found, as Redis reads it) and its count (past any stream's
+# for none). XRqOf is never built: it makes XRq a node of its own.
+type XRq is Data:
+  XRq{key: String, id: String, c: Nat}
+  XRqOf{x: XRq}
+
+# XREAD of several keys, or with BLOCK (SXRead, below): its count,
+# whether BLOCK came, and its keys, then their IDs, as they came. XRmOf
+# is never built.
+type XRm is Data:
+  XRm{c: Nat, block: Bool, ws: List<&2, String>}
+  XRmOf{x: XRm}
+
+# XINFO of a key: STREAM with its options as they came (read once the
+# key is found; sub: the subcommand's name as it came, for the error of
+# options that are wrong), GROUPS, or CONSUMERS of a group (the key, for
+# the error of a group not there). XIOf is never built.
+type XInf is Data:
+  XIStream{sub: String, args: List<&2, String>}
+  XIGroups{}
+  XICons{key: String, g: String}
+  XIOf{x: XInf}
+
+# XPENDING of a group: its summary, or its entries: IDLE's time, the
+# range's bounds, the count (past any group's for one past it) and the
+# consumer, or none; each with the key, for the error of a group not
+# there. XPqOf is never built.
+type XPq is Data:
+  XPSum{key: String, g: String}
+  XPExt{key: String, g: String, idle: X.XIdle, lo: KV.XId, hi: KV.XId, c: Nat, con: Maybe<&2, String>}
+  XPqOf{x: XPq}
+
+# A read of a stream (PStream, below): its count of entries (XLEN), a
+# range of its entries (XRANGE, XREVRANGE), the entries after an ID
+# (XREAD of one key), what XINFO tells of it, or a group's pending
+# entries (XPENDING)
+type XRead is Data:
+  XRLen{}
+  XRRange{q: XQ}
+  XRRead{q: XRq}
+  XRInfo{i: XInf}
+  XRPend{q: XPq}
+
 # A read of one key whose reply depends on what the key holds at now
 # alone (its value and the time it expires at, when it is there): its
 # type (TYPE), its length (STRLEN), its time to live in s or ms (TTL,
@@ -297,10 +356,10 @@ type ZWrite is Data:
 # its bytes (GETRANGE, SUBSTR), a bit (GETBIT), the bits set in a range
 # (BITCOUNT), the first bit of a value in one (BITPOS), fields of its
 # bits (BITFIELD_RO, and BITFIELD whose operations are GETs alone), a
-# read of a hash (PHash), of a list (PList), of a set (PMems) or of a
-# sorted set (PZset), and DUMP's payload of its value (PDump). The
-# laws see them as one command, Peek (LAWS.bend: disturbs), so one more
-# needs no more proof. A command travels in registers as wide as its
+# read of a hash (PHash), of a list (PList), of a set (PMems), of a
+# sorted set (PZset) or of a stream (PStream), and DUMP's payload of its
+# value (PDump). The laws see them as one command, Peek (LAWS.bend:
+# disturbs), so one more needs no more proof. A command travels in registers as wide as its
 # widest form, so each has one field of a word at most: GETRANGE,
 # BITCOUNT and BITPOS keep their arguments as they came (Ranges and bits,
 # below), BITFIELD its operations as a list.
@@ -321,6 +380,7 @@ type PeekOp is Data:
   PMems{op: SRead}
   PZset{op: ZRead}
   PDump{}
+  PStream{op: XRead}
 
 # A time a command names, in ms (a time in s, times 1000; Times, below):
 # a short one (TmN, below 10^14) or any other long long (TmB: its sign and
@@ -550,7 +610,14 @@ type SortO is Data:
 # with IDLETIME or FREQ is SRestore, its key and its update (URestore):
 # the session runs the update on its database, and the server, which
 # keeps when each key was last used, sets the key's word as the option
-# says once the update restored the key (server.bend, Access).
+# says once the update restored the key (server.bend, Access). ACL's
+# subcommands are SAcl, their number and arguments (ACL, below): the
+# session keeps the users and the log (session.bend, ACL), and the server
+# answers WHOAMI from its clients (server.bend, ACL). AUTH (SAuth) and
+# HELLO (SHello) keep their arguments with each password put as its
+# SHA-256 (auth.hashed, hello.hashed), which is all the session reads of
+# one. XREAD of several keys, or with BLOCK (SXRead), reads them
+# (Streams, below).
 
 type SessOp is Data:
   SHello{args: List<&2, String>}
@@ -601,6 +668,8 @@ type SessOp is Data:
   SAdmin{kind: Nat, args: List<&2, String>}
   SGeoStore{kind: Nat, args: List<&2, String>}
   SRestore{key: String, op: UpdOp}
+  SAcl{kind: Nat, args: List<&2, String>}
+  SXRead{q: XRm}
 
 # BITOP's operation
 type BitK is Data:
@@ -846,6 +915,8 @@ def coll.type(+c: KV.Coll) -> String:
       "set"
     case KV.CZset{z}:
       "zset"
+    case KV.CStream{x}:
+      "stream"
 
 def val.type(+v: KV.Val) -> String:
   match v:
@@ -1035,6 +1106,9 @@ def client_help() -> List<&2, String>:
    "    Assign the name <name> to the current connection.",
    "UNBLOCK <clientid> [TIMEOUT|ERROR]",
    "    Unblock the specified blocked client.",
+   "TRACKING (ON|OFF) [REDIRECT <id>] [BCAST] [PREFIX <prefix> [...]]",
+   "         [OPTIN] [OPTOUT] [NOLOOP]",
+   "    Control server assisted client side caching.",
    "TRACKINGINFO",
    "    Report tracking status for the current connection.",
    "NO-EVICT (ON|OFF)",
@@ -1180,12 +1254,16 @@ type TOpt is Data:
 # its options are read), with its options; CACHING yes (1), no (0) or
 # neither (2); GETREDIR; TRACKINGINFO. Errors in the arguments are found
 # here, in Redis's order (clientCommand), but those that depend on other
-# clients.
+# clients, and on the users the server keeps: KILL's USER options before
+# the first error, or all of them, are CoKillUsers, whose first user the
+# server does not keep answers its error, as Redis answers it when it
+# reads that option, else the error after them (err), or the kill.
 type ClOp is Data:
   CoList{ty: Nat, ids: Maybe<&2, List<&2, Nat>>}
   CoInfo{}
   CoKill{f: Kill}
   CoKillAddr{addr: String}
+  CoKillUsers{users: List<&2, String>, f: Kill, err: Maybe<&2, Reply>}
   CoNoEvict{on: Bool}
   CoPause{hi: Nat, lo: Nat, all: Bool}
   CoUnpause{}
@@ -1196,11 +1274,11 @@ type ClOp is Data:
   CoBad{r: Reply}
 
 # CLIENT KILL's filter: the client's address and its own (none: any), its
-# id (none: any; Some{0} names no client), its type (0: any) and whether
-# the client that kills is spared (SKIPME, yes unless told no). USER
-# default names every client: BendKV has no other user.
+# id (none: any; Some{0} names no client), its type (0: any), whether
+# the client that kills is spared (SKIPME, yes unless told no) and its
+# user (none: any).
 type Kill is Data:
-  Kill{addr: Maybe<&2, String>, laddr: Maybe<&2, String>, id: Maybe<&2, Nat>, ty: Nat, skip: Bool}
+  Kill{addr: Maybe<&2, String>, laddr: Maybe<&2, String>, id: Maybe<&2, Nat>, ty: Nat, skip: Bool, user: Maybe<&2, String>}
 
 # a client id as Redis reads one, a long long (string2ll): one that can
 # be a client's (14 digits at most, as int_read reads them; ids start at
@@ -1355,28 +1433,33 @@ def kill.word(+o: String) -> Nat:
 
 def kill.id(m: Maybe<&2, Nat>, f: Kill) -> Kill:
   match f:
-    case Kill{a, l, i, t, s}:
-      Kill{a, l, m, t, s}
+    case Kill{a, l, i, t, s, u}:
+      Kill{a, l, m, t, s, u}
 
 def kill.ty(+n: Nat, f: Kill) -> Kill:
   match f:
-    case Kill{a, l, i, t, s}:
-      Kill{a, l, i, n, s}
+    case Kill{a, l, i, t, s, u}:
+      Kill{a, l, i, n, s, u}
 
 def kill.addr(v: String, f: Kill) -> Kill:
   match f:
-    case Kill{a, l, i, t, s}:
-      Kill{Some{v}, l, i, t, s}
+    case Kill{a, l, i, t, s, u}:
+      Kill{Some{v}, l, i, t, s, u}
 
 def kill.laddr(v: String, f: Kill) -> Kill:
   match f:
-    case Kill{a, l, i, t, s}:
-      Kill{a, Some{v}, i, t, s}
+    case Kill{a, l, i, t, s, u}:
+      Kill{a, Some{v}, i, t, s, u}
 
 def kill.skip(b: Bool, f: Kill) -> Kill:
   match f:
-    case Kill{a, l, i, t, s}:
-      Kill{a, l, i, t, b}
+    case Kill{a, l, i, t, s, u}:
+      Kill{a, l, i, t, b, u}
+
+def kill.usr(v: String, f: Kill) -> Kill:
+  match f:
+    case Kill{a, l, i, t, s, u}:
+      Kill{a, l, i, t, s, Some{v}}
 
 # a step of CLIENT KILL's options: the filter so far, or the error that
 # ends them
@@ -1403,12 +1486,10 @@ def kill.tyv(+ty: Nat, +v: String, f: Kill) -> KSt:
     case _:
       KOk{kill.ty(ty, f)}
 
-def kill.user(ok: Bool, +v: String, f: Kill) -> KSt:
-  match ok:
-    case True{}:
-      KOk{f}
-    case False{}:
-      KErr{RError{no_newlines("ERR No such user '" ++ cstr(v) ++ "'")}}
+# CLIENT KILL's error for a USER option whose user the server does not
+# keep
+def e_no_user(+u: String) -> Reply:
+  RError{no_newlines("ERR No such user '" ++ cstr(u) ++ "'")}
 
 def kill.skipv(yes: Bool, no: Bool, f: Kill) -> KSt:
   match yes no:
@@ -1431,7 +1512,7 @@ def kill.opt(+k: Nat, +v: String, f: Kill) -> KSt:
     case 4n:
       KOk{kill.laddr(v, f)}
     case 5n:
-      kill.user(String.eq(v, "default"), v, f)
+      KOk{kill.usr(v, f)}
     case 6n:
       kill.skipv(is_word(v, "YES"), is_word(v, "NO"), f)
     case _:
@@ -1444,32 +1525,51 @@ def kill.step(st: KSt, +k: Nat, +v: String) -> KSt:
     case KErr{r}:
       KErr{r}
 
-def kill.end(st: KSt) -> ClOp:
+# the options read, an option left without its value: a syntax error,
+# unless an error came before
+def kill.odd(st: KSt) -> KSt:
   match st:
     case KOk{f}:
-      CoKill{f}
+      KErr{RError{"ERR syntax error"}}
     case KErr{r}:
-      CoBad{r}
+      KErr{r}
 
-def kill.odd(st: KSt) -> ClOp:
+# the users of USER options read before any error (us, newest first),
+# with the user of an option k read now
+def kill.users(+st: KSt, +k: Nat, +v: String, +us: List<&2, String>) -> List<&2, String>:
   match st:
     case KOk{f}:
-      e_client_syntax()
+      Bool.pick(List<&2, String>, Nat.is_eq(k, 5n), v <> us, us)
     case KErr{r}:
+      us
+
+# the options' outcome, after the users they named (CoKillUsers) when
+# they named some
+def kill.end(us: List<&2, String>, st: KSt) -> ClOp:
+  match us st:
+    case Nil{} KOk{f}:
+      CoKill{f}
+    case Nil{} KErr{r}:
       CoBad{r}
+    case Con{u, rest} KOk{f}:
+      CoKillUsers{List.reverse(&2, String, u <> rest), f, None{}}
+    case Con{u, rest} KErr{r}:
+      CoKillUsers{List.reverse(&2, String, u <> rest), Kill{None{}, None{}, None{}, 0n, True{}, None{}}, Some{r}}
 
 # The new form's options, each with its value, in order: the first error
 # ends them, as Redis's loop does; a later option of a name overrides an
 # earlier one. An option without a value, or one Redis does not know, is
-# a syntax error.
-def kill.args(args: List<&2, String>, st: KSt) -> ClOp:
+# a syntax error. Each USER option's user is looked up as Redis reads it
+# (us: kill.end).
+def kill.args(args: List<&2, String>, +st: KSt, us: List<&2, String>) -> ClOp:
   match args:
     case Nil{}:
-      kill.end(st)
+      kill.end(us, st)
     case Con{+o, Con{+v, rest}}:
-      kill.args(rest, kill.step(st, kill.word(o), v))
+      +k = kill.word(o)
+      kill.args(rest, kill.step(st, k, v), kill.users(st, k, v, us))
     case Con{o, Nil{}}:
-      kill.odd(st)
+      kill.end(us, kill.odd(st))
 
 # CLIENT KILL: one argument is the old form, an address; more are options
 def kill.of(args: List<&2, String>) -> ClOp:
@@ -1477,7 +1577,7 @@ def kill.of(args: List<&2, String>) -> ClOp:
     case Con{a, Nil{}}:
       CoKillAddr{a}
     case _:
-      kill.args(args, KOk{Kill{None{}, None{}, None{}, 0n, True{}}})
+      kill.args(args, KOk{Kill{None{}, None{}, None{}, 0n, True{}, None{}}}, Nil{})
 
 def no_evict.on(on: Bool, off: Bool) -> ClOp:
   match on off:
@@ -1500,13 +1600,13 @@ def no_evict.of(args: List<&2, String>) -> ClOp:
 # socket's fd, name, age and idle time (s), flags, database, the counts of
 # its channels, patterns and shard channels, the commands queued in its
 # MULTI (none: -1), the bytes of the batch it runs (qbuf) and of the
-# command's arguments (argv-mem), its last command (cmd), the client its
-# invalidations go to (redir: -1 when it does not track, 0 itself), and
+# command's arguments (argv-mem), its last command (cmd), its user (ACL),
+# the client its invalidations go to (redir: -1 when it does not track, 0 itself), and
 # whether it speaks RESP3 (resp). BendKV keeps no buffer of a client's own, so
 # qbuf-free, multi-mem, the reply buffer's size and peak, the output
 # lists and the memory are 0.
 type ClLine is Data:
-  ClLine{id: Nat, addr: String, laddr: String, fd: Nat, name: String, age: Nat, idle: Nat, flags: String, db: Nat, sub: Nat, psub: Nat, ssub: Nat, multi: Maybe<&2, Nat>, qbuf: Nat, argv: Nat, cmd: String, redir: String, r3: Bool}
+  ClLine{id: Nat, addr: String, laddr: String, fd: Nat, name: String, age: Nat, idle: Nat, flags: String, db: Nat, sub: Nat, psub: Nat, ssub: Nat, multi: Maybe<&2, Nat>, qbuf: Nat, argv: Nat, cmd: String, user: String, redir: String, r3: Bool}
 
 def line.multi(m: Maybe<&2, Nat>) -> String:
   match m:
@@ -1517,12 +1617,12 @@ def line.multi(m: Maybe<&2, Nat>) -> String:
 
 def client.line(l: ClLine) -> String:
   match l:
-    case ClLine{id, addr, laddr, fd, name, age, idle, flags, db, sub, psub, ssub, multi, qbuf, argv, cmd, redir, r3}:
+    case ClLine{id, addr, laddr, fd, name, age, idle, flags, db, sub, psub, ssub, multi, qbuf, argv, cmd, user, redir, r3}:
       a = "id=" ++ Nat.show(id) ++ " addr=" ++ addr ++ " laddr=" ++ laddr ++ " fd=" ++ Nat.show(fd) ++ " name=" ++ name
       b = " age=" ++ Nat.show(age) ++ " idle=" ++ Nat.show(idle) ++ " flags=" ++ flags ++ " db=" ++ Nat.show(db)
       c = " sub=" ++ Nat.show(sub) ++ " psub=" ++ Nat.show(psub) ++ " ssub=" ++ Nat.show(ssub) ++ " multi=" ++ line.multi(multi)
       d = " qbuf=" ++ Nat.show(qbuf) ++ " qbuf-free=0 argv-mem=" ++ Nat.show(argv) ++ " multi-mem=0 rbs=0 rbp=0 obl=0 oll=0 omem=0 tot-mem=0"
-      a ++ b ++ c ++ d ++ " events=r cmd=" ++ cmd ++ " user=default redir=" ++ redir ++ " resp=" ++ Bool.pick(String, r3, "3", "2")
+      a ++ b ++ c ++ d ++ " events=r cmd=" ++ cmd ++ " user=" ++ user ++ " redir=" ++ redir ++ " resp=" ++ Bool.pick(String, r3, "3", "2")
 
 def parse_client(id: Nat, sub: String, args: List<&2, String>) -> SessOp:
   match id:
@@ -5839,10 +5939,22 @@ def geo.parse(+kind: Nat, +name: String, +args: List<&2, String>, +n: Nat, lname
 # SLOWLOG RESET, 9 LATENCY LATEST, 10 LATENCY HISTORY (of an event), 11
 # LATENCY RESET (of events, all for none), 12 LATENCY GRAPH (of an
 # event), 13 LATENCY DOCTOR and 14 LATENCY HISTOGRAM (of commands, all
-# for none), and 15 SAVE (which the shell runs: server.bend, The RDB
-# file). ROLE answers as a master with no replica answers. WAIT is a
-# blocking command (SBlock) when it asks for a replica, which none will
-# acknowledge.
+# for none), 15 SAVE and 16 BGSAVE (of SCHEDULE, or nothing), which the
+# shell runs (server.bend, The RDB file, Background saves). ROLE answers
+# as a master with no replica answers. WAIT is a blocking command
+# (SBlock) when it asks for a replica, which none will acknowledge.
+
+# BGSAVE [SCHEDULE]: any other argument, or a second, is a syntax error,
+# which Redis's command finds as it runs (bgsaveCommand), before it looks
+# at whether a save runs
+def bgsave.of(args: List<&2, String>) -> Cmd:
+  match args:
+    case Nil{}:
+      Own{SAdmin{16n, Nil{}}}
+    case Con{+x, Nil{}}:
+      Bool.pick(Cmd, is_word(x, "SCHEDULE"), Own{SAdmin{16n, ["SCHEDULE"]}}, e_syntax())
+    case _:
+      e_syntax()
 
 # SLOWLOG: GET of a count, as getRangeLongFromObjectOrReply reads it (a
 # long long from -1 on; its own error for any other argument, and for a
@@ -5983,6 +6095,129 @@ def parse_latency(id: Nat, sub: String, args: List<&2, String>) -> SessOp:
       SAdmin{11n, args}
     case _:
       e_unknown_sub(sub, "LATENCY")
+
+# ACL: its subcommands, as aclCommand reads them, are SAcl, their number
+# and arguments (session.bend, ACL): the users, the log and the
+# descriptions are the session's, and the server answers WHOAMI and
+# GENPASS, closes the clients of a user DELUSER removed, and logs
+# (server.bend, ACL). Redis checks the arity of each subcommand first; CAT,
+# GENPASS and LOG then refuse a second argument themselves. LOAD and SAVE
+# need an ACL file, which BendKV does not read yet: they answer as Redis
+# answers without aclfile.
+def acl_id(+n: String, len: Nat) -> Nat:
+  match len:
+    case 3n:
+      Bool.pick(Nat, String.eq(n, "CAT"), 1n, Bool.pick(Nat, String.eq(n, "LOG"), 9n, 0n))
+    case 4n:
+      Bool.pick(Nat, String.eq(n, "HELP"), 6n, Bool.pick(Nat, String.eq(n, "LIST"), 7n, Bool.pick(Nat, String.eq(n, "LOAD"), 8n, Bool.pick(Nat, String.eq(n, "SAVE"), 10n, 0n))))
+    case 5n:
+      Bool.pick(Nat, String.eq(n, "USERS"), 12n, 0n)
+    case 6n:
+      Bool.pick(Nat, String.eq(n, "DRYRUN"), 3n, Bool.pick(Nat, String.eq(n, "WHOAMI"), 13n, 0n))
+    case 7n:
+      Bool.pick(Nat, String.eq(n, "DELUSER"), 2n, Bool.pick(Nat, String.eq(n, "GENPASS"), 4n, Bool.pick(Nat, String.eq(n, "GETUSER"), 5n, Bool.pick(Nat, String.eq(n, "SETUSER"), 11n, 0n))))
+    case _:
+      0n
+
+def acl_help() -> List<&2, String>:
+  ["CAT [<category>]",
+   "    List all commands that belong to <category>, or all command categories",
+   "    when no category is specified.",
+   "DELUSER <username> [<username> ...]",
+   "    Delete a list of users.",
+   "DRYRUN <username> <command> [<arg> ...]",
+   "    Returns whether the user can execute the given command without executing the command.",
+   "GETUSER <username>",
+   "    Get the user's details.",
+   "GENPASS [<bits>]",
+   "    Generate a secure 256-bit user password. The optional `bits` argument can",
+   "    be used to specify a different size.",
+   "LIST",
+   "    Show users details in config file format.",
+   "LOAD",
+   "    Reload users from the ACL file.",
+   "LOG [<count> | RESET]",
+   "    Show the ACL log entries.",
+   "SAVE",
+   "    Save the current config to the ACL file.",
+   "SETUSER <username> <attribute> [<attribute> ...]",
+   "    Create or modify a user with the specified attributes.",
+   "USERS",
+   "    List all the registered usernames.",
+   "WHOAMI",
+   "    Return the current connection username."]
+
+def acl.nofile() -> SessOp:
+  SBad{RError{"ERR This Redis instance is not configured to use an ACL file. You may want to specify users via the ACL SETUSER command and then issue a CONFIG REWRITE (assuming you have a Redis configuration file set) in order to store users in the Redis configuration."}}
+
+# a subcommand that takes no argument, or at most one (opt: CAT, GENPASS
+# and LOG, which refuse a second themselves), or at least least
+def acl.none(+id: Nat, sub: String, args: List<&2, String>) -> SessOp:
+  match args:
+    case Nil{}:
+      SAcl{id, Nil{}}
+    case _:
+      s_arity("acl|" ++ String.to_lower(sub))
+
+def acl.opt(+id: Nat, sub: String, args: List<&2, String>) -> SessOp:
+  match args:
+    case Nil{}:
+      SAcl{id, Nil{}}
+    case Con{a, Nil{}}:
+      SAcl{id, [a]}
+    case _:
+      SBad{e_sub_syntax(sub, "ACL")}
+
+def acl.least(+id: Nat, +least: Nat, sub: String, args: List<&2, String>) -> SessOp:
+  +xs = args
+  Bool.pick(SessOp, Nat.is_le(least, List.length(&2, String, xs)), SAcl{id, xs}, s_arity("acl|" ++ String.to_lower(sub)))
+
+def parse_acl(id: Nat, sub: String, args: List<&2, String>) -> SessOp:
+  match id:
+    case 1n:  # CAT
+      acl.opt(1n, sub, args)
+    case 2n:  # DELUSER
+      acl.least(2n, 1n, sub, args)
+    case 3n:  # DRYRUN
+      acl.least(3n, 2n, sub, args)
+    case 4n:  # GENPASS
+      acl.opt(4n, sub, args)
+    case 5n:  # GETUSER
+      match args:
+        case Con{u, Nil{}}:
+          SAcl{5n, [u]}
+        case _:
+          s_arity("acl|getuser")
+    case 6n:  # HELP
+      match args:
+        case Nil{}:
+          help("ACL", acl_help())
+        case _:
+          s_arity("acl|help")
+    case 7n:  # LIST
+      acl.none(7n, sub, args)
+    case 8n:  # LOAD
+      match args:
+        case Nil{}:
+          acl.nofile()
+        case _:
+          s_arity("acl|load")
+    case 9n:  # LOG
+      acl.opt(9n, sub, args)
+    case 10n:  # SAVE
+      match args:
+        case Nil{}:
+          acl.nofile()
+        case _:
+          s_arity("acl|save")
+    case 11n:  # SETUSER
+      acl.least(11n, 1n, sub, args)
+    case 12n:  # USERS
+      acl.none(12n, sub, args)
+    case 13n:  # WHOAMI
+      acl.none(13n, sub, args)
+    case _:
+      e_unknown_sub(sub, "ACL")
 
 # ROLE: a master at the replication offset 0, with no replica
 # (roleCommand)
@@ -6172,6 +6407,8 @@ def lolwut.of(+args: List<&2, String>) -> Cmd:
 # BEGIN gen_commands: dispatch
 def cmd_id.l3(+n: String, c: Nat) -> Nat:
   match c:
+    case 1n:  # A
+      Bool.pick(Nat, String.eq(n, "ACL"), 210n, 0n)
     case 4n:  # D
       Bool.pick(Nat, String.eq(n, "DEL"), 7n, 0n)
     case 7n:  # G
@@ -6238,6 +6475,8 @@ def cmd_id.l4(+n: String, c: Nat) -> Nat:
       Bool.pick(Nat, String.eq(n, "TIME"), 113n, 0n))
     case 23n:  # W
       Bool.pick(Nat, String.eq(n, "WAIT"), 186n, 0n)
+    case 24n:  # X
+      Bool.pick(Nat, String.eq(n, "XLEN"), 211n, 0n)
     case 26n:  # Z
       Bool.pick(Nat, String.eq(n, "ZADD"), 121n,
       Bool.pick(Nat, String.eq(n, "ZREM"), 123n, 0n))
@@ -6282,6 +6521,9 @@ def cmd_id.l5(+n: String, c: Nat) -> Nat:
       Bool.pick(Nat, String.eq(n, "TOUCH"), 44n, 0n)
     case 23n:  # W
       Bool.pick(Nat, String.eq(n, "WATCH"), 164n, 0n)
+    case 24n:  # X
+      Bool.pick(Nat, String.eq(n, "XREAD"), 214n,
+      Bool.pick(Nat, String.eq(n, "XINFO"), 215n, 0n))
     case 26n:  # Z
       Bool.pick(Nat, String.eq(n, "ZCARD"), 124n,
       Bool.pick(Nat, String.eq(n, "ZRANK"), 127n,
@@ -6299,7 +6541,8 @@ def cmd_id.l6(+n: String, c: Nat) -> Nat:
       Bool.pick(Nat, String.eq(n, "BITPOS"), 43n,
       Bool.pick(Nat, String.eq(n, "BLMOVE"), 156n,
       Bool.pick(Nat, String.eq(n, "BLMPOP"), 157n,
-      Bool.pick(Nat, String.eq(n, "BZMPOP"), 160n, 0n))))
+      Bool.pick(Nat, String.eq(n, "BZMPOP"), 160n,
+      Bool.pick(Nat, String.eq(n, "BGSAVE"), 226n, 0n)))))
     case 3n:  # C
       Bool.pick(Nat, String.eq(n, "CLIENT"), 105n,
       Bool.pick(Nat, String.eq(n, "CONFIG"), 107n, 0n))
@@ -6345,6 +6588,8 @@ def cmd_id.l6(+n: String, c: Nat) -> Nat:
       Bool.pick(Nat, String.eq(n, "SWAPDB"), 111n, 0n)))))))
     case 21n:  # U
       Bool.pick(Nat, String.eq(n, "UNLINK"), 8n, 0n)
+    case 24n:  # X
+      Bool.pick(Nat, String.eq(n, "XRANGE"), 212n, 0n)
     case 26n:  # Z
       Bool.pick(Nat, String.eq(n, "ZSCORE"), 125n,
       Bool.pick(Nat, String.eq(n, "ZCOUNT"), 129n,
@@ -6420,6 +6665,8 @@ def cmd_id.l8(+n: String, c: Nat) -> Nat:
       Bool.pick(Nat, String.eq(n, "SMEMBERS"), 88n,
       Bool.pick(Nat, String.eq(n, "SPUBLISH"), 173n,
       Bool.pick(Nat, String.eq(n, "SHUTDOWN"), 187n, 0n))))
+    case 24n:  # X
+      Bool.pick(Nat, String.eq(n, "XPENDING"), 216n, 0n)
     case 26n:  # Z
       Bool.pick(Nat, String.eq(n, "ZREVRANK"), 128n, 0n)
     case _:
@@ -6438,6 +6685,8 @@ def cmd_id.l9(+n: String, c: Nat) -> Nat:
     case 19n:  # S
       Bool.pick(Nat, String.eq(n, "SISMEMBER"), 86n,
       Bool.pick(Nat, String.eq(n, "SUBSCRIBE"), 166n, 0n))
+    case 24n:  # X
+      Bool.pick(Nat, String.eq(n, "XREVRANGE"), 213n, 0n)
     case 26n:  # Z
       Bool.pick(Nat, String.eq(n, "ZLEXCOUNT"), 130n,
       Bool.pick(Nat, String.eq(n, "ZREVRANGE"), 136n, 0n))
@@ -6592,6 +6841,372 @@ def cmd_id(+n: String, len: Nat) -> Nat:
 def cmd_own(+id: Nat) -> Bool:
   Bool.or(Bool.and(Nat.is_le(100n, id), Nat.is_le(id, 120n)), Bool.and(Nat.is_le(152n, id), Nat.is_le(id, 176n)))
 # END gen_commands: dispatch
+
+# Streams
+# -------
+# The commands that read a stream (XLEN, XRANGE, XREVRANGE, XREAD, XINFO,
+# XPENDING) are Peeks of their key (PStream), but XREAD of several keys
+# or with BLOCK (SXRead), each read as Redis 7.0.15 reads it (t_stream.c):
+# what Redis reads before it looks the key up, the parser reads, and what
+# it reads after, the read does (as XRead's forms keep it). stream.bend
+# reads the stream. A count past any stream's (2^47) stands for none.
+
+def xc.inf() -> Nat:
+  Nat.mul(8388608n, 16777216n)
+
+# a long long's count: 0 below 0, xc.inf() past it
+def xc.of.big(big: Bool, +hi: Nat, +lo: Nat) -> Nat:
+  match big:
+    case True{}:
+      xc.inf()
+    case False{}:
+      Nat.min(Nat.add(Nat.mul(hi, 1000000000n), lo), xc.inf())
+
+def xc.of(l: LL) -> Maybe<&2, Nat>:
+  match l:
+    case LL{+neg, +hi, +lo}:
+      Some{Bool.pick(Nat, neg, 0n, xc.of.big(Nat.is_le(140737n, hi), hi, lo))}
+    case LLBad{}:
+      None{}
+
+def e_xid() -> Reply:
+  RError{"ERR Invalid stream ID specified as stream command argument"}
+
+def e_xstart() -> Reply:
+  RError{"ERR invalid start ID for the interval"}
+
+def e_xend() -> Reply:
+  RError{"ERR invalid end ID for the interval"}
+
+# XRANGE key start end [COUNT count] (XREVRANGE key end start ...),
+# read as xrangeGenericCommand reads it: the start, then the end (each a
+# bound, X.xb.parse), then its options from the fourth word on, COUNT and
+# a long long (below 0 as 0) any number of times, the last holding; any
+# other word, or COUNT last, a syntax error
+
+# the count of XRANGE's options as read so far, or their error
+type XCnt is Data:
+  XCOk{c: Nat}
+  XCBad{r: Reply}
+
+def xr.count.of(m: Maybe<&2, Nat>) -> XCnt:
+  match m:
+    case Some{c}:
+      XCOk{c}
+    case None{}:
+      XCBad{e_int()}
+
+def xr.count(cnt: Bool, +v: String) -> XCnt:
+  match cnt:
+    case True{}:
+      xr.count.of(xc.of(ll.read(v)))
+    case False{}:
+      XCBad{e_syntax_r()}
+
+def xr.opts(xs: List<&2, String>, r: XCnt) -> XCnt:
+  match xs r:
+    case Con{+w, Con{+v, rest}} XCOk{c}:
+      xr.opts(rest, xr.count(is_word(w, "COUNT"), v))
+    case Con{w, Nil{}} XCOk{c}:
+      XCBad{e_syntax_r()}
+    case _ other:
+      other
+
+def xq.of(rev: Bool, q: XQ) -> XQ:
+  match rev:
+    case True{}:
+      XQRev{q}
+    case False{}:
+      q
+
+def xr.cmd(r: XCnt, +rev: Bool, +k: String, +lo: KV.XId, +hi: KV.XId) -> Cmd:
+  match r:
+    case XCOk{+c}:
+      Peek{k, PStream{XRRange{xq.of(rev, XQ{lo, hi, c})}}}
+    case XCBad{e}:
+      Bad{e}
+
+def xr.hi(b: X.XB, +rev: Bool, +k: String, +lo: KV.XId, xs: List<&2, String>) -> Cmd:
+  match b:
+    case X.XB{+hi}:
+      xr.cmd(xr.opts(xs, XCOk{xc.inf()}), rev, k, lo, hi)
+    case X.XBBad{}:
+      Bad{e_xid()}
+    case X.XBOver{}:
+      Bad{e_xend()}
+
+def xr.lo(b: X.XB, +rev: Bool, +k: String, +e: String, xs: List<&2, String>) -> Cmd:
+  match b:
+    case X.XB{+lo}:
+      xr.hi(X.xb.parse(e, False{}), rev, k, lo, xs)
+    case X.XBBad{}:
+      Bad{e_xid()}
+    case X.XBOver{}:
+      Bad{e_xstart()}
+
+def xrange.parse(+rev: Bool, +k: String, +a: String, +e: String, xs: List<&2, String>) -> Cmd:
+  xr.lo(X.xb.parse(a, True{}), rev, k, e, xs)
+
+# XREAD [COUNT count] [BLOCK ms] STREAMS key... id..., read as
+# xreadCommand reads it: its options in any order up to STREAMS, the last
+# of a kind holding (BLOCK a long long of ms, not below 0; COUNT a long
+# long, 0 and below for none), GROUP and NOACK XREADGROUP's alone, any
+# other word, or an option without its value, a syntax error; STREAMS
+# with words after it, as many keys as IDs. One key without BLOCK is a
+# Peek of it; more, or BLOCK, are SXRead, which the server sees. BendKV
+# blocks on no stream yet: a BLOCK that would wait answers an error
+# (server.bend, sh.plain), but in MULTI, where Redis answers it as a
+# client that may not wait, a null array.
+
+# XREAD's options as read so far, a word at a time: COUNT's (0 for none),
+# whether BLOCK came, and what the next word is (want: 0 an option, 1
+# BLOCK's value, 2 COUNT's); or, past STREAMS, the words after it (the
+# last first); or the error that ends them
+type XRo is Data:
+  XRo{c: Nat, block: Bool, want: Nat}
+  XRoAt{c: Nat, block: Bool, ws: List<&2, String>}
+  XRoBad{r: Reply}
+
+# an option's word: 1 BLOCK, 2 COUNT, 3 STREAMS, 4 GROUP, 5 NOACK, 0 another
+def xro.word(+w: String) -> Nat:
+  +up = String.to_upper(cstr(w))
+  Bool.pick(Nat, String.eq(up, "BLOCK"), 1n, Bool.pick(Nat, String.eq(up, "COUNT"), 2n, Bool.pick(Nat, String.eq(up, "STREAMS"), 3n, Bool.pick(Nat, String.eq(up, "GROUP"), 4n, Bool.pick(Nat, String.eq(up, "NOACK"), 5n, 0n)))))
+
+def e_xunbalanced() -> Reply:
+  RError{"ERR Unbalanced XREAD list of streams: for each stream key an ID or '$' must be specified."}
+
+# an option of word k, with more words after it
+def xro.opt(+k: Nat, +more: Nat, +c: Nat, +b: Bool) -> XRo:
+  match k:
+    case 1n:
+      Bool.pick(XRo, Nat.is_lt(0n, more), XRo{c, b, 1n}, XRoBad{e_syntax_r()})
+    case 2n:
+      Bool.pick(XRo, Nat.is_lt(0n, more), XRo{c, b, 2n}, XRoBad{e_syntax_r()})
+    case 3n:
+      Bool.pick(XRo, Nat.is_lt(0n, more), Bool.pick(XRo, Nat.is_eq(Nat.mod(more, 2n), 1n), XRoBad{e_xunbalanced()}, XRoAt{c, b, Nil{}}), XRoBad{e_syntax_r()})
+    case 4n:
+      Bool.pick(XRo, Nat.is_le(2n, more), XRoBad{RError{"ERR The GROUP option is only supported by XREADGROUP. You called XREAD instead."}}, XRoBad{e_syntax_r()})
+    case 5n:
+      XRoBad{RError{"ERR The NOACK option is only supported by XREADGROUP. You called XREAD instead."}}
+    case _:
+      XRoBad{e_syntax_r()}
+
+# BLOCK's value: a long long of ms, not below 0
+def xro.block(l: LL, +c: Nat) -> XRo:
+  match l:
+    case LL{True{}, hi, lo}:
+      XRoBad{RError{"ERR timeout is negative"}}
+    case LL{False{}, hi, lo}:
+      XRo{c, True{}, 0n}
+    case LLBad{}:
+      XRoBad{RError{"ERR timeout is not an integer or out of range"}}
+
+def xro.count(m: Maybe<&2, Nat>, +b: Bool) -> XRo:
+  match m:
+    case Some{+c}:
+      XRo{c, b, 0n}
+    case None{}:
+      XRoBad{e_int()}
+
+# the options after one more word w, more words after it
+def xro.step(+w: String, +more: Nat, o: XRo) -> XRo:
+  match o:
+    case XRo{+c, +b, want}:
+      match want:
+        case 0n:
+          xro.opt(xro.word(w), more, c, b)
+        case 1n:
+          xro.block(ll.read(w), c)
+        case _:
+          xro.count(xc.of(ll.read(w)), b)
+    case XRoAt{c, b, ws}:
+      XRoAt{c, b, w <> ws}
+    case XRoBad{r}:
+      XRoBad{r}
+
+def xro.go(xs: List<&2, String>, +n: Nat, o: XRo) -> XRo:
+  match xs:
+    case Nil{}:
+      o
+    case Con{+w, rest}:
+      +m = Nat.sub(n, 1n)
+      xro.go(rest, m, xro.step(w, m, o))
+
+# a count of XREAD (0 for none) as a read takes it
+def xc.read(+c: Nat) -> Nat:
+  Bool.pick(Nat, Nat.is_eq(c, 0n), xc.inf(), c)
+
+def xread.keys(+c: Nat, b: Bool, ws: List<&2, String>) -> Cmd:
+  match b ws:
+    case False{} Con{+k, Con{+id, Nil{}}}:
+      Peek{k, PStream{XRRead{XRq{k, id, xc.read(c)}}}}
+    case False{} other:
+      Own{SXRead{XRm{xc.read(c), False{}, other}}}
+    case True{} other:
+      Own{SXRead{XRm{xc.read(c), True{}, other}}}
+
+def xread.cmd(o: XRo) -> Cmd:
+  match o:
+    case XRo{c, b, w}:
+      e_syntax()
+    case XRoAt{+c, +b, ws}:
+      xread.keys(c, b, List.reverse(&2, String, ws))
+    case XRoBad{r}:
+      Bad{r}
+
+def xread.parse(+args: List<&2, String>) -> Cmd:
+  xread.cmd(xro.go(args, List.length(&2, String, args), XRo{0n, False{}, 0n}))
+
+# with 3 words at least (XREAD's arity, -4)
+def xread.of(+args: List<&2, String>) -> Cmd:
+  Bool.pick(Cmd, Nat.is_le(3n, List.length(&2, String, args)), xread.parse(args), e_arity("xread"))
+
+# XINFO: CONSUMERS key group, GROUPS key, STREAM key [FULL [COUNT
+# count]], HELP; its options read once the key is found
+def xinfo_id(+n: String, len: Nat) -> Nat:
+  match len:
+    case 4n:
+      Bool.pick(Nat, String.eq(n, "HELP"), 1n, 0n)
+    case 6n:
+      Bool.pick(Nat, String.eq(n, "STREAM"), 2n, Bool.pick(Nat, String.eq(n, "GROUPS"), 3n, 0n))
+    case 9n:
+      Bool.pick(Nat, String.eq(n, "CONSUMERS"), 4n, 0n)
+    case _:
+      0n
+
+def xinfo_help() -> List<&2, String>:
+  ["CONSUMERS <key> <groupname>",
+   "    Show consumers of <groupname>.",
+   "GROUPS <key>",
+   "    Show the stream consumer groups.",
+   "STREAM <key> [FULL [COUNT <count>]",
+   "    Show information about the stream."]
+
+def xinfo.parse(id: Nat, sub: String, args: List<&2, String>) -> Cmd:
+  match id:
+    case 1n:  # HELP
+      match args:
+        case Nil{}:
+          Own{help("XINFO", xinfo_help())}
+        case _:
+          e_arity("xinfo|help")
+    case 2n:  # STREAM
+      match args:
+        case Con{k, rest}:
+          Peek{k, PStream{XRInfo{XIStream{sub, rest}}}}
+        case Nil{}:
+          e_arity("xinfo|stream")
+    case 3n:  # GROUPS
+      match args:
+        case Con{k, Nil{}}:
+          Peek{k, PStream{XRInfo{XIGroups{}}}}
+        case _:
+          e_arity("xinfo|groups")
+    case 4n:  # CONSUMERS
+      match args:
+        case Con{+k, Con{g, Nil{}}}:
+          Peek{k, PStream{XRInfo{XICons{k, g}}}}
+        case _:
+          e_arity("xinfo|consumers")
+    case _:
+      Own{e_unknown_sub(sub, "XINFO")}
+
+# XPENDING key group [[IDLE min-idle-time] start end count [consumer]],
+# read as xpendingCommand reads it: 3 words, or 6 to 9 (else a syntax
+# error); IDLE's time (a long long), with 8 words at least; the count (a
+# long long, below 0 as 0), then the start and the end (bounds,
+# X.xb.parse), then the consumer, when there is one (the words after it
+# are not read)
+
+# IDLE's time: none for 0
+def xp.idle(l: LL) -> Maybe<&2, X.XIdle>:
+  match l:
+    case LL{+neg, +hi, +lo}:
+      +n = xc.of.big(Nat.is_le(140737n, hi), hi, lo)
+      Some{Bool.pick(X.XIdle, Nat.is_eq(n, 0n), X.XINone{}, X.XIMin{neg, n})}
+    case LLBad{}:
+      None{}
+
+def xp.con(xs: List<&2, String>) -> Maybe<&2, String>:
+  match xs:
+    case Con{c, rest}:
+      Some{c}
+    case Nil{}:
+      None{}
+
+def xp.end(b: X.XB, +k: String, +g: String, +idle: X.XIdle, +lo: KV.XId, +c: Nat, con: Maybe<&2, String>) -> Cmd:
+  match b:
+    case X.XB{+hi}:
+      Peek{k, PStream{XRPend{XPExt{k, g, idle, lo, hi, c, con}}}}
+    case X.XBBad{}:
+      Bad{e_xid()}
+    case X.XBOver{}:
+      Bad{e_xend()}
+
+def xp.start(b: X.XB, +k: String, +g: String, +idle: X.XIdle, +c: Nat, +e: String, con: Maybe<&2, String>) -> Cmd:
+  match b:
+    case X.XB{+lo}:
+      xp.end(X.xb.parse(e, False{}), k, g, idle, lo, c, con)
+    case X.XBBad{}:
+      Bad{e_xid()}
+    case X.XBOver{}:
+      Bad{e_xstart()}
+
+def xp.count(m: Maybe<&2, Nat>, +k: String, +g: String, +idle: X.XIdle, xs: List<&2, String>) -> Cmd:
+  match m xs:
+    case Some{+c} Con{+a, Con{+e, Con{n, rest}}}:
+      xp.start(X.xb.parse(a, True{}), k, g, idle, c, e, xp.con(rest))
+    case None{} _:
+      Bad{e_int()}
+    case _ _:
+      e_syntax()
+
+# the count, the third word of xs
+def xp.third(xs: List<&2, String>) -> Maybe<&2, Nat>:
+  match xs:
+    case Con{a, Con{e, Con{+n, rest}}}:
+      xc.of(ll.read(n))
+    case _:
+      Some{0n}
+
+def xp.ext(i: X.XIdle, +k: String, +g: String, +xs: List<&2, String>) -> Cmd:
+  xp.count(xp.third(xs), k, g, i, xs)
+
+def xp.idle.at(m: Maybe<&2, X.XIdle>, enough: Bool, +k: String, +g: String, +xs: List<&2, String>) -> Cmd:
+  match m enough:
+    case Some{i} True{}:
+      xp.ext(i, k, g, xs)
+    case Some{i} False{}:
+      e_syntax()
+    case None{} _:
+      Bad{e_int()}
+
+def xp.of(idle: Bool, +k: String, +g: String, +n: Nat, xs: List<&2, String>) -> Cmd:
+  match idle xs:
+    case True{} Con{w, Con{+v, rest}}:
+      xp.idle.at(xp.idle(ll.read(v)), Nat.is_le(5n, n), k, g, rest)
+    case _ other:
+      xp.ext(X.XINone{}, k, g, other)
+
+def xp.shape(+n: Nat) -> Bool:
+  Bool.and(Nat.is_le(3n, n), Nat.is_le(n, 6n))
+
+def xp.head(+xs: List<&2, String>) -> Bool:
+  match xs:
+    case Con{+w, rest}:
+      is_word(w, "IDLE")
+    case Nil{}:
+      False{}
+
+def xpending.of(+n: Nat, +k: String, +g: String, +xs: List<&2, String>) -> Cmd:
+  match n:
+    case 0n:
+      Peek{k, PStream{XRPend{XPSum{k, g}}}}
+    case _:
+      Bool.pick(Cmd, xp.shape(n), xp.of(xp.head(xs), k, g, n, xs), e_syntax())
+
+def xpending.parse(+k: String, +g: String, +xs: List<&2, String>) -> Cmd:
+  xpending.of(List.length(&2, String, xs), k, g, xs)
 
 # Dump and restore
 # ----------------
@@ -7440,6 +8055,48 @@ def parse_id(id: Nat, name: String, args: List<&2, String>) -> Cmd:
           Own{SAdmin{15n, Nil{}}}
         case _:
           e_arity("save")
+    case 210n:  # ACL
+      match args:
+        case Nil{}:
+          e_arity("acl")
+        case Con{+sub, rest}:
+          +up = String.to_upper(sub)
+          Own{parse_acl(acl_id(up, String.length(up)), sub, rest)}
+    case 211n:  # XLEN
+      match args:
+        case Con{k, Nil{}}:
+          Peek{k, PStream{XRLen{}}}
+        case _:
+          e_arity("xlen")
+    case 212n:  # XRANGE
+      match args:
+        case Con{+k, Con{+a, Con{+e, rest}}}:
+          xrange.parse(False{}, k, a, e, rest)
+        case _:
+          e_arity("xrange")
+    case 213n:  # XREVRANGE
+      match args:
+        case Con{+k, Con{+e, Con{+a, rest}}}:
+          xrange.parse(True{}, k, a, e, rest)
+        case _:
+          e_arity("xrevrange")
+    case 214n:  # XREAD
+      xread.of(args)
+    case 215n:  # XINFO
+      match args:
+        case Nil{}:
+          e_arity("xinfo")
+        case Con{+sub, rest}:
+          +up = String.to_upper(sub)
+          xinfo.parse(xinfo_id(up, String.length(up)), sub, rest)
+    case 216n:  # XPENDING
+      match args:
+        case Con{+k, Con{+g, rest}}:
+          xpending.parse(k, g, rest)
+        case _:
+          e_arity("xpending")
+    case 226n:  # BGSAVE
+      bgsave.of(args)
     case _:
       e_unknown(name, args)
 
@@ -7458,6 +8115,61 @@ def block.least(+id: Nat, +n: Nat, name: String, +args: List<&2, String>) -> Ses
 def block.just(+id: Nat, +n: Nat, name: String, +args: List<&2, String>) -> SessOp:
   block.of(Nat.is_eq(n, List.length(&2, String, args)), id, name, args)
 
+# AUTH's arguments, its password put as its SHA-256: the session
+# compares that with the users' hashes (session.bend, login_ok), so that a
+# call hashes its password once, here, however many of its reply, its
+# client's connection and the server's log in ask. More arguments are a
+# syntax error, which reads no password
+def auth.hashed(args: List<&2, String>) -> List<&2, String>:
+  match args:
+    case Con{p, Nil{}}:
+      [Sha.sha256(p)]
+    case Con{u, Con{p, Nil{}}}:
+      [u, Sha.sha256(p)]
+    case xs:
+      xs
+
+# what HELLO's next argument is, after an option x with n arguments from
+# it on: the user of an AUTH that has its two (1), the name of a SETNAME
+# that has its one (3), or none, past an option the session refuses (4)
+def hello.hashed.opt(au: Bool, sn: Bool) -> Nat:
+  match au sn:
+    case True{} _:
+      1n
+    case False{} True{}:
+      3n
+    case False{} False{}:
+      4n
+
+# HELLO's options from xs on, n of them, each AUTH's password put as its
+# SHA-256 (as AUTH's): they are read as the session reads them
+# (session.bend, hello.step), st saying what the next one is: an option
+# (0), the user of an AUTH (1), its password (2), the name of a SETNAME
+# (3); past an option the session refuses (4), the rest is as it was
+def hello.hashed.go(xs: List<&2, String>, +n: Nat, +st: Nat) -> List<&2, String>:
+  match xs st:
+    case Nil{} _:
+      Nil{}
+    case Con{+x, rest} 0n:
+      x <> hello.hashed.go(rest, Nat.sub(n, 1n), hello.hashed.opt(Bool.and(is_word(x, "AUTH"), Nat.is_le(3n, n)), Bool.and(is_word(x, "SETNAME"), Nat.is_le(2n, n))))
+    case Con{x, rest} 1n:
+      x <> hello.hashed.go(rest, Nat.sub(n, 1n), 2n)
+    case Con{x, rest} 2n:
+      Sha.sha256(x) <> hello.hashed.go(rest, Nat.sub(n, 1n), 0n)
+    case Con{x, rest} 3n:
+      x <> hello.hashed.go(rest, Nat.sub(n, 1n), 0n)
+    case Con{x, rest} _:
+      x <> rest
+
+# HELLO's arguments: its version, then its options with their passwords
+# hashed. A version the session refuses leaves the options unread
+def hello.hashed(args: List<&2, String>) -> List<&2, String>:
+  match args:
+    case Con{v, +rest}:
+      v <> hello.hashed.go(rest, List.length(&2, String, rest), 0n)
+    case Nil{}:
+      Nil{}
+
 # the session commands (cmd_own), parsed into their ops
 def parse_sess(id: Nat, name: String, args: List<&2, String>) -> SessOp:
   match id:
@@ -7468,13 +8180,13 @@ def parse_sess(id: Nat, name: String, args: List<&2, String>) -> SessOp:
         case _:
           s_arity("select")
     case 101n:  # HELLO
-      SHello{args}
+      SHello{hello.hashed(args)}
     case 102n:  # AUTH
       match args:
         case Nil{}:
           s_arity("auth")
         case Con{a, rest}:
-          SAuth{a <> rest}
+          SAuth{auth.hashed(a <> rest)}
     case 103n:  # QUIT
       SQuit{}
     case 104n:  # RESET
@@ -8140,6 +8852,22 @@ def stat.top(+id: Nat) -> Nat:
       202n
     case 203n:
       203n
+    case 210n:
+      204n
+    case 211n:
+      205n
+    case 212n:
+      206n
+    case 213n:
+      207n
+    case 214n:
+      208n
+    case 215n:
+      209n
+    case 216n:
+      210n
+    case 226n:
+      211n
     case _:
       0n
 
@@ -8147,37 +8875,37 @@ def stat.top(+id: Nat) -> Nat:
 def stat.sub.client(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      204n
-    case 2n:
-      205n
-    case 3n:
-      206n
-    case 4n:
-      207n
-    case 5n:
-      208n
-    case 6n:
-      209n
-    case 7n:
-      210n
-    case 8n:
-      211n
-    case 9n:
       212n
-    case 10n:
+    case 2n:
       213n
-    case 11n:
+    case 3n:
       214n
-    case 12n:
+    case 4n:
       215n
-    case 13n:
+    case 5n:
       216n
-    case 14n:
+    case 6n:
       217n
-    case 15n:
+    case 7n:
       218n
-    case 16n:
+    case 8n:
       219n
+    case 9n:
+      220n
+    case 10n:
+      221n
+    case 11n:
+      222n
+    case 12n:
+      223n
+    case 13n:
+      224n
+    case 14n:
+      225n
+    case 15n:
+      226n
+    case 16n:
+      227n
     case _:
       0n
 
@@ -8185,9 +8913,9 @@ def stat.sub.client(+sub: Nat) -> Nat:
 def stat.sub.function(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      220n
+      228n
     case 2n:
-      221n
+      229n
     case _:
       0n
 
@@ -8195,15 +8923,15 @@ def stat.sub.function(+sub: Nat) -> Nat:
 def stat.sub.config(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      222n
+      230n
     case 2n:
-      223n
+      231n
     case 3n:
-      224n
+      232n
     case 4n:
-      225n
+      233n
     case 5n:
-      226n
+      234n
     case _:
       0n
 
@@ -8211,19 +8939,19 @@ def stat.sub.config(+sub: Nat) -> Nat:
 def stat.sub.command(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      227n
+      235n
     case 2n:
-      228n
+      236n
     case 3n:
-      229n
+      237n
     case 4n:
-      230n
+      238n
     case 5n:
-      231n
+      239n
     case 6n:
-      232n
+      240n
     case 7n:
-      233n
+      241n
     case _:
       0n
 
@@ -8231,15 +8959,15 @@ def stat.sub.command(+sub: Nat) -> Nat:
 def stat.sub.object(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      234n
+      242n
     case 2n:
-      235n
+      243n
     case 3n:
-      236n
+      244n
     case 4n:
-      237n
+      245n
     case 5n:
-      238n
+      246n
     case _:
       0n
 
@@ -8247,17 +8975,17 @@ def stat.sub.object(+sub: Nat) -> Nat:
 def stat.sub.memory(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      239n
+      247n
     case 2n:
-      240n
+      248n
     case 3n:
-      241n
+      249n
     case 4n:
-      242n
+      250n
     case 5n:
-      243n
+      251n
     case 6n:
-      244n
+      252n
     case _:
       0n
 
@@ -8265,17 +8993,17 @@ def stat.sub.memory(+sub: Nat) -> Nat:
 def stat.sub.pubsub(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      245n
+      253n
     case 2n:
-      246n
+      254n
     case 3n:
-      247n
+      255n
     case 4n:
-      248n
+      256n
     case 5n:
-      249n
+      257n
     case 6n:
-      250n
+      258n
     case _:
       0n
 
@@ -8283,13 +9011,13 @@ def stat.sub.pubsub(+sub: Nat) -> Nat:
 def stat.sub.slowlog(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      251n
+      259n
     case 2n:
-      252n
+      260n
     case 3n:
-      253n
+      261n
     case 4n:
-      254n
+      262n
     case _:
       0n
 
@@ -8297,19 +9025,65 @@ def stat.sub.slowlog(+sub: Nat) -> Nat:
 def stat.sub.latency(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      255n
+      263n
     case 2n:
-      256n
+      264n
     case 3n:
-      257n
+      265n
     case 4n:
-      258n
+      266n
     case 5n:
-      259n
+      267n
     case 6n:
-      260n
+      268n
     case 7n:
-      261n
+      269n
+    case _:
+      0n
+
+# a subcommand of ACL's key, by its number; 0 for none
+def stat.sub.acl(+sub: Nat) -> Nat:
+  match sub:
+    case 1n:
+      270n
+    case 2n:
+      271n
+    case 3n:
+      272n
+    case 4n:
+      273n
+    case 5n:
+      274n
+    case 6n:
+      275n
+    case 7n:
+      276n
+    case 8n:
+      277n
+    case 9n:
+      278n
+    case 10n:
+      279n
+    case 11n:
+      280n
+    case 12n:
+      281n
+    case 13n:
+      282n
+    case _:
+      0n
+
+# a subcommand of XINFO's key, by its number; 0 for none
+def stat.sub.xinfo(+sub: Nat) -> Nat:
+  match sub:
+    case 1n:
+      283n
+    case 2n:
+      284n
+    case 3n:
+      285n
+    case 4n:
+      286n
     case _:
       0n
 
@@ -8723,121 +9497,171 @@ def stat.name(+key: Nat) -> String:
     case 203n:
       "save"
     case 204n:
-      "client|id"
+      "acl"
     case 205n:
-      "client|help"
+      "xlen"
     case 206n:
-      "client|reply"
+      "xrange"
     case 207n:
-      "client|getname"
+      "xrevrange"
     case 208n:
-      "client|setname"
+      "xread"
     case 209n:
-      "client|caching"
+      "xinfo"
     case 210n:
-      "client|unblock"
+      "xpending"
     case 211n:
-      "client|getredir"
+      "bgsave"
     case 212n:
-      "client|no-evict"
+      "client|id"
     case 213n:
-      "client|trackinginfo"
+      "client|help"
     case 214n:
-      "client|list"
+      "client|reply"
     case 215n:
-      "client|info"
+      "client|getname"
     case 216n:
-      "client|kill"
+      "client|setname"
     case 217n:
-      "client|pause"
+      "client|caching"
     case 218n:
-      "client|unpause"
+      "client|unblock"
     case 219n:
-      "client|tracking"
+      "client|getredir"
     case 220n:
-      "function|flush"
+      "client|no-evict"
     case 221n:
-      "function|help"
+      "client|trackinginfo"
     case 222n:
-      "config|get"
+      "client|list"
     case 223n:
-      "config|set"
+      "client|info"
     case 224n:
-      "config|resetstat"
+      "client|kill"
     case 225n:
-      "config|rewrite"
+      "client|pause"
     case 226n:
-      "config|help"
+      "client|unpause"
     case 227n:
-      "command|info"
+      "client|tracking"
     case 228n:
-      "command|docs"
+      "function|flush"
     case 229n:
-      "command|list"
+      "function|help"
     case 230n:
-      "command|help"
+      "config|get"
     case 231n:
-      "command|count"
+      "config|set"
     case 232n:
-      "command|getkeys"
+      "config|resetstat"
     case 233n:
-      "command|getkeysandflags"
+      "config|rewrite"
     case 234n:
-      "object|help"
+      "config|help"
     case 235n:
-      "object|freq"
+      "command|info"
     case 236n:
-      "object|encoding"
+      "command|docs"
     case 237n:
-      "object|refcount"
+      "command|list"
     case 238n:
-      "object|idletime"
+      "command|help"
     case 239n:
-      "memory|help"
+      "command|count"
     case 240n:
-      "memory|usage"
+      "command|getkeys"
     case 241n:
-      "memory|stats"
+      "command|getkeysandflags"
     case 242n:
-      "memory|doctor"
+      "object|help"
     case 243n:
-      "memory|purge"
+      "object|freq"
     case 244n:
-      "memory|malloc-stats"
+      "object|encoding"
     case 245n:
-      "pubsub|channels"
+      "object|refcount"
     case 246n:
-      "pubsub|help"
+      "object|idletime"
     case 247n:
-      "pubsub|numpat"
+      "memory|help"
     case 248n:
-      "pubsub|numsub"
+      "memory|usage"
     case 249n:
-      "pubsub|shardchannels"
+      "memory|stats"
     case 250n:
-      "pubsub|shardnumsub"
+      "memory|doctor"
     case 251n:
-      "slowlog|get"
+      "memory|purge"
     case 252n:
-      "slowlog|len"
+      "memory|malloc-stats"
     case 253n:
-      "slowlog|reset"
+      "pubsub|channels"
     case 254n:
-      "slowlog|help"
+      "pubsub|help"
     case 255n:
-      "latency|doctor"
+      "pubsub|numpat"
     case 256n:
-      "latency|graph"
+      "pubsub|numsub"
     case 257n:
-      "latency|help"
+      "pubsub|shardchannels"
     case 258n:
-      "latency|histogram"
+      "pubsub|shardnumsub"
     case 259n:
-      "latency|history"
+      "slowlog|get"
     case 260n:
-      "latency|latest"
+      "slowlog|len"
     case 261n:
+      "slowlog|reset"
+    case 262n:
+      "slowlog|help"
+    case 263n:
+      "latency|doctor"
+    case 264n:
+      "latency|graph"
+    case 265n:
+      "latency|help"
+    case 266n:
+      "latency|histogram"
+    case 267n:
+      "latency|history"
+    case 268n:
+      "latency|latest"
+    case 269n:
       "latency|reset"
+    case 270n:
+      "acl|cat"
+    case 271n:
+      "acl|deluser"
+    case 272n:
+      "acl|dryrun"
+    case 273n:
+      "acl|genpass"
+    case 274n:
+      "acl|getuser"
+    case 275n:
+      "acl|help"
+    case 276n:
+      "acl|list"
+    case 277n:
+      "acl|load"
+    case 278n:
+      "acl|log"
+    case 279n:
+      "acl|save"
+    case 280n:
+      "acl|setuser"
+    case 281n:
+      "acl|users"
+    case 282n:
+      "acl|whoami"
+    case 283n:
+      "xinfo|help"
+    case 284n:
+      "xinfo|stream"
+    case 285n:
+      "xinfo|groups"
+    case 286n:
+      "xinfo|consumers"
     case _:
       ""
 
@@ -9252,121 +10076,171 @@ def stat.arity(+key: Nat) -> Nat:
     case 203n:
       2n
     case 204n:
-      4n
+      5n
     case 205n:
       4n
     case 206n:
-      6n
+      9n
     case 207n:
-      4n
+      9n
     case 208n:
-      6n
+      9n
     case 209n:
-      6n
+      5n
     case 210n:
       7n
     case 211n:
-      4n
+      3n
     case 212n:
-      6n
+      4n
     case 213n:
       4n
     case 214n:
-      5n
+      6n
     case 215n:
       4n
     case 216n:
-      7n
+      6n
     case 217n:
-      7n
+      6n
     case 218n:
-      4n
-    case 219n:
       7n
+    case 219n:
+      4n
     case 220n:
-      5n
+      6n
     case 221n:
       4n
     case 222n:
-      7n
+      5n
     case 223n:
-      9n
+      4n
     case 224n:
-      4n
+      7n
     case 225n:
-      4n
+      7n
     case 226n:
       4n
     case 227n:
-      5n
+      7n
     case 228n:
       5n
     case 229n:
-      5n
+      4n
     case 230n:
-      4n
+      7n
     case 231n:
-      4n
+      9n
     case 232n:
-      9n
+      4n
     case 233n:
-      9n
+      4n
     case 234n:
       4n
     case 235n:
-      6n
+      5n
     case 236n:
-      6n
+      5n
     case 237n:
-      6n
+      5n
     case 238n:
-      6n
+      4n
     case 239n:
       4n
     case 240n:
-      7n
+      9n
     case 241n:
-      4n
+      9n
     case 242n:
       4n
     case 243n:
-      4n
+      6n
     case 244n:
-      4n
+      6n
     case 245n:
-      5n
+      6n
     case 246n:
-      4n
+      6n
     case 247n:
       4n
     case 248n:
-      5n
+      7n
     case 249n:
-      5n
+      4n
     case 250n:
-      5n
+      4n
     case 251n:
-      5n
+      4n
     case 252n:
       4n
     case 253n:
-      4n
+      5n
     case 254n:
       4n
     case 255n:
       4n
     case 256n:
-      6n
+      5n
     case 257n:
-      4n
+      5n
     case 258n:
       5n
     case 259n:
-      6n
+      5n
     case 260n:
       4n
     case 261n:
+      4n
+    case 262n:
+      4n
+    case 263n:
+      4n
+    case 264n:
+      6n
+    case 265n:
+      4n
+    case 266n:
       5n
+    case 267n:
+      6n
+    case 268n:
+      4n
+    case 269n:
+      5n
+    case 270n:
+      5n
+    case 271n:
+      7n
+    case 272n:
+      9n
+    case 273n:
+      5n
+    case 274n:
+      6n
+    case 275n:
+      4n
+    case 276n:
+      4n
+    case 277n:
+      4n
+    case 278n:
+      5n
+    case 279n:
+      4n
+    case 280n:
+      7n
+    case 281n:
+      4n
+    case 282n:
+      4n
+    case 283n:
+      4n
+    case 284n:
+      7n
+    case 285n:
+      6n
+    case 286n:
+      8n
     case _:
       1n
 
@@ -9607,11 +10481,27 @@ def stat.risky(+key: Nat) -> Bool:
       True{}
     case 200n:
       True{}
-    case 235n:
+    case 205n:
       True{}
-    case 238n:
+    case 206n:
       True{}
-    case 240n:
+    case 207n:
+      True{}
+    case 208n:
+      True{}
+    case 210n:
+      True{}
+    case 243n:
+      True{}
+    case 246n:
+      True{}
+    case 248n:
+      True{}
+    case 284n:
+      True{}
+    case 285n:
+      True{}
+    case 286n:
       True{}
     case _:
       False{}
@@ -9635,43 +10525,63 @@ def stat.unseen(+key: Nat) -> Bool:
       True{}
     case 203n:
       True{}
-    case 210n:
-      True{}
-    case 212n:
-      True{}
-    case 214n:
-      True{}
-    case 216n:
-      True{}
-    case 217n:
+    case 211n:
       True{}
     case 218n:
       True{}
-    case 222n:
+    case 220n:
       True{}
-    case 223n:
+    case 222n:
       True{}
     case 224n:
       True{}
     case 225n:
       True{}
-    case 251n:
+    case 226n:
       True{}
-    case 252n:
+    case 230n:
       True{}
-    case 253n:
+    case 231n:
       True{}
-    case 255n:
+    case 232n:
       True{}
-    case 256n:
-      True{}
-    case 258n:
+    case 233n:
       True{}
     case 259n:
       True{}
     case 260n:
       True{}
     case 261n:
+      True{}
+    case 263n:
+      True{}
+    case 264n:
+      True{}
+    case 266n:
+      True{}
+    case 267n:
+      True{}
+    case 268n:
+      True{}
+    case 269n:
+      True{}
+    case 271n:
+      True{}
+    case 272n:
+      True{}
+    case 274n:
+      True{}
+    case 276n:
+      True{}
+    case 277n:
+      True{}
+    case 278n:
+      True{}
+    case 279n:
+      True{}
+    case 280n:
+      True{}
+    case 281n:
       True{}
     case _:
       False{}
@@ -10012,17 +10922,33 @@ def stat.keyspace(+key: Nat) -> Bool:
       True{}
     case 200n:
       True{}
-    case 220n:
+    case 205n:
       True{}
-    case 235n:
+    case 206n:
       True{}
-    case 236n:
+    case 207n:
       True{}
-    case 237n:
+    case 208n:
       True{}
-    case 238n:
+    case 210n:
       True{}
-    case 240n:
+    case 228n:
+      True{}
+    case 243n:
+      True{}
+    case 244n:
+      True{}
+    case 245n:
+      True{}
+    case 246n:
+      True{}
+    case 248n:
+      True{}
+    case 284n:
+      True{}
+    case 285n:
+      True{}
+    case 286n:
       True{}
     case _:
       False{}
@@ -10217,7 +11143,7 @@ def stat.pausable(+key: Nat) -> Bool:
       True{}
     case 200n:
       True{}
-    case 220n:
+    case 228n:
       True{}
     case _:
       False{}
@@ -10332,6 +11258,382 @@ def stat.denyoom(+key: Nat) -> Bool:
       True{}
     case _:
       False{}
+
+# whether the command of a key writes (write): while a background save
+# that failed stops writes (MISCONF), Redis refuses it
+def stat.write(+key: Nat) -> Bool:
+  match key:
+    case 4n:
+      True{}
+    case 5n:
+      True{}
+    case 6n:
+      True{}
+    case 7n:
+      True{}
+    case 8n:
+      True{}
+    case 10n:
+      True{}
+    case 11n:
+      True{}
+    case 12n:
+      True{}
+    case 13n:
+      True{}
+    case 14n:
+      True{}
+    case 17n:
+      True{}
+    case 19n:
+      True{}
+    case 20n:
+      True{}
+    case 23n:
+      True{}
+    case 24n:
+      True{}
+    case 26n:
+      True{}
+    case 27n:
+      True{}
+    case 28n:
+      True{}
+    case 29n:
+      True{}
+    case 30n:
+      True{}
+    case 31n:
+      True{}
+    case 36n:
+      True{}
+    case 39n:
+      True{}
+    case 41n:
+      True{}
+    case 45n:
+      True{}
+    case 46n:
+      True{}
+    case 47n:
+      True{}
+    case 48n:
+      True{}
+    case 49n:
+      True{}
+    case 51n:
+      True{}
+    case 52n:
+      True{}
+    case 55n:
+      True{}
+    case 56n:
+      True{}
+    case 63n:
+      True{}
+    case 66n:
+      True{}
+    case 67n:
+      True{}
+    case 68n:
+      True{}
+    case 69n:
+      True{}
+    case 70n:
+      True{}
+    case 71n:
+      True{}
+    case 75n:
+      True{}
+    case 76n:
+      True{}
+    case 77n:
+      True{}
+    case 78n:
+      True{}
+    case 80n:
+      True{}
+    case 81n:
+      True{}
+    case 82n:
+      True{}
+    case 83n:
+      True{}
+    case 84n:
+      True{}
+    case 90n:
+      True{}
+    case 93n:
+      True{}
+    case 95n:
+      True{}
+    case 97n:
+      True{}
+    case 98n:
+      True{}
+    case 99n:
+      True{}
+    case 111n:
+      True{}
+    case 112n:
+      True{}
+    case 115n:
+      True{}
+    case 119n:
+      True{}
+    case 121n:
+      True{}
+    case 122n:
+      True{}
+    case 123n:
+      True{}
+    case 137n:
+      True{}
+    case 138n:
+      True{}
+    case 139n:
+      True{}
+    case 140n:
+      True{}
+    case 141n:
+      True{}
+    case 147n:
+      True{}
+    case 148n:
+      True{}
+    case 149n:
+      True{}
+    case 150n:
+      True{}
+    case 151n:
+      True{}
+    case 153n:
+      True{}
+    case 154n:
+      True{}
+    case 155n:
+      True{}
+    case 156n:
+      True{}
+    case 157n:
+      True{}
+    case 158n:
+      True{}
+    case 159n:
+      True{}
+    case 160n:
+      True{}
+    case 177n:
+      True{}
+    case 179n:
+      True{}
+    case 181n:
+      True{}
+    case 182n:
+      True{}
+    case 189n:
+      True{}
+    case 193n:
+      True{}
+    case 195n:
+      True{}
+    case 198n:
+      True{}
+    case 200n:
+      True{}
+    case 228n:
+      True{}
+    case _:
+      False{}
+
+# how a call of the command of a key counts its changes (DIRTY_RULES in
+# tools/gen_commands.py; server.bend, The count of changes)
+def stat.dirty(+key: Nat) -> Nat:
+  match key:
+    case 4n:
+      3n
+    case 5n:
+      2n
+    case 6n:
+      1n
+    case 7n:
+      2n
+    case 8n:
+      2n
+    case 10n:
+      1n
+    case 11n:
+      1n
+    case 12n:
+      1n
+    case 13n:
+      1n
+    case 14n:
+      1n
+    case 17n:
+      10n
+    case 19n:
+      10n
+    case 20n:
+      10n
+    case 23n:
+      1n
+    case 24n:
+      1n
+    case 26n:
+      10n
+    case 27n:
+      4n
+    case 28n:
+      2n
+    case 29n:
+      2n
+    case 30n:
+      2n
+    case 31n:
+      2n
+    case 36n:
+      2n
+    case 39n:
+      10n
+    case 41n:
+      10n
+    case 45n:
+      11n
+    case 46n:
+      10n
+    case 47n:
+      2n
+    case 48n:
+      12n
+    case 49n:
+      15n
+    case 51n:
+      10n
+    case 52n:
+      2n
+    case 55n:
+      10n
+    case 56n:
+      2n
+    case 63n:
+      1n
+    case 65n:
+      16n
+    case 66n:
+      10n
+    case 67n:
+      10n
+    case 68n:
+      11n
+    case 69n:
+      11n
+    case 70n:
+      5n
+    case 71n:
+      5n
+    case 75n:
+      1n
+    case 76n:
+      9n
+    case 77n:
+      2n
+    case 78n:
+      10n
+    case 80n:
+      4n
+    case 81n:
+      4n
+    case 82n:
+      6n
+    case 83n:
+      2n
+    case 84n:
+      2n
+    case 90n:
+      10n
+    case 93n:
+      12n
+    case 95n:
+      12n
+    case 97n:
+      12n
+    case 98n:
+      1n
+    case 99n:
+      1n
+    case 111n:
+      1n
+    case 112n:
+      2n
+    case 115n:
+      2n
+    case 119n:
+      5n
+    case 121n:
+      14n
+    case 122n:
+      14n
+    case 123n:
+      2n
+    case 137n:
+      2n
+    case 138n:
+      2n
+    case 139n:
+      2n
+    case 140n:
+      7n
+    case 141n:
+      7n
+    case 147n:
+      12n
+    case 148n:
+      12n
+    case 149n:
+      12n
+    case 150n:
+      12n
+    case 151n:
+      6n
+    case 153n:
+      8n
+    case 154n:
+      8n
+    case 155n:
+      4n
+    case 156n:
+      4n
+    case 157n:
+      6n
+    case 158n:
+      8n
+    case 159n:
+      8n
+    case 160n:
+      6n
+    case 177n:
+      13n
+    case 179n:
+      2n
+    case 181n:
+      1n
+    case 182n:
+      10n
+    case 189n:
+      14n
+    case 193n:
+      13n
+    case 195n:
+      13n
+    case 198n:
+      13n
+    case 200n:
+      10n
+    case 228n:
+      1n
+    case _:
+      0n
 
 # whether the command of a key may not run in a transaction (no_multi:
 # SHUTDOWN, SAVE): in MULTI, Redis refuses it before it is queued
@@ -10526,6 +11828,8 @@ def stat.fast(+key: Nat) -> Bool:
       True{}
     case 188n:
       True{}
+    case 205n:
+      True{}
     case _:
       False{}
 
@@ -10690,15 +11994,31 @@ def stat.ro(+key: Nat) -> Bool:
       True{}
     case 199n:
       True{}
-    case 235n:
+    case 205n:
       True{}
-    case 236n:
+    case 206n:
       True{}
-    case 237n:
+    case 207n:
       True{}
-    case 238n:
+    case 208n:
       True{}
-    case 240n:
+    case 210n:
+      True{}
+    case 243n:
+      True{}
+    case 244n:
+      True{}
+    case 245n:
+      True{}
+    case 246n:
+      True{}
+    case 248n:
+      True{}
+    case 284n:
+      True{}
+    case 285n:
+      True{}
+    case 286n:
       True{}
     case _:
       False{}
@@ -10991,6 +12311,14 @@ def stat.touch(+key: Nat) -> Bool:
     case 199n:
       True{}
     case 200n:
+      True{}
+    case 205n:
+      True{}
+    case 206n:
+      True{}
+    case 207n:
+      True{}
+    case 210n:
       True{}
     case _:
       False{}
@@ -12570,6 +13898,156 @@ def stat.cw(+code: Nat) -> U32:
       3335
     case 785n:
       3339
+    case 786n:
+      3341
+    case 787n:
+      3342
+    case 788n:
+      3347
+    case 789n:
+      3349
+    case 790n:
+      3350
+    case 791n:
+      3353
+    case 792n:
+      3354
+    case 793n:
+      3356
+    case 794n:
+      3363
+    case 795n:
+      3365
+    case 796n:
+      3366
+    case 797n:
+      3369
+    case 798n:
+      3370
+    case 799n:
+      3372
+    case 800n:
+      3377
+    case 801n:
+      3378
+    case 802n:
+      3380
+    case 803n:
+      3384
+    case 804n:
+      3395
+    case 805n:
+      3397
+    case 806n:
+      3398
+    case 807n:
+      3401
+    case 808n:
+      3402
+    case 809n:
+      3404
+    case 810n:
+      3409
+    case 811n:
+      3410
+    case 812n:
+      3412
+    case 813n:
+      3416
+    case 814n:
+      3425
+    case 815n:
+      3426
+    case 816n:
+      3428
+    case 817n:
+      3432
+    case 818n:
+      3440
+    case 819n:
+      3459
+    case 820n:
+      3461
+    case 821n:
+      3462
+    case 822n:
+      3465
+    case 823n:
+      3466
+    case 824n:
+      3468
+    case 825n:
+      3473
+    case 826n:
+      3474
+    case 827n:
+      3476
+    case 828n:
+      3480
+    case 829n:
+      3489
+    case 830n:
+      3490
+    case 831n:
+      3492
+    case 832n:
+      3496
+    case 833n:
+      3504
+    case 834n:
+      3521
+    case 835n:
+      3522
+    case 836n:
+      3524
+    case 837n:
+      3528
+    case 838n:
+      3536
+    case 839n:
+      3552
+    case 840n:
+      3591
+    case 841n:
+      3595
+    case 842n:
+      3597
+    case 843n:
+      3598
+    case 844n:
+      3603
+    case 845n:
+      3605
+    case 846n:
+      3606
+    case 847n:
+      3609
+    case 848n:
+      3610
+    case 849n:
+      3612
+    case 850n:
+      3619
+    case 851n:
+      3621
+    case 852n:
+      3622
+    case 853n:
+      3625
+    case 854n:
+      3626
+    case 855n:
+      3628
+    case 856n:
+      3633
+    case 857n:
+      3634
+    case 858n:
+      3636
+    case 859n:
+      3640
+    case 860n:
+      3651
     case _:
       63
 
@@ -14407,6 +15885,181 @@ def stat.code.lo52(+lo: Nat) -> Nat:
       784n
     case 11n:
       785n
+    case 13n:
+      786n
+    case 14n:
+      787n
+    case 19n:
+      788n
+    case 21n:
+      789n
+    case 22n:
+      790n
+    case 25n:
+      791n
+    case 26n:
+      792n
+    case 28n:
+      793n
+    case 35n:
+      794n
+    case 37n:
+      795n
+    case 38n:
+      796n
+    case 41n:
+      797n
+    case 42n:
+      798n
+    case 44n:
+      799n
+    case 49n:
+      800n
+    case 50n:
+      801n
+    case 52n:
+      802n
+    case 56n:
+      803n
+    case _:
+      0n
+
+def stat.code.lo53(+lo: Nat) -> Nat:
+  match lo:
+    case 3n:
+      804n
+    case 5n:
+      805n
+    case 6n:
+      806n
+    case 9n:
+      807n
+    case 10n:
+      808n
+    case 12n:
+      809n
+    case 17n:
+      810n
+    case 18n:
+      811n
+    case 20n:
+      812n
+    case 24n:
+      813n
+    case 33n:
+      814n
+    case 34n:
+      815n
+    case 36n:
+      816n
+    case 40n:
+      817n
+    case 48n:
+      818n
+    case _:
+      0n
+
+def stat.code.lo54(+lo: Nat) -> Nat:
+  match lo:
+    case 3n:
+      819n
+    case 5n:
+      820n
+    case 6n:
+      821n
+    case 9n:
+      822n
+    case 10n:
+      823n
+    case 12n:
+      824n
+    case 17n:
+      825n
+    case 18n:
+      826n
+    case 20n:
+      827n
+    case 24n:
+      828n
+    case 33n:
+      829n
+    case 34n:
+      830n
+    case 36n:
+      831n
+    case 40n:
+      832n
+    case 48n:
+      833n
+    case _:
+      0n
+
+def stat.code.lo55(+lo: Nat) -> Nat:
+  match lo:
+    case 1n:
+      834n
+    case 2n:
+      835n
+    case 4n:
+      836n
+    case 8n:
+      837n
+    case 16n:
+      838n
+    case 32n:
+      839n
+    case _:
+      0n
+
+def stat.code.lo56(+lo: Nat) -> Nat:
+  match lo:
+    case 7n:
+      840n
+    case 11n:
+      841n
+    case 13n:
+      842n
+    case 14n:
+      843n
+    case 19n:
+      844n
+    case 21n:
+      845n
+    case 22n:
+      846n
+    case 25n:
+      847n
+    case 26n:
+      848n
+    case 28n:
+      849n
+    case 35n:
+      850n
+    case 37n:
+      851n
+    case 38n:
+      852n
+    case 41n:
+      853n
+    case 42n:
+      854n
+    case 44n:
+      855n
+    case 49n:
+      856n
+    case 50n:
+      857n
+    case 52n:
+      858n
+    case 56n:
+      859n
+    case _:
+      0n
+
+def stat.code.lo57(+lo: Nat) -> Nat:
+  match lo:
+    case 3n:
+      860n
     case _:
       0n
 
@@ -14518,6 +16171,16 @@ def stat.code.hl(+hi: Nat, +lo: Nat) -> Nat:
       stat.code.lo51(lo)
     case 52n:
       stat.code.lo52(lo)
+    case 53n:
+      stat.code.lo53(lo)
+    case 54n:
+      stat.code.lo54(lo)
+    case 55n:
+      stat.code.lo55(lo)
+    case 56n:
+      stat.code.lo56(lo)
+    case 57n:
+      stat.code.lo57(lo)
     case _:
       0n
 
@@ -14541,7 +16204,7 @@ def stat.mark.restore() -> U32:
 # END gen_commands: stats
 
 # a container (CLIENT, FUNCTION, CONFIG, COMMAND, OBJECT, MEMORY, PUBSUB,
-# SLOWLOG, LATENCY)
+# SLOWLOG, LATENCY, ACL, XINFO)
 # by its first argument; alone, the container itself (top)
 def stat.sub.of(id: Nat, +up: String) -> Nat:
   match id:
@@ -14561,6 +16224,10 @@ def stat.sub.of(id: Nat, +up: String) -> Nat:
       stat.sub.slowlog(slowlog_id(up, String.length(up)))
     case 202n:
       stat.sub.latency(latency_id(up, String.length(up)))
+    case 210n:
+      stat.sub.acl(acl_id(up, String.length(up)))
+    case 215n:
+      stat.sub.xinfo(xinfo_id(up, String.length(up)))
     case _:
       stat.sub.command(command_id(up, String.length(up)))
 
@@ -14592,6 +16259,10 @@ def stat.key(+id: Nat, +args: List<&2, String>) -> Nat:
       stat.key.args(stat.top(201n), 201n, args)
     case 202n:
       stat.key.args(stat.top(202n), 202n, args)
+    case 210n:
+      stat.key.args(stat.top(210n), 210n, args)
+    case 215n:
+      stat.key.args(stat.top(215n), 215n, args)
     case _:
       stat.top(id)
 
@@ -15915,8 +17586,10 @@ def hscan.big(+t: KV.Trie<String>, sc: KV.Scan, pat: Maybe<&2, String>) -> Reply
 
 def hscan.go(+h: KV.Hash, +cur: Nat, +n: Nat, pat: Maybe<&2, String>) -> Reply:
   match h:
-    case KV.HSmall{m, +ps}:
-      hscan.rep(0n, ps, pat)
+    case KV.HSmall{+m, +b}:
+      hscan.rep(0n, KV.hb.pairs(m, b, 0n), pat)
+    case KV.HLong{m, +ps}:
+      hscan.rep(0n, KV.hl.pairs(ps), pat)
     case KV.HBig{m, +t}:
       hscan.big(t, KV.scan(String, t, cur, n, 0n), pat)
 
@@ -15990,6 +17663,8 @@ def hread.coll(op: HRead, +cl: KV.Coll) -> Reply:
       e_wrongtype()
     case KV.CZset{+z}:
       e_wrongtype()
+    case KV.CStream{+x}:
+      e_wrongtype()
 
 # A list's reads.
 
@@ -16035,58 +17710,45 @@ def lrange.args(args: List<&2, String>, +l: KV.Deq) -> Reply:
     case _:
       e_int()
 
-# LPOS's walk, from the end it starts from: the elements xs, the i-th read
-# next; stop says the walk is over (the matches it wants are found, or
-# MAXLEN elements are read); m matches so far, the positions found
-# reversed in acc (the answer with COUNT, else the one position)
-def lpos.put(take: Bool, +p: Nat, acc: List<&2, Reply>) -> List<&2, Reply>:
-  match take:
-    case True{}:
-      RInt{IPos{p}} <> acc
-    case False{}:
-      acc
+# LPOS's search (KV.deq.find), from the end it starts from: the matches
+# it wants are the RANK-th without COUNT, else COUNT of them from the
+# RANK-th on (0: every one), among the first MAXLEN elements (0: all).
+# Neither bound goes past the list's n elements and one, so that a RANK
+# or a COUNT near 2^47 makes no larger number.
+def lpos.want(+cnt: Maybe<&2, Nat>, +rank: Nat, +n: Nat) -> Nat:
+  match cnt:
+    case None{}:
+      Nat.min(rank, 1n+n)
+    case Some{+c}:
+      Bool.pick(Nat, Nat.is_eq(c, 0n), 1n+n, Nat.add(Nat.min(Nat.sub(rank, 1n), n), Nat.min(c, 1n+n)))
 
-def lpos.out(cnt: Maybe<&2, Nat>, acc: List<&2, Reply>) -> Reply:
-  match cnt acc:
-    case Some{c} rs:
-      RArray{List.reverse(&2, Reply, rs)}
+def lpos.reads(+maxlen: Nat, +n: Nat) -> Nat:
+  Bool.pick(Nat, Nat.is_eq(maxlen, 0n), 1n+n, maxlen)
+
+# the positions found, the last first, as replies in the order found
+def lpos.ints(ps: List<&2, Nat>, acc: List<&2, Reply>) -> List<&2, Reply>:
+  match ps:
+    case Nil{}:
+      acc
+    case Con{p, rest}:
+      lpos.ints(rest, RInt{IPos{p}} <> acc)
+
+# the answer: the positions from the RANK-th match on with COUNT, else
+# the one position (none: nil)
+def lpos.out(cnt: Maybe<&2, Nat>, rs: List<&2, Reply>) -> Reply:
+  match cnt rs:
+    case Some{c} xs:
+      RArray{xs}
     case None{} Con{r, rest}:
       r
     case None{} Nil{}:
       RNull{}
 
-# whether the match just taken (the m-th) is the last the walk wants: the
-# first one without COUNT, the c-th from RANK on with COUNT c (0: every
-# one)
-def lpos.full(+cnt: Maybe<&2, Nat>, +rank: Nat, +m: Nat) -> Bool:
-  match cnt:
-    case None{}:
-      True{}
-    case Some{+c}:
-      Bool.and(Nat.is_lt(0n, c), Nat.is_le(c, 1n+Nat.sub(m, rank)))
-
-def lpos.go(xs: List<&2, String>, stop: Bool, +x: String, +n: Nat, +back: Bool, +rank: Nat, +cnt: Maybe<&2, Nat>, +maxlen: Nat, +i: Nat, +m: Nat, acc: List<&2, Reply>) -> Reply:
-  match xs stop:
-    case Con{y, rest} False{}:
-      +hit = String.eq(y, x)
-      +m2 = Bool.pick(Nat, hit, 1n+m, m)
-      +take = Bool.and(hit, Nat.is_le(rank, m2))
-      +last = Bool.and(Nat.is_lt(0n, maxlen), Nat.is_le(maxlen, 1n+i))
-      lpos.go(rest, Bool.or(Bool.and(take, lpos.full(cnt, rank, m2)), last), x, n, back, rank, cnt, maxlen, 1n+i, m2, lpos.put(take, Bool.pick(Nat, back, Nat.sub(Nat.sub(n, 1n), i), i), acc))
-    case _ _:
-      lpos.out(cnt, acc)
-
-def lpos.elems(back: Bool, +l: KV.Deq) -> List<&2, String>:
-  match back:
-    case True{}:
-      List.reverse(&2, String, KV.deq.all(l))
-    case False{}:
-      KV.deq.all(l)
-
 def lpos.run(o: LPosOpts, +x: String, +l: KV.Deq) -> Reply:
   match o:
     case LPosOpts{+back, +rank, +cnt, +maxlen}:
-      lpos.go(lpos.elems(back, l), False{}, x, KV.deq.len(l), back, rank, cnt, maxlen, 0n, 0n, Nil{})
+      +n = KV.deq.len(l)
+      lpos.out(cnt, List.drop(&2, Reply, lpos.ints(KV.deq.find(x, back, lpos.want(cnt, rank, n), lpos.reads(maxlen, n), l), Nil{}), Nat.min(Nat.sub(rank, 1n), n)))
     case LPosBad{r}:
       r
 
@@ -16156,6 +17818,8 @@ def lread.coll(op: LRead, +cl: KV.Coll) -> Reply:
       e_wrongtype()
     case KV.CZset{+z}:
       e_wrongtype()
+    case KV.CStream{+x}:
+      e_wrongtype()
 
 # A set's reads. A key not there reads as an empty set, as in Redis
 # (SISMEMBER 0, SMISMEMBER's zeros, SCARD 0, SMEMBERS empty, an empty
@@ -16202,7 +17866,9 @@ def sscan.rep(+next: Nat, xs: List<&2, String>, pat: Maybe<&2, String>) -> Reply
 
 # SSCAN: an intset answers all its members at once, with cursor 0, as
 # Redis answers one; a hashtable scans its trie as HSCAN scans a hash's
-# (the options as HSCAN reads them)
+# (the options as HSCAN reads them), and a small one (KV.Mems) answers
+# the cursors, and the members a call, that a trie of its members
+# answers (KV.ss.scan, which makes none)
 def sscan.big(sc: KV.Scan, pat: Maybe<&2, String>) -> Reply:
   match sc:
     case KV.Stop{+at, acc}:
@@ -16210,12 +17876,24 @@ def sscan.big(sc: KV.Scan, pat: Maybe<&2, String>) -> Reply:
     case KV.Scan{w, acc}:
       sscan.rep(0n, List.reverse(&2, String, acc), pat)
 
+# a small set's scan, its members in the order read
+def sscan.small(sc: KV.Scan, pat: Maybe<&2, String>) -> Reply:
+  match sc:
+    case KV.Stop{+at, xs}:
+      sscan.rep(Bool.pick(Nat, Nat.is_lt(at, 1048576n), at, 0n), xs, pat)
+    case KV.Scan{w, xs}:
+      sscan.rep(0n, xs, pat)
+
 def sscan.go(+s: KV.Mems, +cur: Nat, +n: Nat, pat: Maybe<&2, String>) -> Reply:
   match s:
-    case KV.MInts{m, +xs}:
-      sscan.rep(0n, KV.ints.list(xs), pat)
+    case KV.MInts{+m, +b}:
+      sscan.rep(0n, KV.ints.list(b, m), pat)
     case KV.MBig{m, +t}:
       sscan.big(KV.scan(Unit, t, cur, n, 0n), pat)
+    case KV.MSmall{+m, +b}:
+      sscan.small(KV.ss.scan(m, b, cur, n), pat)
+    case KV.MLong{m, +ps}:
+      sscan.small(KV.ss.scan.ps(ps, cur, n), pat)
 
 def sscan.of(a: ScanArgs, +s: KV.Mems) -> Reply:
   match a:
@@ -16271,6 +17949,8 @@ def sread.coll(op: SRead, +cl: KV.Coll) -> Reply:
       e_wrongtype()
     case KV.CZset{+z}:
       e_wrongtype()
+    case KV.CStream{+x}:
+      e_wrongtype()
 
 # A sorted set's reads. A key not there reads as an empty sorted set, as
 # in Redis (ZCARD 0, nils for scores and ranks, no elements in a range,
@@ -16300,10 +17980,9 @@ def zmscore.none(ms: List<&2, String>) -> List<&2, Reply>:
       RNull{} <> zmscore.none(rest)
 
 # a member's rank, from the first element (from the last when rev)
-def zrank.of(m: Maybe<&2, F.F64>, +rev: Bool, +k: String, +z: KV.Zset) -> Reply:
+def zrank.of(m: Maybe<&2, Nat>, +rev: Bool, +z: KV.Zset) -> Reply:
   match m:
-    case Some{+d}:
-      +r = KV.zset.rank(z, k, d)
+    case Some{+r}:
       r_int(Bool.pick(Nat, rev, Nat.sub(Nat.sub(KV.zset.len(z), r), 1n), r))
     case None{}:
       RNull{}
@@ -16351,7 +18030,7 @@ def zels.flat(xs: List<&2, KV.ZEl>) -> List<&2, Reply>:
 
 # How a range's elements are found. By rank, as LRANGE reads its range
 # (lspan); from the last element when reversed. By score (in order, so a
-# walk down the tree finds where a bound falls, KV.zt.before): the ranks
+# walk finds where a bound falls, KV.zset.before): the ranks
 # lo, of the first element in the range, and hi, past its last; then
 # LIMIT as Redis reads it (genericZrangebyscoreCommand): an offset above
 # 0 and at least the size of the sorted set, or below 0, keeps none, a
@@ -16483,9 +18162,9 @@ def zel.ok(e: KV.ZEl, +p: KV.ZP) -> Bool:
 
 # whether a small sorted set's range of members can hold an element
 # (zzlIsInLexRange)
-def zlex.in(+t: KV.ZTree, +lo: KV.ZLB, +hi: KV.ZLB) -> Bool:
-  +n = KV.zt.size(t)
-  Bool.and(Bool.not(zlb.empty(lo, hi)), Bool.and(Nat.is_lt(0n, n), Bool.and(zel.ok(KV.zt.nth(t, Nat.sub(n, 1n)), KV.ZGeL{lo}), zel.ok(KV.zt.nth(t, 0n), KV.ZLeL{hi}))))
+def zlex.in(+z: KV.Zset, +lo: KV.ZLB, +hi: KV.ZLB) -> Bool:
+  +n = KV.zset.len(z)
+  Bool.and(Bool.not(zlb.empty(lo, hi)), Bool.and(Nat.is_lt(0n, n), Bool.and(zel.ok(KV.zset.nth(z, Nat.sub(n, 1n)), KV.ZGeL{lo}), zel.ok(KV.zset.nth(z, 0n), KV.ZLeL{hi}))))
 
 def zlex.take(ok: Bool, +s: List<&2, KV.ZEl>, +o: Nat, +p: KV.ZP, +c: Nat) -> List<&2, KV.ZEl>:
   match ok:
@@ -16494,32 +18173,31 @@ def zlex.take(ok: Bool, +s: List<&2, KV.ZEl>, +o: Nat, +p: KV.ZP, +c: Nat) -> Li
     case False{}:
       Nil{}
 
-def zlex.small.in(ok: Bool, rev: Bool, +t: KV.ZTree, +lo: KV.ZLB, +hi: KV.ZLB, +o: Nat, +c: Nat) -> List<&2, KV.ZEl>:
+def zlex.small.in(ok: Bool, rev: Bool, +z: KV.Zset, +lo: KV.ZLB, +hi: KV.ZLB, +o: Nat, +c: Nat) -> List<&2, KV.ZEl>:
   match ok rev:
     case False{} _:
       Nil{}
     case True{} False{}:
-      +s = zl.from(KV.zt.all(t), KV.ZGeL{lo})
+      +s = zl.from(KV.zset.all(z), KV.ZGeL{lo})
       zlex.take(zl.ok(s, KV.ZLeL{hi}), s, o, KV.ZLeL{hi}, c)
     case True{} True{}:
-      +s = zl.from(KV.zt.rslice(t, 0n, KV.zt.size(t)), KV.ZLeL{hi})
+      +s = zl.from(KV.zset.slice(True{}, z, 0n, KV.zset.len(z)), KV.ZLeL{hi})
       zlex.take(zl.ok(s, KV.ZGeL{lo}), s, o, KV.ZGeL{lo}, c)
 
-def zlex.small(off: Int, +rev: Bool, +t: KV.ZTree, +lo: KV.ZLB, +hi: KV.ZLB, +c: Nat) -> List<&2, KV.ZEl>:
+def zlex.small(off: Int, +rev: Bool, +z: KV.Zset, +lo: KV.ZLB, +hi: KV.ZLB, +c: Nat) -> List<&2, KV.ZEl>:
   match off:
     case INeg{x}:
       Nil{}
     case IPos{+o}:
-      zlex.small.in(zlex.in(t, lo, hi), rev, t, lo, hi, o, c)
+      zlex.small.in(zlex.in(z, lo, hi), rev, z, lo, hi, o, c)
 
 def zlex.of(small: Bool, +lo: KV.ZLB, +hi: KV.ZLB, +rev: Bool, +off: Int, +cnt: Int, +z: KV.Zset) -> List<&2, KV.ZEl>:
   match small:
     case True{}:
-      zlex.small(off, rev, KV.zset.tree(z), lo, hi, zcnt(cnt, KV.zset.len(z)))
+      zlex.small(off, rev, z, lo, hi, zcnt(cnt, KV.zset.len(z)))
     case False{}:
-      +t = KV.zset.tree(z)
       +n = KV.zset.len(z)
-      zwin.slice(zwin(off, rev, KV.zt.before(t, KV.ZGeL{lo}), KV.zt.before(t, KV.ZGtL{hi}), zcnt(cnt, n), n), rev, z)
+      zwin.slice(zwin(off, rev, KV.zset.before(z, KV.ZGeL{lo}), KV.zset.before(z, KV.ZGtL{hi}), zcnt(cnt, n), n), rev, z)
 
 # a range's elements, in the order Redis answers them
 def zrange.of(r: ZRng, +rev: Bool, +off: Int, +cnt: Int, +z: KV.Zset) -> List<&2, KV.ZEl>:
@@ -16527,9 +18205,8 @@ def zrange.of(r: ZRng, +rev: Bool, +off: Int, +cnt: Int, +z: KV.Zset) -> List<&2
     case ZRankR{+a, +b}:
       zrank.range(lspan(a, b, KV.zset.len(z)), rev, z)
     case ZScoreR{+lo, +hi}:
-      +t = KV.zset.tree(z)
       +n = KV.zset.len(z)
-      zwin.slice(zwin(off, rev, KV.zt.before(t, KV.ZGeS{lo}), KV.zt.before(t, KV.ZGtS{hi}), zcnt(cnt, n), n), rev, z)
+      zwin.slice(zwin(off, rev, KV.zset.before(z, KV.ZGeS{lo}), KV.zset.before(z, KV.ZGtS{hi}), zcnt(cnt, n), n), rev, z)
     case ZLexR{+lo, +hi}:
       zlex.of(KV.zset.is_small(z), lo, hi, rev, off, cnt, z)
 
@@ -16559,16 +18236,14 @@ def zq.reply(+q: ZQ, +z: KV.Zset) -> Reply:
 # small sorted set, those its range by member holds (as above), of a
 # large one, those between the ranks of its bounds
 def zcount(+lo: KV.ZSB, +hi: KV.ZSB, +z: KV.Zset) -> Nat:
-  +t = KV.zset.tree(z)
-  Nat.sub(KV.zt.before(t, KV.ZGtS{hi}), KV.zt.before(t, KV.ZGeS{lo}))
+  Nat.sub(KV.zset.before(z, KV.ZGtS{hi}), KV.zset.before(z, KV.ZGeS{lo}))
 
 def zlexcount.of(small: Bool, +lo: KV.ZLB, +hi: KV.ZLB, +z: KV.Zset) -> Nat:
   match small:
     case True{}:
-      List.length(&2, KV.ZEl, zlex.small(IPos{0n}, False{}, KV.zset.tree(z), lo, hi, KV.zset.len(z)))
+      List.length(&2, KV.ZEl, zlex.small(IPos{0n}, False{}, z, lo, hi, KV.zset.len(z)))
     case False{}:
-      +t = KV.zset.tree(z)
-      Nat.sub(KV.zt.before(t, KV.ZGtL{hi}), KV.zt.before(t, KV.ZGeL{lo}))
+      Nat.sub(KV.zset.before(z, KV.ZGtL{hi}), KV.zset.before(z, KV.ZGeL{lo}))
 
 # ZCOUNT's range (k 2) or ZLEXCOUNT's (k 3), read again as it runs: the
 # count, or the error of a range that does not read
@@ -16622,7 +18297,9 @@ def zscan.big(+t: KV.Trie<F.F64>, sc: KV.Scan, pat: Maybe<&2, String>) -> Reply:
 
 def zscan.go(+z: KV.Zset, +cur: Nat, +n: Nat, pat: Maybe<&2, String>) -> Reply:
   match z:
-    case KV.ZSmall{+tr}:
+    case KV.ZSmall{+k, +b}:
+      hscan.rep(0n, zscan.lp(KV.zb.all(k, b)), pat)
+    case KV.ZWide{+tr}:
       hscan.rep(0n, zscan.lp(KV.zt.all(tr)), pat)
     case KV.ZBig{tr, +t}:
       zscan.big(t, KV.scan(F.F64, t, cur, n, 0n), pat)
@@ -16644,9 +18321,9 @@ def zread(op: ZRead, +z: KV.Zset) -> Reply:
     case ZRMScore{ms}:
       RArray{zmscore(ms, z)}
     case ZRRank{+m}:
-      zrank.of(KV.zset.score(m, z), False{}, m, z)
+      zrank.of(KV.zset.rank(m, z), False{}, z)
     case ZRRevRank{+m}:
-      zrank.of(KV.zset.score(m, z), True{}, m, z)
+      zrank.of(KV.zset.rank(m, z), True{}, z)
     case ZRCount{args}:
       zcount.args(2n, args, z)
     case ZRLexCount{args}:
@@ -16719,6 +18396,553 @@ def dump.of(m: Maybe<&2, KV.Item<String>>) -> Reply:
     case None{}:
       RNull{}
 
+# Reads of a stream
+# -----------------
+# The replies of PStream, from the stream stream.bend reads (Streams,
+# above, for what each reads before the key): its entries, each its ID
+# and its fields and values; XREAD's keys and their entries (RKMap); a
+# count Redis keeps as a long long as one (X.xn.show.ll)
+
+def xv.bulks(xs: List<&2, String>) -> List<&2, Reply>:
+  match xs:
+    case Con{x, rest}:
+      RBulk{x} <> xv.bulks(rest)
+    case Nil{}:
+      Nil{}
+
+def xv.entry(e: X.XE) -> Reply:
+  match e:
+    case X.XE{+id, fv}:
+      RArray{[RBulk{X.xid.show(id)}, RArray{xv.bulks(fv)}]}
+
+def xv.entries(es: List<&2, X.XE>) -> List<&2, Reply>:
+  match es:
+    case Con{e, rest}:
+      xv.entry(e) <> xv.entries(rest)
+    case Nil{}:
+      Nil{}
+
+def xv.id(+id: KV.XId) -> Reply:
+  RBulk{X.xid.show(id)}
+
+def xv.ll(+n: KV.XN) -> Reply:
+  RIntS{X.xn.show.ll(n)}
+
+# XRANGE's entries, or a null for COUNT 0
+def xv.range.of(+c: Nat, +x: KV.XStream, +lo: KV.XId, +hi: KV.XId, +rev: Bool) -> Reply:
+  match c:
+    case 0n:
+      RNullA{}
+    case _:
+      RArray{xv.entries(X.xs.range(x, lo, hi, c, rev))}
+
+def xv.range(+x: KV.XStream, q: XQ) -> Reply:
+  match q:
+    case XQ{+lo, +hi, +c}:
+      xv.range.of(c, x, lo, hi, False{})
+    case XQRev{XQ{+lo, +hi, +c}}:
+      xv.range.of(c, x, lo, hi, True{})
+    case XQRev{r}:
+      RArray{Nil{}}
+
+# XREAD's ID of a key: "$" its last ID (0-0 for a key not there), ">"
+# an error, another a strict ID (missing sequence 0); each compared as a
+# C string, up to its first NUL
+type XRid is Data:
+  XRid{id: KV.XId}
+  XRidBad{r: Reply}
+
+def xv.rid.of(m: Maybe<&2, KV.XId>) -> XRid:
+  match m:
+    case Some{id}:
+      XRid{id}
+    case None{}:
+      XRidBad{e_xid()}
+
+def xv.rid(+s: String, +last: KV.XId) -> XRid:
+  +c = cstr(s)
+  Bool.pick(XRid, String.eq(c, "$"), XRid{last}, Bool.pick(XRid, String.eq(c, ">"), XRidBad{RError{"ERR The > ID can be specified only when calling XREADGROUP using the GROUP <group> <consumer> option."}}, xv.rid.of(X.xid.parse(s, True{}, X.xn.zero()))))
+
+# a key XREAD reads: a stream and the ID its entries must be past, a key
+# not there, or the error that ends the read
+type XRk is Data:
+  XRkS{key: String, x: KV.XStream, id: KV.XId}
+  XRkNone{}
+  XRkBad{r: Reply}
+
+def xv.rk.of(r: XRid, +k: String, +x: KV.XStream) -> XRk:
+  match r:
+    case XRid{id}:
+      XRkS{k, x, id}
+    case XRidBad{e}:
+      XRkBad{e}
+
+def xv.rk.none(r: XRid) -> XRk:
+  match r:
+    case XRid{id}:
+      XRkNone{}
+    case XRidBad{e}:
+      XRkBad{e}
+
+# key k's entry m, with its ID s: WRONGTYPE for a key of another kind
+def xv.rk(m: Maybe<&2, KV.Item<KV.Val>>, +k: String, +s: String) -> XRk:
+  match m:
+    case Some{KV.Item{KV.VColl{KV.CStream{+x}}, e}}:
+      xv.rk.of(xv.rid(s, X.xstream.last(x)), k, x)
+    case Some{_}:
+      XRkBad{e_wrongtype()}
+    case None{}:
+      xv.rk.none(xv.rid(s, X.xid.zero()))
+
+# the ID after id; past the last one, 0-0 (as streamIncrID leaves it)
+def xv.after.of(m: Maybe<&2, KV.XId>) -> KV.XId:
+  match m:
+    case Some{+id}:
+      id
+    case None{}:
+      X.xid.zero()
+
+def xv.after(+id: KV.XId) -> KV.XId:
+  xv.after.of(X.xid.incr(id))
+
+def xv.serve.if(go: Bool, +k: String, +x: KV.XStream, +id: KV.XId, +c: Nat) -> Maybe<&2, Reply>:
+  match go:
+    case True{}:
+      Some{RKPair{[RBulk{k}, RArray{xv.entries(X.xs.range(x, xv.after(id), X.xid.max(), c, False{}))}]}}
+    case False{}:
+      None{}
+
+# a key served: its entries past id, when the last live one is past it
+def xv.serve.of(m: Maybe<&2, KV.XId>, +k: String, +x: KV.XStream, +id: KV.XId, +c: Nat) -> Maybe<&2, Reply>:
+  match m:
+    case Some{+top}:
+      xv.serve.if(Cmp.is_gt(KV.xid.cmp(top, id)), k, x, id, c)
+    case None{}:
+      None{}
+
+def xv.serve(r: XRk, +c: Nat) -> Maybe<&2, Reply>:
+  match r:
+    case XRkS{+k, +x, +id}:
+      xv.serve.of(X.xs.top(x), k, x, id, c)
+    case _:
+      None{}
+
+# XREAD's reply: the keys served, or none, a null array (with BLOCK, as
+# Redis answers a client that may not wait; the server answers that
+# BendKV blocks on no stream yet)
+def xv.read.reply(ps: List<&2, Reply>) -> Reply:
+  match ps:
+    case Nil{}:
+      RNullA{}
+    case xs:
+      RKMap{xs}
+
+def xv.maybe(m: Maybe<&2, Reply>) -> List<&2, Reply>:
+  match m:
+    case Some{r}:
+      [r]
+    case None{}:
+      Nil{}
+
+def xv.read.one(r: XRk, +c: Nat) -> Reply:
+  match r:
+    case XRkBad{e}:
+      e
+    case other:
+      xv.read.reply(xv.maybe(xv.serve(other, c)))
+
+# XREAD of one key, its entry m
+def xv.read(q: XRq, m: Maybe<&2, KV.Item<KV.Val>>) -> Reply:
+  match q:
+    case XRq{+k, +s, +c}:
+      xv.read.one(xv.rk(m, k, s), c)
+    case XRqOf{y}:
+      xv.read(y, m)
+
+# XREAD of several keys in the database d: each key, then its ID, in
+# turn, the first error ending the read before any is served; then each
+# key served in turn
+type XRks is Data:
+  XRksOk{rs: List<&2, XRk>}
+  XRksBad{r: Reply}
+
+def xv.rks.add(r: XRk, rest: XRks) -> XRks:
+  match r rest:
+    case XRkBad{e} _:
+      XRksBad{e}
+    case _ XRksBad{e}:
+      XRksBad{e}
+    case x XRksOk{rs}:
+      XRksOk{x <> rs}
+
+def xv.rks(ks: List<&2, String>, ids: List<&2, String>, +d: Db) -> XRks:
+  match ks ids:
+    case Con{+k, krest} Con{+s, irest}:
+      xv.rks.add(xv.rk(db.ent(d, k), k, s), xv.rks(krest, irest, d))
+    case _ _:
+      XRksOk{Nil{}}
+
+def xv.serves(rs: List<&2, XRk>, +c: Nat) -> List<&2, Reply>:
+  match rs:
+    case Con{r, rest}:
+      List.append(&2, Reply, xv.maybe(xv.serve(r, c)), xv.serves(rest, c))
+    case Nil{}:
+      Nil{}
+
+def xv.read.all(r: XRks, +c: Nat) -> Reply:
+  match r:
+    case XRksOk{rs}:
+      xv.read.reply(xv.serves(rs, c))
+    case XRksBad{e}:
+      e
+
+# the keys and their IDs of XREAD's words ws (keys, then as many IDs), in
+# the database d
+def xv.rks.of(+ws: List<&2, String>, +d: Db) -> XRks:
+  +n = Nat.div(List.length(&2, String, ws), 2n)
+  xv.rks(List.take(&2, String, ws, n), List.drop(&2, String, ws, n), d)
+
+def xread.many(q: XRm, +d: Db) -> Reply:
+  match q:
+    case XRm{+c, b, ws}:
+      xv.read.all(xv.rks.of(ws, d), c)
+    case XRmOf{y}:
+      xread.many(y, d)
+
+# whether no key of rs is served (its last live entry past its ID)
+def xv.unserved.of(m: Maybe<&2, KV.XId>, +id: KV.XId) -> Bool:
+  match m:
+    case Some{+top}:
+      Bool.not(Cmp.is_gt(KV.xid.cmp(top, id)))
+    case None{}:
+      True{}
+
+def xv.unserved(rs: List<&2, XRk>) -> Bool:
+  match rs:
+    case Con{XRkS{k, x, +id}, rest}:
+      Bool.and(xv.unserved.of(X.xs.top(x), id), xv.unserved(rest))
+    case Con{r, rest}:
+      xv.unserved(rest)
+    case Nil{}:
+      True{}
+
+def xv.waits(r: XRks) -> Bool:
+  match r:
+    case XRksOk{rs}:
+      xv.unserved(rs)
+    case XRksBad{e}:
+      False{}
+
+# whether XREAD q would wait on the database d: BLOCK came, and it
+# answers no error and serves no key (the server answers it then, as
+# BendKV blocks on no stream yet)
+def xread.waits(q: XRm, +d: Db) -> Bool:
+  match q:
+    case XRm{c, True{}, ws}:
+      xv.waits(xv.rks.of(ws, d))
+    case XRm{c, False{}, ws}:
+      False{}
+    case XRmOf{y}:
+      xread.waits(y, d)
+
+# a group's count of entries read: none as a null
+def xv.read.cnt(r: KV.XRd) -> Reply:
+  match r:
+    case KV.XRdN{+n}:
+      xv.ll(n)
+    case KV.XRdNone{}:
+      RNull{}
+
+def xv.lag(m: Maybe<&2, KV.XN>) -> Reply:
+  match m:
+    case Some{+n}:
+      xv.ll(n)
+    case None{}:
+      RNull{}
+
+def xv.first(es: List<&2, X.XE>) -> Reply:
+  match es:
+    case Con{e, rest}:
+      xv.entry(e)
+    case Nil{}:
+      RNull{}
+
+# XINFO STREAM's fields that both forms answer
+def xv.info.head(+x: KV.XStream) -> List<&2, Reply>:
+  [RBulk{"length"}, r_int(KV.xstream.len(x)), RBulk{"radix-tree-keys"}, r_int(KV.xns.size(X.xstream.nodes(x))), RBulk{"radix-tree-nodes"}, r_int(X.xs.rax(x)), RBulk{"last-generated-id"}, xv.id(X.xstream.last(x)), RBulk{"max-deleted-entry-id"}, xv.id(X.xstream.maxdel(x)), RBulk{"entries-added"}, xv.ll(X.xstream.added(x)), RBulk{"recorded-first-entry-id"}, xv.id(X.xstream.first(x))]
+
+def xv.info.plain(+x: KV.XStream) -> Reply:
+  RMap{List.append(&2, Reply, xv.info.head(x), [RBulk{"groups"}, r_int(KV.xgs.size(X.xstream.groups(x))), RBulk{"first-entry"}, xv.first(X.xs.range(x, X.xid.zero(), X.xid.max(), 1n, False{})), RBulk{"last-entry"}, xv.first(X.xs.range(x, X.xid.zero(), X.xid.max(), 1n, True{}))])}
+
+# XINFO STREAM FULL's pending entries of a group, and of a consumer
+def xv.nack.full(+n: KV.XNack) -> Reply:
+  RArray{[xv.id(KV.xnack.id(n)), RBulk{X.xnack.owner(n)}, r_int(X.xnack.time(n)), xv.ll(X.xnack.count(n))]}
+
+def xv.nacks.full(ns: List<&2, KV.XNack>) -> List<&2, Reply>:
+  match ns:
+    case Con{n, rest}:
+      xv.nack.full(n) <> xv.nacks.full(rest)
+    case Nil{}:
+      Nil{}
+
+def xv.cnack.full(+n: KV.XNack) -> Reply:
+  RArray{[xv.id(KV.xnack.id(n)), r_int(X.xnack.time(n)), xv.ll(X.xnack.count(n))]}
+
+def xv.cnacks.full(ns: List<&2, KV.XNack>) -> List<&2, Reply>:
+  match ns:
+    case Con{n, rest}:
+      xv.cnack.full(n) <> xv.cnacks.full(rest)
+    case Nil{}:
+      Nil{}
+
+def xv.con.full(+c: KV.XCon, +pel: KV.XPel, +n: Nat) -> Reply:
+  +ids = X.xcon.ids(c)
+  RMap{[RBulk{"name"}, RBulk{KV.xcon.name(c)}, RBulk{"seen-time"}, r_int(X.xcon.seen(c)), RBulk{"pel-count"}, r_int(KV.xis.size(ids)), RBulk{"pending"}, RArray{xv.cnacks.full(X.xs.pending(pel, Some{ids}, X.xid.zero(), X.xid.max(), n, X.XINone{}, 0n))}]}
+
+def xv.cons.full(cs: List<&2, KV.XCon>, +pel: KV.XPel, +n: Nat) -> List<&2, Reply>:
+  match cs:
+    case Con{+c, rest}:
+      xv.con.full(c, pel, n) <> xv.cons.full(rest, pel, n)
+    case Nil{}:
+      Nil{}
+
+def xv.group.full(+x: KV.XStream, +g: KV.XGroup, +n: Nat) -> Reply:
+  +pel = X.xgroup.pel(g)
+  RMap{[RBulk{"name"}, RBulk{KV.xgroup.name(g)}, RBulk{"last-delivered-id"}, xv.id(X.xgroup.last(g)), RBulk{"entries-read"}, xv.read.cnt(X.xgroup.read(g)), RBulk{"lag"}, xv.lag(X.xs.lag(x, g)), RBulk{"pel-count"}, r_int(KV.xpl.size(pel)), RBulk{"pending"}, RArray{xv.nacks.full(X.xs.pending(pel, None{}, X.xid.zero(), X.xid.max(), n, X.XINone{}, 0n))}, RBulk{"consumers"}, RArray{xv.cons.full(KV.xcs.list(X.xgroup.cons(g), Nil{}), pel, n)}]}
+
+def xv.groups.full(gs: List<&2, KV.XGroup>, +x: KV.XStream, +n: Nat) -> List<&2, Reply>:
+  match gs:
+    case Con{+g, rest}:
+      xv.group.full(x, g, n) <> xv.groups.full(rest, x, n)
+    case Nil{}:
+      Nil{}
+
+# FULL with COUNT n (0 for all): the entries, then the groups
+def xv.info.full(+x: KV.XStream, +n: Nat) -> Reply:
+  RMap{List.append(&2, Reply, xv.info.head(x), [RBulk{"entries"}, RArray{xv.entries(X.xs.range(x, X.xid.zero(), X.xid.max(), n, False{}))}, RBulk{"groups"}, RArray{xv.groups.full(KV.xgs.list(X.xstream.groups(x), Nil{}), x, n)}])}
+
+# FULL's COUNT: a long long, below 0 as 10, 0 for all
+def xv.full.count(m: Maybe<&2, LL>, +x: KV.XStream) -> Reply:
+  match m:
+    case Some{LL{True{}, hi, lo}}:
+      xv.info.full(x, 10n)
+    case Some{LL{False{}, +hi, +lo}}:
+      xv.info.full(x, xc.read(xc.of.big(Nat.is_le(140737n, hi), hi, lo)))
+    case Some{LLBad{}}:
+      e_int()
+    case None{}:
+      xv.info.full(x, 10n)
+
+def xv.ll.of(l: LL) -> Maybe<&2, LL>:
+  Some{l}
+
+# FULL's reply when its words are right (ok), else the subcommand's
+# syntax error; a match, so that a wrong word reads no entry
+def xv.info.full.if(ok: Bool, m: Maybe<&2, LL>, +sub: String, +x: KV.XStream) -> Reply:
+  match ok:
+    case True{}:
+      xv.full.count(m, x)
+    case False{}:
+      e_sub_syntax(sub, "XINFO")
+
+# XINFO STREAM's options (xinfoReplyWithStreamInfo): none, FULL, or FULL
+# COUNT count; any other shape the subcommand's syntax error
+def xv.info.stream(+sub: String, args: List<&2, String>, +x: KV.XStream) -> Reply:
+  match args:
+    case Nil{}:
+      xv.info.plain(x)
+    case Con{+f, Nil{}}:
+      xv.info.full.if(is_word(f, "FULL"), None{}, sub, x)
+    case Con{+f, Con{+w, Con{+n, Nil{}}}}:
+      xv.info.full.if(Bool.and(is_word(f, "FULL"), is_word(w, "COUNT")), xv.ll.of(ll.read(n)), sub, x)
+    case _:
+      e_sub_syntax(sub, "XINFO")
+
+# XINFO GROUPS
+def xv.group.info(+x: KV.XStream, +g: KV.XGroup) -> Reply:
+  RMap{[RBulk{"name"}, RBulk{KV.xgroup.name(g)}, RBulk{"consumers"}, r_int(KV.xcs.size(X.xgroup.cons(g))), RBulk{"pending"}, r_int(KV.xpl.size(X.xgroup.pel(g))), RBulk{"last-delivered-id"}, xv.id(X.xgroup.last(g)), RBulk{"entries-read"}, xv.read.cnt(X.xgroup.read(g)), RBulk{"lag"}, xv.lag(X.xs.lag(x, g))]}
+
+def xv.groups.info(gs: List<&2, KV.XGroup>, +x: KV.XStream) -> List<&2, Reply>:
+  match gs:
+    case Con{+g, rest}:
+      xv.group.info(x, g) <> xv.groups.info(rest, x)
+    case Nil{}:
+      Nil{}
+
+# XINFO CONSUMERS: each consumer's idle time, now less its seen time (0
+# for one past now)
+def xv.con.info(+c: KV.XCon, +now: Nat) -> Reply:
+  RMap{[RBulk{"name"}, RBulk{KV.xcon.name(c)}, RBulk{"pending"}, r_int(KV.xis.size(X.xcon.ids(c))), RBulk{"idle"}, r_int(Nat.sub(now, X.xcon.seen(c)))]}
+
+def xv.cons.info(cs: List<&2, KV.XCon>, +now: Nat) -> List<&2, Reply>:
+  match cs:
+    case Con{+c, rest}:
+      xv.con.info(c, now) <> xv.cons.info(rest, now)
+    case Nil{}:
+      Nil{}
+
+def xv.info.cons(m: Maybe<&2, KV.XGroup>, +k: String, +g: String, +now: Nat) -> Reply:
+  match m:
+    case Some{+gr}:
+      RArray{xv.cons.info(KV.xcs.list(X.xgroup.cons(gr), Nil{}), now)}
+    case None{}:
+      RError{e_fmt("NOGROUP No such consumer group '" ++ cstr(g) ++ "' for key name '" ++ cstr(k) ++ "'")}
+
+def xv.info(i: XInf, +now: Nat, +x: KV.XStream) -> Reply:
+  match i:
+    case XIStream{+sub, args}:
+      xv.info.stream(sub, args, x)
+    case XIGroups{}:
+      RArray{xv.groups.info(KV.xgs.list(X.xstream.groups(x), Nil{}), x)}
+    case XICons{+k, +g}:
+      xv.info.cons(X.xs.group(x, g), k, g, now)
+    case XIOf{y}:
+      xv.info(y, now, x)
+
+# XPENDING
+def e_xnogroup(+k: String, +g: String) -> Reply:
+  RError{e_fmt("NOGROUP No such key '" ++ cstr(k) ++ "' or consumer group '" ++ cstr(g) ++ "'")}
+
+def xv.pend.con(c: KV.XCon) -> Reply:
+  match c:
+    case KV.XCon{+name, seen, +ids}:
+      RArray{[RBulk{name}, RBulk{Nat.show(KV.xis.size(ids))}]}
+
+def xv.pend.cons(cs: List<&2, KV.XCon>) -> List<&2, Reply>:
+  match cs:
+    case Con{c, rest}:
+      xv.pend.con(c) <> xv.pend.cons(rest)
+    case Nil{}:
+      Nil{}
+
+def xv.pend.edge(m: Maybe<&2, KV.XId>) -> Reply:
+  match m:
+    case Some{+id}:
+      xv.id(id)
+    case None{}:
+      RNull{}
+
+# the summary: the count of pending entries, the first and last IDs, and
+# each consumer with pending entries and its count, as a bulk
+def xv.pend.sum(+g: KV.XGroup) -> Reply:
+  +pel = X.xgroup.pel(g)
+  +n = KV.xpl.size(pel)
+  Bool.pick(Reply, Nat.is_eq(n, 0n), RArray{[r_int(0n), RNull{}, RNull{}, RNullA{}]}, RArray{[r_int(n), xv.pend.edge(X.xpl.first(pel, None{})), xv.pend.edge(X.xpl.last(pel, None{})), RArray{xv.pend.cons(X.xcs.pending(KV.xcs.list(X.xgroup.cons(g), Nil{}), Nil{}))}]})
+
+# an entry: its ID, its owner, its idle time (now less its time, 0 past
+# now) and its count of deliveries
+def xv.pend.one(+n: KV.XNack, +now: Nat) -> Reply:
+  RArray{[xv.id(KV.xnack.id(n)), RBulk{X.xnack.owner(n)}, r_int(Nat.sub(now, X.xnack.time(n))), xv.ll(X.xnack.count(n))]}
+
+def xv.pend.all(ns: List<&2, KV.XNack>, +now: Nat) -> List<&2, Reply>:
+  match ns:
+    case Con{n, rest}:
+      xv.pend.one(n, now) <> xv.pend.all(rest, now)
+    case Nil{}:
+      Nil{}
+
+# the entries of the group, or of a consumer of it; none of a consumer
+# not there
+def xv.pend.ids(m: Maybe<&2, KV.XCon>) -> Maybe<&2, Maybe<&2, KV.XIds>>:
+  match m:
+    case Some{+c}:
+      Some{Some{X.xcon.ids(c)}}
+    case None{}:
+      None{}
+
+def xv.pend.of(m: Maybe<&2, Maybe<&2, KV.XIds>>, +g: KV.XGroup, +idle: X.XIdle, +lo: KV.XId, +hi: KV.XId, +c: Nat, +now: Nat) -> Reply:
+  match m:
+    case Some{ids}:
+      RArray{xv.pend.all(X.xs.pending(X.xgroup.pel(g), ids, lo, hi, c, idle, now), now)}
+    case None{}:
+      RArray{Nil{}}
+
+def xv.pend.con.of(m: Maybe<&2, String>, +g: KV.XGroup) -> Maybe<&2, Maybe<&2, KV.XIds>>:
+  match m:
+    case Some{+name}:
+      xv.pend.ids(X.xgroup.con(g, name))
+    case None{}:
+      Some{None{}}
+
+def xv.pend.ext(+g: KV.XGroup, +idle: X.XIdle, +lo: KV.XId, +hi: KV.XId, +c: Nat, con: Maybe<&2, String>, +now: Nat) -> Reply:
+  xv.pend.of(xv.pend.con.of(con, g), g, idle, lo, hi, c, now)
+
+def xv.pend.group(m: Maybe<&2, KV.XGroup>, q: XPq, +now: Nat) -> Reply:
+  match m q:
+    case Some{+g} XPSum{k, gn}:
+      xv.pend.sum(g)
+    case Some{+g} XPExt{k, gn, +idle, +lo, +hi, +c, con}:
+      xv.pend.ext(g, idle, lo, hi, c, con, now)
+    case None{} XPSum{+k, +gn}:
+      e_xnogroup(k, gn)
+    case None{} XPExt{+k, +gn, idle, lo, hi, c, con}:
+      e_xnogroup(k, gn)
+    case _ _:
+      RArray{Nil{}}
+
+def xv.pend(q: XPq, +now: Nat, +x: KV.XStream) -> Reply:
+  match q:
+    case XPSum{+k, +g}:
+      xv.pend.group(X.xs.group(x, g), XPSum{k, g}, now)
+    case XPExt{+k, +g, idle, lo, hi, c, con}:
+      xv.pend.group(X.xs.group(x, g), XPExt{k, g, idle, lo, hi, c, con}, now)
+    case XPqOf{y}:
+      xv.pend(y, now, x)
+
+# a key not there: XPENDING's group is not there either
+def xv.pend.none(q: XPq) -> Reply:
+  match q:
+    case XPSum{+k, +g}:
+      e_xnogroup(k, g)
+    case XPExt{+k, +g, idle, lo, hi, c, con}:
+      e_xnogroup(k, g)
+    case XPqOf{y}:
+      xv.pend.none(y)
+
+# a read of a stream x (at now)
+def xread(op: XRead, +now: Nat, +x: KV.XStream) -> Reply:
+  match op:
+    case XRLen{}:
+      r_int(KV.xstream.len(x))
+    case XRRange{q}:
+      xv.range(x, q)
+    case XRRead{q}:
+      xv.read(q, Some{KV.Item{KV.VColl{KV.CStream{x}}, 0n}})
+    case XRInfo{i}:
+      xv.info(i, now, x)
+    case XRPend{q}:
+      xv.pend(q, now, x)
+
+# of a key not there
+def xread.none(op: XRead) -> Reply:
+  match op:
+    case XRLen{}:
+      r_int(0n)
+    case XRRange{q}:
+      RArray{Nil{}}
+    case XRRead{q}:
+      xv.read(q, None{})
+    case XRInfo{i}:
+      RError{"ERR no such key"}
+    case XRPend{q}:
+      xv.pend.none(q)
+
+# of a key that holds a string (m: the string's entry, or none)
+def xread.str(op: XRead, m: Maybe<&2, KV.Item<String>>) -> Reply:
+  match m:
+    case Some{x}:
+      e_wrongtype()
+    case None{}:
+      xread.none(op)
+
+# of a key that holds a collection
+def xread.coll(op: XRead, +now: Nat, +cl: KV.Coll) -> Reply:
+  match cl:
+    case KV.CStream{+x}:
+      xread(op, now, x)
+    case _:
+      e_wrongtype()
+
 # the reply of a Peek, from the entry of its key there at now
 def peek(c: PeekOp, +now: Nat, m: Maybe<&2, KV.Item<String>>) -> Reply:
   match c:
@@ -16754,6 +18978,8 @@ def peek(c: PeekOp, +now: Nat, m: Maybe<&2, KV.Item<String>>) -> Reply:
       zread.str(op, m)
     case PDump{}:
       dump.of(m)
+    case PStream{op}:
+      xread.str(op, m)
 
 # a Peek of a key that holds a collection: its type, its time, a read of
 # a hash of a hash (so of the others), its payload, or WRONGTYPE for a
@@ -16780,6 +19006,8 @@ def peek.coll(c: PeekOp, +now: Nat, +cl: KV.Coll, +e: Nat) -> Reply:
       zread.coll(op, cl)
     case PDump{}:
       RBulk{D.dump(KV.VColl{cl})}
+    case PStream{op}:
+      xread.coll(op, now, cl)
     case _:
       e_wrongtype()
 
@@ -17552,6 +19780,8 @@ def hwrite.coll(op: HWrite, +cl: KV.Coll) -> Out:
       hwrite.wrong(op)
     case KV.CZset{z}:
       hwrite.wrong(op)
+    case KV.CStream{x}:
+      hwrite.wrong(op)
 
 # A list's writes. A key not there is an empty list: LPUSH and RPUSH make
 # it, LPUSHX and RPUSHX answer 0, the others find nothing (LSET: no such
@@ -17672,32 +19902,8 @@ def lset.fresh(fresh: Bool, +i: String, +v: String, l: KV.Deq) -> Out:
     case False{}:
       lset.of(lnum(i), i, v, l)
 
-# LINSERT: the elements xs with v put before the first p (after it, for
-# after), when one is there; hit says whether xs's first element is p
-def lins.head(+p: String, +xs: List<&2, String>) -> Bool:
-  match xs:
-    case Con{+y, +rest}:
-      String.eq(y, p)
-    case Nil{}:
-      False{}
-
-def lins.put(after: Bool, y: String, v: String, rest: List<&2, String>) -> List<&2, String>:
-  match after:
-    case True{}:
-      y <> (v <> rest)
-    case False{}:
-      v <> (y <> rest)
-
-def lins.go(xs: List<&2, String>, hit: Bool, +after: Bool, +p: String, +v: String, acc: List<&2, String>) -> Maybe<&2, List<&2, String>>:
-  match xs hit:
-    case Con{y, rest} True{}:
-      Some{List.reverse.go(&2, String, acc, lins.put(after, y, v, rest))}
-    case Con{y, +rest} False{}:
-      +h = lins.head(p, rest)
-      lins.go(rest, h, after, p, v, y <> acc)
-    case Nil{} _:
-      None{}
-
+# LINSERT: v put before the first element that is p (after it, for
+# after), when one is there (KV.deq.ins)
 def lins.op(after: Bool, p: String, v: String) -> LWrite:
   match after:
     case True{}:
@@ -17705,10 +19911,10 @@ def lins.op(after: Bool, p: String, v: String) -> LWrite:
     case False{}:
       LWBefore{p, v}
 
-def lins.of(m: Maybe<&2, List<&2, String>>, +n: Nat, +after: Bool, +p: String, +v: String) -> Out:
+def lins.of(m: Maybe<&2, KV.Deq>, +n: Nat, +after: Bool, +p: String, +v: String) -> Out:
   match m:
-    case Some{xs}:
-      Out{r_int(1n+n), CList{lins.op(after, p, v), KV.deq.of(1n+n, xs)}}
+    case Some{d}:
+      Out{r_int(1n+n), CList{lins.op(after, p, v), d}}
     case None{}:
       Out{RInt{INeg{0n}}, CKeep{}}
 
@@ -17718,68 +19924,33 @@ def lins.fresh(fresh: Bool, +after: Bool, +p: String, +v: String, l: KV.Deq) -> 
       Out{r_int(0n), CKeep{}}
     case False{}:
       +d = l
-      +xs = KV.deq.all(d)
-      lins.of(lins.go(xs, lins.head(p, xs), after, p, v, Nil{}), KV.deq.len(d), after, p, v)
+      lins.of(KV.deq.ins(p, after, v, d), KV.deq.len(d), after, p, v)
 
-# LREM: up to k matches of v taken (k 0: all) from the elements xs, the
-# others kept in order; how many were taken
-type LRem is Data:
-  LRem{xs: List<&2, String>, gone: Nat}
-
-def lrem.keep(hit: Bool, y: String, acc: List<&2, String>) -> List<&2, String>:
-  match hit:
-    case True{}:
-      acc
-    case False{}:
-      y <> acc
-
-def lrem.go(xs: List<&2, String>, +v: String, +k: Nat, +gone: Nat, acc: List<&2, String>) -> LRem:
-  match xs:
-    case Nil{}:
-      LRem{List.reverse(&2, String, acc), gone}
-    case Con{+y, rest}:
-      +hit = Bool.and(String.eq(y, v), Bool.or(Nat.is_eq(k, 0n), Nat.is_lt(gone, k)))
-      lrem.go(rest, v, k, Bool.pick(Nat, hit, 1n+gone, gone), lrem.keep(hit, y, acc))
-
-# from the last element (back): the elements reversed, and the rest put
-# back in order
-def lrem.back(back: Bool, r: LRem) -> LRem:
-  match back r:
-    case True{} LRem{xs, gone}:
-      LRem{List.reverse(&2, String, xs), gone}
-    case False{} r:
-      r
-
-def lrem.elems(back: Bool, +l: KV.Deq) -> List<&2, String>:
-  match back:
-    case True{}:
-      List.reverse(&2, String, KV.deq.all(l))
-    case False{}:
-      KV.deq.all(l)
-
-def lrem.ch(none: Bool, all: Bool, +gone: Nat, +n: Nat, +c: String, +v: String, xs: List<&2, String>) -> Out:
+# LREM: up to k matches of v taken (k 0: all), from the first element or
+# the last (KV.deq.rem); how many were taken
+def lrem.ch(none: Bool, all: Bool, +gone: Nat, +n: Nat, +c: String, +v: String, d: KV.Deq) -> Out:
   match none all:
     case True{} _:
       Out{r_int(0n), CKeep{}}
     case False{} True{}:
       Out{r_int(gone), CDel{}}
     case False{} False{}:
-      Out{r_int(gone), CList{LWRem{c, v}, KV.deq.of(Nat.sub(n, gone), xs)}}
+      Out{r_int(gone), CList{LWRem{c, v}, d}}
 
-def lrem.out(r: LRem, +n: Nat, +c: String, +v: String) -> Out:
+def lrem.out(r: KV.Rem, +n: Nat, +c: String, +v: String) -> Out:
   match r:
-    case LRem{xs, +gone}:
-      lrem.ch(Nat.is_eq(gone, 0n), Nat.is_eq(gone, n), gone, n, c, v, xs)
+    case KV.Rem{d, +gone}:
+      lrem.ch(Nat.is_eq(gone, 0n), Nat.is_eq(gone, n), gone, n, c, v, d)
 
 # count c: c of v from the first element (0: every one), -c from the last
 def lrem.of(m: Maybe<&2, Int>, +c: String, +v: String, l: KV.Deq) -> Out:
   match m:
     case Some{IPos{+k}}:
       +d = l
-      lrem.out(lrem.go(KV.deq.all(d), v, k, 0n, Nil{}), KV.deq.len(d), c, v)
+      lrem.out(KV.deq.rem(v, k, False{}, d), KV.deq.len(d), c, v)
     case Some{INeg{+k}}:
       +d = l
-      lrem.out(lrem.back(True{}, lrem.go(lrem.elems(True{}, d), v, 1n+k, 0n, Nil{})), KV.deq.len(d), c, v)
+      lrem.out(KV.deq.rem(v, 1n+k, True{}, d), KV.deq.len(d), c, v)
     case None{}:
       Out{e_int(), CKeep{}}
 
@@ -17884,15 +20055,18 @@ def lwrite.coll(op: LWrite, +cl: KV.Coll) -> Out:
       lwrite.wrong(op)
     case KV.CZset{z}:
       lwrite.wrong(op)
+    case KV.CStream{x}:
+      lwrite.wrong(op)
 
 # Members at random, by r (the server's random number, and the numbers of
 # its Weyl sequence after it, each scrambled by KV.mix): a member of an
-# intset by its index, of a hashtable as RANDOMKEY picks a key (KV.pick).
-# k different members of a set of n, k below n: an intset's picked and
-# dropped in turn; a hashtable's, when k is more than a third of n, by
-# n - k members dropped from it at random (Redis's third way), else
-# picked until k different ones come, at most 16k + 64 picks (Redis's
-# fourth way), as SRANDMEMBER and SPOP pick them.
+# intset or of a small hashtable by its index, of a trie as RANDOMKEY
+# picks a key (KV.pick). k different members of a set of n, k below n:
+# an intset's or a small hashtable's picked and dropped in turn; a
+# trie's, when k is more than a third of n, by n - k members dropped
+# from it at random (Redis's third way), else picked until k different
+# ones come, at most 16k + 64 picks (Redis's fourth way), as SRANDMEMBER
+# and SPOP pick them.
 def srand.next(+r: U32) -> U32:
   U32.add(r, 2654435769)
 
@@ -17901,10 +20075,14 @@ def srand.at(+r: U32, +n: Nat) -> Nat:
 
 def srand.pick(+s: KV.Mems, +r: U32) -> Maybe<&2, String>:
   match s:
-    case KV.MInts{+n, +xs}:
-      KV.ints.nth(xs, srand.at(r, n))
+    case KV.MInts{+n, +b}:
+      KV.ints.nth(b, n, srand.at(r, n))
     case KV.MBig{n, +t}:
       KV.pick(Unit, t, KV.mix(r), 0n)
+    case KV.MSmall{+n, +b}:
+      KV.ms.nth(n, b, srand.at(r, n))
+    case KV.MLong{+n, +ps}:
+      KV.ml.nth(ps, srand.at(r, n), None{})
 
 def srand.cons(m: Maybe<&2, String>, rest: List<&2, String>) -> List<&2, String>:
   match m:
@@ -18006,10 +20184,14 @@ def srand.big(thin: Bool, +k: Nat, +n: Nat, +t: KV.Trie<Unit>, +r: U32) -> List<
 # k different members of s, k below its size
 def srand.uniq(+k: Nat, +s: KV.Mems, +r: U32) -> List<&2, String>:
   match s:
-    case KV.MInts{+n, +xs}:
-      srand.ints(k, KV.ints.list(xs), n, r)
+    case KV.MInts{+n, +b}:
+      srand.ints(k, KV.ints.list(b, n), n, r)
     case KV.MBig{+n, +t}:
       srand.big(Nat.is_lt(n, Nat.mul(k, 3n)), k, n, t, r)
+    case KV.MSmall{+n, +b}:
+      srand.ints(k, KV.ms.all(n, b), n, r)
+    case KV.MLong{+n, +ps}:
+      srand.ints(k, KV.ml.all(ps), n, r)
 
 # c different members of s, all of them when c is at least its size
 def srand.many.of(all: Bool, +c: Nat, +s: KV.Mems, +r: U32) -> List<&2, String>:
@@ -18167,6 +20349,8 @@ def swrite.coll(op: SWrite, +cl: KV.Coll) -> Out:
       swrite.wrong(op)
     case KV.CZset{z}:
       swrite.wrong(op)
+    case KV.CStream{x}:
+      swrite.wrong(op)
 
 # A sorted set's writes. A key not there is an empty sorted set: ZADD
 # makes it (but under XX, which adds nothing), the others find nothing; a
@@ -18212,7 +20396,7 @@ def zadd.new(xx: Bool, +d: F.F64, +m: String, z: KV.Zset, +added: Nat, +upd: Nat
     case False{}:
       ZAdd{KV.zset.add(z, m, d), Nat.add(added, 1n), upd, Nat.add(done, 1n), d}
 
-def zadd.old.of(nx: Bool, nan: Bool, keep: Bool, same: Bool, +sc: F.F64, +c: F.F64, +m: String, z: KV.Zset, +added: Nat, +upd: Nat, +done: Nat, last: F.F64) -> ZAdd:
+def zadd.old.of(nx: Bool, nan: Bool, keep: Bool, same: Bool, +sc: F.F64, +c: F.F64, +i: Nat, +m: String, z: KV.Zset, +added: Nat, +upd: Nat, +done: Nat, last: F.F64) -> ZAdd:
   match nx nan keep same:
     case True{} _ _ _:
       ZAdd{z, added, upd, done, last}
@@ -18223,21 +20407,21 @@ def zadd.old.of(nx: Bool, nan: Bool, keep: Bool, same: Bool, +sc: F.F64, +c: F.F
     case False{} False{} False{} True{}:
       ZAdd{z, added, upd, Nat.add(done, 1n), sc}
     case False{} False{} False{} False{}:
-      ZAdd{KV.zset.set(z, m, c, sc), added, Nat.add(upd, 1n), Nat.add(done, 1n), sc}
+      ZAdd{KV.zset.set(z, i, m, c, sc), added, Nat.add(upd, 1n), Nat.add(done, 1n), sc}
 
-# a member there, of score c
-def zadd.old(+o: ZOpts, +c: F.F64, +d: F.F64, +m: String, z: KV.Zset, +added: Nat, +upd: Nat, +done: Nat, last: F.F64) -> ZAdd:
+# a member there, of score c (i: where KV.zset.find found it)
+def zadd.old(+o: ZOpts, +c: F.F64, +i: Nat, +d: F.F64, +m: String, z: KV.Zset, +added: Nat, +upd: Nat, +done: Nat, last: F.F64) -> ZAdd:
   match o:
     case ZOpts{+nx, xx, +gt, +lt, ch, +incr}:
       +sc = zadd.score(incr, c, d)
       +cmp = F.f64.cmp(sc, c)
-      zadd.old.of(nx, F.f64.is_nan(sc), Bool.or(Bool.and(lt, Bool.not(Cmp.is_lt(cmp))), Bool.and(gt, Bool.not(Cmp.is_gt(cmp)))), Cmp.is_eq(cmp), sc, c, m, z, added, upd, done, last)
+      zadd.old.of(nx, F.f64.is_nan(sc), Bool.or(Bool.and(lt, Bool.not(Cmp.is_lt(cmp))), Bool.and(gt, Bool.not(Cmp.is_gt(cmp)))), Cmp.is_eq(cmp), sc, c, i, m, z, added, upd, done, last)
 
-def zadd.at(cur: Maybe<&2, F.F64>, +o: ZOpts, +d: F.F64, +m: String, z: KV.Zset, +added: Nat, +upd: Nat, +done: Nat, last: F.F64) -> ZAdd:
+def zadd.at(cur: KV.ZHit, +o: ZOpts, +d: F.F64, +m: String, z: KV.Zset, +added: Nat, +upd: Nat, +done: Nat, last: F.F64) -> ZAdd:
   match cur:
-    case Some{+c}:
-      zadd.old(o, c, d, m, z, added, upd, done, last)
-    case None{}:
+    case KV.ZYes{+c, +i}:
+      zadd.old(o, c, i, d, m, z, added, upd, done, last)
+    case KV.ZNo{}:
       zadd.new(zopts.xx(o), d, m, z, added, upd, done, last)
 
 def zadd.step(+o: ZOpts, p: ZPair, st: ZAdd) -> ZAdd:
@@ -18245,7 +20429,7 @@ def zadd.step(+o: ZOpts, p: ZPair, st: ZAdd) -> ZAdd:
     case _ ZAddNaN{}:
       ZAddNaN{}
     case ZPair{+s, +m} ZAdd{+z, added, upd, done, last}:
-      zadd.at(KV.zset.score(m, z), o, zadd.num(F.f64.parse(s)), m, z, added, upd, done, last)
+      zadd.at(KV.zset.find(m, z), o, zadd.num(F.f64.parse(s)), m, z, added, upd, done, last)
 
 def zadd.go(ps: List<&2, ZPair>, +o: ZOpts, st: ZAdd) -> ZAdd:
   match ps:
@@ -18325,11 +20509,11 @@ def zdels.out(+xs: List<&2, KV.ZEl>, +op: ZWrite, z: KV.Zset, r: Reply) -> Out:
 type ZDel is Data:
   ZDel{z: KV.Zset, gone: Nat}
 
-def zrem.one(m: Maybe<&2, F.F64>, z: KV.Zset, +k: String, +gone: Nat) -> ZDel:
+def zrem.one(m: KV.ZHit, z: KV.Zset, +k: String, +gone: Nat) -> ZDel:
   match m:
-    case Some{+d}:
-      ZDel{KV.zset.del(z, k, d), Nat.add(gone, 1n)}
-    case None{}:
+    case KV.ZYes{+d, +i}:
+      ZDel{KV.zset.del.at(z, i, k, d), Nat.add(gone, 1n)}
+    case KV.ZNo{}:
       ZDel{z, gone}
 
 def zrem.go(ms: List<&2, String>, st: ZDel) -> ZDel:
@@ -18337,7 +20521,7 @@ def zrem.go(ms: List<&2, String>, st: ZDel) -> ZDel:
     case Nil{} acc:
       acc
     case Con{+m, rest} ZDel{+z, +gone}:
-      zrem.go(rest, zrem.one(KV.zset.score(m, z), z, m, gone))
+      zrem.go(rest, zrem.one(KV.zset.find(m, z), z, m, gone))
 
 def zrem.of(none: Bool, empty: Bool, +ms: List<&2, String>, z: KV.Zset, +gone: Nat) -> Out:
   match none empty:
@@ -18965,18 +21149,20 @@ def upd.put(t: KV.Trie<KV.Val>, +k: String, +h: U32, +n: Nat, +x: Nat, now: Nat,
 
 # whether an update of a key whose entry there at now is m takes the key's
 # value out of the keyspace while it changes it: an HSET of pairs to a
-# hash, or an SADD to a set that lacks its first member, which write the
-# collection over for sure (PROOF.bend: takes_over). The keyspace holding
-# the collection meanwhile would make the write copy the path it changes
-# in it, and the keyspace drop the old path after.
+# hash, or an SADD to a trie of members that lacks its first member,
+# which write the collection over for sure (PROOF.bend: takes_over). The
+# keyspace holding the collection meanwhile would make the write copy the
+# path it changes in it, and the keyspace drop the old path after. A set
+# kept in a string (an intset, KV.MInts; a small set of strings, KV.MSmall
+# and KV.MLong) is not taken: its write makes its string anew whatever
+# holds it, so the take would save nothing and its test cost a find
+# (FINDINGS.md, section 3zzzs).
 def upd.takes(+op: UpdOp, +m: Maybe<&2, KV.Item<KV.Val>>) -> Bool:
   match op m:
     case UHash{HWSet{Con{p, rest}, mset}} Some{KV.Item{KV.VColl{KV.CHash{h}}, e}}:
       True{}
     case UMems{SWAdd{Con{+x, rest}}} Some{KV.Item{KV.VColl{KV.CMems{KV.MBig{n, +t}}}, e}}:
       Bool.not(KV.has(Unit, t, x))
-    case UMems{SWAdd{Con{+x, rest}}} Some{KV.Item{KV.VColl{KV.CMems{KV.MInts{n, +xs}}}, e}}:
-      Bool.not(KV.mems.ints.has(KV.ints.ok(x), x, xs))
     case _ _:
       False{}
 
