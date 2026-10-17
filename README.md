@@ -956,12 +956,12 @@ client's requests in the same group; files that do not load).
 Redis and on BendKV, and counts the tests Redis passes that BendKV passes
 ([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)). `make clients` runs the test suites of
 two client libraries the same way, redis-py's in RESP2 and in RESP3 and go-redis's
-(`tools/client_suite.py`); CI runs them on every pull request, and fails on a test Redis
-passes that BendKV fails and that is not among the known failures of
+(`tools/client_suite.py`); CI's heavy tier runs them before a pull request merges, and
+fails on a test Redis passes that BendKV fails and that is not among the known failures of
 `tools/data/clients.json`. `tools/sanitize.sh` builds the server with AddressSanitizer
 and UndefinedBehaviorSanitizer (the Bend heap's free nodes poisoned, patch 34) and with
 ThreadSanitizer, and runs under each the tests that stress its memory and its writer
-thread most; CI runs it on every pull request too, and fails on any report
+thread most; CI's heavy tier runs it too, and fails on any report
 ([docs/FINDINGS.md](docs/FINDINGS.md), section 3zzp).
 
 ## Layout
@@ -1075,5 +1075,12 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
-Not decided yet. Until a license is added, all rights are reserved by the authors. The
-third-party software in `deps/` keeps its own licenses ([NOTICE](NOTICE)).
+BendKV is licensed under the [Apache License, Version 2.0](LICENSE). It includes, and
+ports code from, software under other licenses: Redis 7.0.15 (BSD 3-Clause), Lua 5.1.5
+and its libraries (MIT), and Bend, which `bend-patches/` changes (Apache 2.0).
+[NOTICE](NOTICE) lists them file by file. Contributions come under BendKV's license
+([CONTRIBUTING.md](CONTRIBUTING.md#license)).
+
+Redis is a registered trademark of Redis Ltd. BendKV names Redis to say what it is
+compatible with and what it is measured against; it is not affiliated with, or endorsed
+by, Redis Ltd.

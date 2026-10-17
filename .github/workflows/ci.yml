@@ -1,16 +1,37 @@
-# CI: what CONTRIBUTING.md asks of a change before it is merged, on every
-# pull request and every push to main. The proofs
-# (make check, then make verdict in the BendTT kernel), the generated
-# blocks (make gencheck) and the pure checks (make smoke) in one job; the
-# server built once (make build), then tested against Redis 7.0.15
-# (make test) and counted under callgrind (make perfcheck) in two jobs
-# side by side. Redis 7.0.15 is the one Ubuntu 24.04 ships, the reference
-# the tests compare with. The test suites of client libraries (redis-py in
-# RESP2 and in RESP3, go-redis) run against Redis 7.0.15 and the server
-# built, in three more jobs (tools/client_suite.py): a test Redis passes
-# that BendKV fails, and that is not among the known failures of
-# tools/data/clients.json, fails the job. The server is also built with
-# the sanitizers, in one more job (tools/sanitize.sh): a report fails it.
+# CI, in two tiers (AGENTS.md, Merging).
+#
+# The light tier runs on every push to a pull request and to main: the
+# generated blocks (make gencheck), the proofs (make check, then make
+# verdict in the BendTT kernel) and the pure checks (make smoke), and the
+# server built (make build) and counted under callgrind (make perfcheck).
+# A change of documents alone (*.md, docs/, LICENSE, NOTICE) runs make
+# gencheck alone, which checks README's counts. The server is kept in the
+# cache under the hash of what it is built from (src/, deps/,
+# bend-patches/, the Makefile, the toolchain's setup and the runner's
+# image), so a push that leaves those as they were does not build it
+# again. "CI ok" sums the light tier up.
+#
+# The heavy tier runs only when it is started by hand: workflow_dispatch
+# on a branch (GitHub's "Run workflow", or the API), with the parts to run
+# (all by default). Such a run tests the branch merged with main as main
+# is when it starts (.github/actions/merge-main), every job the same tree:
+# the light tier; make test against Redis 7.0.15, in three parts side by
+# side; the test suites of client libraries (redis-py in RESP2 and in
+# RESP3, go-redis) against Redis 7.0.15 and the server built
+# (tools/client_suite.py: a test Redis passes that BendKV fails, and that
+# is not among the known failures of tools/data/clients.json, fails its
+# job); and the server built with the sanitizers (tools/sanitize.sh), ASan
+# with UBSan in one job and TSan in another: a report fails it. Redis
+# 7.0.15 is the one Ubuntu 24.04 ships, the reference the tests compare
+# with.
+#
+# The commit status "CI heavy" says whether the heavy tier passed on a
+# commit. A run of all the heavy parts sets it on its branch's head as it
+# starts (pending) and as it ends (success or failure). A push to a pull
+# request sets it on the new head: to pending, or to success when the pull
+# request changes documents alone; a success already there stays. A pull
+# request merges once "CI ok" is green and "CI heavy" is success on its
+# head.
 name: CI
 
 on:
@@ -18,21 +39,140 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      parts:
+        description: 'The heavy parts to run: all, or some of test, clients and sanitize (only all sets CI heavy)'
+        required: false
+        default: all
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.ref }}
+  group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
+  # what the change touches (docs: documents alone), main's commit that a
+  # run by hand merges into its branch (main), the heavy parts it runs
+  # (parts, and full when they are all three), and the status CI heavy
+  changes:
+    name: changes
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      statuses: write
+    outputs:
+      docs: ${{ steps.what.outputs.docs }}
+      main: ${{ steps.what.outputs.main }}
+      parts: ${{ steps.what.outputs.parts }}
+      full: ${{ steps.what.outputs.full }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: what
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+          BEFORE: ${{ github.event.before }}
+          PARTS: ${{ inputs.parts }}
+        run: |
+          case "$EVENT" in
+            pull_request) range="$BASE...$HEAD" ;;
+            push) range="$BEFORE..$GITHUB_SHA" ;;
+            *) range= ;;
+          esac
+          docs=false
+          if [ -n "$range" ] && files=$(git diff --name-only "$range") && [ -n "$files" ]; then
+            echo "the change touches:"
+            printf '%s\n' "$files" | sed 's/^/  /'
+            if ! printf '%s\n' "$files" | grep -qvE '(\.md$|^docs/|^LICENSE$|^NOTICE$|^bend-patches/LICENSE$)'; then
+              docs=true
+            fi
+          fi
+          main= parts= full=false
+          if [ "$EVENT" = workflow_dispatch ]; then
+            git fetch -q origin main
+            main=$(git rev-parse FETCH_HEAD)
+            for w in $(echo "${PARTS:-all}" | tr ',' ' '); do
+              case $w in
+                all) parts="test clients sanitize" ;;
+                test|clients|sanitize) case " $parts " in *" $w "*) ;; *) parts="${parts:+$parts }$w" ;; esac ;;
+                *) echo "::error::no heavy part $w: all, or some of test, clients and sanitize"; exit 1 ;;
+              esac
+            done
+            case " $parts " in *" test "*) case " $parts " in *" clients "*) case " $parts " in *" sanitize "*) full=true ;; esac ;; esac ;; esac
+          fi
+          echo "docs=$docs main=$main parts=$parts full=$full"
+          { echo "docs=$docs"; echo "main=$main"; echo "parts=$parts"; echo "full=$full"; } >> "$GITHUB_OUTPUT"
+      - name: the status CI heavy
+        if: github.event_name != 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          DOCS: ${{ steps.what.outputs.docs }}
+          FULL: ${{ steps.what.outputs.full }}
+          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          HOW: ${{ github.server_url }}/${{ github.repository }}/actions/workflows/ci.yml
+        run: |
+          post() {
+            jq -n --arg s "$1" --arg d "$2" --arg u "$3" \
+              '{state: $s, context: "CI heavy", description: $d, target_url: $u}' |
+              curl -sSf -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+                "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/statuses/$SHA" -d @- > /dev/null
+            echo "CI heavy on $SHA: $1 ($2)"
+          }
+          if [ "$EVENT" = workflow_dispatch ]; then
+            if [ "$FULL" = true ]; then
+              post pending "Running, on this commit merged with main" "$RUN"
+            fi
+          elif [ "$DOCS" = true ]; then
+            post success "Documents alone: the heavy tier is not needed" "$RUN"
+          else
+            now=$(curl -sSf -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+              "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/commits/$SHA/statuses?per_page=100" |
+              jq -r '[.[] | select(.context == "CI heavy")][0].state // ""')
+            if [ "$now" = success ]; then
+              echo "CI heavy on $SHA: success already"
+            else
+              post pending "Not run on this commit: run CI by hand on the branch" "$HOW"
+            fi
+          fi
+
+  gencheck:
+    name: gencheck
+    needs: changes
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - if: github.event_name == 'workflow_dispatch'
+        uses: ./.github/actions/merge-main
+        with:
+          main: ${{ needs.changes.outputs.main }}
+      - name: make gencheck
+        run: make gencheck
+
   proofs:
-    name: proofs (check, verdict, gencheck, smoke)
+    name: proofs (check, verdict, smoke)
+    needs: changes
+    if: needs.changes.outputs.docs != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - if: github.event_name == 'workflow_dispatch'
+        uses: ./.github/actions/merge-main
+        with:
+          main: ${{ needs.changes.outputs.main }}
       - uses: ./.github/actions/setup
       # make verdict rechecks the proofs in the BendTT kernel, which the
       # compiler builds once with Lean 4.34.0 into ~/.bend/bendtt; kept
@@ -60,8 +200,6 @@ jobs:
           ./elan-init -y --no-modify-path --default-toolchain none
           ~/.elan/bin/elan toolchain install leanprover/lean4:v4.34.0
           ~/.elan/toolchains/leanprover--lean4---v4.34.0/bin/lean --version
-      - name: make gencheck
-        run: make gencheck
       - name: make check
         run: make check BEND="$BEND"
       - name: make verdict
@@ -69,14 +207,33 @@ jobs:
       - name: make smoke
         run: make smoke BEND="$BEND"
 
+  # the server, from the cache when what it is built from is the same, or
+  # built (make build) and kept there
   build:
     name: build
+    needs: changes
+    if: needs.changes.outputs.docs != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - uses: ./.github/actions/setup
+        with:
+          fetch-depth: 0
+      - if: github.event_name == 'workflow_dispatch'
+        uses: ./.github/actions/merge-main
+        with:
+          main: ${{ needs.changes.outputs.main }}
+      - id: key
+        run: echo "key=bendkv-$ImageOS-$ImageVersion-${{ hashFiles('src/**', 'deps/**', 'bend-patches/**', 'Makefile', '.github/actions/setup/action.yml') }}" >> "$GITHUB_OUTPUT"
+      - id: cached
+        uses: actions/cache@v4
+        with:
+          path: build/bendkv
+          key: ${{ steps.key.outputs.key }}
+      - if: steps.cached.outputs.cache-hit != 'true'
+        uses: ./.github/actions/setup
       - name: make build
+        if: steps.cached.outputs.cache-hit != 'true'
         run: make build BEND="$BEND"
       - uses: actions/upload-artifact@v4
         with:
@@ -84,13 +241,55 @@ jobs:
           path: build/bendkv
           retention-days: 7
 
-  test:
-    name: test (against Redis 7.0.15)
-    needs: build
+  perf:
+    name: perfcheck (instructions per request)
+    needs: [changes, build]
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - if: github.event_name == 'workflow_dispatch'
+        uses: ./.github/actions/merge-main
+        with:
+          main: ${{ needs.changes.outputs.main }}
+      - name: valgrind and redis-benchmark
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -yq valgrind redis-tools
+      - uses: actions/download-artifact@v4
+        with:
+          name: bendkv
+          path: build
+      - run: chmod +x build/bendkv
+      - name: make perfcheck
+        run: sh tools/perf_guard.sh build/bendkv
+
+  # make test in three parts side by side (tests/run_tests.sh's PARTS)
+  test:
+    name: test (${{ matrix.name }})
+    needs: [changes, build]
+    if: github.event_name == 'workflow_dispatch' && contains(needs.changes.outputs.parts, 'test')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: defaults
+            parts: defaults
+          - name: start, post, send
+            parts: start post send
+          - name: aof, files
+            parts: aof files
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/merge-main
+        with:
+          main: ${{ needs.changes.outputs.main }}
       # the float test compiles its checks with Bend, and the tests build
       # a shim and a reference with the C compiler
       - uses: ./.github/actions/setup
@@ -108,41 +307,25 @@ jobs:
       # the server as built, newer than its sources, so that nothing
       # builds it again
       - run: chmod +x build/bendkv && touch build/bendkv
-      - name: make test
+      - name: make test (${{ matrix.name }})
+        env:
+          PARTS: ${{ matrix.parts }}
         run: CC=clang-19 PORT=6380 REDIS_PORT=6390 sh tests/run_tests.sh
       - name: the logs of a failed run
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: test-logs
+          name: test-logs-${{ strategy.job-index }}
           path: |
             build/*.log
             build/**/*.log
           if-no-files-found: ignore
           retention-days: 7
 
-  perf:
-    name: perfcheck (instructions per request)
-    needs: build
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-      - name: valgrind and redis-benchmark
-        run: |
-          sudo apt-get update -q
-          sudo apt-get install -yq valgrind redis-tools
-      - uses: actions/download-artifact@v4
-        with:
-          name: bendkv
-          path: build
-      - run: chmod +x build/bendkv
-      - name: make perfcheck
-        run: sh tools/perf_guard.sh build/bendkv
-
   clients:
     name: clients (${{ matrix.suite }})
-    needs: build
+    needs: [changes, build]
+    if: github.event_name == 'workflow_dispatch' && contains(needs.changes.outputs.parts, 'clients')
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     strategy:
@@ -154,6 +337,11 @@ jobs:
           - { suite: go-redis, client: go-redis, protocol: 3 }
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/merge-main
+        with:
+          main: ${{ needs.changes.outputs.main }}
       - name: Redis 7.0.15
         run: |
           sudo apt-get update -q
@@ -189,14 +377,26 @@ jobs:
 
   # the server's C built with AddressSanitizer and UndefinedBehaviorSanitizer
   # (the Bend heap poisoned, bend-patches/heap-asan.patch), and with
-  # ThreadSanitizer, each serving the tests that stress its memory and its
-  # writer thread most (tools/sanitize.sh): a report fails the job
+  # ThreadSanitizer, in a job each (tools/sanitize.sh's SANS), each serving
+  # the tests that stress its memory and its writer thread most: a report
+  # fails the job
   sanitize:
-    name: sanitize (ASan and UBSan, TSan)
+    name: sanitize (${{ matrix.san }})
+    needs: changes
+    if: github.event_name == 'workflow_dispatch' && contains(needs.changes.outputs.parts, 'sanitize')
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        san: [asan, tsan]
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/merge-main
+        with:
+          main: ${{ needs.changes.outputs.main }}
       - uses: ./.github/actions/setup
       # clang 19's sanitizer runtimes and llvm-symbolizer, which Ubuntu
       # ships apart from clang-19, and Redis 7.0.15 for the tests that
@@ -210,15 +410,78 @@ jobs:
           sudo systemctl stop redis-server || true
           redis-server --version | grep -q 'v=7\.0\.15 '
           sudo sysctl -w vm.mmap_rnd_bits=28
-      - name: tools/sanitize.sh
+      - name: tools/sanitize.sh (${{ matrix.san }})
+        env:
+          SANS: ${{ matrix.san }}
         run: CC=clang-19 PORT=6380 REDIS_PORT=6390 sh tools/sanitize.sh
       - name: the reports and logs of a failed run
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: sanitize-logs
+          name: sanitize-logs-${{ matrix.san }}
           path: |
             build/sanitize
             build/*.log
           if-no-files-found: ignore
           retention-days: 7
+
+  # the light tier summed up: no job of it failed or was cancelled (a job
+  # skipped for a change of documents alone is no failure). A run by hand
+  # names it apart, so that a pull request's head carries one "CI ok"
+  ok:
+    name: ${{ github.event_name == 'workflow_dispatch' && 'CI ok (run by hand)' || 'CI ok' }}
+    needs: [changes, gencheck, proofs, build, perf]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          echo "$RESULTS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          if echo "$RESULTS" | jq -e 'to_entries | any(.value.result == "failure" or .value.result == "cancelled")' > /dev/null; then
+            echo "::error::a job of the light tier failed or was cancelled"
+            exit 1
+          fi
+
+  # a run by hand summed up, and the status CI heavy set from it: success
+  # when every job ran and passed, failure otherwise; a run of some heavy
+  # parts only sets no status
+  heavy:
+    name: heavy tier
+    needs: [changes, gencheck, proofs, build, perf, test, clients, sanitize]
+    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      statuses: write
+    steps:
+      - env:
+          RESULTS: ${{ toJSON(needs) }}
+          FULL: ${{ needs.changes.outputs.full }}
+          MAIN: ${{ needs.changes.outputs.main }}
+          GH_TOKEN: ${{ github.token }}
+          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          echo "$RESULTS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          if [ "$FULL" = true ]; then
+            ok=$(echo "$RESULTS" | jq -r 'if to_entries | all(.value.result == "success") then "yes" else "no" end')
+          else
+            ok=$(echo "$RESULTS" | jq -r 'if to_entries | any(.value.result == "failure" or .value.result == "cancelled") then "no" else "yes" end')
+          fi
+          if [ "$FULL" = true ]; then
+            if [ "$ok" = yes ]; then
+              state=success desc="Passed on this commit merged with main ${MAIN:0:7}"
+            else
+              state=failure desc="Failed on this commit merged with main ${MAIN:0:7}"
+            fi
+            jq -n --arg s "$state" --arg d "$desc" --arg u "$RUN" \
+              '{state: $s, context: "CI heavy", description: $d, target_url: $u}' |
+              curl -sSf -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+                "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" -d @- > /dev/null
+            echo "CI heavy on $GITHUB_SHA: $state ($desc)"
+          else
+            echo "some heavy parts only: CI heavy is left as it is"
+          fi
+          [ "$ok" = yes ]
