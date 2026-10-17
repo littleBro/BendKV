@@ -3,7 +3,8 @@
 # between its "# BEGIN gen_streams: trees" and "# END gen_streams: trees"
 # lines: one weight-balanced tree, as an intset's ITree, for each kind of
 # element of a stream and its key (nodes and pending entries by ID, a
-# consumer's IDs, consumers and groups by name).
+# consumer's IDs, consumers and groups by name), with its insertion,
+# replacement and deletion by key.
 #
 #   python3 tools/gen_streams.py          # rewrites the block in place
 #   python3 tools/gen_streams.py --check  # fails if it is out of date
@@ -129,6 +130,90 @@ def {p}.rep(t: {T}, c: Cmp, +x: {P}) -> {T}:
 def {p}.set(+x: {P}, +t: {T}) -> {T}:
   {p}.rep(t, {p}.at(t, {key}(x)), x)
 
+# a node's element cut from the end of a tree, and the tree left
+type {Cut} is Data:
+  {Cut}{{x: {P}, t: {T}}}
+
+def {p}.cutl.fix(c: {Cut}, +x: {P}, r: {T}) -> {Cut}:
+  match c:
+    case {Cut}{{+cx, +ct}}:
+      {Cut}{{cx, {p}.balance(x, ct, r)}}
+
+# the first element of the node of x between l and r, cut from it
+def {p}.cutl(l: {T}, +x: {P}, r: {T}) -> {Cut}:
+  match l:
+    case {Tip}{{}}:
+      {Cut}{{x, r}}
+    case {Bin}{{n, +lx, ll, lr}}:
+      {p}.cutl.fix({p}.cutl(ll, lx, lr), x, r)
+
+def {p}.cutr.fix(c: {Cut}, +x: {P}, l: {T}) -> {Cut}:
+  match c:
+    case {Cut}{{+cx, +ct}}:
+      {Cut}{{cx, {p}.balance(x, l, ct)}}
+
+# the last element of the node of x between l and r, cut from it
+def {p}.cutr(r: {T}, +x: {P}, l: {T}) -> {Cut}:
+  match r:
+    case {Tip}{{}}:
+      {Cut}{{x, l}}
+    case {Bin}{{n, +rx, rl, rr}}:
+      {p}.cutr.fix({p}.cutr(rr, rx, rl), x, l)
+
+def {p}.glue.lfix(c: {Cut}, r: {T}) -> {T}:
+  match c:
+    case {Cut}{{+x, +l}}:
+      {p}.balance(x, l, r)
+
+def {p}.glue.rfix(l: {T}, c: {Cut}) -> {T}:
+  match c:
+    case {Cut}{{+x, +r}}:
+      {p}.balance(x, l, r)
+
+# the larger side l's last element takes the place of the one taken out
+def {p}.glue.l(l: {T}, r: {T}) -> {T}:
+  match l:
+    case {Tip}{{}}:
+      r
+    case {Bin}{{n, +lx, ll, lr}}:
+      {p}.glue.lfix({p}.cutr(lr, lx, ll), r)
+
+# or r's first element (r a tip: both sides are)
+def {p}.glue.r(l: {T}, r: {T}) -> {T}:
+  match r:
+    case {Tip}{{}}:
+      l
+    case {Bin}{{n, +rx, rl, rr}}:
+      {p}.glue.rfix(l, {p}.cutl(rl, rx, rr))
+
+def {p}.glue.of(lbig: Bool, l: {T}, r: {T}) -> {T}:
+  match lbig:
+    case True{{}}:
+      {p}.glue.l(l, r)
+    case False{{}}:
+      {p}.glue.r(l, r)
+
+# the elements of l and then those of r, the sides of a node whose
+# element is taken out
+def {p}.glue(+l: {T}, +r: {T}) -> {T}:
+  {p}.glue.of(Nat.is_lt({p}.size(r), {p}.size(l)), l, r)
+
+# t without the element of key k (t as it was when it holds none); c is
+# how k compares with t's root's
+def {p}.rm(t: {T}, c: Cmp, +k: {K}) -> {T}:
+  match t c:
+    case {Tip}{{}} _:
+      {Tip}{{}}
+    case {Bin}{{n, +y, +l, +r}} LT{{}}:
+      {p}.balance(y, {p}.rm(l, {p}.at(l, k), k), r)
+    case {Bin}{{n, +y, +l, +r}} GT{{}}:
+      {p}.balance(y, l, {p}.rm(r, {p}.at(r, k), k))
+    case {Bin}{{n, y, +l, +r}} EQ{{}}:
+      {p}.glue(l, r)
+
+def {p}.del(+k: {K}, +t: {T}) -> {T}:
+  {p}.rm(t, {p}.at(t, k), k)
+
 # a node's element, made before the walk goes on (as it.el)
 def {p}.el(+x: {P}) -> {P}:
   x
@@ -144,11 +229,11 @@ def {p}.list(+t: {T}, acc: List<&2, {P}>) -> List<&2, {P}>:
       {p}.list(l, y <> acc2)
 """
 kinds = [
-  dict(p="xns", T="XNodes", Tip="XNTip", Bin="XNBin", P="XNode", K="XId", cmp="xid.cmp", key="xnode.mid"),
-  dict(p="xpl", T="XPel", Tip="XPTip", Bin="XPBin", P="XNack", K="XId", cmp="xid.cmp", key="xnack.id"),
-  dict(p="xis", T="XIds", Tip="XITip", Bin="XIBin", P="XId", K="XId", cmp="xid.cmp", key="xid.self"),
-  dict(p="xcs", T="XCons", Tip="XCTip", Bin="XCBin", P="XCon", K="String", cmp="String.order", key="xcon.name"),
-  dict(p="xgs", T="XGroups", Tip="XGTip", Bin="XGBin", P="XGroup", K="String", cmp="String.order", key="xgroup.name"),
+  dict(p="xns", Cut="XNCut", T="XNodes", Tip="XNTip", Bin="XNBin", P="XNode", K="XId", cmp="xid.cmp", key="xnode.mid"),
+  dict(p="xpl", Cut="XPCut", T="XPel", Tip="XPTip", Bin="XPBin", P="XNack", K="XId", cmp="xid.cmp", key="xnack.id"),
+  dict(p="xis", Cut="XICut", T="XIds", Tip="XITip", Bin="XIBin", P="XId", K="XId", cmp="xid.cmp", key="xid.self"),
+  dict(p="xcs", Cut="XCCut", T="XCons", Tip="XCTip", Bin="XCBin", P="XCon", K="String", cmp="String.order", key="xcon.name"),
+  dict(p="xgs", Cut="XGCut", T="XGroups", Tip="XGTip", Bin="XGBin", P="XGroup", K="String", cmp="String.order", key="xgroup.name"),
 ]
 
 def block_trees():

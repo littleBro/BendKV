@@ -95,7 +95,7 @@ COMMANDS = {
     "acl": ["cat", "deluser", "dryrun", "genpass", "getuser", "help", "list", "load", "log",
             "save", "setuser", "users", "whoami"], "bgsave": [], "xlen": [], "xrange": [],
     "xrevrange": [], "xread": [], "xinfo": ["consumers", "groups", "help", "stream"],
-    "xpending": []}
+    "xpending": [], "xadd": [], "xtrim": [], "xdel": [], "xsetid": []}
 
 # Step 1: redis-server -> facts
 # -----------------------------
@@ -458,7 +458,11 @@ SBEGIN, SEND = "# BEGIN gen_commands: stats\n", "# END gen_commands: stats\n"
 # there (BUSYKEY), a time or a payload read once the key is found, and
 # the reads of a stream on a key of another kind (WRONGTYPE), XREAD's IDs
 # read once their key is found, XINFO on a key not there and on options
-# read once it is found, and XPENDING on a group not there (NOGROUP).
+# read once it is found, XPENDING on a group not there (NOGROUP), and the
+# writes of a stream on a key of another kind (WRONGTYPE), XADD on IDs
+# not past the stream's last or on elements too large, XDEL on IDs read
+# once the key is found, and XSETID on a key not there or below the
+# stream's entries.
 # (SET's time
 # can overflow too, past 9 * 10^18 ms only: SET is left out, so that a
 # batch of SETs needs no look at its replies.)
@@ -478,7 +482,8 @@ RISKY = {"incr", "decr", "incrby", "decrby", "expire", "pexpire", "setex", "pset
          "zrandmember", "sort", "sort_ro", "pfadd", "pfcount", "pfmerge", "pfdebug", "pfselftest",
          "geoadd", "geodist", "geohash", "geopos", "georadius", "georadius_ro", "georadiusbymember",
          "georadiusbymember_ro", "geosearch", "geosearchstore", "restore", "xlen", "xrange",
-         "xrevrange", "xread", "xinfo|consumers", "xinfo|groups", "xinfo|stream", "xpending"}
+         "xrevrange", "xread", "xinfo|consumers", "xinfo|groups", "xinfo|stream", "xpending",
+         "xadd", "xtrim", "xdel", "xsetid"}
 
 # BendKV's commands that may be replicated (MAY_REPLICATE in Redis's
 # src/commands/*.json), a flag COMMAND INFO hides: a monitor may not run
@@ -537,7 +542,8 @@ DIRTY = {
     "zunionstore": "store", "zinterstore": "store", "zdiffstore": "store", "zrangestore": "store",
     "pfadd": "int", "pfmerge": "one", "pfdebug": "wok", "geoadd": "zadd", "georadius": "nstore",
     "georadiusbymember": "nstore", "geosearchstore": "nstore", "sort": "nstore",
-    "function|flush": "one", "eval": "w"}
+    "function|flush": "one", "eval": "w", "xadd": "bulk", "xtrim": "int", "xdel": "int",
+    "xsetid": "one"}
 
 # the parser's commands with subcommands, by the function that numbers
 # their subcommands

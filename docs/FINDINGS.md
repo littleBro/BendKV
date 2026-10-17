@@ -6730,9 +6730,9 @@ each kept as Redis does it):
   that came with it. No client can tell the order of requests that came together, and a
   client's own commands after a script run after it.
 - SCRIPT DEBUG is not there: it is an unknown subcommand.
-- An EVAL of the exact text of one of the four fixed scripts of the file, with arguments
-  other than the file's, is refused (`ERR a script of the append-only file, not as the
-  file writes it`); Redis runs it.
+- An EVAL of the exact text of one of the five fixed scripts of the file (the fifth a
+  new stream's, 3zzzza), with arguments other than the file's, is refused (`ERR a script
+  of the append-only file, not as the file writes it`); Redis runs it.
 - `redis.acl_check_cmd` of a command with a number of arguments its arity does not
   allow answers true, as the check of a call the parser refuses lets it pass (3zzzh);
   Redis checks its command, and the keys it finds.
@@ -8982,6 +8982,147 @@ time grows with the nodes: 3.5 times Redis's on 1 node, 19 times on 100, 100 tim
 - XREAD that waits (BLOCK), with the writes that serve it.
 - A walk of a node's entries that steps over their bytes without copying them (the
   ranges from the middle of a node), as section 3zzzu says for RESTORE.
+
+## 3zzzza. Streams: the commands that write one
+
+**What there is** (`src/stream.bend`, Writes; `src/redis.bend`, Stream writes). XADD,
+XTRIM, XDEL and XSETID change a stream as Redis 7.0.15's `t_stream.c` changes it, node
+for node and byte for byte: after each write, the stream's DUMP is the one Redis gives
+(section 3zzzu), its XINFO STREAM too.
+- **The words** are read as `streamParseAddOrTrimArgsOrReply` and `xsetidCommand` read
+  them, before the key is looked up, with Redis's errors in its order: XADD's
+  NOMKSTREAM; MAXLEN or MINID, with `=`, `~` or neither, and its threshold (MAXLEN's a
+  count not below 0); LIMIT, with `~` alone, its count not below 0 (10,000 when it is
+  not given: 100 times `stream-node-max-entries`); then XADD's ID (an ID, but 0-0;
+  `<ms>-*`; or `*`) and its fields and values, in pairs. XSETID's ID, ENTRIESADDED (not
+  below 0) and MAXDELETEDID (not past the ID; 0-0 leaves the greatest ID deleted as it
+  was). XDEL reads its IDs strictly, as XREAD does, once it finds its key.
+- **XADD** adds after the stream's last ID, as `streamAppendItem` does. `*` is the next
+  ID at now: now's ms with sequence 0 once now is past the last's ms, else the one after
+  the last (`streamNextID`); `<ms>-*` is the last's sequence + 1 when the last is of that
+  ms, else sequence 0. An ID not past the last is an error, a stream at the last ID there
+  is (both parts 2^64 - 1) takes none, and fields and values past 1 GiB together are
+  too large. The entry is written as `lpAppendInteger` and `lpAppend` write its
+  elements: its flags (SAMEFIELDS when its fields are the node's master fields, in
+  order, and then its values alone), its ID as its differences from the node's master
+  ID, its fields and values after their count, and its count of elements; each element
+  that reads as an integer in the smallest integer encoding, as `lpStringToInt64` reads
+  it. The node's counts of live and deleted entries are written again, each in its own
+  size. A new node takes the entry when the last one's listpack and the entry's fields
+  and values reach 4096 bytes, or the last node holds 100 entries, live and deleted:
+  `stream-node-max-bytes` and `stream-node-max-entries` at their defaults, which BendKV
+  does not read, as a write of one key runs on its database alone (and a file replays
+  alike whatever they are).
+- **Trims** go as `streamTrim`: from the first node, a node is taken out whole while
+  the stream keeps MAXLEN's entries without its live ones, or while its last entry, a
+  deleted one too, is below MINID. Then `=` marks the entries of the first node left
+  deleted, from its oldest, while the stream is past MAXLEN or up to the first at or
+  past MINID; `~` stops at the first node it cannot take out whole, and once LIMIT's
+  entries are reached. The first ID is then the first live entry's, 0-0 for none.
+- **XDEL** marks each live entry of its IDs deleted, found as `streamIteratorGetID`'s
+  walk finds it, and takes its node out instead when it was the node's last live entry,
+  with its deleted ones; it raises the greatest ID deleted, and the first ID moves when
+  the first entry went.
+- **XSETID** on a stream with entries refuses an ID below its last live one and an
+  ENTRIESADDED below its length; else it sets the last ID, the count of entries ever
+  added and the greatest ID deleted, when given. Redis 7.0 does not check the ID against
+  the greatest ID deleted, as 7.2 does; nor does BendKV.
+- **Replies and events.** XADD answers the ID it added, a null with NOMKSTREAM on a key
+  not there; XTRIM and XDEL answer how many entries they deleted. The keyspace events
+  are those of class `t`: `xadd`, and `xtrim` after it when its trim deleted entries;
+  `xtrim`, `xdel` and `xsetid`. XSETID changes its stream without `signalModifiedKey`,
+  so WATCH and CLIENT TRACKING do not see it, as on Redis (`touch.by`).
+
+**The append-only file.** A write's change keeps the write resolved: its words as those
+of the exact write it makes. XADD's `*` and `<ms>-*` become the ID it added, a trim by
+`~` the exact trim that makes it (`X.xs.approx`), and NOMKSTREAM goes, as the key is
+there (or nothing is written). Resolved words resolve to themselves, so the write the
+file logs makes the same change whenever it runs. Redis logs a trim by `~` the same way,
+as the exact trim at the threshold it reached (`streamRewriteApproxSpecifier`,
+`streamRewriteTrimArgument`): for MAXLEN the stream's length after it, for MINID the
+first entry of the first node it kept, a deleted one too. Run as an exact trim, that
+threshold takes out the same nodes but in two cases: MINID on a stream whose entries are
+out of order across its nodes (XSETID can set the last ID below an entry deleted, and
+XADD then adds IDs past it again), and MAXLEN when the last node taken out held no live
+entry. There
+BendKV takes the other kind's threshold when that one takes out the same nodes; when
+neither does, it takes Redis's, and its stream is then what a Redis replica holds, not
+the Redis that ran the `~`. A new stream made where a key whose time had passed lay is
+logged as the script that deletes the key and runs the XADD (`R.xnew.script`), one
+entry, as for a new hash, which BendKV's loader reads back as that write (`XWNew`).
+
+**The proofs.** Two cases of `proof/SPEC.bend` (approved): a stream changed by a write
+keeps its key's time (`CStream`, the key's entry kept, `keep.at`), and a new stream has
+none (`CStreamNew`, `setx.at` with 0). `proof/PROOF.bend` has their cases in each case
+split over changes, and the facts the replay needs, all from the change a write makes:
+the file's write, replayed at time 0 on the stream the key held, makes the same change
+(`stream_replay`), and its command, written and read back, is that write
+(`stream_args`): an XADD, XTRIM or XSETID of words that read, as many as the parser
+takes (three, two, one), or an XDEL of IDs. They hold because the write makes its change
+only from fixed patterns of its resolved words (`xadd.fin`, `xtrim.fin`), so its change
+names words whose resolution is themselves.
+- The checker compared terms it had unfolded, and some of BendKV's numbers are big: the
+  last ID there is (2^64 - 1 twice) and 10^14 (section 3zzzu) are computed, and in the
+  checker they are unary. Two copies of a term that held them overflowed its stack. The
+  helpers a proof compares now match their stream first, so that they stay stuck on a
+  stream they do not know (`X.xs.top`, `X.xs.exhausted`, `X.xn.is_max`), and the
+  replay's lemmas take the change as a variable rather than computing it twice.
+
+**What it changes elsewhere.**
+- **The server** (`src/server.bend`): XSETID touches no key (`touch.by`, `ps.trk.cmd.if`);
+  the events of class `t` (`ev.t`, `EkXt`: `xtrim` after XADD's trim when the stream is
+  no longer after it than before); the script of a new stream counts the DEL it starts
+  with and the XADD's one change (`dw.upd`), as a new hash's script counts its own.
+- **Tables** (`tools/gen_commands.py`): the four commands, and their counts of changes
+  as `server.dirty` counts them in `t_stream.c`: XADD one for the ID it answers, XTRIM
+  and XDEL the entries they deleted, XSETID one (DIRTY: `bulk`, `int`, `int`, `one`).
+- **INFO.** The writes bring INFO's keys to 290, 873 of the 924 words.
+
+**Tests.**
+- `tests/stream_write_test.py` (new, in `make test`): random writes on a few keys
+  against Redis, in RESP2 and RESP3, each reply compared whole, and after each write the
+  stream's DUMP payload and XINFO STREAM: XADD with an ID, `<ms>-*` and `*` (on a stream
+  whose last ID is past the clock, so that both servers add the same ID), fields and
+  values of every encoding, a node's master fields or others, values up to 5,000 bytes,
+  runs of up to 230 XADDs; MAXLEN and MINID with `=`, `~` and LIMIT; NOMKSTREAM; XTRIM;
+  XDEL of IDs there, deleted and not there; XSETID with ENTRIESADDED and MAXDELETEDID;
+  the errors in Redis's order; the keyspace events, WATCH and MULTI. 32,582 checks at
+  seed 1; seeds 2 and 3 pass too.
+- `tests/stream_aof_test.py` (new, in `make test`): the same writes on BendKV and on a
+  Redis that keeps its own append-only file, with the same replies and the same streams;
+  then BendKV started from its file, Redis from BendKV's, and BendKV from Redis's (its
+  LIMIT taken out, below), each holding the streams byte for byte: XADD with each kind
+  of ID, a stream of three nodes and more, trims of each kind, XDEL, XSETID, NOMKSTREAM,
+  a stream made where a key had expired, and another database.
+- `tests/bgsave_test.py` counts the changes of each write of a stream, and of the script
+  of a new stream, against Redis's.
+- Redis's own unit/type/stream: BendKV passes 39 of the 63 tests Redis passes (none
+  before). With `--tags -needs:debug`, which leaves out the block that turns the
+  append-only file on at run time (where the unit stops), it passes 52: the others need
+  XREAD's wait or XGROUP, or set `stream-node-max-entries` (2 tests).
+- `stream_read_test.py` and `stream_dump_test.py` pass on the writes' build as before.
+
+**What it costs** (PERFORMANCE 84). Nothing on GET, SET and INCR. A write of a stream
+takes a constant time whatever the stream's size, 6 to 12 times Redis's (XADD 7, XADD
+with an exact trim 12, XDEL 6, XSETID 3): the write runs on the stream the keyspace still
+holds, so each part it takes by value is copied and dropped after, XDEL's walk turns its
+node's entries around, and the keyspace drops the old version.
+
+**What is left.**
+- The groups' commands: XGROUP, XREADGROUP, XACK, XCLAIM, XAUTOCLAIM.
+- XREAD that waits (BLOCK), served by XADD.
+- Redis's files. Redis writes a trim by `~` with LIMIT as `=` with LIMIT, which its
+  load takes, the limit dropped (`mustObeyClient`); BendKV's parser answers it the
+  syntax error Redis answers a client, so BendKV's start refuses a Redis file that holds
+  one, naming the entry. And the rewrite of the file writes a stream as the RESTORE of
+  its payload (section 3zzzu), where Redis writes XADD, XSETID, XGROUP and XCLAIM.
+- The script of a new stream passes XADD's words with `unpack`, which Redis's Lua
+  limits to 7,999 values: Redis would not load such an XADD of 8,000 words or more (4,000
+  pairs). BendKV loads it.
+- The count of the rax's nodes kept with the stream, for XINFO STREAM (section 3zzzy).
+- The writes in place (PERFORMANCE 84): the stream taken out of the keyspace while a
+  write runs, which needs every write of a stream to write its stream back, the writes
+  that change nothing too, with no effect; XDEL's walk from the newest entry, in place.
 
 ## 4. Where a request's time goes, and hiding the memory waits
 

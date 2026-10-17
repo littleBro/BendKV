@@ -8606,3 +8606,53 @@ table says; one run of each, on a shared machine). Requests a second:
 per request, +0.8% to +0.9% from the baseline (3,452, 4,214 and 4,552), as #114's build
 counted alike on this machine (3,480, 4,243 and 4,593); last-level misses 2.84, 3.15 and
 3.29; with 100 clients in BLPOP, +3.1% and +3.7%.
+
+## 84. The writes of a stream
+
+**What changed** (FINDINGS 3zzzza). XADD, XTRIM, XDEL and XSETID write the stream of
+section 3zzzu of FINDINGS: an entry is appended to its node's list of entries (the newest
+first) as the bytes Redis's listpack holds for it, and the node's counts and sizes are
+written again; a trim takes nodes out of the tree by master ID, and marks the entries of
+the first node left; XDEL marks an entry, or takes its node out.
+
+**Throughput** (redis-benchmark; each server on fresh keys of its own; 20 clients at a
+pipeline depth of 16; one run of each, on a shared machine). Requests a second:
+
+| command | BendKV | Redis 7.0.15 | Redis's / BendKV's |
+|---|---:|---:|---:|
+| XADD s1 * f v (to 100,000 entries) | 78,200 | 546,000 | 7.0 |
+| XADD s2 * of five pairs | 64,700 | 452,000 | 7.0 |
+| XADD s3 MAXLEN ~ 1000 * f v | 46,500 | 452,000 | 9.7 |
+| XADD s4 MAXLEN 1000 * f v | 12,200 | 141,000 | 11.6 |
+| XADD s5 * of values that differ | 81,800 | 617,000 | 7.5 |
+| XDEL of an ID not there (100,000 entries) | 139,000 | 847,000 | 6.1 |
+| XTRIM MAXLEN ~ that trims nothing | 74,900 | 847,000 | 11.3 |
+| XSETID on a stream of one entry | 248,000 | 694,000 | 2.8 |
+| XLEN (for scale) | 1,587,000 | 935,000 | 0.6 |
+
+**Where the time goes** (callgrind, 20,000 requests each, instructions per request): XADD
+74,700, XDEL of an ID not there 49,800, XTRIM that trims nothing 86,300, XSETID 30,000;
+SET 3,900 and HSET 10,900 alike. Their cost is the same on a stream of 100, 10,000 and
+100,000 entries: no write walks the stream.
+- **A write reads a stream it borrows.** The stream stays in the keyspace while a write
+  runs on it, so each part the write takes by value is copied, and dropped after
+  (`term_drop`, `span_fade`: 59% of XDEL's instructions, 37% of XTRIM's, 28% of
+  XADD's). XDEL's walk turns its node's entries around to walk them from the oldest,
+  where Redis steps through its listpack, and drops each one it passes: 4,300 and
+  16,800 instructions. A node's live entries increase, so a walk from the newest finds
+  the same entry, in place. XTRIM by ~ walks the first node's entries to its oldest,
+  for the MINID threshold it may resolve to (8,300 in drops), where a MAXLEN trim needs
+  none.
+- **The old version is dropped.** XADD's new stream replaces the old one in the
+  keyspace, which drops the path that changed (5,100). An update in place, the stream
+  taken out of the keyspace while it is written (as section 3zzd of FINDINGS did for
+  HSET), needs every write of a stream to write its stream back, the writes that
+  change nothing too (an error, a trim that trims nothing, an XDEL of IDs not there),
+  with no effect: the next step.
+- **XADD** reads its words twice, as they came and resolved, and prints the ID it adds,
+  for its reply and the file.
+
+**`make perfcheck`**: GET, SET and INCR unchanged: 3,484, 4,247 and 4,592 instructions
+per request, +0.8% to +0.9% from the baseline, as the reads' build counted (3,484, 4,246
+and 4,588); last-level misses 2.83, 3.14 and 3.32; with 100 clients in BLPOP, +3.1% and
++3.6%.
