@@ -8840,6 +8840,6 @@ bytes a list. A collection's value was as wide as a list's deque, six words, wha
 kind; with the deque in the list's node it is as wide as the widest of the others, and
 every hash, set and sorted set takes 32 bytes less.
 
-**`make perfcheck`** (merged with d134405 and 6bab87d): GET, SET and INCR 3,499, 4,292 and
-4,605 instructions per request, as the integration branch counted them (3,499, 4,292 and
-4,608); with 100 clients in BLPOP, +3.2% and +3.6%.
+**`make perfcheck`** (merged with 5a2ff7c): GET, SET and INCR 3,504, 4,298 and 4,611
+instructions per request, as the integration branch counts them (3,501, 4,301 and 4,609);
+with 100 clients in BLPOP, +3.1% and +3.4%.

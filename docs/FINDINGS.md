@@ -10255,9 +10255,9 @@ count, LTRIM, LREM, LSET, LINSERT into a node, next to it, alone and splitting i
 and payloads read by each server; and its random commands check both now and then.
 A list that parts from Redis's right after one of the commands above is followed apart
 until the two meet again. `set_test` compares a listpack's SMEMBERS in order and its
-DUMP, and SADD's sizing. Against 7.2.16 `list_test` (four seeds), `set_test`,
-`dump_test`, `rdb_test`, `aof_redis_test`, `sort_test`, `blocking_test`,
-`keyspace_test` and `multi_test` pass.
+DUMP, and SADD's sizing. Against 7.2.16, `list_test` passes with four seeds, and `make
+test` but for what other kinds hold (client_test's NO-TOUCH with OBJECT FREQ, and
+`master_repl_offset` and ROLE's offset, which WAITAOF's offset gives).
 
 **What it costs** (PERFORMANCE.md, section 85: 8a4caf0's build against this change on
 it). Pipelined, as `make perfcheck` counts, LPUSH and RPUSH run 7.4 to 7.7% more
@@ -10273,8 +10273,8 @@ after (`term_drop` and `span_fade`, 99,000 of LINDEX's 180,000). LINSERT runs 1.
 LREM 0.3% less, and LTRIM 1 -2 19.3% less, as it turns the piece at the end it cuts once,
 which it read through on each call before. A list takes 96 bytes more, its node; a hash,
 a set or a sorted set 32 bytes less a key, as a collection's value is no longer as wide
-as a list's deque. GET, SET and INCR run as before (3,499, 4,292 and 4,605 instructions a
-request).
+as a list's deque. GET, SET and INCR run as before: 3,504, 4,298 and 4,611 instructions a
+request merged with 5a2ff7c, which counts 3,501, 4,301 and 4,609.
 
 ## 4. Where a request's time goes, and hiding the memory waits
 
