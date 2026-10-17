@@ -33,7 +33,11 @@
 # heap's account with the twenty-ninth's IO.heap; OBJECT IDLETIME and FREQ
 # and the eviction's LRU and LFU keep when each key was last used with the
 # thirtieth's Mem.touch and Mem.cell; GEO computes, and ZADD reads its
-# scores, with C's doubles, the thirty-third's F64 and F64.read; the others
+# scores, with C's doubles, the thirty-third's F64 and F64.read; the timing
+# of calls reads the monotonic clock with the thirty-fifth's Clock.us; the
+# start listens on IPv6 addresses and on a unix socket, and tells systemd
+# it is ready and stops, with the thirty-sixth's TCP.listen,
+# TCP.listen_unix and IO.notify; the others
 # only speed up the runtime and the code):
 #   make build BEND="bun <patched bend>/bend2/main.ts"
 # Bend compiles with $(BEND_CC) when it has one: clang 19 honors the

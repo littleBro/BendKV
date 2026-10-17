@@ -575,16 +575,20 @@ translation stays in the trusted base.
   `-` for the standard input, read line by line as Redis reads them (includes, `dir`
   changing the directory at once, save points that add up, the same errors at the same
   lines), and a log in Redis's form, on the standard output or in `logfile`. The port,
-  `bind` (IPv4), `requirepass`, `protected-mode`, the append-only file (`appendonly`,
-  `appendfilename`, `appendfsync`, `aof-load-truncated`), `logfile`, `loglevel` and
-  `pidfile` act. With `appendonly no` the RDB file (`dbfilename` in `dir`) is loaded
-  when it is there, as Redis loads it, with its log's lines; a file that does not load
-  stops the start with Redis's reason. With `appendonly yes` the append-only file is
-  loaded and the RDB file left aside, as in Redis. What BendKV cannot do (modules, ACL
-  users from the configuration or a file, renamed commands, the background, a cluster, a
-  replica, TLS, a supervisor to signal, Redis 7's multi-part append-only file, or an RDB
-  file that holds a module's data or functions, to load) stops the start with a line
-  saying so.
+  `bind` (IPv4 and IPv6, each IPv6 socket IPv6 alone, as Redis binds them),
+  `unixsocket` and `unixsocketperm`, `requirepass`, `protected-mode`, `supervised`
+  (systemd is told the server loads, is ready and stops, as Redis's sd_notify tells it),
+  the append-only file (`appendonly`, `appendfilename`, `appendfsync`,
+  `aof-load-truncated`), `logfile`, `loglevel` and `pidfile` act. A unix socket's client
+  is named as Redis names it: its path and port 0 in CLIENT LIST, with the flag U, and
+  unix:path in a monitor's lines. With `appendonly no` the RDB file (`dbfilename` in
+  `dir`) is loaded when it is there, as Redis loads it, with its log's lines; a file that
+  does not load stops the start with Redis's reason. With `appendonly yes` the
+  append-only file is loaded and the RDB file left aside, as in Redis. What BendKV cannot
+  do (modules, ACL users from the configuration or a file, renamed commands, the
+  background without a supervisor, a cluster, a replica, TLS, upstart's supervision,
+  Redis 7's multi-part append-only file, or an RDB file that holds a module's data or
+  functions, to load) stops the start with a line saying so.
 - **Protocol:** pipelining, partial packets, inline commands with quoting,
   binary-safe values; requests framed as Redis 7.0.15 frames them (a length as `string2ll`
   reads it, with no `0` before its first digit, a count of 0 or less skipped down to
@@ -912,7 +916,7 @@ away.
 | what | how many | counted in |
 |---|---:|---|
 | laws | 68 | `proof/LAWS.bend` (by group: [What is proved](#what-is-proved)) |
-| patches to the Bend compiler | 35 | `bend-patches/apply.sh` |
+| patches to the Bend compiler | 36 | `bend-patches/apply.sh` |
 | constructors of `Cmd`, a parsed command | 30 | `src/redis.bend` |
 | Redis 7.0.15's parameters, all of which CONFIG serves | 178 | `tools/data/redis-configs.json` |
 
