@@ -933,6 +933,12 @@ def gen.count(srv: S.Srv, +code: Nat, ys: List<&2, R.Erred>) -> S.Srv:
 def gen.count.d(srv: S.Srv, +code: Nat, ys: List<&2, R.Erred>, +n: Nat) -> S.Srv:
   S.srv.errs(S.srv.ran.d(srv, R.code.calls(code, 1n), R.run.of(code, 1n), Nil{}, 0n, 0n, n), ys)
 
+# a call that blocks (its client waits): not counted yet, its run (of one
+# call) kept for its share of the window's time, until its client is
+# unblocked (S.srv.served), as Redis 7.2 counts a blocked call
+def gen.count.blk(srv: S.Srv, +code: Nat) -> S.Srv:
+  S.srv.ran(S.srv.blk(srv), 0n, R.run.of(code, 1n), Nil{}, 0n, 0n)
+
 # a call's changes once it ran: by its reply, from its weight w, when its
 # error was not known before it (xs none); else w, which is the count of
 # a command of the connection or the server whose client's replies are
@@ -983,10 +989,12 @@ def gen.pre.own(+o: R.SessOp, +code: Nat, +conn: S.Conn, +srv: S.Srv, +ds: R.Ds)
 # up at the end of a group gets a null array; CLIENT UNBLOCK unblocks one
 # (a null array, or an UNBLOCKED error). An unblocked client's batch goes
 # on at the end of the group, after the group's batches, as Redis runs an
-# unblocked client's commands before it sleeps. The call counts when it
-# blocks, as Redis's call() counts it, and fails when CLIENT UNBLOCK
-# unblocks it or its reply is an error (updateStatsOnUnblock). A client
-# whose connection closes is forgotten (Gone), its batch dropped. A
+# unblocked client's commands before it sleeps. The call counts when its
+# client is unblocked, as Redis 7.2 counts it (updateStatsOnUnblock, and
+# call() on the command run again), not when it blocks: served, its time
+# up, or by CLIENT UNBLOCK, and failed when its reply is an error. A
+# client whose connection closes is forgotten (Gone), its batch dropped,
+# and its call never counted, but WAIT's (gone.count). A
 # client that a pause holds back waits in the same chain, with the
 # command held back at the head of the rest of its batch (The pause): no
 # key serves it, no time ends it, CLIENT UNBLOCK leaves it, and the end
@@ -1221,16 +1229,17 @@ def ups.drop(us: List<&2, Up>, hit: Bool, +n: Nat) -> List<&2, Up>:
       u <> ups.drop(rest, ups.is(n, rest), n)
 
 # the clients whose time is up at now unblocked (late: whether the first
-# of ws's is) with a null array, or 0 for WAIT (S.blk.late), in the order
-# they came, the others kept in order (keep: those before, newest first)
-def waits.expire(ws: Waits, late: Bool, +now: Nat, keep: Waits, up: List<&2, Up>) -> Waits & List<&2, Up>:
+# of ws's is) with a null array, or 0 for WAIT (S.blk.late), each call
+# counted (S.srv.served), in the order they came, the others kept in
+# order (keep: those before, newest first)
+def waits.expire(ws: Waits, late: Bool, +now: Nat, keep: Waits, up: List<&2, Up>, srv: S.Srv) -> Waits & (List<&2, Up> & S.Srv):
   match ws late:
     case WaitNone{} _:
-      (waits.rev(keep, WaitNone{}), up)
+      (waits.rev(keep, WaitNone{}), (up, srv))
     case WaitOn{id, back, +c0, c1, +b, argv, code, db, until, cmds, codes, av, +rest} True{}:
-      waits.expire(rest, waits.late(now, rest), now, keep, Up{back, c1, S.put(S.say(S.conn.mode(c0), S.blk.late(b)), Nil{}), cmds, codes, av} <> up)
+      waits.expire(rest, waits.late(now, rest), now, keep, Up{back, c1, S.put(S.say(S.conn.mode(c0), S.blk.late(b)), Nil{}), cmds, codes, av} <> up, S.srv.served(srv, id))
     case WaitOn{id, back, c0, c1, b, argv, code, db, until, cmds, codes, av, +rest} False{}:
-      waits.expire(rest, waits.late(now, rest), now, WaitOn{id, back, c0, c1, b, argv, code, db, until, cmds, codes, av, keep}, up)
+      waits.expire(rest, waits.late(now, rest), now, WaitOn{id, back, c0, c1, b, argv, code, db, until, cmds, codes, av, keep}, up, srv)
 
 # whether the first of ks holds what a pop waits for (z: a sorted set) in
 # the focus of d, and the first of ks that does (hit: whether the first
@@ -6094,15 +6103,18 @@ def bg.wait(+id: Nat, +back: Chan(Ans), b: S.Blk, +c: R.Cmd, +code: Nat, rest: L
       +x = b
       +u = S.blk.until(R.ds.now(ds), S.blk.ms(x))
       +ws2 = waits.add(ws, WaitOn{id, Chan.mark(Ans, back, U32.from_nat(code), R.ds.now(ds)), conn, S.next_conn(False{}, c, conn, srv), x, wait.argv(c), code, S.conn.db(conn), u, rest, more, av, WaitNone{}})
-      LHeld{LRun{rs, es, conn, waits.count(ws2, gen.count(S.srv.blk(srv), code, Nil{})), ds, ws2, up, tx, ps.heed.add(S.blk.keys(x), u, pb)}}
+      LHeld{LRun{rs, es, conn, waits.count(ws2, gen.count.blk(srv, code)), ds, ws2, up, tx, ps.heed.add(S.blk.keys(x), u, pb)}}
     case LHeld{h}:
       LHeld{h}
 
 # CLIENT UNBLOCK: the client of the id, if it waits, unblocked with a
-# null array (0 for WAIT: S.blk.late) or an UNBLOCKED error, its call
-# failed (an error reply's counted as one); the command answers 1, or 0
-# when no client of the id waits. Redis counts CLIENT UNBLOCK's own call failed when it sends the
-# error: the error reply came while it ran (incrCommandStatsOnError).
+# null array (0 for WAIT: S.blk.late), its call counted as one whose time
+# is up, or with an UNBLOCKED error, its call counted failed; the command
+# answers 1, or 0 when no client of the id waits. Redis counts CLIENT
+# UNBLOCK's own call failed when it sends the error: the error reply came
+# while it ran (incrCommandStatsOnError). Redis 7.0 counted each call that
+# CLIENT UNBLOCK unblocks failed; 7.2 counts WAIT's twice when it sends
+# the error (docs/UPSTREAM.md, bug 4), which BendKV counts once.
 def unblock.msg() -> String:
   "UNBLOCKED client unblocked via CLIENT UNBLOCK"
 
@@ -6114,7 +6126,7 @@ def unblock.stat(+err: Bool, +code: Nat, +own: Nat, srv: S.Srv) -> S.Srv:
     case True{}:
       S.srv.failed(S.srv.errs(srv, [R.Erred{code, unblock.msg()}]), own)
     case False{}:
-      S.srv.failed(srv, code)
+      srv
 
 def bg.unblocked(p: Waits & Waits, +err: Bool, +code: Nat, rs: List<&2, R.Reply>, es: List<&2, A.Ent>, conn: S.Conn, srv: S.Srv, ds: R.Ds, up: List<&2, Up>, tx: Tx, pb: Ps) -> LRun:
   (w, +ws) = p
@@ -7889,14 +7901,15 @@ def save.points(+srv: S.Srv) -> Bool:
   Bool.not(String.is_empty(C.config.get_value(S.srv.cfg(srv), "save")))
 
 # a client that waits for a save: the rest of its batch kept, its call
-# counted now (its reply comes with the save: The RDB file on the disk),
+# counted with its reply, which comes with the save (The RDB file on the
+# disk),
 # its channel marked with the command, and d asked of the shell (ps.down,
 # never lowered)
 def save.hold(+d: Nat, +id: Nat, +back: Chan(Ans), +c: R.Cmd, +code: Nat, rest: List<&2, R.Cmd>, more: List<&2, Nat>, av: Av, g: LRun) -> LRun:
   match g:
     case LRun{rs, es, +conn, +srv, +ds, ws, up, tx, +pb}:
       +ws2 = waits.add(ws, WaitOn{id, Chan.mark(Ans, back, U32.from_nat(code), R.ds.now(ds)), conn, S.next_conn(False{}, c, conn, srv), S.BlkWait{Nil{}}, 0n, code, S.conn.db(conn), 0n, rest, more, av, WaitNone{}})
-      LHeld{LRun{rs, es, conn, waits.count(ws2, gen.count(S.srv.blk(srv), code, Nil{})), ds, ws2, up, tx, ps.down.set(Nat.max(d, ps.down(pb)), pb)}}
+      LHeld{LRun{rs, es, conn, waits.count(ws2, gen.count.blk(srv, code)), ds, ws2, up, tx, ps.down.set(Nat.max(d, ps.down(pb)), pb)}}
     case LHeld{h}:
       LHeld{h}
 
@@ -10341,9 +10354,13 @@ def bg.ups(f: Nat, g: Grp) -> Grp:
 def ups.fuel() -> Nat:
   1000000n
 
-def grp.late(p: Waits & List<&2, Up>, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, srv: S.Srv, ds: R.Ds, tx: Tx, pb: Ps) -> Grp:
-  (+ws, up) = p
+def grp.late.of(+ws: Waits, q: List<&2, Up> & S.Srv, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, ds: R.Ds, tx: Tx, pb: Ps) -> Grp:
+  (up, srv) = q
   bg.ups(ups.fuel(), Grp{outs, es, waits.count(ws, srv), ds, ws, up, tx, ps.soon.set(waits.soon(ws, 0n), pb)})
+
+def grp.late(p: Waits & (List<&2, Up> & S.Srv), outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, ds: R.Ds, tx: Tx, pb: Ps) -> Grp:
+  (ws, q) = p
+  grp.late.of(ws, q, outs, es, ds, tx, pb)
 
 # the end of a group while some client waits: the clients whose time is
 # up unblocked when one's may be (due: before now the earliest end, kept
@@ -10354,7 +10371,7 @@ def grp.end.due(due: Bool, +now: Nat, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ 
   match due up:
     case True{} u0:
       +w = ws
-      grp.late(waits.expire(w, waits.late(now, w), now, WaitNone{}, u0), outs, es, srv, ds, tx, pb)
+      grp.late(waits.expire(w, waits.late(now, w), now, WaitNone{}, u0, srv), outs, es, ds, tx, pb)
     case False{} Nil{}:
       Grp{outs, es, srv, ds, ws, Nil{}, tx, pb}
     case False{} Con{u, more}:
@@ -10408,12 +10425,34 @@ def grp.end(g: Grp) -> Grp:
   +x = g
   grp.end.if(Nat.is_le(2n, grp.down(x)), x)
 
-# a client gone (its connection closed while it waits): forgotten, its
-# batch dropped, and its connection answered Bye, after any answer before
-def grp.gone(+id: Nat, +back: Chan(Ans), outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, srv: S.Srv, ds: R.Ds, +ws: Waits, +up: List<&2, Up>, tx: Tx, pb: Ps) -> Grp:
-  +left = waits.rest(waits.take(ws, waits.is(id, ws), id, WaitNone{}))
-  +sv = S.srv.left(srv, id)
+# the call of a client gone while it waited (b: what it waited for):
+# counted when it waited in WAIT, or for a save (S.BlkWait), as Redis 7.2
+# counts WAIT's when it frees the client (unblockClientWaitingReplicas)
+# and runs SAVE to its end; any other, never counted (S.srv.dropped)
+def gone.of(b: S.Blk, srv: S.Srv, +id: Nat) -> S.Srv:
+  match b:
+    case S.BlkWait{ms}:
+      S.srv.served(srv, id)
+    case _:
+      S.srv.dropped(srv, id)
+
+def gone.count(w: Waits, srv: S.Srv, +id: Nat) -> S.Srv:
+  match w:
+    case WaitOn{i, back, c0, c1, b, argv, code, db, until, cmds, codes, av, rest}:
+      gone.of(b, srv, id)
+    case WaitNone{}:
+      S.srv.dropped(srv, id)
+
+def grp.gone.of(p: Waits & Waits, +id: Nat, +back: Chan(Ans), outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, srv: S.Srv, ds: R.Ds, +up: List<&2, Up>, tx: Tx, pb: Ps) -> Grp:
+  (w, +left) = p
+  +sv = S.srv.left(gone.count(w, srv, id), id)
   Grp{(back, Bye{}) <> outs, es, waits.count(left, sv), ds, left, ups.drop(up, ups.is(id, up), id), tx.drop(id, tx), ps.acl.at(ps.drop(id, pb), acl.on(sv))}
+
+# a client gone (its connection closed while it waits): forgotten, its
+# call counted or not (gone.count), its batch dropped, and its connection
+# answered Bye, after any answer before
+def grp.gone(+id: Nat, +back: Chan(Ans), outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, srv: S.Srv, ds: R.Ds, +ws: Waits, +up: List<&2, Up>, tx: Tx, pb: Ps) -> Grp:
+  grp.gone.of(waits.take(ws, waits.is(id, ws), id, WaitNone{}), id, back, outs, es, srv, ds, up, tx, pb)
 
 # Memory
 # ------

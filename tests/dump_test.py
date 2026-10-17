@@ -256,7 +256,7 @@ def restores(b, r):
         same(b, r, c)
     # a time to live that the clock's time added to overflows 64 bits: 7.0.15
     # takes the sum for a time past and makes no key, 7.2.16 makes a key that
-    # lives until its cycle of expiries comes (docs/UPSTREAM.md, bug 4), so
+    # lives until its cycle of expiries comes (docs/UPSTREAM.md, bug 5), so
     # BendKV is held to 7.0.15's replies
     for c, want in ((cmd("RESTORE", "k8", "9223372036854775807", p), (b"+", b"OK")),
                     (cmd("EXISTS", "k8"), (b":", b"0"))):

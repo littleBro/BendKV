@@ -631,6 +631,16 @@ def truns.of(rs: List<&2, Nat>, acc: List<&2, TRun>) -> List<&2, TRun>:
     case Con{r, rest}:
       TRun{r, 0n, HT0{}} <> truns.of(rest, acc)
 
+# a call of the window as a run that took no time, before acc; none for a
+# call whose client waits (blk): it counts once its client is unblocked
+# (stats.served), as Redis 7.2 counts a blocked call (updateStatsOnUnblock)
+def truns.call(blk: Bool, +r: Nat, acc: List<&2, TRun>) -> List<&2, TRun>:
+  match blk:
+    case True{}:
+      acc
+    case False{}:
+      TRun{r, 0n, HT0{}} <> acc
+
 # the window's runs since its CONFIG RESETSTAT, newest first, before acc,
 # as runs that took no time
 def fresh.truns(fs: List<&2, Fresh>, acc: List<&2, TRun>) -> List<&2, TRun>:
@@ -642,7 +652,7 @@ def fresh.truns(fs: List<&2, Fresh>, acc: List<&2, TRun>) -> List<&2, TRun>:
     case Con{FRuns{rs}, rest}:
       truns.of(rs, fresh.truns(rest, acc))
     case Con{FCall{r, id, arg, blk}, rest}:
-      TRun{r, 0n, HT0{}} <> fresh.truns(rest, acc)
+      truns.call(blk, r, fresh.truns(rest, acc))
     case Con{FNamed{id, arg, blk}, rest}:
       fresh.truns(rest, acc)
     case Con{FSlow{id, us, code, arg}, rest}:
@@ -1371,8 +1381,9 @@ def win.job(log: Bool, +id: Nat, +us: Nat, +code: Nat, arg: Arg, js: List<&2, Sl
       js
 
 # a call of the general way (run r, of one call or of one refused) timed,
-# of client id, with arguments arg: a call that blocked (blk) has its
-# share in usec only, kept with its client
+# of client id, with arguments arg: a call that blocked (blk) counts
+# nothing yet, its share kept with its client until it is unblocked
+# (stats.served)
 def win.call(+cnt: Bool, +r: Nat, +id: Nat, +arg: Arg, +blk: Bool, +s: Nat, +trk: Bool, +son: Bool, +slt: Nat, w: Win) -> Win:
   match w:
     case Win{cur, pend, wt, js, +x, pos, fast, slow}:
@@ -1383,7 +1394,7 @@ def win.call(+cnt: Bool, +r: Nat, +id: Nat, +arg: Arg, +blk: Bool, +s: Nat, +trk
       +key = R.code.key(code)
       +fa = R.stat.fast(key)
       +log = Bool.and(Bool.and(son, Bool.not(blk)), Bool.and(Nat.is_lt(0n, k), Bool.and(Nat.is_le(slt, us), Bool.not(R.stat.noslow(key)))))
-      win.put(cnt, TRun{r, us, trun.h(Bool.and(cnt, Bool.and(trk, Bool.not(blk))), s, k, m)}, cur, pend, win.wt(blk, id, code, us, arg, wt), win.job(log, id, us, code, arg, js), Nat.sub(x, m), pos, win.fast(fa, us, fast), win.slow(fa, us, slow))
+      win.put(Bool.and(cnt, Bool.not(blk)), TRun{r, us, trun.h(Bool.and(cnt, trk), s, k, m)}, cur, pend, win.wt(blk, id, code, us, arg, wt), win.job(log, id, us, code, arg, js), Nat.sub(x, m), pos, win.fast(fa, us, fast), win.slow(fa, us, slow))
     case WinOf{w0}:
       win.call(cnt, r, id, arg, blk, s, trk, son, slt, w0)
 
@@ -1498,6 +1509,31 @@ def fresh.unblk(fs: List<&2, Fresh>, +id: Nat) -> List<&2, Fresh>:
     case Con{FReset{}, rest}:
       FReset{} <> fresh.unblk(rest, id)
 
+# the window's call of client id that blocked, as a call of none (its
+# client gone while it waited, which Redis 7.2 counts no call of)
+def fresh.drop(fs: List<&2, Fresh>, +id: Nat) -> List<&2, Fresh>:
+  match fs:
+    case Nil{}:
+      Nil{}
+    case Con{FCall{+r, +j, arg, +blk}, rest}:
+      +hit = Bool.and(blk, Nat.is_eq(j, id))
+      FCall{Bool.pick(Nat, hit, R.run.of(R.run.code(r), 0n), r), j, arg, Bool.and(blk, Bool.not(hit))} <> fresh.drop(rest, id)
+    case Con{FRun{r}, rest}:
+      FRun{r} <> fresh.drop(rest, id)
+    case Con{FNamed{j, arg, blk}, rest}:
+      FNamed{j, arg, blk} <> fresh.drop(rest, id)
+    case Con{FRuns{rs}, rest}:
+      FRuns{rs} <> fresh.drop(rest, id)
+    case Con{FSlow{j, us, code, arg}, rest}:
+      FSlow{j, us, code, arg} <> fresh.drop(rest, id)
+    case Con{FReset{}, rest}:
+      FReset{} <> fresh.drop(rest, id)
+
+def stats.drop(st: Stats, +id: Nat) -> Stats:
+  match st:
+    case Stats{es, fresh, cur, pend, errs, total}:
+      Stats{es, fresh.drop(fresh, id), cur, pend, errs, total}
+
 def served.slow(log: Bool, +id: Nat, +us: Nat, +code: Nat, arg: Arg, fs: List<&2, Fresh>) -> List<&2, Fresh>:
   match log:
     case True{}:
@@ -1510,14 +1546,16 @@ def served.of(p: TRun & List<&2, TRun>, es: List<&2, Ent>, fresh: List<&2, Fresh
   Stats{es, fresh, cur, pend, errs, total}
 
 # the statistics after client id is served (m: the call it blocked with,
-# kept: Wt): its share to usec again, and to the histogram while
-# latency-tracking is on; its entry, when the slow log takes it, in the
-# window, for the window's order; with none kept, its call blocked in the
-# window, which times it as one that did not block
+# kept: Wt): the call counted, with its share in usec, and in the
+# histogram while latency-tracking is on; its entry, when the slow log
+# takes it, in the window, for the window's order; with none kept, its
+# call blocked in the window, which times it as one that did not block.
+# Redis 7.2 counts a blocked call so, when its client is unblocked
+# (updateStatsOnUnblock), and not when it blocks, as 7.0 did
 def stats.served(m: Maybe<&2, Wt>, st: Stats, +cf: TCfg, +id: Nat) -> Stats:
   match m st:
     case Some{Wt{j, +code, +us, arg}} Stats{es, fresh, cur, pend, errs, total}:
-      served.of(timed.run(R.run.of(code, 0n), us, tcfg.trk(cf), us, 1n, 0n, (cur, pend)), es, served.slow(Bool.and(tcfg.son(cf), Bool.and(Nat.is_le(tcfg.slt(cf), us), Bool.not(R.stat.noslow(R.code.key(code))))), id, us, code, arg, fresh), errs, total)
+      served.of(timed.run(R.run.of(code, 1n), us, tcfg.trk(cf), us, 1n, 0n, (cur, pend)), es, served.slow(Bool.and(tcfg.son(cf), Bool.and(Nat.is_le(tcfg.slt(cf), us), Bool.not(R.stat.noslow(R.code.key(code))))), id, us, code, arg, fresh), errs, total)
     case None{} Stats{es, fresh, cur, pend, errs, total}:
       Stats{es, fresh.unblk(fresh, id), cur, pend, errs, total}
 
@@ -2880,12 +2918,19 @@ def info.blk(i: Info) -> Info:
     case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
       IInfo{b, l, c, inst, pk, c0, a0, a, stats.blk(st), ex, rw, tm, rf}
 
-# the client of id served after it waited, or unblocked by CLIENT UNBLOCK
-# (stats.served); gone, the call it blocked with is forgotten
+# the client of id served after it waited, its time up, or unblocked by
+# CLIENT UNBLOCK: its call counted (stats.served, and in
+# total_commands_processed); gone, the call it blocked with is forgotten,
+# and dropped, never counted
 def info.served(i: Info, +id: Nat) -> Info:
   match i:
     case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, +tm, rf}:
-      IInfo{b, l, c, inst, pk, c0, a0, a, stats.served(wt.get(tim.wt(tm), id), st, tim.cf(tm), id), ex, rw, tim.unwait(tm, id), rf}
+      IInfo{b, l, count.add(c, 1n, 0n, 0n), inst, pk, c0, a0, a, stats.served(wt.get(tim.wt(tm), id), st, tim.cf(tm), id), ex, rw, tim.unwait(tm, id), rf}
+
+def info.drop(i: Info, +id: Nat) -> Info:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
+      IInfo{b, l, c, inst, pk, c0, a0, a, stats.drop(st, id), ex, rw, tim.unwait(tm, id), rf}
 
 def info.gone(i: Info, +id: Nat) -> Info:
   match i:
