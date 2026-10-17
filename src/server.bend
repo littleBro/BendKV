@@ -3364,6 +3364,30 @@ def ps.addr(+id: Nat, +pb: Ps) -> String:
     case PsOf{+p}:
       ps.addr(id, p)
 
+# the address of the client of id as a monitor's line shows it: a unix
+# socket's client (its two ends named alike, cl.at) as unix:path, as
+# Redis's replicationFeedMonitors names it
+def cl.mon.unix(unix: Bool, +addr: String) -> String:
+  match unix:
+    case True{}:
+      "unix:" ++ String.take(addr, Nat.sub(String.length(addr), 2n))
+    case False{}:
+      addr
+
+def cl.mon.or(m: Maybe<&2, Cl>) -> String:
+  match m:
+    case Some{Cl{id, back, fd, +addr, +laddr, since, name, db, noev, r3, kt, user}}:
+      cl.mon.unix(String.eq(addr, laddr), addr)
+    case None{}:
+      "?:0"
+
+def ps.mon.addr(+id: Nat, +pb: Ps) -> String:
+  match pb:
+    case Ps{reg, ev, px, Cls{+tab, kd, ks, ms, pz, dn, hd}, own}:
+      cl.mon.or(KV.get(Cl, tab, Nat.show(id)))
+    case PsOf{+p}:
+      ps.mon.addr(id, p)
+
 # the name of the client of id (CLIENT SETNAME's), "" for none
 def cl.name.or(m: Maybe<&2, Cl>) -> String:
   match m:
@@ -6663,7 +6687,7 @@ def fed.held(f: Fed) -> Fed:
 def bg.fed(+id: Nat, +k: Nat, +m0: S.Mute, got: Got, g: LRun) -> Fed:
   match got g:
     case Got{args, rest} LRun{rs, es, +conn, srv, +ds, ws, up, tx, +pb}:
-      +line = mon.line(R.ds.now(ds), S.conn.db(conn), ps.addr(id, pb), mon.redact(R.code.key(k), args))
+      +line = mon.line(R.ds.now(ds), S.conn.db(conn), ps.mon.addr(id, pb), mon.redact(R.code.key(k), args))
       Fed{LRun{mon.mine(mon.self(ps.mon.is(id, pb), m0, conn), line, rs), es, conn, srv, ds, ws, up, tx, ps.mon.push(id, "+" ++ line ++ "\r\n", pb)}, rest}
     case Got{args, rest} LHeld{h}:
       Fed{LHeld{h}, rest}
@@ -6695,7 +6719,7 @@ type Xr is Data:
 def bg.x.fed(+id: Nat, +k: Nat, +m0: S.Mute, got: Got, g: LRun, mine: List<&2, String>) -> Xr:
   match got g:
     case Got{args, rest} LRun{rs, es, +conn, srv, +ds, ws, up, tx, +pb}:
-      +line = mon.line(R.ds.now(ds), S.conn.db(conn), ps.addr(id, pb), mon.redact(R.code.key(k), args))
+      +line = mon.line(R.ds.now(ds), S.conn.db(conn), ps.mon.addr(id, pb), mon.redact(R.code.key(k), args))
       Xr{LRun{rs, es, conn, srv, ds, ws, up, tx, ps.mon.push(id, "+" ++ line ++ "\r\n", pb)}, mon.add(mon.self(ps.mon.is(id, pb), m0, conn), line, mine), False{}}
     case Got{args, rest} LHeld{h}:
       Xr{LHeld{h}, mine, False{}}
@@ -7008,16 +7032,34 @@ def tx.find(+n: Nat, +t: Tx) -> TxIs:
     case TxNone{}:
       TxIs{False{}, 0n, False{}}
 
+# a client's address as Redis names it: TCP.name names either end of a
+# unix socket "/unixsocket:0", which becomes unixsocket's path and port 0,
+# as Redis's genClientAddrString names a unix socket's client at both ends.
+# A match, not Bool.pick: the parameter is read for a unix socket's client
+# alone, since a walk of the configuration at each join cost 125
+# instructions per request of make perfcheck (20 joins in 20,000 requests)
+def cl.at.of(unix: Bool, +srv: S.Srv, +a: String) -> String:
+  match unix:
+    case True{}:
+      T.cfg(S.srv.cfg(srv), "unixsocket") ++ ":0"
+    case False{}:
+      a
+
+def cl.at(+srv: S.Srv, +a: String) -> String:
+  cl.at.of(String.eq(a, "/unixsocket:0"), srv, a)
+
 def cl.flag(+on: Bool, +f: String) -> String:
   Bool.pick(String, on, f, "")
 
 def cl.flags.of(+s: String) -> String:
   Bool.pick(String, String.eq(s, ""), "N", s)
 
-def cl.flags(+mo: Bool, +sub: Bool, +x: TxIs, +b: Bool, +kt: Tk, +e: Bool) -> String:
+# the flags of a client, in Redis's order (catClientInfoString): a unix
+# socket's client (u: its two ends named alike, cl.at) is U
+def cl.flags(+mo: Bool, +sub: Bool, +x: TxIs, +b: Bool, +kt: Tk, +u: Bool, +e: Bool) -> String:
   match x:
     case TxIs{+mu, n, +cas}:
-      cl.flags.of(cl.flag(mo, "O") ++ cl.flag(sub, "P") ++ cl.flag(mu, "x") ++ cl.flag(b, "b") ++ tk.line.flags(kt) ++ cl.flag(cas, "d") ++ cl.flag(e, "e"))
+      cl.flags.of(cl.flag(mo, "O") ++ cl.flag(sub, "P") ++ cl.flag(mu, "x") ++ cl.flag(b, "b") ++ tk.line.flags(kt) ++ cl.flag(cas, "d") ++ cl.flag(u, "U") ++ cl.flag(e, "e"))
 
 def cl.multi(+x: TxIs) -> Maybe<&2, Nat>:
   match x:
@@ -7059,12 +7101,12 @@ def cl.line.of(m: Mine, +mo: Bool, +sub: Bool, +x: TxIs, +b: Bool, +wa: Nat, c: 
   match m:
     case Mine{+ch, +pa, +sh}:
       match c:
-        case Cl{id, back, fd, addr, laddr, +since, name, db, +noev, r3, +kt, user}:
+        case Cl{id, back, fd, +addr, +laddr, +since, name, db, +noev, r3, +kt, user}:
           match w:
             case Them{}:
-              R.client.line(R.ClLine{id, addr, laddr, U32.to_nat(fd), name, cl.secs(now, since), cl.secs(now, at), cl.flags(mo, sub, x, b, kt, noev), db, List.length(&2, String, ch), List.length(&2, String, pa), List.length(&2, String, sh), cl.multi(x), 0n, wa, cl.cmd.of(word), user, tk.line.redir(kt), r3})
+              R.client.line(R.ClLine{id, addr, laddr, U32.to_nat(fd), name, cl.secs(now, since), cl.secs(now, at), cl.flags(mo, sub, x, b, kt, String.eq(addr, laddr), noev), db, List.length(&2, String, ch), List.length(&2, String, pa), List.length(&2, String, sh), cl.multi(x), 0n, wa, cl.cmd.of(word), user, tk.line.redir(kt), r3})
             case Me{i, +cn, cmd, qbuf, argv, ex}:
-              R.client.line(R.ClLine{id, addr, laddr, U32.to_nat(fd), S.conn.name(cn), cl.secs(now, since), 0n, cl.flags(mo, sub, x, b, kt, noev), S.conn.db(cn), List.length(&2, String, ch), List.length(&2, String, pa), List.length(&2, String, sh), cl.multi(x), qbuf, argv, cmd, user, tk.line.redir(kt), S.conn.r3(cn)})
+              R.client.line(R.ClLine{id, addr, laddr, U32.to_nat(fd), S.conn.name(cn), cl.secs(now, since), 0n, cl.flags(mo, sub, x, b, kt, String.eq(addr, laddr), noev), S.conn.db(cn), List.length(&2, String, ch), List.length(&2, String, pa), List.length(&2, String, sh), cl.multi(x), qbuf, argv, cmd, user, tk.line.redir(kt), S.conn.r3(cn)})
 
 def cl.line.mk(m: Mine, +mo: Bool, +sub: Bool, +x: TxIs, +b: Bool, +wa: Nat, c: Cl, +now: Nat, mk: U32 & Nat, w: Who) -> String:
   (word, at) = mk
@@ -10160,7 +10202,7 @@ def group_req(+log: Bool, q: Req, g: Grp) -> Grp:
     case Join{+id, +back, fd, addr, laddr} Grp{outs, es, +srv, +ds, ws, up, tx, pb}:
       +now = R.ds.now(ds)
       +sv = S.srv.acl.client(srv, id, "default")
-      Grp{(back, Ans{None{}, S.conn_join(id, srv)}) <> outs, es, sv, ds, ws, up, tx, ps.acl.at(ps.join(id, Cl{id, Chan.mark(Ans, back, 0, now), fd, addr, laddr, now, "", 0n, False{}, False{}, TkOff{}, "default"}, pb), acl.on(sv))}
+      Grp{(back, Ans{None{}, S.conn_join(id, srv)}) <> outs, es, sv, ds, ws, up, tx, ps.acl.at(ps.join(id, Cl{id, Chan.mark(Ans, back, 0, now), fd, cl.at(srv, addr), cl.at(srv, laddr), now, "", 0n, False{}, False{}, TkOff{}, "default"}, pb), acl.on(sv))}
 
 # the clock (IO.clock: s and us since 1970) in ms
 def clock.ms(t: U32 & U32) -> Nat:
@@ -10721,6 +10763,7 @@ def db_shut(p: S.Srv & Bool, +force: Bool, outs: List<&2, Sigma<&2, &2, Chan(Ans
   +lg = down.lg(srv, rw)
   do IO<Unit>:
     Unit <- log(lg, 3, "User requested shutdown...")
+    Unit <- down.sd(S.srv.cfg(srv))
     Unit <- down.bgsave(bg.on(srv), bgr.ch(rw.bg(rw)), lg, rw.pid(rw))
     Unit <- down.rewrite(rw.runs(rw), lg, rw.tmp(rw))
     ok : Bool <- down.final(lg, srv, ds, rw.pid(rw))
@@ -12414,6 +12457,7 @@ def aof_shut.go(p: S.Srv & Bool, +force: Bool, outs: List<&2, Sigma<&2, &2, Chan
   +lg = down.lg(srv, rw)
   do IO<Unit>:
     Unit <- log(lg, 3, "User requested shutdown...")
+    Unit <- down.sd(S.srv.cfg(srv))
     Unit <- down.bgsave(bg.on(srv), bgr.ch(rw.bg(rw)), lg, rw.pid(rw))
     Unit <- down.rewrite(rw.runs(rw), lg, rw.tmp(rw))
     g : File <- down.sync.f(f, lg)
@@ -12910,12 +12954,37 @@ def down.pid(none: Bool, +lg: Log, +path: String) -> IO(Unit):
         r : Result<&1, &1, U32 & String, Unit> <- File.unlink(path)
         IO.pure(Unit, Unit{})
 
-# the end: the pid file removed, the log's last line, exit(0)
+# the unix socket's file removed, as Redis's closeListeningSockets
+# removes it
+@unsafe
+def down.unlinked(r: Result<&1, &1, U32 & String, Unit>, +lg: Log) -> IO(Unit):
+  match r:
+    case Done{u}:
+      IO.pure(Unit, Unit{})
+    case Fail{e}:
+      (code, msg) = e
+      log(lg, 3, "Error removing the unix socket file: " ++ msg)
+
+@unsafe
+def down.unix(none: Bool, +lg: Log, +path: String) -> IO(Unit):
+  match none:
+    case True{}:
+      IO.pure(Unit, Unit{})
+    case False{}:
+      do IO<Unit>:
+        Unit <- log(lg, 2, "Removing the unix socket file.")
+        r : Result<&1, &1, U32 & String, Unit> <- File.unlink(path)
+        down.unlinked(r, lg)
+
+# the end: the pid file and the unix socket's file removed, the log's
+# last line, exit(0)
 @unsafe
 def down.exit(+srv: S.Srv, +lg: Log) -> IO(Unit):
   +pid = T.cfg(S.srv.cfg(srv), "pidfile")
+  +unix = T.cfg(S.srv.cfg(srv), "unixsocket")
   do IO<Unit>:
     Unit <- down.pid(String.is_empty(pid), lg, pid)
+    Unit <- down.unix(String.is_empty(unix), lg, unix)
     Unit <- log(lg, 3, "BendKV is now ready to exit, bye bye...")
     IO.die(Unit, 0, "")
 
@@ -12926,6 +12995,7 @@ def down.stop(+srv: S.Srv, +rw: Rw, m: Maybe<&1, File>) -> IO(Unit):
   +lg = down.lg(srv, rw)
   do IO<Unit>:
     Unit <- log(lg, 3, "User requested shutdown...")
+    Unit <- down.sd(S.srv.cfg(srv))
     Unit <- down.bgsave(bg.on(srv), bgr.ch(rw.bg(rw)), lg, rw.pid(rw))
     Unit <- down.rewrite(rw.runs(rw), lg, rw.tmp(rw))
     Unit <- down.sync(m, lg)
@@ -15622,7 +15692,7 @@ def open_aof.d(m: Result<&1, &1, U32 & String, File>, +path: String, +inc: Strin
 # the files' facts for INFO: their size, and the base's (as Redis takes
 # aof_rewrite_base_size at the start); the keys the RDB base loaded
 @unsafe
-def dir.serve(o: DOpen, a: DAll, +dn: String, +n: String, +sync: Sync, +items: List<&2, C.CItem>, info: I.Info, ls: List<&1, Listener>, +post: Bool, +lg: Log, +tl: Chan(Tally), +pid: U32) -> IO(Unit):
+def dir.serve(o: DOpen, a: DAll, +dn: String, +n: String, +sync: Sync, +items: List<&2, C.CItem>, info: I.Info, ls: Bool & List<&1, Listener>, +sup: Bool, +post: Bool, +lg: Log, +tl: Chan(Tally), +pid: U32) -> IO(Unit):
   match o a:
     case DOpen{mf, +inc} DAll{ds, +size, +base, +ld, +ex}:
       +path = dn ++ "/" ++ inc
@@ -15631,40 +15701,40 @@ def dir.serve(o: DOpen, a: DAll, +dn: String, +n: String, +sync: Sync, +items: L
         +pc : Chan(String) <- Chan.new(String, 64)
         m : Result<&1, &1, U32 & String, File> <- File.open(path, "a")
         +reqs : Chan(Req) <- open_aof.d(m, path, inc, sync, S.srv_of(items, I.info.rdb.loaded(I.info.aof(I.info.restored(info, base), Nat.sub(size, base)), ld, ex)), ds, lg, pid, RDir{dn, n, m2, 0n, pc}, pc)
-        accept_all(ls, reqs, post, lg, tl, items)
+        accept_all(ls, sup, reqs, post, lg, tl, items)
 
 @unsafe
-def dir.start.loaded(a: DAll, +t0: Nat, +lg: Log, +dn: String, +n: String, +mf: AD.Mf, +sync: Sync, +items: List<&2, C.CItem>, info: I.Info, ls: List<&1, Listener>, +post: Bool, +tl: Chan(Tally), +pid: U32) -> IO(Unit):
+def dir.start.loaded(a: DAll, +t0: Nat, +lg: Log, +dn: String, +n: String, +mf: AD.Mf, +sync: Sync, +items: List<&2, C.CItem>, info: I.Info, ls: Bool & List<&1, Listener>, +sup: Bool, +post: Bool, +tl: Chan(Tally), +pid: U32) -> IO(Unit):
   do IO<Unit>:
     t1 : Nat <- IO.now()
     Unit <- log(lg, 2, "DB loaded from append only file: " ++ secs3(Nat.sub(t1, t0)) ++ " seconds")
     o : DOpen <- dir.incr.at(AD.mf.incr.last(mf), lg, dn, n, mf)
-    dir.serve(o, a, dn, n, sync, items, info, ls, post, lg, tl, pid)
+    dir.serve(o, a, dn, n, sync, items, info, ls, sup, post, lg, tl, pid)
 
 @unsafe
-def dir.start.files(any: Bool, +lg: Log, +trunc: Bool, +dn: String, +n: String, +mf: AD.Mf, +sync: Sync, +items: List<&2, C.CItem>, info: I.Info, ls: List<&1, Listener>, +post: Bool, +tl: Chan(Tally), +pid: U32, +more: Nat) -> IO(Unit):
+def dir.start.files(any: Bool, +lg: Log, +trunc: Bool, +dn: String, +n: String, +mf: AD.Mf, +sync: Sync, +items: List<&2, C.CItem>, info: I.Info, ls: Bool & List<&1, Listener>, +sup: Bool, +post: Bool, +tl: Chan(Tally), +pid: U32, +more: Nat) -> IO(Unit):
   match any:
     case False{}:
       +m1 = AD.mf.base.new(mf, n, False{})
       do IO<Unit>:
         Unit <- base0(lg, pid, dn, AD.mf.base.at(m1))
         o : DOpen <- dir.incr.at(None{}, lg, dn, n, m1)
-        dir.serve(o, DAll{R.ds.empty(more), 0n, 0n, 0n, 0n}, dn, n, sync, items, info, ls, post, lg, tl, pid)
+        dir.serve(o, DAll{R.ds.empty(more), 0n, 0n, 0n, 0n}, dn, n, sync, items, info, ls, sup, post, lg, tl, pid)
     case True{}:
       +fs = AD.mf.loads(mf)
       do IO<Unit>:
         Unit <- dir.check(fs, lg, dn)
         t0 : Nat <- IO.now()
         a : DAll <- dir.loads(fs, lg, trunc, items, dn, more, DAll{R.ds.empty(more), 0n, 0n, 0n, 0n})
-        dir.start.loaded(a, t0, lg, dn, n, mf, sync, items, info, ls, post, tl, pid)
+        dir.start.loaded(a, t0, lg, dn, n, mf, sync, items, info, ls, sup, post, tl, pid)
 
 # the start with appendonly yes in the directory dn, its files named n,
 # its manifest mf0 as read
 @unsafe
-def dir.start(+lg: Log, +trunc: Bool, +dn: String, +n: String, mf0: AD.Mf, +sync: Sync, +items: List<&2, C.CItem>, info: I.Info, ls: List<&1, Listener>, +post: Bool, +tl: Chan(Tally), +pid: U32, +more: Nat) -> IO(Unit):
+def dir.start(+lg: Log, +trunc: Bool, +dn: String, +n: String, mf0: AD.Mf, +sync: Sync, +items: List<&2, C.CItem>, info: I.Info, ls: Bool & List<&1, Listener>, +sup: Bool, +post: Bool, +tl: Chan(Tally), +pid: U32, +more: Nat) -> IO(Unit):
   do IO<Unit>:
     +mf : AD.Mf <- dir.upgrade(lg, dn, n, mf0)
-    dir.start.files(AD.mf.any(mf), lg, trunc, dn, n, mf, sync, items, info, ls, post, tl, pid, more)
+    dir.start.files(AD.mf.any(mf), lg, trunc, dn, n, mf, sync, items, info, ls, sup, post, tl, pid, more)
 
 # with appendonly no (in the configuration's form), the directory's
 # manifest read all the same, for the rewrites (BGREWRITEAOF writes its
@@ -15727,20 +15797,28 @@ def mm.warn.if(on: Bool, +lg: Log, +max: Nat) -> IO(Unit):
 def mm.warn(+lg: Log, +max: Nat) -> IO(Unit):
   mm.warn.if(Bool.and(Nat.is_lt(0n, max), Nat.is_lt(max, 1048576n)), lg, max)
 
+# the server serves: Redis's lines that it is ready (on TCP when some TCP
+# listener is up, the pair's first; at the unix socket's path when it has
+# one), and systemd told when it supervises the server (sup), as Redis's
+# main ends its start
 @unsafe
-def accept_all(ls: List<&1, Listener>, +reqs: Chan(Req), +post: Bool, +lg: Log, +tl: Chan(Tally), +items: List<&2, C.CItem>) -> IO(Unit):
+def accept_all(p: Bool & List<&1, Listener>, +sup: Bool, +reqs: Chan(Req), +post: Bool, +lg: Log, +tl: Chan(Tally), +items: List<&2, C.CItem>) -> IO(Unit):
+  (tcp, ls) = p
+  +path = T.cfg(items, "unixsocket")
   do IO<Unit>:
     Unit <- IO.spawn(Unit, cron(reqs))
     Unit <- accept_each(ls, reqs, post, tl)
-    Unit <- log(lg, 2, "Ready to accept connections")
+    Unit <- log.if(tcp, lg, 2, "Ready to accept connections")
+    Unit <- log.if(Bool.not(String.is_empty(path)), lg, 2, "The server is now ready to accept connections at " ++ path)
+    Unit <- sd.ready(sup)
     mm.warn(lg, S.mm.get(items, "maxmemory"))
 
 @unsafe
-def serve.aof(p: R.Ds & Nat, +path: String, +sync: Sync, +items: List<&2, C.CItem>, info: I.Info, ls: List<&1, Listener>, +post: Bool, +lg: Log, +tl: Chan(Tally), +pid: U32) -> IO(Unit):
+def serve.aof(p: R.Ds & Nat, +path: String, +sync: Sync, +items: List<&2, C.CItem>, info: I.Info, ls: Bool & List<&1, Listener>, +sup: Bool, +post: Bool, +lg: Log, +tl: Chan(Tally), +pid: U32) -> IO(Unit):
   (ds, +size) = p
   do IO<Unit>:
     +reqs : Chan(Req) <- open_aof(path, sync, S.srv_of(items, I.info.restored(info, size)), ds, lg, pid)
-    accept_all(ls, reqs, post, lg, tl, items)
+    accept_all(ls, sup, reqs, post, lg, tl, items)
 
 # the actor without a file, its Pub/Sub's state told of maxmemory
 @unsafe
@@ -15754,69 +15832,69 @@ def dbs.more(+items: List<&2, C.CItem>) -> Nat:
 # the actor without a file, on the databases the RDB file held (The RDB
 # file on the disk: rdb.start)
 @unsafe
-def serve.db(p: R.Ds & I.Info, d: RDir, ls: List<&1, Listener>, +post: Bool, +items: List<&2, C.CItem>, +lg: Log, +tl: Chan(Tally), +pid: U32) -> IO(Unit):
+def serve.db(p: R.Ds & I.Info, d: RDir, ls: Bool & List<&1, Listener>, +sup: Bool, +post: Bool, +items: List<&2, C.CItem>, +lg: Log, +tl: Chan(Tally), +pid: U32) -> IO(Unit):
   (ds, info) = p
   do IO<Unit>:
     +reqs : Chan(Req) <- Chan.new(Req, 1024)
     Unit <- IO.spawn(Unit, db_start(S.srv_of(items, info), ds, rw.new(T.cfg(items, "appendfilename"), False{}, pid, d), reqs))
-    accept_all(ls, reqs, post, lg, tl, items)
+    accept_all(ls, sup, reqs, post, lg, tl, items)
 
 # rdb: whether the RDB file is loaded when there is no append-only file
 # (not in the short form)
 @unsafe
-def serve.single(+path: String, ls: List<&1, Listener>, +post: Bool, +sync: Sync, +trunc: Bool, +items: List<&2, C.CItem>, info: I.Info, +lg: Log, +tl: Chan(Tally), +pid: U32) -> IO(Unit):
+def serve.single(+path: String, ls: Bool & List<&1, Listener>, +sup: Bool, +post: Bool, +sync: Sync, +trunc: Bool, +items: List<&2, C.CItem>, info: I.Info, +lg: Log, +tl: Chan(Tally), +pid: U32) -> IO(Unit):
   do IO<Unit>:
     p : R.Ds & Nat <- restore(lg, trunc, path, dbs.more(items))
-    serve.aof(p, path, sync, items, info, ls, post, lg, tl, pid)
+    serve.aof(p, path, sync, items, info, ls, sup, post, lg, tl, pid)
 
 # with appendonly yes: the single file, or the directory when it is there
 # (The append-only directory), whose files are named path
 @unsafe
-def serve.at(dir: Bool, +path: String, ls: List<&1, Listener>, +post: Bool, +sync: Sync, +trunc: Bool, +items: List<&2, C.CItem>, info: I.Info, +lg: Log, +tl: Chan(Tally), +pid: U32) -> IO(Unit):
+def serve.at(dir: Bool, +path: String, ls: Bool & List<&1, Listener>, +sup: Bool, +post: Bool, +sync: Sync, +trunc: Bool, +items: List<&2, C.CItem>, info: I.Info, +lg: Log, +tl: Chan(Tally), +pid: U32) -> IO(Unit):
   match dir:
     case False{}:
-      serve.single(path, ls, post, sync, trunc, items, info, lg, tl, pid)
+      serve.single(path, ls, sup, post, sync, trunc, items, info, lg, tl, pid)
     case True{}:
       +dn = T.cfg(items, "appenddirname")
       do IO<Unit>:
         mf : AD.Mf <- mf.load(lg, dn, path)
-        dir.start(lg, trunc, dn, path, mf, sync, items, info, ls, post, tl, pid, dbs.more(items))
+        dir.start(lg, trunc, dn, path, mf, sync, items, info, ls, sup, post, tl, pid, dbs.more(items))
 
 @unsafe
-def serve.on(conf: Bool, +path: String, ls: List<&1, Listener>, +post: Bool, +sync: Sync, +trunc: Bool, +items: List<&2, C.CItem>, info: I.Info, +lg: Log, +tl: Chan(Tally), +pid: U32) -> IO(Unit):
+def serve.on(conf: Bool, +path: String, ls: Bool & List<&1, Listener>, +sup: Bool, +post: Bool, +sync: Sync, +trunc: Bool, +items: List<&2, C.CItem>, info: I.Info, +lg: Log, +tl: Chan(Tally), +pid: U32) -> IO(Unit):
   match conf:
     case False{}:
-      serve.single(path, ls, post, sync, trunc, items, info, lg, tl, pid)
+      serve.single(path, ls, sup, post, sync, trunc, items, info, lg, tl, pid)
     case True{}:
       do IO<Unit>:
         d : Bool <- there(T.cfg(items, "appenddirname") ++ "/.")
-        serve.at(d, path, ls, post, sync, trunc, items, info, lg, tl, pid)
+        serve.at(d, path, ls, sup, post, sync, trunc, items, info, lg, tl, pid)
 
 # without an append-only file, the RDB file loaded (not in the short
 # form), with the directory's manifest read before it when the directory
 # is there, and its history removed after
 @unsafe
-def serve.off(+dir: Bool, ls: List<&1, Listener>, +post: Bool, +items: List<&2, C.CItem>, info: I.Info, +lg: Log, +tl: Chan(Tally), +pid: U32, rdb: Bool) -> IO(Unit):
+def serve.off(+dir: Bool, ls: Bool & List<&1, Listener>, +sup: Bool, +post: Bool, +items: List<&2, C.CItem>, info: I.Info, +lg: Log, +tl: Chan(Tally), +pid: U32, rdb: Bool) -> IO(Unit):
   +dn = T.cfg(items, "appenddirname")
   +n = T.cfg(items, "appendfilename")
   do IO<Unit>:
     m : Maybe<&2, AD.Mf> <- dir.off(dir, lg, dn, n)
     p : R.Ds & I.Info <- rdb.start(rdb, lg, items, info, dbs.more(items))
     d : RDir <- dir.off.gc(m, lg, items, dn, n)
-    serve.db(p, d, ls, post, items, lg, tl, pid)
+    serve.db(p, d, ls, sup, post, items, lg, tl, pid)
 
 # rdb: whether this is the configuration's form, where the RDB file is
 # loaded when there is no append-only file and Redis 7's directory is
 # used when it is there (not in the short form)
 @unsafe
-def serve(aof: Maybe<&2, String>, ls: List<&1, Listener>, +post: Bool, +sync: Sync, +trunc: Bool, +items: List<&2, C.CItem>, info: I.Info, +lg: Log, +tl: Chan(Tally), +pid: U32, +rdb: Bool) -> IO(Unit):
+def serve(aof: Maybe<&2, String>, ls: Bool & List<&1, Listener>, +sup: Bool, +post: Bool, +sync: Sync, +trunc: Bool, +items: List<&2, C.CItem>, info: I.Info, +lg: Log, +tl: Chan(Tally), +pid: U32, +rdb: Bool) -> IO(Unit):
   match aof:
     case None{}:
       do IO<Unit>:
         d : Bool <- there(T.cfg(items, "appenddirname") ++ "/.")
-        serve.off(Bool.and(rdb, d), ls, post, items, info, lg, tl, pid, rdb)
+        serve.off(Bool.and(rdb, d), ls, sup, post, items, info, lg, tl, pid, rdb)
     case Some{+path}:
-      serve.on(rdb, path, ls, post, sync, trunc, items, info, lg, tl, pid)
+      serve.on(rdb, path, ls, sup, post, sync, trunc, items, info, lg, tl, pid)
 
 # Listening
 # ---------
@@ -15847,9 +15925,9 @@ def listen.got(m: Result<&1, &1, U32 & String, Listener>, +name: String, +port: 
     case Done{l}:
       IO.pure(List<&1, Listener>, l <> ls)
     case Fail{e}:
-      (code, msg) = e
+      (+code, msg) = e
       do IO<List<&1, Listener>>:
-        Unit <- log(lg, 3, "Warning: Could not create server TCP listening socket " ++ name ++ ":" ++ U32.show(port) ++ ": bind: " ++ msg)
+        Unit <- log(lg, 3, "Warning: Could not create server TCP listening socket " ++ name ++ ":" ++ U32.show(port) ++ ": " ++ T.listen.why(code, msg))
         listen.fail(T.listen.skip(code), port, lg, ls)
 
 @unsafe
@@ -15893,11 +15971,61 @@ def listen.check(ls: List<&1, Listener>, +lg: Log) -> IO(List<&1, Listener>):
 def listen.start(zero: Bool, xs: List<&2, T.Addr>, +port: U32, +lg: Log) -> IO(List<&1, Listener>):
   match zero:
     case True{}:
-      listen.check(Nil{}, lg)
+      IO.pure(List<&1, Listener>, Nil{})
+    case False{}:
+      listen.all(xs, port, lg, Nil{})
+
+# The unix socket of unixsocket, after the TCP listeners, as Redis's
+# initServer listens on it: its path removed first, unixsocketperm its
+# mode; one it cannot listen on stops the start, as in Redis, and so does
+# a configuration that listens nowhere (listen.check). The listeners go
+# with whether some TCP listener is up (accept_all: Redis's "Ready to
+# accept connections" then).
+
+@unsafe
+def listen.unix.got(m: Result<&1, &1, U32 & String, Listener>, +lg: Log, ls: List<&1, Listener>) -> IO(List<&1, Listener>):
+  match m:
+    case Done{l}:
+      IO.pure(List<&1, Listener>, l <> ls)
+    case Fail{e}:
+      (code, msg) = e
+      log.die(List<&1, Listener>, lg, "Failed opening Unix socket: bind: " ++ msg)
+
+# the unix socket's path, as Redis's initServer and anetUnixServer take
+# it: one longer than sun_path holds stops the start with Redis's line;
+# else the file a run before left there removed, whether that works or
+# not, then the listener (TCP.listen_unix)
+@unsafe
+def listen.unix.at(long: Bool, +path: String, +perm: U32, +lg: Log, ls: List<&1, Listener>) -> IO(List<&1, Listener>):
+  match long:
+    case True{}:
+      log.die(List<&1, Listener>, lg, "Failed opening Unix socket: unix socket path too long (" ++ Nat.show(String.length(path)) ++ "), must be under 108")
     case False{}:
       do IO<List<&1, Listener>>:
-        ls : List<&1, Listener> <- listen.all(xs, port, lg, Nil{})
-        listen.check(ls, lg)
+        u : Result<&1, &1, U32 & String, Unit> <- File.unlink(path)
+        m : Result<&1, &1, U32 & String, Listener> <- TCP.listen_unix(path, perm)
+        listen.unix.got(m, lg, ls)
+
+@unsafe
+def listen.unix(none: Bool, +path: String, +perm: U32, +lg: Log, ls: List<&1, Listener>) -> IO(List<&1, Listener>):
+  match none:
+    case True{}:
+      IO.pure(List<&1, Listener>, ls)
+    case False{}:
+      listen.unix.at(Nat.is_lt(107n, String.length(path)), path, perm, lg, ls)
+
+@unsafe
+def listen.up(tcp: List<&1, Listener>, +path: String, +perm: U32, +lg: Log) -> IO(Bool & List<&1, Listener>):
+  match tcp:
+    case Nil{}:
+      do IO<Bool & List<&1, Listener>>:
+        ls : List<&1, Listener> <- listen.unix(String.is_empty(path), path, perm, lg, Nil{})
+        ls2 : List<&1, Listener> <- listen.check(ls, lg)
+        return (False{}, ls2)
+    case Con{l, rest}:
+      do IO<Bool & List<&1, Listener>>:
+        ls : List<&1, Listener> <- listen.unix(String.is_empty(path), path, perm, lg, Con{l, rest})
+        return (True{}, ls)
 
 # The start
 # ---------
@@ -15946,17 +16074,40 @@ def start.refused(none: Bool, +msg: String, +lg: Log) -> IO(Unit):
     case False{}:
       log.die(Unit, lg, msg)
 
+# Supervision, as Redis's redisIsSupervised sets it up: upstart stops the
+# start (BendKV cannot stop itself to signal it); systemd is told that the
+# server loads (IO.notify, as Redis's sd_notify tells it), and it
+# supervises the server once that reached it, which then tells it the
+# server is ready (sd.ready) and stopping (down.sd), and runs in the
+# foreground whatever daemonize says; a supervisor asked for whose
+# variable is not set is a warning, and no supervision.
 @unsafe
-def start.sup(+k: Nat, +lg: Log) -> IO(Unit):
+def start.sup.told(ok: Bool, +lg: Log) -> IO(Bool):
+  match ok:
+    case True{}:
+      do IO<Bool>:
+        Unit <- log(lg, 2, "Supervised by systemd. Please make sure you set appropriate values for TimeoutStartSec and TimeoutStopSec in your service unit.")
+        return True{}
+    case False{}:
+      do IO<Bool>:
+        Unit <- log(lg, 3, "systemd supervision error: sd_notify could not reach NOTIFY_SOCKET")
+        return False{}
+
+@unsafe
+def start.sup(+k: Nat, +lg: Log) -> IO(Bool):
   match k:
     case 1n:
-      log.die(Unit, lg, T.sup.msg(k))
+      log.die(Bool, lg, T.sup.msg(k))
     case 2n:
-      log.die(Unit, lg, T.sup.msg(k))
+      do IO<Bool>:
+        ok : Bool <- IO.notify("STATUS=BendKV is loading...\n")
+        start.sup.told(ok, lg)
     case 0n:
-      IO.pure(Unit, Unit{})
+      IO.pure(Bool, False{})
     case _:
-      log(lg, 3, T.sup.msg(k))
+      do IO<Bool>:
+        Unit <- log(lg, 3, T.sup.msg(k))
+        return False{}
 
 def env.set(r: Result<&1, &1, U32 & String, String>) -> Bool:
   match r:
@@ -15965,13 +16116,52 @@ def env.set(r: Result<&1, &1, U32 & String, String>) -> Bool:
     case Fail{e}:
       False{}
 
-# supervised, as its environment shows it (upstart, systemd)
+# how the environment and supervised say the server is supervised
+# (T.sup.kind: 2 by systemd)
 @unsafe
-def start.sup.env(+items: List<&2, C.CItem>, +lg: Log) -> IO(Unit):
-  do IO<Unit>:
+def sup.kind.env(+items: List<&2, C.CItem>) -> IO(Nat):
+  do IO<Nat>:
     up : Result<&1, &1, U32 & String, String> <- IO.get_env("UPSTART_JOB")
     sd : Result<&1, &1, U32 & String, String> <- IO.get_env("NOTIFY_SOCKET")
-    start.sup(T.sup.kind(T.cfg(items, "supervised"), env.set(up), env.set(sd)), lg)
+    return T.sup.kind(T.cfg(items, "supervised"), env.set(up), env.set(sd))
+
+# supervised, as its environment shows it (upstart, systemd): whether
+# systemd supervises the server
+@unsafe
+def start.sup.env(+items: List<&2, C.CItem>, +lg: Log) -> IO(Bool):
+  do IO<Bool>:
+    k : Nat <- sup.kind.env(items)
+    start.sup(k, lg)
+
+# systemd told the server is ready, as Redis tells it once it serves
+@unsafe
+def sd.ready(sup: Bool) -> IO(Unit):
+  match sup:
+    case False{}:
+      IO.pure(Unit, Unit{})
+    case True{}:
+      do IO<Unit>:
+        a : Bool <- IO.notify("STATUS=Ready to accept connections\n")
+        b : Bool <- IO.notify("READY=1\n")
+        IO.pure(Unit, Unit{})
+
+# systemd told the server stops (SHUTDOWN), as Redis tells it when it is
+# supervised
+@unsafe
+def down.sd.if(sup: Bool) -> IO(Unit):
+  match sup:
+    case False{}:
+      IO.pure(Unit, Unit{})
+    case True{}:
+      do IO<Unit>:
+        a : Bool <- IO.notify("STOPPING=1\n")
+        IO.pure(Unit, Unit{})
+
+@unsafe
+def down.sd(+items: List<&2, C.CItem>) -> IO(Unit):
+  do IO<Unit>:
+    k : Nat <- sup.kind.env(items)
+    down.sd.if(Nat.is_eq(k, 2n))
 
 # the server as the configuration asks: up to listening, then serving;
 # checks: the configuration's form (the RDB file's load, and Redis 7's
@@ -15983,13 +16173,14 @@ def run(+items: List<&2, C.CItem>, +post: Bool, +aof: Maybe<&2, String>, +sync: 
   +lm = log.up(log.of(items, pid))
   +port = port_or(T.cfg(items, "port"))
   do IO<Unit>:
-    Unit <- start.sup.env(items, lg)
-    Unit <- start.refused(String.is_empty(T.refusal(items, False{})), T.refusal(items, False{}), lg)
+    +sup : Bool <- start.sup.env(items, lg)
+    Unit <- start.refused(String.is_empty(T.refusal(items, sup)), T.refusal(items, sup), lg)
     Unit <- log(lg, 3, "oO0OoO0OoO0Oo BendKV is starting oO0OoO0OoO0Oo")
     Unit <- log(lg, 3, "BendKV version=" ++ T.version() ++ ", Redis 7.0.15 commands, bits=64, pid=" ++ U32.show(pid) ++ ", just started")
     Unit <- log(lg, 3, Bool.pick(String, bare, "Warning: no config file specified, using the default config. In order to specify a config file use " ++ prog ++ " /path/to/redis.conf", "Configuration loaded"))
     Unit <- log.lines(lm, 3, T.warnings(items))
-    ls : List<&1, Listener> <- listen.start(U32.is_eq(port, 0), T.addrs(items), port, lm)
+    tcp : List<&1, Listener> <- listen.start(U32.is_eq(port, 0), T.addrs(items), port, lm)
+    ls : Bool & List<&1, Listener> <- listen.up(tcp, T.cfg(items, "unixsocket"), T.unix.perm(items), lm)
     Unit <- pidfile(String.is_empty(T.cfg(items, "pidfile")), T.cfg(items, "pidfile"), pid, lm)
     Unit <- log.raw.at(Bool.and(String.eq(T.cfg(items, "always-show-logo"), "yes"), U32.is_le(log.level(lg), 2)), lm, T.logo(T.cfg(items, "port"), pid))
     Unit <- log.if(Bool.not(String.eq(T.cfg(items, "always-show-logo"), "yes")), lm, 2, "Running mode=standalone, port=" ++ T.cfg(items, "port") ++ ".")
@@ -15998,7 +16189,7 @@ def run(+items: List<&2, C.CItem>, +post: Bool, +aof: Maybe<&2, String>, +sync: 
     +tl : Chan(Tally) <- Chan.new(Tally, 1)
     ok : Bool <- Chan.send(Tally, tl, Tally{0n, 0n})
     info : I.Info <- info.read(pid, exe, conf, tl)
-    serve(aof, ls, post, sync, String.eq(T.cfg(items, "aof-load-truncated"), "yes"), items, info, lm, tl, pid, checks)
+    serve(aof, ls, sup, post, sync, String.eq(T.cfg(items, "aof-load-truncated"), "yes"), items, info, lm, tl, pid, checks)
 
 # The short form
 # --------------

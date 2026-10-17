@@ -166,10 +166,13 @@ translation stays in the trusted base.
   random numbers in Redis's ways of picking), SMOVE, SINTER, SUNION, SDIFF, SINTERSTORE,
   SUNIONSTORE, SDIFFSTORE and SINTERCARD (LIMIT), their arguments and errors read where
   and as Redis reads them. A set is an intset while its members are canonical 64-bit
-  integers, at most 512 of them, and a trie of its own past that, for good, as Redis
-  turns an intset into a hashtable: an intset answers its members in numeric order and
-  scans whole with cursor 0, as Redis's does. OBJECT ENCODING answers `intset` or
-  `hashtable`, MEMORY USAGE estimates a set's bytes, and a key never holds an empty set.
+  integers, at most 512 of them, and a hashtable past that, for good, as Redis turns an
+  intset into a hashtable: an intset answers its members in numeric order and scans
+  whole with cursor 0, as Redis's does. A hashtable keeps its members in one string, in
+  the order they came, while it holds at most 128 of at most 64 bytes (Redis 7.2's
+  listpack limits), and in a trie of its own past that, for good. OBJECT ENCODING
+  answers `intset` or `hashtable`, MEMORY USAGE estimates a set's bytes, and a key never
+  holds an empty set.
   A set write is logged as the SADD or SREM it makes (SPOP as the SREM of the members it
   took, or the DEL of the key when it took the last; a STORE as the SADD of the members
   it made, or the DEL of its destination when there are none); a set made where a key
@@ -271,10 +274,11 @@ translation stays in the trusted base.
   `sanitize-dump-payload yes`, and takes REPLACE, ABSTTL, IDLETIME and FREQ, with
   Redis's errors in Redis's order and its keyspace events. The append-only file logs a
   RESTORE with REPLACE and ABSTTL. Where BendKV differs: DUMP writes no LZF; a hashtable's
-  pairs or members come in the order of BendKV's trie; RESTORE checks every payload in
-  depth, as Redis does only with `sanitize-dump-payload yes`. A value of 100,000 elements
-  takes 3 to 38 times Redis's time to dump or restore, less than the commands that make
-  it (section 3zzu of [docs/FINDINGS.md](docs/FINDINGS.md), section 62 of
+  pairs or members come in BendKV's order (its trie's, or a small set's own, the order its
+  members came in); RESTORE checks every payload in depth, as Redis does only with
+  `sanitize-dump-payload yes`. A value of 100,000 elements takes 3 to 38 times Redis's
+  time to dump or restore, less than the commands that make it (section 3zzu of
+  [docs/FINDINGS.md](docs/FINDINGS.md), section 62 of
   [docs/PERFORMANCE.md](docs/PERFORMANCE.md)).
 - **Streams:** a stream as Redis 7.0.15 keeps one, its entries in nodes that are
   Redis's listpacks byte for byte, its groups with their pending entries and their
@@ -570,16 +574,19 @@ translation stays in the trusted base.
   `-` for the standard input, read line by line as Redis reads them (includes, `dir`
   changing the directory at once, save points that add up, the same errors at the same
   lines), and a log in Redis's form, on the standard output or in `logfile`. The port,
-  `bind` (IPv4), `requirepass`, `protected-mode`, the append-only file (`appendonly`,
-  `appendfilename`, `appenddirname`, `appendfsync`, `aof-load-truncated`,
-  `aof-disable-auto-gc`), `logfile`, `loglevel` and `pidfile` act. With `appendonly no`
-  the RDB file (`dbfilename` in `dir`) is loaded when it is there, as Redis loads it, with
-  its log's lines; a file that does not load stops the start with Redis's reason. With
-  `appendonly yes` the append-only file is loaded and the RDB file left aside, as in
-  Redis. What BendKV cannot do (modules, ACL users from the configuration or a file,
-  renamed commands, the background, a cluster, a replica, TLS, a supervisor to signal, or
-  an RDB file that holds a module's data or functions, to load) stops the start with a
-  line saying so.
+  `bind` (IPv4 and IPv6, each IPv6 socket IPv6 alone, as Redis binds them), `unixsocket`
+  and `unixsocketperm`, `requirepass`, `protected-mode`, `supervised` (systemd is told the
+  server loads, is ready and stops, as Redis's sd_notify tells it), the append-only file
+  (`appendonly`, `appendfilename`, `appenddirname`, `appendfsync`, `aof-load-truncated`,
+  `aof-disable-auto-gc`), `logfile`, `loglevel` and `pidfile` act. A unix socket's client
+  is named as Redis names it: its path and port 0 in CLIENT LIST, with the flag U, and
+  unix:path in a monitor's lines. With `appendonly no` the RDB file (`dbfilename` in
+  `dir`) is loaded when it is there, as Redis loads it, with its log's lines; a file that
+  does not load stops the start with Redis's reason. With `appendonly yes` the append-only
+  file is loaded and the RDB file left aside, as in Redis. What BendKV cannot do (modules,
+  ACL users from the configuration or a file, renamed commands, the background without a
+  supervisor, a cluster, a replica, TLS, upstart's supervision, or an RDB file that holds
+  a module's data or functions, to load) stops the start with a line saying so.
 - **Protocol:** pipelining, partial packets, inline commands with quoting,
   binary-safe values; requests framed as Redis 7.0.15 frames them (a length as `string2ll`
   reads it, with no `0` before its first digit, a count of 0 or less skipped down to
@@ -780,7 +787,8 @@ after it compared), hashes (each command at its edges, past a listpack's limits,
 whose time has passed, and at random, the fields of a hashtable compared as sets), lists
 (each command at its edges, lists of up to 20,000 elements, moves onto keys whose time
 has passed, and at random, with moves between a few keys), sets (each command at its
-edges, intsets on both sides of 512 members and hashtables of up to 20,000, moves and
+edges, intsets on both sides of 512 members, small sets on both sides of 128 members of
+64 bytes and hashtables of up to 20,000, moves and
 STOREs onto keys whose time has passed, and at random, the members of a hashtable
 compared as sets and each random pick checked against the set it came from), sorted sets
 (each command at its edges, sorted sets of up to 20,000 elements on both sides of a
@@ -928,13 +936,13 @@ away.
 | what | how many | counted in |
 |---|---:|---|
 | laws | 68 | `proof/LAWS.bend` (by group: [What is proved](#what-is-proved)) |
-| patches to the Bend compiler | 35 | `bend-patches/apply.sh` |
+| patches to the Bend compiler | 36 | `bend-patches/apply.sh` |
 | constructors of `Cmd`, a parsed command | 30 | `src/redis.bend` |
 | Redis 7.0.15's parameters, all of which CONFIG serves | 178 | `tools/data/redis-configs.json` |
 
 | file | lines of code | of them written by a generator | the laws import it |
 |---|---:|---:|---|
-| `src/map.bend` | 3,900 | 1,200 | yes |
+| `src/map.bend` | 4,400 | 1,200 | yes |
 | `src/redis.bend` | 18,000 | 7,300 | yes |
 | `src/batch.bend` | 84 |  | yes |
 | `src/aof.bend` | 1,300 |  | yes |
