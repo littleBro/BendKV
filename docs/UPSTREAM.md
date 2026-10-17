@@ -21,7 +21,8 @@ The causes below are read from the sources of Redis 7.2.16 and Valkey 9.1.2, whi
 BSD-3. Redis 8.10.2 was only run; its sources were not read (AGENTS.md, rule 10).
 
 Bug 5 turned up later, when RDB 11 came in on the branch of 7.2.16, and was replayed on
-7.0.15 and 7.2.16 only.
+7.0.15 and 7.2.16 only. Bug 6 turned up as the last difference of HyperLogLog's test, and
+was replayed on all four.
 
 | bug | 7.0.15 | 7.2.16 | 8.10.2 | Valkey 9.1.2 |
 |---|---|---|---|---|
@@ -30,6 +31,7 @@ Bug 5 turned up later, when RDB 11 came in on the branch of 7.2.16, and was repl
 | 3. CONFIG SET tls-port crashes a server built without TLS | refuses | **bug** | refuses | **bug** |
 | 4. CLIENT UNBLOCK with ERROR counts a WAIT twice | counts once | **bug** | **bug** | **bug** |
 | 5. RESTORE with a time to live near 2^63 ms makes a key | no key | **bug** | not run | not run |
+| 6. PFADD reads the byte after a sparse HyperLogLog's end | **bug** | **bug** | **bug** | **bug** |
 
 ## 1. LSET takes its index modulo 2^32
 
@@ -195,3 +197,64 @@ time past. 7.0.15 added `mstime()` where 7.2.16 adds `commandTimeSnapshot()`. SE
 and their kin check the sum for overflow first (`invalid expire time`); RESTORE does not.
 
 **To report to:** Redis, for its 7.2 branch; 8.10.2 and Valkey 9.1.2 are not checked yet.
+
+## 6. PFADD reads the byte after a sparse HyperLogLog's end
+
+**What happens.** A string can pass for a sparse HyperLogLog whose opcodes end within an
+XZERO, an opcode of two bytes cut after its first. PFADD then reads the byte after the
+value's end as the XZERO's second, so the run it reads, and the value it writes, turn on
+memory outside the value:
+- the string's NUL, 0, when nothing else wrote there;
+- the last byte of the opcodes a split of that XZERO made, which PFADD writes there, over
+  the NUL;
+- the NUL again, once Redis 7.2 grows the value's buffer (which it does when fewer than 3
+  bytes are left), that is, by the sizes of the allocator's classes.
+
+So the versions leave different values for the same commands, though none checks the
+value's last opcode, and a split leaves a string without its NUL. Every opcode of 7.2.16's
+and Valkey's own values is whole; such a value comes from a SET, a SETRANGE, a RESTORE or a
+file. PFCOUNT and PFMERGE read the byte too.
+
+**How to see it.** A 40-byte value: the header, 23 ZEROs of one register each, then an
+XZERO's first byte, `7f` (with a 0 after it, 16,129 registers). Two elements land in the
+cut XZERO:
+
+```
+python3 -c '
+import socket, time
+def req(*a):
+    return b"*%d\r\n" % len(a) + b"".join(b"$%d\r\n%s\r\n" % (len(x), x) for x in a)
+v = b"HYLL\x01" + b"\x00" * 10 + b"\x80" + b"\x00" * 23 + b"\x7f"
+s = socket.create_connection(("127.0.0.1", 6379))
+s.sendall(req(b"SET", b"h", v) + req(b"PFADD", b"h", b"a3", b"b3") + req(b"GET", b"h"))
+time.sleep(0.2); print(s.recv(4096).split(b"\r\n")[-2][-7:].hex())'
+```
+
+The value ends `4827846b4f884b` on 7.0.15, and `4827846b4f884a` on 7.2.16, 8.10.2 and
+Valkey 9.1.2: XZERO, VAL, XZERO, VAL, and an XZERO's first byte.
+- a3 splits the XZERO into XZERO, VAL, XZERO. The last XZERO, of 14,040 registers (`76 d7`),
+  is cut in turn: its `d7` lies past the value's end, over the NUL.
+- b3 lands in that XZERO. 7.0.15 reads `76 d7`, and leaves an XZERO of 2,951 registers
+  (`4b 86`, cut after `4b`). 7.2.16 grows the buffer first, which writes a NUL over `d7`.
+  It reads `76 00`, 13,825 registers, and leaves 2,736 (`4a af`, cut after `4a`).
+
+The same two elements in two PFADDs, one each, leave `4b` on 7.0.15 again: its buffer
+keeps the byte between commands.
+
+**Where.** `hllSparseSet` reads an XZERO's run with `HLL_SPARSE_XZERO_LEN(p)`, `p[1]`
+included, whether or not `p + 1` is still within the value:
+- Redis 7.2.16: `src/hyperloglog.c`, line 717. A split copies its opcodes with
+  `memcpy(p,seq,seqlen)` (line 859), one byte past the end for a cut XZERO, after
+  `sdsIncrLen` (line 858) wrote the NUL there. Growing the buffer, `sdsResize`
+  (line 691) writes the NUL again (`src/sds.c`, line 382). 7.0.15's `sdsMakeRoomFor`
+  copies the byte past the end with the string.
+- Valkey 9.1.2: `src/hyperloglog.c`, lines 750, 891 and 724.
+
+`hllSparseSum` and `hllMerge` read the run the same way.
+
+**What BendKV does.** It reads the byte as 0 when a command starts, and as the last byte of
+the split it made, within the same command (7.0.15 within one PFADD), which does not turn
+on an allocator. tests/hll_test.py checks that alone, and does not fail on a command that
+reads such a value and is answered otherwise.
+
+**To report to:** Redis, for 7.2 and 8, and Valkey.

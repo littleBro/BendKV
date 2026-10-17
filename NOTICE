@@ -173,6 +173,16 @@ parts of it are written from 7.2.16's sources:
   double2ll in tests/float_ref.c.
 - XINFO STREAM FULL's active-time and XINFO CONSUMERS' inactive
   (t_stream.c), in src/redis.bend and src/stream.bend.
+- New commands and options: CLIENT SETINFO, its checks and the library
+  CLIENT LIST shows, and CLIENT NO-TOUCH and its flag (networking.c's
+  clientSetinfoCommand, validateClientAttr, clientCommand and
+  catClientInfoString), with which a client's commands but TOUCH leave
+  the keys' access as it was (db.c's lookupKey); ZRANK and ZREVRANK's
+  WITHSCORE (t_zset.c's zrankGenericCommand); and CLUSTER as Redis
+  answers it with cluster support disabled (cluster.c's clusterCommand),
+  with its subcommands' arities from tools/data/redis-commands.json, in
+  src/redis.bend, src/server.bend, src/session.bend and
+  tools/gen_commands.py.
 
 Bend (bend-patches/): patches to the Bend compiler and its runtime
 (github.com/bendlang/bend at 1cce499, Bend 2.0.35), Copyright 2026

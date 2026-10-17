@@ -9992,6 +9992,80 @@ Grisu2 makes 17 digits at most from 64-bit integers. An integral score (ZSCORE o
 the integer's path, as before. DUMP writes a small sorted set's scores with `d2string`
 too.
 
+## 3zzzzi. Redis 7.2.16's new commands and options, and HyperLogLog's last difference
+
+**What changed** (#128, kinds B and J: `src/redis.bend`, `src/server.bend`,
+`src/session.bend`, `tools/gen_commands.py`).
+- **CLIENT SETINFO LIB-NAME|LIB-VER value** (`clientSetinfoCommand`), the option in any
+  case.
+  - A value is bytes from `!` to `~` up to its first NUL (`validateClientAttr`); any other
+    is `<option> cannot contain spaces, newlines or special characters.`, and another
+    option is `Unrecognized option '<option>'`. An empty value clears the field.
+  - CLIENT LIST and INFO show the library as `lib-name=` and `lib-ver=`, up to the first
+    NUL, as `%s` prints them; RESET keeps it.
+  - The registry keeps it with what else a client set of itself (`Clf`: NO-EVICT,
+    NO-TOUCH and the library), which takes NO-EVICT's place in the client's record.
+- **CLIENT NO-TOUCH ON|OFF**: `T` in CLIENT LIST's flags, after `e`; RESET turns it off.
+  - Redis's `lookupKey` leaves a key's access time and LFU counter as they were for such
+    a client's commands, but TOUCH's (in a transaction too: TOUCH is the command then).
+  - BendKV's fast way marks a batch's keys before the batch runs. So while some client
+    has NO-TOUCH on (Ps's bit 18), every batch takes the general way. There a no-touch
+    client's calls mark their keys as they run, TOUCH's alone. The bit is set as a client
+    turns NO-TOUCH on, and looked for again in the registry as one turns it off, resets or
+    goes.
+  - A batch that holds a CLIENT NO-TOUCH marks its keys as its calls run too, so that a
+    pipeline of CLIENT NO-TOUCH ON and GET leaves the GET's key as it was, as in Redis.
+  - A first version kept the other clients on the fast way, with a look in the registry
+    for each batch's client. That cost every GET 39 instructions (1.1%), so the bit sends
+    every batch to the general way instead, and the fast way pays nothing for it while no
+    client has it on.
+- **ZRANK and ZREVRANK key member [WITHSCORE]** (`zrankGenericCommand`).
+  - More than four arguments are the command's own error, a failed call: the table's
+    arity, -3, lets them pass.
+  - A fourth that is not WITHSCORE is a syntax error. Both are answered before the key is
+    looked for.
+  - With WITHSCORE: the rank and the score (`addReplyDouble`), or a null array.
+- **CLUSTER.** BendKV runs no cluster.
+  - Redis 7.2.16 with `cluster-enabled no` answers each of CLUSTER's 28 subcommands, HELP
+    and MYSHARDID among them, `This instance has cluster support disabled`, once its arity
+    passes: a failed call, after NOAUTH and ACL's checks.
+  - An unknown subcommand is refused (`unknown subcommand '…'. Try CLUSTER HELP.`), and so
+    is a wrong number of arguments (`'cluster|<subcommand>'`).
+  - The parser needs the subcommands' arities before the statistics' block that holds the
+    others', so `tools/gen_commands.py` writes them into the dispatch block
+    (`cluster.arity`).
+  - COMMAND, ACL and INFO's commandstats know CLUSTER and its subcommands from 7.2.16's
+    table, as they know the rest.
+- **HyperLogLog's last difference** (kind J) is a bug of every version: bug 6 of
+  `docs/UPSTREAM.md`.
+  - A sparse value whose opcodes end within an XZERO makes Redis read the byte after the
+    value's end.
+  - 7.0.15 and 7.2.16 find different bytes there. A split of the XZERO leaves its last
+    byte past the end, and 7.2's greedy growth of the buffer writes a NUL over it, which
+    turns on the sizes of jemalloc's classes.
+  - BendKV keeps its reading: 0 as a command starts, the split's byte within the command.
+    `hll_test` counts the commands answered otherwise on such a value, without failing
+    (one in its 3,000 random rounds), and sets both servers to Redis's values after one.
+    It checks BendKV's reading of one such value alone.
+
+**Tests.** Against 7.2.16 these pass:
+- `client_test`'s new scenarios: NO-TOUCH's flag and errors; its keys' OBJECT FREQ (with
+  `lfu-log-factor` 0, so that each access steps the counter) and OBJECT IDLETIME, in a
+  pipeline and in MULTI, and TOUCH's; SETINFO's fields, errors and RESET; the statistics
+  of both;
+- `zset_test`'s WITHSCORE cases: the scripted ones, the reads of every size, the random
+  rounds;
+- `admin_test`'s CLUSTER: each subcommand, wrong numbers of arguments, unknown ones, in
+  MULTI, and their statistics;
+- `command_test`, which reads COMMAND INFO and DOCS of the new subcommands and of
+  CLUSTER's;
+- `hll_test`, on three seeds, and on 7.0.15 too.
+
+**What it costs.** Nothing more while no client has NO-TOUCH on. A request costs a few
+instructions more under callgrind here: GET 3,509 (3,500 before), SET 4,301 (4,293), INCR
+4,621 (4,610). Among them, each request's statistics key now tests CLUSTER with the other
+containers (`stat.key`).
+
 ## 4. Where a request's time goes, and hiding the memory waits
 
 With the eight patches, BendKV ran fewer instructions on GET and SET than Redis, missed

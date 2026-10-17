@@ -528,179 +528,241 @@ def acl.of.key(+k: Nat) -> Nat:
     case 221n:
       18n
     case 222n:
-      37n
+      51n
     case 223n:
-      36n
+      37n
     case 224n:
-      44n
+      36n
     case 225n:
-      34n
+      44n
     case 226n:
-      46n
+      34n
     case 227n:
-      33n
+      46n
     case 228n:
-      49n
+      33n
     case 229n:
-      35n
+      49n
     case 230n:
-      41n
+      35n
     case 231n:
-      48n
+      41n
     case 232n:
-      40n
+      48n
     case 233n:
-      38n
+      40n
     case 234n:
-      39n
+      38n
     case 235n:
-      43n
+      39n
     case 236n:
-      50n
+      43n
     case 237n:
-      47n
+      50n
     case 238n:
-      120n
+      47n
     case 239n:
-      121n
+      45n
     case 240n:
-      124n
+      42n
     case 241n:
-      118n
+      120n
     case 242n:
-      123n
+      121n
     case 243n:
-      126n
+      124n
     case 244n:
-      122n
+      118n
     case 245n:
-      119n
+      123n
     case 246n:
-      125n
+      126n
     case 247n:
-      89n
+      122n
     case 248n:
-      93n
+      119n
     case 249n:
-      91n
+      125n
     case 250n:
-      92n
+      89n
     case 251n:
-      90n
+      93n
     case 252n:
-      86n
+      91n
     case 253n:
-      82n
+      92n
     case 254n:
-      87n
+      90n
     case 255n:
-      85n
+      86n
     case 256n:
-      81n
+      82n
     case 257n:
-      83n
+      87n
     case 258n:
-      84n
+      85n
     case 259n:
-      212n
+      81n
     case 260n:
-      211n
+      83n
     case 261n:
-      210n
+      84n
     case 262n:
-      214n
+      212n
     case 263n:
-      213n
+      211n
     case 264n:
-      191n
+      210n
     case 265n:
-      195n
+      214n
     case 266n:
-      194n
+      213n
     case 267n:
-      190n
+      191n
     case 268n:
-      193n
+      195n
     case 269n:
-      192n
+      194n
     case 270n:
-      231n
+      190n
     case 271n:
-      232n
+      193n
     case 272n:
-      233n
+      192n
     case 273n:
-      234n
+      231n
     case 274n:
-      235n
+      232n
     case 275n:
-      236n
+      233n
     case 276n:
-      280n
+      234n
     case 277n:
-      282n
+      235n
     case 278n:
-      283n
+      236n
     case 279n:
-      281n
+      280n
     case 280n:
-      167n
+      282n
     case 281n:
-      168n
+      283n
     case 282n:
-      169n
+      281n
     case 283n:
-      170n
+      167n
     case 284n:
-      171n
+      168n
     case 285n:
-      172n
+      169n
     case 286n:
-      173n
+      170n
     case 287n:
-      264n
+      171n
     case 288n:
-      260n
+      172n
     case 289n:
-      261n
+      173n
     case 290n:
-      263n
+      264n
     case 291n:
-      262n
+      260n
     case 292n:
-      1n
+      261n
     case 293n:
-      2n
+      263n
     case 294n:
-      3n
+      262n
     case 295n:
-      4n
+      1n
     case 296n:
-      5n
+      2n
     case 297n:
-      6n
+      3n
     case 298n:
-      7n
+      4n
     case 299n:
-      8n
+      5n
     case 300n:
-      9n
+      6n
     case 301n:
-      10n
+      7n
     case 302n:
-      11n
+      8n
     case 303n:
-      12n
+      9n
     case 304n:
-      13n
+      10n
     case 305n:
-      328n
+      11n
     case 306n:
-      329n
+      12n
     case 307n:
-      327n
+      13n
     case 308n:
+      328n
+    case 309n:
+      329n
+    case 310n:
+      327n
+    case 311n:
       326n
+    case 312n:
+      52n
+    case 313n:
+      53n
+    case 314n:
+      54n
+    case 315n:
+      55n
+    case 316n:
+      56n
+    case 317n:
+      57n
+    case 318n:
+      58n
+    case 319n:
+      59n
+    case 320n:
+      60n
+    case 321n:
+      61n
+    case 322n:
+      62n
+    case 323n:
+      63n
+    case 324n:
+      64n
+    case 325n:
+      65n
+    case 326n:
+      66n
+    case 327n:
+      67n
+    case 328n:
+      68n
+    case 329n:
+      69n
+    case 330n:
+      70n
+    case 331n:
+      71n
+    case 332n:
+      72n
+    case 333n:
+      73n
+    case 334n:
+      74n
+    case 335n:
+      75n
+    case 336n:
+      76n
+    case 337n:
+      77n
+    case 338n:
+      78n
+    case 339n:
+      79n
     case _:
       370n
 # END gen_commands: acl

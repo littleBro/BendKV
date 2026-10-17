@@ -256,7 +256,7 @@ STORE's destination, an expired key), as an EVAL entry of the same script as for
 with SADD, and an SMOVE onto an expired key as one EVAL entry of a third constant script
 that deletes the destination and runs SMOVE.
 Sorted sets: ZADD (NX, XX, GT, LT, CH, INCR), ZINCRBY, ZREM, ZCARD, ZSCORE, ZMSCORE,
-ZRANK, ZREVRANK, ZCOUNT, ZLEXCOUNT, ZRANGE (BYSCORE, BYLEX, REV, LIMIT, WITHSCORES),
+ZRANK and ZREVRANK (WITHSCORE), ZCOUNT, ZLEXCOUNT, ZRANGE (BYSCORE, BYLEX, REV, LIMIT, WITHSCORES),
 ZRANGEBYSCORE, ZREVRANGEBYSCORE, ZRANGEBYLEX, ZREVRANGEBYLEX, ZREVRANGE,
 ZREMRANGEBYRANK, ZREMRANGEBYSCORE, ZREMRANGEBYLEX, ZPOPMIN and ZPOPMAX (with a count),
 ZMPOP, ZRANDMEMBER (with a count, with repeats when it is negative, WITHSCORES; chosen
@@ -404,11 +404,11 @@ KILL (the old form with an address, and the filters ID, TYPE, ADDR, LADDR, USER 
 SKIPME), as Redis 7.0.15 runs them, with its errors. A client's line has Redis's fields
 in its order: the id, the address and the local address, the socket's fd, the name, the
 age and the idle time, the flags (P subscribed, x in MULTI, b waiting, d a watched key
-touched, e NO-EVICT on, N nothing), the database, the count of subscriptions, the queued
+touched, e NO-EVICT on, T NO-TOUCH on, N nothing), the database, the count of subscriptions, the queued
 commands, the bytes of the batch and of the arguments of the running command (for a
-waiting client, of the blocking one) and the full name of the last command (while the
+waiting client, of the blocking one), the full name of the last command (while the
 client waits, the blocking one; while EXEC runs a transaction, EXEC, with the client in
-MULTI). A killed client is cut off at once, wherever it waits (its socket is shut down),
+MULTI) and the library CLIENT SETINFO names, which RESET keeps. A killed client is cut off at once, wherever it waits (its socket is shut down),
 its transaction, wait and subscriptions are removed, and what it waited for stays as it
 was; the old form and SKIPME no kill the client itself too, after its reply, and in a
 transaction after its end. Where BendKV differs: it has no buffers per client, and their
@@ -443,7 +443,9 @@ no random number), and SHUTDOWN with its flags: the append-only file written and
 a rewrite or a background save that runs stopped, the RDB file saved with SAVE or with
 save points and not with NOSAVE (a save that fails stops nothing, Redis's error
 answered, but with FORCE), the pid file removed, the process ended with code 0 (sections
-3zzl, 3zzzc and 3zzzk of docs/FINDINGS.md).
+3zzl, 3zzzc and 3zzzk of docs/FINDINGS.md). CLUSTER answers as Redis 7.2.16 answers it with
+cluster support disabled, for each of its subcommands, HELP and MYSHARDID among them, once
+its number of arguments is Redis's (section 3zzzzi).
 Times to live: EXPIRE, PEXPIRE, EXPIREAT and PEXPIREAT (with NX, XX, GT, LT), TTL, PTTL,
 EXPIRETIME, PEXPIRETIME, PERSIST; SET with NX, XX, GET, EX, PX, EXAT, PXAT and KEEPTTL;
 SETEX, PSETEX, GETEX (EX, PX, EXAT, PXAT, PERSIST) and GETDEL. Times are read as Redis
@@ -459,7 +461,9 @@ with keys, and the sweep of expired keys goes over all databases.
 The connection: HELLO (2 or 3; with AUTH and SETNAME), AUTH (a password, or a user and
 its password), SELECT, QUIT, RESET (selects database 0 again, RESP2 and the default
 user), CLIENT ID,
-GETNAME, SETNAME, REPLY ON/OFF/SKIP, NO-EVICT, TRACKING (client-side caching: the keys a
+GETNAME, SETNAME, SETINFO, REPLY ON/OFF/SKIP, NO-EVICT, NO-TOUCH (the client's commands
+leave the keys' access times and counters as they were, but TOUCH's), TRACKING
+(client-side caching: the keys a
 client read, invalidated when they change, as Redis's tracking.c; section 3zzzb of
 FINDINGS.md), CACHING, GETREDIR, TRACKINGINFO, UNBLOCK (TIMEOUT or ERROR), LIST, INFO,
 KILL, HELP. A client must be authenticated where Redis requires it:

@@ -3297,12 +3297,13 @@ def pub.say(m: Mute, p: R.PubOp) -> Maybe<&2, R.Reply>:
 
 # Clients
 # -------
-# CLIENT LIST, INFO, KILL, NO-EVICT, PAUSE and UNPAUSE (R.SClient), as
-# Redis answers a client alone on the server: LIST and INFO show the
-# client's own line, its addresses and its socket unknown here ("?:0", fd
-# 0), KILL finds no other client to kill and its old form no address,
-# NO-EVICT, PAUSE and UNPAUSE answer OK (a pause holds back no other
-# client). The server answers them with every client it holds, and
+# CLIENT LIST, INFO, KILL, NO-EVICT, PAUSE, UNPAUSE, SETINFO and NO-TOUCH
+# (R.SClient), as Redis answers a client alone on the server: LIST and
+# INFO show the client's own line, its addresses and its socket unknown
+# here ("?:0", fd 0), KILL finds no other client to kill and its old form
+# no address, NO-EVICT, PAUSE and UNPAUSE answer OK (a pause holds back
+# no other client), and SETINFO and NO-TOUCH answer OK too, the line
+# naming no library. The server answers them with every client it holds, and
 # pauses them (server.bend, Clients, The pause). MONITOR (R.SMonitor) answers OK, as Redis answers a client
 # alone on the server, which sees no command but its own; the server
 # makes the client a monitor (server.bend, MONITOR).
@@ -3318,7 +3319,7 @@ def cl.argv(args: List<&2, String>, +n: Nat) -> Nat:
       cl.argv(rest, Nat.add(n, String.length(a)))
 
 def cl.alone.line(+c: Conn, +info: Bool, +argv: Nat) -> String:
-  R.client.line(R.ClLine{conn.id(c), "?:0", "?:0", 0n, conn.name(c), 0n, 0n, "N", conn.db(c), 0n, 0n, 0n, None{}, 0n, argv, cl.cmd(info), "default", "-1", conn.r3(c)}) ++ "\n"
+  R.client.line(R.ClLine{conn.id(c), "?:0", "?:0", 0n, conn.name(c), 0n, 0n, "N", conn.db(c), 0n, 0n, 0n, None{}, 0n, argv, cl.cmd(info), "default", "-1", conn.r3(c), "", ""}) ++ "\n"
 
 def cl.ids(ids: List<&2, Nat>, +c: Conn, +argv: Nat, acc: String) -> String:
   match ids:
@@ -3386,6 +3387,10 @@ def cl.reply(op: R.ClOp, +c: Conn, +argv: Nat, +s: Srv) -> R.Reply:
       R.RInt{R.INeg{0n}}
     case R.CoTrackInfo{}:
       R.tracking_info()
+    case R.CoSetInfo{ver, v}:
+      R.r_ok()
+    case R.CoNoTouch{on}:
+      R.r_ok()
     case R.CoBad{r}:
       r
 

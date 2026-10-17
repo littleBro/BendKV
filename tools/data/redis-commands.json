@@ -5744,6 +5744,57 @@
          ]
         ]
        },
+       "client|no-touch",
+       {
+        "%": [
+         "summary",
+         "Controls whether commands sent by the client affect the LRU/LFU of accessed keys.",
+         "since",
+         "7.2.0",
+         "group",
+         "connection",
+         "complexity",
+         "O(1)",
+         "arguments",
+         [
+          {
+           "%": [
+            "name",
+            "enabled",
+            "type",
+            "oneof",
+            "arguments",
+            [
+             {
+              "%": [
+               "name",
+               "on",
+               "type",
+               "pure-token",
+               "display_text",
+               "on",
+               "token",
+               "ON"
+              ]
+             },
+             {
+              "%": [
+               "name",
+               "off",
+               "type",
+               "pure-token",
+               "display_text",
+               "off",
+               "token",
+               "OFF"
+              ]
+             }
+            ]
+           ]
+          }
+         ]
+        ]
+       },
        "client|pause",
        {
         "%": [
@@ -5879,6 +5930,57 @@
                "skip",
                "token",
                "SKIP"
+              ]
+             }
+            ]
+           ]
+          }
+         ]
+        ]
+       },
+       "client|setinfo",
+       {
+        "%": [
+         "summary",
+         "Sets information specific to the client or connection.",
+         "since",
+         "7.2.0",
+         "group",
+         "connection",
+         "complexity",
+         "O(1)",
+         "arguments",
+         [
+          {
+           "%": [
+            "name",
+            "attr",
+            "type",
+            "oneof",
+            "arguments",
+            [
+             {
+              "%": [
+               "name",
+               "libname",
+               "type",
+               "string",
+               "display_text",
+               "libname",
+               "token",
+               "LIB-NAME"
+              ]
+             },
+             {
+              "%": [
+               "name",
+               "libver",
+               "type",
+               "string",
+               "display_text",
+               "libver",
+               "token",
+               "LIB-VER"
               ]
              }
             ]
@@ -6592,6 +6694,45 @@
       }
      ],
      [
+      "client|no-touch",
+      3,
+      {
+       "~": [
+        {
+         "+": "noscript"
+        },
+        {
+         "+": "loading"
+        },
+        {
+         "+": "stale"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@slow"
+        },
+        {
+         "+": "@connection"
+        }
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
       "client|pause",
       -3,
       {
@@ -6670,6 +6811,48 @@
       },
       {
        "~": []
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "client|setinfo",
+      4,
+      {
+       "~": [
+        {
+         "+": "noscript"
+        },
+        {
+         "+": "loading"
+        },
+        {
+         "+": "stale"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@slow"
+        },
+        {
+         "+": "@connection"
+        }
+       ]
+      },
+      {
+       "~": [
+        "request_policy:all_nodes",
+        "response_policy:all_succeeded"
+       ]
       },
       {
        "~": []
@@ -6886,6 +7069,1986 @@
       },
       {
        "~": []
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ]
+    ]
+   ]
+  },
+  "cluster": {
+   "docs": {
+    "%": [
+     "summary",
+     "A container for Redis Cluster commands.",
+     "since",
+     "3.0.0",
+     "group",
+     "cluster",
+     "complexity",
+     "Depends on subcommand.",
+     "subcommands",
+     {
+      "%": [
+       "cluster|addslots",
+       {
+        "%": [
+         "summary",
+         "Assigns new hash slots to a node.",
+         "since",
+         "3.0.0",
+         "group",
+         "cluster",
+         "complexity",
+         "O(N) where N is the total number of hash slot arguments",
+         "arguments",
+         [
+          {
+           "%": [
+            "name",
+            "slot",
+            "type",
+            "integer",
+            "display_text",
+            "slot",
+            "flags",
+            {
+             "~": [
+              {
+               "+": "multiple"
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        ]
+       },
+       "cluster|addslotsrange",
+       {
+        "%": [
+         "summary",
+         "Assigns new hash slot ranges to a node.",
+         "since",
+         "7.0.0",
+         "group",
+         "cluster",
+         "complexity",
+         "O(N) where N is the total number of the slots between the start slot and end slot arguments.",
+         "arguments",
+         [
+          {
+           "%": [
+            "name",
+            "range",
+            "type",
+            "block",
+            "flags",
+            {
+             "~": [
+              {
+               "+": "multiple"
+              }
+             ]
+            },
+            "arguments",
+            [
+             {
+              "%": [
+               "name",
+               "start-slot",
+               "type",
+               "integer",
+               "display_text",
+               "start-slot"
+              ]
+             },
+             {
+              "%": [
+               "name",
+               "end-slot",
+               "type",
+               "integer",
+               "display_text",
+               "end-slot"
+              ]
+             }
+            ]
+           ]
+          }
+         ]
+        ]
+       },
+       "cluster|bumpepoch",
+       {
+        "%": [
+         "summary",
+         "Advances the cluster config epoch.",
+         "since",
+         "3.0.0",
+         "group",
+         "cluster",
+         "complexity",
+         "O(1)"
+        ]
+       },
+       "cluster|count-failure-reports",
+       {
+        "%": [
+         "summary",
+         "Returns the number of active failure reports active for a node.",
+         "since",
+         "3.0.0",
+         "group",
+         "cluster",
+         "complexity",
+         "O(N) where N is the number of failure reports",
+         "arguments",
+         [
+          {
+           "%": [
+            "name",
+            "node-id",
+            "type",
+            "string",
+            "display_text",
+            "node-id"
+           ]
+          }
+         ]
+        ]
+       },
+       "cluster|countkeysinslot",
+       {
+        "%": [
+         "summary",
+         "Returns the number of keys in a hash slot.",
+         "since",
+         "3.0.0",
+         "group",
+         "cluster",
+         "complexity",
+         "O(1)",
+         "arguments",
+         [
+          {
+           "%": [
+            "name",
+            "slot",
+            "type",
+            "integer",
+            "display_text",
+            "slot"
+           ]
+          }
+         ]
+        ]
+       },
+       "cluster|delslots",
+       {
+        "%": [
+         "summary",
+         "Sets hash slots as unbound for a node.",
+         "since",
+         "3.0.0",
+         "group",
+         "cluster",
+         "complexity",
+         "O(N) where N is the total number of hash slot arguments",
+         "arguments",
+         [
+          {
+           "%": [
+            "name",
+            "slot",
+            "type",
+            "integer",
+            "display_text",
+            "slot",
+            "flags",
+            {
+             "~": [
+              {
+               "+": "multiple"
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        ]
+       },
+       "cluster|delslotsrange",
+       {
+        "%": [
+         "summary",
+         "Sets hash slot ranges as unbound for a node.",
+         "since",
+         "7.0.0",
+         "group",
+         "cluster",
+         "complexity",
+         "O(N) where N is the total number of the slots between the start slot and end slot arguments.",
+         "arguments",
+         [
+          {
+           "%": [
+            "name",
+            "range",
+            "type",
+            "block",
+            "flags",
+            {
+             "~": [
+              {
+               "+": "multiple"
+              }
+             ]
+            },
+            "arguments",
+            [
+             {
+              "%": [
+               "name",
+               "start-slot",
+               "type",
+               "integer",
+               "display_text",
+               "start-slot"
+              ]
+             },
+             {
+              "%": [
+               "name",
+               "end-slot",
+               "type",
+               "integer",
+               "display_text",
+               "end-slot"
+              ]
+             }
+            ]
+           ]
+          }
+         ]
+        ]
+       },
+       "cluster|failover",
+       {
+        "%": [
+         "summary",
+         "Forces a replica to perform a manual failover of its master.",
+         "since",
+         "3.0.0",
+         "group",
+         "cluster",
+         "complexity",
+         "O(1)",
+         "arguments",
+         [
+          {
+           "%": [
+            "name",
+            "options",
+            "type",
+            "oneof",
+            "flags",
+            {
+             "~": [
+              {
+               "+": "optional"
+              }
+             ]
+            },
+            "arguments",
+            [
+             {
+              "%": [
+               "name",
+               "force",
+               "type",
+               "pure-token",
+               "display_text",
+               "force",
+               "token",
+               "FORCE"
+              ]
+             },
+             {
+              "%": [
+               "name",
+               "takeover",
+               "type",
+               "pure-token",
+               "display_text",
+               "takeover",
+               "token",
+               "TAKEOVER"
+              ]
+             }
+            ]
+           ]
+          }
+         ]
+        ]
+       },
+       "cluster|flushslots",
+       {
+        "%": [
+         "summary",
+         "Deletes all slots information from a node.",
+         "since",
+         "3.0.0",
+         "group",
+         "cluster",
+         "complexity",
+         "O(1)"
+        ]
+       },
+       "cluster|forget",
+       {
+        "%": [
+         "summary",
+         "Removes a node from the nodes table.",
+         "since",
+         "3.0.0",
+         "group",
+         "cluster",
+         "complexity",
+         "O(1)",
+         "arguments",
+         [
+          {
+           "%": [
+            "name",
+            "node-id",
+            "type",
+            "string",
+            "display_text",
+            "node-id"
+           ]
+          }
+         ]
+        ]
+       },
+       "cluster|getkeysinslot",
+       {
+        "%": [
+         "summary",
+         "Returns the key names in a hash slot.",
+         "since",
+         "3.0.0",
+         "group",
+         "cluster",
+         "complexity",
+         "O(N) where N is the number of requested keys",
+         "arguments",
+         [
+          {
+           "%": [
+            "name",
+            "slot",
+            "type",
+            "integer",
+            "display_text",
+            "slot"
+           ]
+          },
+          {
+           "%": [
+            "name",
+            "count",
+            "type",
+            "integer",
+            "display_text",
+            "count"
+           ]
+          }
+         ]
+        ]
+       },
+       "cluster|help",
+       {
+        "%": [
+         "summary",
+         "Returns helpful text about the different subcommands.",
+         "since",
+         "5.0.0",
+         "group",
+         "cluster",
+         "complexity",
+         "O(1)"
+        ]
+       },
+       "cluster|info",
+       {
+        "%": [
+         "summary",
+         "Returns information about the state of a node.",
+         "since",
+         "3.0.0",
+         "group",
+         "cluster",
+         "complexity",
+         "O(1)"
+        ]
+       },
+       "cluster|keyslot",
+       {
+        "%": [
+         "summary",
+         "Returns the hash slot for a key.",
+         "since",
+         "3.0.0",
+         "group",
+         "cluster",
+         "complexity",
+         "O(N) where N is the number of bytes in the key",
+         "arguments",
+         [
+          {
+           "%": [
+            "name",
+            "key",
+            "type",
+            "string",
+            "display_text",
+            "key"
+           ]
+          }
+         ]
+        ]
+       },
+       "cluster|links",
+       {
+        "%": [
+         "summary",
+         "Returns a list of all TCP links to and from peer nodes.",
+         "since",
+         "7.0.0",
+         "group",
+         "cluster",
+         "complexity",
+         "O(N) where N is the total number of Cluster nodes"
+        ]
+       },
+       "cluster|meet",
+       {
+        "%": [
+         "summary",
+         "Forces a node to handshake with another node.",
+         "since",
+         "3.0.0",
+         "group",
+         "cluster",
+         "complexity",
+         "O(1)",
+         "history",
+         {
+          "~": [
+           [
+            "4.0.0",
+            "Added the optional `cluster_bus_port` argument."
+           ]
+          ]
+         },
+         "arguments",
+         [
+          {
+           "%": [
+            "name",
+            "ip",
+            "type",
+            "string",
+            "display_text",
+            "ip"
+           ]
+          },
+          {
+           "%": [
+            "name",
+            "port",
+            "type",
+            "integer",
+            "display_text",
+            "port"
+           ]
+          },
+          {
+           "%": [
+            "name",
+            "cluster-bus-port",
+            "type",
+            "integer",
+            "display_text",
+            "cluster-bus-port",
+            "since",
+            "4.0.0",
+            "flags",
+            {
+             "~": [
+              {
+               "+": "optional"
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        ]
+       },
+       "cluster|myid",
+       {
+        "%": [
+         "summary",
+         "Returns the ID of a node.",
+         "since",
+         "3.0.0",
+         "group",
+         "cluster",
+         "complexity",
+         "O(1)"
+        ]
+       },
+       "cluster|myshardid",
+       {
+        "%": [
+         "summary",
+         "Returns the shard ID of a node.",
+         "since",
+         "7.2.0",
+         "group",
+         "cluster",
+         "complexity",
+         "O(1)"
+        ]
+       },
+       "cluster|nodes",
+       {
+        "%": [
+         "summary",
+         "Returns the cluster configuration for a node.",
+         "since",
+         "3.0.0",
+         "group",
+         "cluster",
+         "complexity",
+         "O(N) where N is the total number of Cluster nodes"
+        ]
+       },
+       "cluster|replicas",
+       {
+        "%": [
+         "summary",
+         "Lists the replica nodes of a master node.",
+         "since",
+         "5.0.0",
+         "group",
+         "cluster",
+         "complexity",
+         "O(N) where N is the number of replicas.",
+         "arguments",
+         [
+          {
+           "%": [
+            "name",
+            "node-id",
+            "type",
+            "string",
+            "display_text",
+            "node-id"
+           ]
+          }
+         ]
+        ]
+       },
+       "cluster|replicate",
+       {
+        "%": [
+         "summary",
+         "Configure a node as replica of a master node.",
+         "since",
+         "3.0.0",
+         "group",
+         "cluster",
+         "complexity",
+         "O(1)",
+         "arguments",
+         [
+          {
+           "%": [
+            "name",
+            "node-id",
+            "type",
+            "string",
+            "display_text",
+            "node-id"
+           ]
+          }
+         ]
+        ]
+       },
+       "cluster|reset",
+       {
+        "%": [
+         "summary",
+         "Resets a node.",
+         "since",
+         "3.0.0",
+         "group",
+         "cluster",
+         "complexity",
+         "O(N) where N is the number of known nodes. The command may execute a FLUSHALL as a side effect.",
+         "arguments",
+         [
+          {
+           "%": [
+            "name",
+            "reset-type",
+            "type",
+            "oneof",
+            "flags",
+            {
+             "~": [
+              {
+               "+": "optional"
+              }
+             ]
+            },
+            "arguments",
+            [
+             {
+              "%": [
+               "name",
+               "hard",
+               "type",
+               "pure-token",
+               "display_text",
+               "hard",
+               "token",
+               "HARD"
+              ]
+             },
+             {
+              "%": [
+               "name",
+               "soft",
+               "type",
+               "pure-token",
+               "display_text",
+               "soft",
+               "token",
+               "SOFT"
+              ]
+             }
+            ]
+           ]
+          }
+         ]
+        ]
+       },
+       "cluster|saveconfig",
+       {
+        "%": [
+         "summary",
+         "Forces a node to save the cluster configuration to disk.",
+         "since",
+         "3.0.0",
+         "group",
+         "cluster",
+         "complexity",
+         "O(1)"
+        ]
+       },
+       "cluster|set-config-epoch",
+       {
+        "%": [
+         "summary",
+         "Sets the configuration epoch for a new node.",
+         "since",
+         "3.0.0",
+         "group",
+         "cluster",
+         "complexity",
+         "O(1)",
+         "arguments",
+         [
+          {
+           "%": [
+            "name",
+            "config-epoch",
+            "type",
+            "integer",
+            "display_text",
+            "config-epoch"
+           ]
+          }
+         ]
+        ]
+       },
+       "cluster|setslot",
+       {
+        "%": [
+         "summary",
+         "Binds a hash slot to a node.",
+         "since",
+         "3.0.0",
+         "group",
+         "cluster",
+         "complexity",
+         "O(1)",
+         "arguments",
+         [
+          {
+           "%": [
+            "name",
+            "slot",
+            "type",
+            "integer",
+            "display_text",
+            "slot"
+           ]
+          },
+          {
+           "%": [
+            "name",
+            "subcommand",
+            "type",
+            "oneof",
+            "arguments",
+            [
+             {
+              "%": [
+               "name",
+               "importing",
+               "type",
+               "string",
+               "display_text",
+               "node-id",
+               "token",
+               "IMPORTING"
+              ]
+             },
+             {
+              "%": [
+               "name",
+               "migrating",
+               "type",
+               "string",
+               "display_text",
+               "node-id",
+               "token",
+               "MIGRATING"
+              ]
+             },
+             {
+              "%": [
+               "name",
+               "node",
+               "type",
+               "string",
+               "display_text",
+               "node-id",
+               "token",
+               "NODE"
+              ]
+             },
+             {
+              "%": [
+               "name",
+               "stable",
+               "type",
+               "pure-token",
+               "display_text",
+               "stable",
+               "token",
+               "STABLE"
+              ]
+             }
+            ]
+           ]
+          }
+         ]
+        ]
+       },
+       "cluster|shards",
+       {
+        "%": [
+         "summary",
+         "Returns the mapping of cluster slots to shards.",
+         "since",
+         "7.0.0",
+         "group",
+         "cluster",
+         "complexity",
+         "O(N) where N is the total number of cluster nodes"
+        ]
+       },
+       "cluster|slaves",
+       {
+        "%": [
+         "summary",
+         "Lists the replica nodes of a master node.",
+         "since",
+         "3.0.0",
+         "group",
+         "cluster",
+         "complexity",
+         "O(N) where N is the number of replicas.",
+         "doc_flags",
+         {
+          "~": [
+           {
+            "+": "deprecated"
+           }
+          ]
+         },
+         "deprecated_since",
+         "5.0.0",
+         "replaced_by",
+         "`CLUSTER REPLICAS`",
+         "arguments",
+         [
+          {
+           "%": [
+            "name",
+            "node-id",
+            "type",
+            "string",
+            "display_text",
+            "node-id"
+           ]
+          }
+         ]
+        ]
+       },
+       "cluster|slots",
+       {
+        "%": [
+         "summary",
+         "Returns the mapping of cluster slots to nodes.",
+         "since",
+         "3.0.0",
+         "group",
+         "cluster",
+         "complexity",
+         "O(N) where N is the total number of Cluster nodes",
+         "doc_flags",
+         {
+          "~": [
+           {
+            "+": "deprecated"
+           }
+          ]
+         },
+         "deprecated_since",
+         "7.0.0",
+         "replaced_by",
+         "`CLUSTER SHARDS`",
+         "history",
+         {
+          "~": [
+           [
+            "4.0.0",
+            "Added node IDs."
+           ],
+           [
+            "7.0.0",
+            "Added additional networking metadata field."
+           ]
+          ]
+         }
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   "info": [
+    "cluster",
+    -2,
+    {
+     "~": []
+    },
+    0,
+    0,
+    0,
+    {
+     "~": [
+      {
+       "+": "@slow"
+      }
+     ]
+    },
+    {
+     "~": []
+    },
+    {
+     "~": []
+    },
+    [
+     [
+      "cluster|addslots",
+      -3,
+      {
+       "~": [
+        {
+         "+": "admin"
+        },
+        {
+         "+": "stale"
+        },
+        {
+         "+": "no_async_loading"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@admin"
+        },
+        {
+         "+": "@slow"
+        },
+        {
+         "+": "@dangerous"
+        }
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "cluster|addslotsrange",
+      -4,
+      {
+       "~": [
+        {
+         "+": "admin"
+        },
+        {
+         "+": "stale"
+        },
+        {
+         "+": "no_async_loading"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@admin"
+        },
+        {
+         "+": "@slow"
+        },
+        {
+         "+": "@dangerous"
+        }
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "cluster|bumpepoch",
+      2,
+      {
+       "~": [
+        {
+         "+": "admin"
+        },
+        {
+         "+": "stale"
+        },
+        {
+         "+": "no_async_loading"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@admin"
+        },
+        {
+         "+": "@slow"
+        },
+        {
+         "+": "@dangerous"
+        }
+       ]
+      },
+      {
+       "~": [
+        "nondeterministic_output"
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "cluster|count-failure-reports",
+      3,
+      {
+       "~": [
+        {
+         "+": "admin"
+        },
+        {
+         "+": "stale"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@admin"
+        },
+        {
+         "+": "@slow"
+        },
+        {
+         "+": "@dangerous"
+        }
+       ]
+      },
+      {
+       "~": [
+        "nondeterministic_output"
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "cluster|countkeysinslot",
+      3,
+      {
+       "~": [
+        {
+         "+": "stale"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@slow"
+        }
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "cluster|delslots",
+      -3,
+      {
+       "~": [
+        {
+         "+": "admin"
+        },
+        {
+         "+": "stale"
+        },
+        {
+         "+": "no_async_loading"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@admin"
+        },
+        {
+         "+": "@slow"
+        },
+        {
+         "+": "@dangerous"
+        }
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "cluster|delslotsrange",
+      -4,
+      {
+       "~": [
+        {
+         "+": "admin"
+        },
+        {
+         "+": "stale"
+        },
+        {
+         "+": "no_async_loading"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@admin"
+        },
+        {
+         "+": "@slow"
+        },
+        {
+         "+": "@dangerous"
+        }
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "cluster|failover",
+      -2,
+      {
+       "~": [
+        {
+         "+": "admin"
+        },
+        {
+         "+": "stale"
+        },
+        {
+         "+": "no_async_loading"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@admin"
+        },
+        {
+         "+": "@slow"
+        },
+        {
+         "+": "@dangerous"
+        }
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "cluster|flushslots",
+      2,
+      {
+       "~": [
+        {
+         "+": "admin"
+        },
+        {
+         "+": "stale"
+        },
+        {
+         "+": "no_async_loading"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@admin"
+        },
+        {
+         "+": "@slow"
+        },
+        {
+         "+": "@dangerous"
+        }
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "cluster|forget",
+      3,
+      {
+       "~": [
+        {
+         "+": "admin"
+        },
+        {
+         "+": "stale"
+        },
+        {
+         "+": "no_async_loading"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@admin"
+        },
+        {
+         "+": "@slow"
+        },
+        {
+         "+": "@dangerous"
+        }
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "cluster|getkeysinslot",
+      4,
+      {
+       "~": [
+        {
+         "+": "stale"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@slow"
+        }
+       ]
+      },
+      {
+       "~": [
+        "nondeterministic_output"
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "cluster|help",
+      2,
+      {
+       "~": [
+        {
+         "+": "loading"
+        },
+        {
+         "+": "stale"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@slow"
+        }
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "cluster|info",
+      2,
+      {
+       "~": [
+        {
+         "+": "stale"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@slow"
+        }
+       ]
+      },
+      {
+       "~": [
+        "nondeterministic_output"
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "cluster|keyslot",
+      3,
+      {
+       "~": [
+        {
+         "+": "stale"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@slow"
+        }
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "cluster|links",
+      2,
+      {
+       "~": [
+        {
+         "+": "stale"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@slow"
+        }
+       ]
+      },
+      {
+       "~": [
+        "nondeterministic_output"
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "cluster|meet",
+      -4,
+      {
+       "~": [
+        {
+         "+": "admin"
+        },
+        {
+         "+": "stale"
+        },
+        {
+         "+": "no_async_loading"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@admin"
+        },
+        {
+         "+": "@slow"
+        },
+        {
+         "+": "@dangerous"
+        }
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "cluster|myid",
+      2,
+      {
+       "~": [
+        {
+         "+": "stale"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@slow"
+        }
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "cluster|myshardid",
+      2,
+      {
+       "~": [
+        {
+         "+": "stale"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@slow"
+        }
+       ]
+      },
+      {
+       "~": [
+        "nondeterministic_output"
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "cluster|nodes",
+      2,
+      {
+       "~": [
+        {
+         "+": "stale"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@slow"
+        }
+       ]
+      },
+      {
+       "~": [
+        "nondeterministic_output"
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "cluster|replicas",
+      3,
+      {
+       "~": [
+        {
+         "+": "admin"
+        },
+        {
+         "+": "stale"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@admin"
+        },
+        {
+         "+": "@slow"
+        },
+        {
+         "+": "@dangerous"
+        }
+       ]
+      },
+      {
+       "~": [
+        "nondeterministic_output"
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "cluster|replicate",
+      3,
+      {
+       "~": [
+        {
+         "+": "admin"
+        },
+        {
+         "+": "stale"
+        },
+        {
+         "+": "no_async_loading"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@admin"
+        },
+        {
+         "+": "@slow"
+        },
+        {
+         "+": "@dangerous"
+        }
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "cluster|reset",
+      -2,
+      {
+       "~": [
+        {
+         "+": "admin"
+        },
+        {
+         "+": "noscript"
+        },
+        {
+         "+": "stale"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@admin"
+        },
+        {
+         "+": "@slow"
+        },
+        {
+         "+": "@dangerous"
+        }
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "cluster|saveconfig",
+      2,
+      {
+       "~": [
+        {
+         "+": "admin"
+        },
+        {
+         "+": "stale"
+        },
+        {
+         "+": "no_async_loading"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@admin"
+        },
+        {
+         "+": "@slow"
+        },
+        {
+         "+": "@dangerous"
+        }
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "cluster|set-config-epoch",
+      3,
+      {
+       "~": [
+        {
+         "+": "admin"
+        },
+        {
+         "+": "stale"
+        },
+        {
+         "+": "no_async_loading"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@admin"
+        },
+        {
+         "+": "@slow"
+        },
+        {
+         "+": "@dangerous"
+        }
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "cluster|setslot",
+      -4,
+      {
+       "~": [
+        {
+         "+": "admin"
+        },
+        {
+         "+": "stale"
+        },
+        {
+         "+": "no_async_loading"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@admin"
+        },
+        {
+         "+": "@slow"
+        },
+        {
+         "+": "@dangerous"
+        }
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "cluster|shards",
+      2,
+      {
+       "~": [
+        {
+         "+": "loading"
+        },
+        {
+         "+": "stale"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@slow"
+        }
+       ]
+      },
+      {
+       "~": [
+        "nondeterministic_output"
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "cluster|slaves",
+      3,
+      {
+       "~": [
+        {
+         "+": "admin"
+        },
+        {
+         "+": "stale"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@admin"
+        },
+        {
+         "+": "@slow"
+        },
+        {
+         "+": "@dangerous"
+        }
+       ]
+      },
+      {
+       "~": [
+        "nondeterministic_output"
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "cluster|slots",
+      2,
+      {
+       "~": [
+        {
+         "+": "loading"
+        },
+        {
+         "+": "stale"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@slow"
+        }
+       ]
+      },
+      {
+       "~": [
+        "nondeterministic_output"
+       ]
       },
       {
        "~": []

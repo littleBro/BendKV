@@ -187,7 +187,7 @@ translation stays in the trusted base.
   EVAL of the hash's script with the SADD, and SMOVE onto a key whose time had passed as
   one EVAL of a third fixed script that deletes the destination and runs the SMOVE.
 - **Sorted sets:** ZADD (NX, XX, GT, LT, CH, INCR), ZINCRBY, ZREM, ZCARD, ZSCORE, ZMSCORE,
-  ZRANK, ZREVRANK, ZCOUNT, ZLEXCOUNT, ZRANGE (BYSCORE, BYLEX, REV, LIMIT, WITHSCORES),
+  ZRANK and ZREVRANK (WITHSCORE), ZCOUNT, ZLEXCOUNT, ZRANGE (BYSCORE, BYLEX, REV, LIMIT, WITHSCORES),
   ZRANGEBYSCORE, ZREVRANGEBYSCORE, ZRANGEBYLEX, ZREVRANGEBYLEX, ZREVRANGE,
   ZREMRANGEBYRANK, ZREMRANGEBYSCORE, ZREMRANGEBYLEX, ZPOPMIN and ZPOPMAX (with a count),
   ZMPOP, ZRANDMEMBER (a count, repeating when negative, WITHSCORES; picked with the
@@ -402,8 +402,10 @@ translation stays in the trusted base.
 - **Connection:** PING, ECHO, TIME (the time the batch runs at, to the ms), HELLO (2 or 3,
   with AUTH and SETNAME), AUTH (a password, or a user and its password), SELECT, QUIT,
   RESET (which selects database 0 again, RESP2 and the default user),
-  CLIENT (ID, GETNAME, SETNAME, REPLY ON/OFF/SKIP, NO-EVICT, TRACKING, CACHING, GETREDIR,
-  TRACKINGINFO, UNBLOCK (TIMEOUT or ERROR), LIST, INFO, KILL, PAUSE, UNPAUSE, HELP). A
+  CLIENT (ID, GETNAME, SETNAME, SETINFO, REPLY ON/OFF/SKIP, NO-EVICT, NO-TOUCH, TRACKING,
+  CACHING, GETREDIR, TRACKINGINFO, UNBLOCK (TIMEOUT or ERROR), LIST, INFO, KILL, PAUSE,
+  UNPAUSE, HELP). With NO-TOUCH on, a client's commands leave the keys' access times and
+  counters as they were, but TOUCH's. A
   client must authenticate where Redis asks it to: once a command's name and number of arguments
   are checked, before it runs (a syntax error is NOAUTH for a client that has not
   authenticated); a client is authenticated as it connects, and at RESET, when the
@@ -413,11 +415,12 @@ translation stays in the trusted base.
   form of an address, and the filters ID, TYPE, ADDR, LADDR, USER and SKIPME), as Redis
   7.0.15 runs them, with its errors. A client's line has Redis's fields in Redis's order:
   its id, address and local address, its socket's fd, its name, age and idle time, its
-  flags (P subscribed, x in MULTI, b waiting, d a watched key touched, e NO-EVICT on, t
-  tracking keys, R its redirect gone, B in BCAST mode, N none), database, counts of subscriptions, its queued commands, the bytes of the batch
+  flags (P subscribed, x in MULTI, b waiting, d a watched key touched, e NO-EVICT on, T
+  NO-TOUCH on, t tracking keys, R its redirect gone, B in BCAST mode, N none), database, counts of subscriptions, its queued commands, the bytes of the batch
   and of the arguments of the command that runs (of the blocking command, for a client
-  that waits), and the full name of its last command (the blocking one while it waits;
-  EXEC, with the client in MULTI, while EXEC runs). A client killed is cut off at once,
+  that waits), the full name of its last command (the blocking one while it waits;
+  EXEC, with the client in MULTI, while EXEC runs), and the library CLIENT SETINFO names
+  (which RESET keeps). A client killed is cut off at once,
   wherever it waits (its socket shut down), its transaction, wait and subscriptions
   dropped, what it waited for left as it was; the old form, and SKIPME no, kill the client
   itself after its reply, and in a transaction after the rest of it. Where BendKV
@@ -571,7 +574,9 @@ translation stays in the trusted base.
   removed, the process ended with code 0. SIGTERM and SIGINT run that shutdown, as
   Redis's handler has them run it, with the flags of `shutdown-on-sigterm` and
   `shutdown-on-sigint` (the signal's line logged at once, a second SIGINT ending the
-  process). Where BendKV differs: MEMORY MALLOC-STATS has no allocator's statistics;
+  process). CLUSTER answers as Redis 7.2.16 answers it with cluster support disabled:
+  each of its subcommands, HELP and MYSHARDID among them, once its number of arguments is
+  Redis's. Where BendKV differs: MEMORY MALLOC-STATS has no allocator's statistics;
   LOLWUT's large drawings take up to a hundred times Redis's time (FINDINGS.md, sections
   3zzl, 3zzzc and 3zzzf).
 - **Configuration:** CONFIG GET (names, aliases and glob patterns), SET (several

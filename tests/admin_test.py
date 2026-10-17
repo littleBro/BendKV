@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """The administrative commands against Redis: LASTSAVE, ROLE, WAIT,
-MEMORY STATS, DOCTOR, PURGE and MALLOC-STATS, LOLWUT and SHUTDOWN.
+MEMORY STATS, DOCTOR, PURGE and MALLOC-STATS, LOLWUT, SHUTDOWN and
+CLUSTER.
 
 Scenarios run on BendKV and on Redis with clients of their own, the
 transcripts compared line by line: LASTSAVE as INFO's rdb_last_save_time;
@@ -13,8 +14,11 @@ their values, DOCTOR on a small data set, its errors; LOLWUT's own text,
 its errors, the drawings of VERSION 5 that rand() has no part in (one or
 two rows of squares, which must be the same bytes), the others' shapes
 (their lines and their widths), VERSION 6's (its lines of pixels), and
-the verbatim reply of RESP3; SHUTDOWN's errors and its refusal in MULTI,
-with their statistics. No scenario stops a server: they run against the
+the verbatim reply of RESP3; SHUTDOWN's errors and its refusal in MULTI;
+CLUSTER as Redis answers it with cluster support disabled (each of its
+subcommands, MYSHARDID and HELP too, once its arity passes; an unknown
+one and a wrong number of arguments refused, in MULTI too); with their
+statistics. No scenario stops a server: they run against the
 shared ones.
 
 The checks of BendKV alone: MEMORY MALLOC-STATS answers as Redis built
@@ -50,7 +54,7 @@ from blocking_test import Client, enc, info_lines, wait_blocked
 from client_test import Named
 
 STATS = ("cmdstat_wait:", "cmdstat_shutdown:", "cmdstat_exec:", "cmdstat_lastsave:", "cmdstat_role:",
-         "cmdstat_lolwut:", "cmdstat_memory|")
+         "cmdstat_lolwut:", "cmdstat_memory|", "cmdstat_cluster|")
 
 
 def stats(r):
@@ -214,6 +218,18 @@ def scenarios(port, log):
         log("7 shutdown", args, r.cmd("SHUTDOWN", *args))
     log("7 multi", r.cmd("MULTI"), r.cmd("SHUTDOWN"), r.cmd("SHUTDOWN", "foo"), r.cmd("GET", "k"), r.cmd("EXEC"), r.cmd("GET", "k"))
     log("7 discard", r.cmd("MULTI"), r.cmd("SHUTDOWN", "NOSAVE"), r.cmd("DISCARD"))
+    # 7b. CLUSTER with cluster support disabled
+    for args in ([], ["INFO"], ["info"], ["MYSHARDID"], ["MyShardId"], ["MYID"], ["HELP"], ["SLOTS"], ["SHARDS"],
+                 ["NODES"], ["LINKS"], ["KEYSLOT", "k"], ["COUNTKEYSINSLOT", "1"], ["GETKEYSINSLOT", "1", "2"],
+                 ["ADDSLOTS", "1", "2"], ["ADDSLOTSRANGE", "1", "2"], ["DELSLOTS", "1"], ["SETSLOT", "1", "NODE", "x"],
+                 ["MEET", "127.0.0.1", "7000"], ["FAILOVER"], ["FAILOVER", "FORCE"], ["RESET", "HARD"],
+                 ["COUNT-FAILURE-REPORTS", "x"], ["SET-CONFIG-EPOCH", "1"], ["SAVECONFIG"], ["BUMPEPOCH"],
+                 ["FLUSHSLOTS"], ["FORGET", "x"], ["REPLICATE", "x"], ["REPLICAS", "x"], ["SLAVES", "x"],
+                 ["DELSLOTSRANGE", "1", "2"], ["INFO", "x"], ["MYSHARDID", "x"], ["KEYSLOT"], ["ADDSLOTS"],
+                 ["GETKEYSINSLOT", "1"], ["ADDSLOTSRANGE", "1"], ["MEET", "x"], ["NOSUCH"], ["nosuch", "x"], ["a" * 200]):
+        log("7b cluster", args, r.cmd("CLUSTER", *args))
+    log("7b multi", r.cmd("MULTI"), r.cmd("CLUSTER", "INFO"), r.cmd("CLUSTER", "MYSHARDID"), r.cmd("EXEC"))
+    log("7b multi refused", r.cmd("MULTI"), r.cmd("CLUSTER", "NOSUCH"), r.cmd("EXEC"))
     # 8. the statistics
     log("8 stats", stats(r))
     log("8 errorstats", errorstats(r))
