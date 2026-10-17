@@ -55,7 +55,14 @@
 # must stop the server, with everysec as with always. Last, the files
 # both ways: the same commands against BendKV and a redis-server that
 # keeps its own file, then BendKV started from Redis's file and Redis
-# from BendKV's, each holding the databases the other held. And the
+# from BendKV's, each holding the databases the other held. Then files
+# whose entries, transactions and values straddle the windows the start
+# reads them in, cut short, or with a transaction left open, each started
+# on by BendKV and by Redis, with aof-load-truncated yes and no: both
+# start or refuse alike, with the same databases and the file cut alike
+# (tests/aof_window_test.py); and a restart from a file of a million
+# SETs, after which the server's resident memory must be at most 1.3
+# times what it was before (tools/restore_mem.sh). And the
 # rewrite of the file (BGREWRITEAOF): its replies and INFO's account
 # against Redis's, the rewritten file against Redis's base, command for
 # command, writes while it runs (and a kill while it runs), BendKV and
@@ -233,6 +240,10 @@ ${CC:-cc} -shared -fPIC -o build/fail_io.so tests/fail_io.c -ldl
 python3 tests/aof_fail_test.py --port "$PORT" --shim build/fail_io.so
 echo "== append-only files of Redis and of BendKV"
 python3 tests/aof_redis_test.py --bin build/bendkv --bendkv "$PORT" --redis "$((REDIS_PORT + 1))" --dir build/aofio
+echo "== the append-only file read in windows, against Redis"
+python3 tests/aof_window_test.py --bin build/bendkv --bendkv "$PORT" --redis "$((REDIS_PORT + 1))" --dir build/aofwin
+echo "== resident memory after a restart from the append-only file"
+PORT="$PORT" sh tools/restore_mem.sh build/bendkv
 echo "== the rewrite of the append-only file"
 python3 tests/rewrite_test.py --bin build/bendkv --bendkv "$PORT" --redis "$((REDIS_PORT + 1))" --dir build/rewrite
 echo "== maxmemory and eviction"

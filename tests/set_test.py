@@ -1,20 +1,25 @@
 #!/usr/bin/env python3
 """Sets against Redis: a script of set commands at their edges, sets of
 many sizes on both sides of the intset limit (512 integers), an intset
-whose members come and go in a random order, sets whose key's time has
-passed, then random commands on a few keys (moves and the operations of
-several sets among them), replies compared one by one.
+whose members come and go in a random order, sets of strings on both
+sides of BendKV's small sets (128 members of at most 64 bytes, kept in
+one string) made and taken apart every way, read, popped, moved, copied,
+sorted, combined with sets of each kind and restored from each server's
+payload, sets whose key's time has passed, then random commands on a few
+keys (moves and the operations of several sets among them), replies
+compared one by one.
 
 An intset keeps its members in numeric order on both servers, and those
-replies are compared as they are; a hashtable answers in the order of
-each server's own table, so a whole set (SMEMBERS, SINTER, SUNION,
-SDIFF) is compared as a set, and SSCAN by the members its whole walk
-answers. SRANDMEMBER and SPOP pick at random: their replies are compared
-by kind and size, each member checked against the set it was picked
-from (distinct where they must be), and the set an SPOP leaves against
-the set less the members it answered; then the key is made again on
-both servers from BendKV's members, so that the two go on alike. MEMORY
-USAGE, an estimate on each server, is compared by kind.
+replies are compared as they are, and its DUMP byte for byte (each
+member in the width Redis's intset gives it); a hashtable answers in the
+order of each server's own table, so a whole set (SMEMBERS, SINTER,
+SUNION, SDIFF) is compared as a set, and SSCAN by the members its whole
+walk answers. SRANDMEMBER and SPOP pick at random: their replies are
+compared by kind and size, each member checked against the set it was
+picked from (distinct where they must be), and the set an SPOP leaves
+against the set less the members it answered; then the key is made
+again on both servers from BendKV's members, so that the two go on
+alike. MEMORY USAGE, an estimate on each server, is compared by kind.
 
     python3 tests/set_test.py --bendkv 6380 --redis 6390 [--rounds 3000] [--seed 1]
 """
@@ -161,14 +166,22 @@ def same(b, r, cmd):
         fail(cmd, x, y)
 
 
-# a whole set as it is: in order, for an intset
+# a whole set as it is: in order, for an intset, and its DUMP byte for
+# byte (Redis runs with rdbcompression no: BendKV writes no LZF), each
+# member in the width Redis's intset gives them
 def exact(b, r, key):
     global n
     n += 1
     cmd = [b"SMEMBERS", key]
     x, y = run(b, cmd), run(r, cmd)
-    if encoding(r, key) == (b"$", b"intset") and x != y:
-        fail(cmd, x, y)
+    if encoding(r, key) == (b"$", b"intset"):
+        if x != y:
+            fail(cmd, x, y)
+        n += 1
+        cmd = [b"DUMP", key]
+        x, y = run(b, cmd), run(r, cmd)
+        if x != y:
+            fail(cmd, x, y)
 
 
 LLONG_MIN = b"-9223372036854775808"
@@ -339,6 +352,123 @@ def sizes(b, r):
     same(b, r, [b"EXISTS", b"shuf"])
 
 
+# Sets of strings at the edges of BendKV's small sets (128 members of at
+# most 64 bytes, one string of them; Redis 7.0.15 holds them in a
+# hashtable, as BendKV does past either limit): 127, 128 and 129 members
+# made at once and a member at a time, members of 64 and 65 bytes, sets
+# past one buffer of 2,048 bytes, intsets that take a string at 127 and
+# at 128 members, intsets that pass 512, members taken out down to none,
+# the operations of several sets and moves between sets of each kind,
+# pops and picks, and RESTORE of each server's payload on the other
+def packed(b, r):
+    def m(i, w=8):
+        return (b"m%07d" % i) * (w // 8) + b"x" * (w % 8)
+
+    def cmds(*cs):
+        for c in cs:
+            same(b, r, c)
+
+    def reads(key, have, gone):
+        cmds([b"OBJECT", b"ENCODING", key], [b"SCARD", key], [b"SMEMBERS", key],
+             [b"SISMEMBER", key, have[0]], [b"SISMEMBER", key, have[-1]], [b"SISMEMBER", key, have[len(have) // 2]],
+             [b"SISMEMBER", key, gone], [b"SMISMEMBER", key, have[0], gone, have[-1], b""],
+             [b"SSCAN", key, b"0"], [b"SSCAN", key, b"0", b"COUNT", b"3"], [b"SSCAN", key, b"0", b"MATCH", b"*1*"],
+             [b"SRANDMEMBER", key], [b"SRANDMEMBER", key, b"5"], [b"SRANDMEMBER", key, b"-7"],
+             [b"SRANDMEMBER", key, b"%d" % len(have)], [b"SRANDMEMBER", key, b"%d" % (len(have) + 3)],
+             [b"SRANDMEMBER", key, b"-%d" % (len(have) * 3)], [b"TYPE", key], [b"MEMORY", b"USAGE", key])
+        exact(b, r, key)
+
+    for size in (1, 2, 10, 100, 127, 128, 129, 130):
+        for w in (1, 8, 15, 16, 30, 63, 64, 65):
+            ms = [m(i, w) if w >= 8 else b"abcdefg"[i % 7:i % 7 + 1] * (1 + i // 7) for i in range(size)]
+            ka, k1 = b"pa%d:%d" % (size, w), b"p1%d:%d" % (size, w)
+            cmds([b"SADD", ka] + ms)
+            for x in ms:
+                same(b, r, [b"SADD", k1, x])
+            reads(ka, ms, m(size + 1, max(w, 8)))
+            reads(k1, ms, b"nope")
+            # one more member, one of 65 bytes, one there already
+            cmds([b"SADD", ka, b"one more"], [b"OBJECT", b"ENCODING", ka], [b"SCARD", ka],
+                 [b"SADD", k1, b"y" * 65], [b"OBJECT", b"ENCODING", k1], [b"SADD", k1, ms[0]], [b"SCARD", k1],
+                 [b"SISMEMBER", k1, b"y" * 65], [b"SREM", k1, b"y" * 65], [b"OBJECT", b"ENCODING", k1])
+            # taken out from the front, the end and the middle down to none
+            order = list(range(0, size, 3)) + list(range(size - 1, -1, -3)) + list(range(size))
+            done = set()
+            for i in order:
+                if i in done:
+                    continue
+                done.add(i)
+                same(b, r, [b"SREM", ka, ms[i], b"nope"])
+                if len(done) % 17 == 1:
+                    cmds([b"SCARD", ka], [b"SISMEMBER", ka, ms[i]], [b"SMEMBERS", ka], [b"OBJECT", b"ENCODING", ka])
+            cmds([b"SREM", ka, b"one more"], [b"EXISTS", ka], [b"SPOP", k1, b"%d" % (size // 2)], [b"SCARD", k1],
+                 [b"SPOP", k1], [b"SCARD", k1], [b"SPOP", k1, b"1000"], [b"EXISTS", k1])
+    # intsets that take a string: at 127 members (a small set of 128) and
+    # at 128 (a set of 129), a string of 64 bytes and of 65, and past 512
+    for size, x in ((127, b"s"), (128, b"s"), (100, b"z" * 64), (100, b"z" * 65), (1, b""), (511, b"s"),
+                    (512, b"9" * 18), (512, b"s")):
+        key = b"pi%d:%d" % (size, len(x))
+        ints = [b"%d" % (i * 13 - 600) for i in range(size)]
+        cmds([b"SADD", key] + ints, [b"OBJECT", b"ENCODING", key], [b"SADD", key, x], [b"OBJECT", b"ENCODING", key])
+        reads(key, ints + [x], b"-601")
+        cmds([b"SREM", key, x], [b"OBJECT", b"ENCODING", key], [b"SADD", key, b"12345678901234567890"],
+             [b"SMEMBERS", key])
+    # SPOP and SRANDMEMBER of each count on small sets
+    for size in (1, 3, 10, 128):
+        ms = [m(i) for i in range(size)]
+        for c in (None, b"0", b"1", b"2", b"%d" % (size - 1), b"%d" % size, b"%d" % (size + 1), b"-1", b"-%d" % size,
+                  b"-%d" % (2 * size + 1)):
+            key = b"pp%d" % size
+            cmds([b"DEL", key], [b"SADD", key] + ms)
+            same(b, r, [b"SRANDMEMBER", key] + ([c] if c is not None else []))
+            if c is None or not c.startswith(b"-"):
+                same(b, r, [b"SPOP", key] + ([c] if c is not None else []))
+                cmds([b"SCARD", key], [b"EXISTS", key])
+    # several sets of each kind: small ones, a trie, an intset, past one
+    # buffer
+    cmds([b"SADD", b"o:a"] + [m(i) for i in range(20)], [b"SADD", b"o:b"] + [m(i) for i in range(10, 40)],
+         [b"SADD", b"o:c"] + [m(i) for i in range(5, 300)], [b"SADD", b"o:i"] + [b"%d" % i for i in range(50)],
+         [b"SADD", b"o:w"] + [m(i, 64) for i in range(128)], [b"SADD", b"o:n", b"1", b"m0000003", b"m0000012"])
+    keys = [b"o:a", b"o:b", b"o:c", b"o:i", b"o:w", b"o:n", b"nope"]
+    for k1 in keys:
+        for k2 in keys:
+            cmds([b"SINTER", k1, k2], [b"SUNION", k1, k2], [b"SDIFF", k1, k2], [b"SINTERCARD", b"2", k1, k2],
+                 [b"SINTERCARD", b"2", k1, k2, b"LIMIT", b"3"])
+            for op in (b"SINTERSTORE", b"SUNIONSTORE", b"SDIFFSTORE"):
+                cmds([op, b"o:d", k1, k2], [b"OBJECT", b"ENCODING", b"o:d"], [b"SMEMBERS", b"o:d"])
+                exact(b, r, b"o:d")
+    cmds([b"SINTER", b"o:a", b"o:b", b"o:c"], [b"SUNION", b"o:a", b"o:i", b"o:w"], [b"SDIFF", b"o:c", b"o:a", b"o:b"])
+    for src, dst, x in ((b"o:a", b"o:b", m(1)), (b"o:a", b"o:i", m(2)), (b"o:i", b"o:a", b"3"), (b"o:w", b"o:a", m(5, 64)),
+                        (b"o:c", b"o:a", m(299)), (b"o:a", b"o:new", m(4)), (b"o:i", b"o:new2", b"7"),
+                        (b"o:a", b"o:w", b"q" * 65), (b"o:n", b"o:n", b"1")):
+        cmds([b"SMOVE", src, dst, x], [b"OBJECT", b"ENCODING", src], [b"OBJECT", b"ENCODING", dst],
+             [b"SMEMBERS", src], [b"SMEMBERS", dst])
+    # copies, renames, moves and SORT of small sets
+    cmds([b"COPY", b"o:a", b"o:copy"], [b"SADD", b"o:copy", b"z"], [b"SMEMBERS", b"o:a"], [b"SMEMBERS", b"o:copy"],
+         [b"RENAME", b"o:copy", b"o:ren"], [b"SMEMBERS", b"o:ren"], [b"OBJECT", b"ENCODING", b"o:ren"],
+         [b"MOVE", b"o:ren", b"1"], [b"SELECT", b"1"], [b"SMEMBERS", b"o:ren"], [b"SREM", b"o:ren", b"z"],
+         [b"SCARD", b"o:ren"], [b"DEL", b"o:ren"], [b"SELECT", b"0"], [b"SORT", b"o:a", b"ALPHA"],
+         [b"SORT", b"o:n", b"ALPHA", b"LIMIT", b"1", b"2"], [b"SORT", b"o:a", b"ALPHA", b"STORE", b"o:sorted"],
+         [b"LRANGE", b"o:sorted", b"0", b"-1"], [b"SORT", b"o:i", b"DESC"])
+    # the bytes of members
+    cmds([b"SADD", b"o:bytes", b"", b"\x00", b"\xff", b"\r\n", b"\x00" * 64, b"\xff" * 63, b"a\x00b"],
+         [b"SMEMBERS", b"o:bytes"], [b"SISMEMBER", b"o:bytes", b""], [b"SISMEMBER", b"o:bytes", b"\x00" * 63],
+         [b"SISMEMBER", b"o:bytes", b"\x00" * 64], [b"SMISMEMBER", b"o:bytes", b"\xff", b"\xfe", b"a\x00b", b"a\x00c"],
+         [b"SREM", b"o:bytes", b"\x00"], [b"SMEMBERS", b"o:bytes"], [b"SREM", b"o:bytes", b""],
+         [b"SMEMBERS", b"o:bytes"], [b"OBJECT", b"ENCODING", b"o:bytes"])
+    # each server's payload of a small set restored on the other, read
+    # and written
+    for key in (b"o:a", b"o:w", b"o:n", b"o:bytes", b"pi127:1"):
+        pb, pr = run(b, [b"DUMP", key]), run(r, [b"DUMP", key])
+        for p in (pb[1], pr[1]):
+            cmds([b"RESTORE", b"o:res", b"0", p, b"REPLACE"], [b"OBJECT", b"ENCODING", b"o:res"],
+                 [b"SMEMBERS", b"o:res"], [b"SCARD", b"o:res"], [b"SISMEMBER", b"o:res", m(3)],
+                 [b"SADD", b"o:res", b"new", b"\x00"], [b"SREM", b"o:res", m(3), b"1"], [b"SMEMBERS", b"o:res"],
+                 [b"OBJECT", b"ENCODING", b"o:res"])
+    for key in [k for k in keys if k != b"nope"] + [b"o:bytes", b"o:new", b"o:new2", b"o:sorted", b"o:d"]:
+        same(b, r, [b"DEL", key])
+
+
 # a set whose time passed: a read finds nothing, a write makes it anew,
 # a move or a STORE takes it as not there, as a source or a destination
 def expired(b, r):
@@ -409,9 +539,11 @@ def main():
     b, rd = Conn(a.bendkv), Conn(a.redis)
     for c in (b, rd):
         run(c, [b"FLUSHALL"])
+    run(rd, [b"CONFIG", b"SET", b"rdbcompression", b"no"])
     for cmd in SCRIPT:
         same(b, rd, cmd)
     sizes(b, rd)
+    packed(b, rd)
     expired(b, rd)
     r = random.Random(a.seed)
     for _ in range(a.rounds):
@@ -421,6 +553,7 @@ def main():
         exact(b, rd, key)
     for c in (b, rd):
         run(c, [b"FLUSHALL"])
+    run(rd, [b"CONFIG", b"SET", b"rdbcompression", b"yes"])
     if bad:
         sys.exit("FAIL: %d of %d" % (bad, n))
     print("OK: %d set commands, each answered as Redis answers it" % n)
