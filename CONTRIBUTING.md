@@ -13,9 +13,9 @@ sh bend-patches/apply.sh ../bend-patched
 export B="bun ../bend-patched/bend2/main.ts"
 ```
 
-For the tests you also need `redis-server` and `redis-cli` (Redis 7.0.15 is the
-reference), Python 3 and a C compiler; for `make perfcheck`, `valgrind` and
-`redis-benchmark`.
+For the tests you also need `redis-server`, `redis-cli` and `redis-benchmark` (Redis
+7.0.15 is the reference), Python 3 and a C compiler; for `make perfcheck`, `valgrind`
+too.
 
 ## Before you open a pull request
 

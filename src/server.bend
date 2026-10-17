@@ -13444,30 +13444,58 @@ def file.end(m: Maybe<&1, File>) -> IO(Unit):
 
 # Restoring
 # ---------
+# The start reads its file a window at a time (aof.bend: A.wins, which
+# the law load_windows makes the file read whole), so that it holds a
+# window and the databases it builds, never the whole file: a read of 1
+# MiB, or, after a window that left more than that (an entry longer than
+# a window, still cut), a read as long as what it left, so that an entry
+# of any length is read again only a few times, each read at least
+# doubling it.
 
-# the bytes of a file from where it is, read until a read comes back empty
+# the size of the next read, after a window that left l bytes: 1 MiB, or
+# l, so that a window that holds no whole entry is followed by one at
+# least twice as long (a read of 1 GiB at most)
+def win.want.of(short: Bool, long: Bool, +l: Nat) -> U32:
+  match short long:
+    case True{} _:
+      1048576
+    case False{} True{}:
+      1073741824
+    case False{} False{}:
+      U32.from_nat(l)
+
+def win.want(+left: String) -> U32:
+  +l = String.length(left)
+  win.want.of(Nat.is_lt(l, 1048576n), Nat.is_lt(1073741824n, l), l)
+
+# the start's state after the windows read so far (s), the bytes they
+# hold (size), read on until a read comes back empty; what the start
+# makes of the file, and its size
 @unsafe
-def read_all(f: File, got: List<&2, String>) -> IO(File & String):
-  do IO<File & String>:
-    p : File & Result<&1, &1, U32 & String, String> <- File.read_raw(f, 16777216)
-    read_more(p, got)
+def restore_win(f: File, s: A.Wins, +more: Nat, +size: Nat, +want: U32) -> IO(File & (A.Start & Nat)):
+  do IO<File & (A.Start & Nat)>:
+    p : File & Result<&1, &1, U32 & String, String> <- File.read_raw(f, want)
+    restore_win.got(p, s, more, size)
 
 @unsafe
-def read_more(p: File & Result<&1, &1, U32 & String, String>, got: List<&2, String>) -> IO(File & String):
+def restore_win.got(p: File & Result<&1, &1, U32 & String, String>, s: A.Wins, +more: Nat, +size: Nat) -> IO(File & (A.Start & Nat)):
   (f, r) = p
   match r:
     case Fail{e}:
-      IO.die(File & String, 1, aof_fail(e))
+      IO.die(File & (A.Start & Nat), 1, aof_fail(e))
     case Done{+x}:
-      read_next(f, String.is_empty(x), x, got)
+      restore_win.next(f, String.is_empty(x), x, s, more, size)
 
 @unsafe
-def read_next(f: File, eof: Bool, x: String, got: List<&2, String>) -> IO(File & String):
+def restore_win.next(f: File, eof: Bool, +x: String, s: A.Wins, +more: Nat, +size: Nat) -> IO(File & (A.Start & Nat)):
   match eof:
     case True{}:
-      IO.pure(File & String, (f, glue(got, SNil{})))
+      IO.pure(File & (A.Start & Nat), (f, (A.wins.done(s), size)))
     case False{}:
-      read_all(f, x <> got)
+      +got = Nat.add(size, String.length(x))
+      +t = A.wins.step(s, x, more)
+      +want = win.want(A.wins.left(t))
+      restore_win(f, t, more, got, want)
 
 # a leftover is an entry cut short when it starts as one and the request
 # parser waits for more of it
@@ -13546,22 +13574,62 @@ def restore_fix(+lg: Log, +trunc: Bool, +path: String, +size: Nat, +n: Nat, +ds:
     case False{} False{}:
       log.die(R.Ds & Nat, lg, "Bad file format reading the append only file " ++ path ++ ": no entry at byte " ++ Nat.show(Nat.sub(size, String.length(rest))))
 
-# a file with an entry that does not replay as the file means it stops
-# the start, with the entry's number and the byte it starts at (A.offset
-# of the file read again: the text read first is let go before the
-# replay, as before the check)
+# The byte entry i of a file starts at, the file read again a window at
+# a time as the start reads it: the entry's offset in the window that
+# holds it (A.offset), after the bytes before what the windows before
+# left (before)
 @unsafe
-def restore_refused_at(+lg: Log, +path: String, +i: Nat, +why: String, p: File & String) -> IO(R.Ds & Nat):
-  (f, +s) = p
+def offset_win(f: File, +i: Nat, +left: String, +before: Nat) -> IO(File & Nat):
+  do IO<File & Nat>:
+    p : File & Result<&1, &1, U32 & String, String> <- File.read_raw(f, win.want(left))
+    offset_got(p, i, left, before)
+
+@unsafe
+def offset_got(p: File & Result<&1, &1, U32 & String, String>, +i: Nat, left: String, +before: Nat) -> IO(File & Nat):
+  (f, r) = p
+  match r:
+    case Fail{e}:
+      IO.die(File & Nat, 1, aof_fail(e))
+    case Done{+x}:
+      offset_in(f, String.is_empty(x), i, left ++ x, before)
+
+@unsafe
+def offset_in(f: File, eof: Bool, +i: Nat, +w: String, +before: Nat) -> IO(File & Nat):
+  match eof:
+    case True{}:
+      IO.pure(File & Nat, (f, Nat.add(before, A.offset(w, i))))
+    case False{}:
+      offset_load(f, i, w, before, A.load(w))
+
+@unsafe
+def offset_load(f: File, +i: Nat, +w: String, +before: Nat, l: List<&2, List<&2, String>> & String) -> IO(File & Nat):
+  (+reqs, +rest) = l
+  +c = List.length(&2, List<&2, String>, reqs)
+  offset_at(f, Nat.is_lt(i, c), i, c, w, before, rest)
+
+@unsafe
+def offset_at(f: File, here: Bool, +i: Nat, +c: Nat, +w: String, +before: Nat, +rest: String) -> IO(File & Nat):
+  match here:
+    case True{}:
+      IO.pure(File & Nat, (f, Nat.add(before, A.offset(w, i))))
+    case False{}:
+      offset_win(f, Nat.sub(i, c), rest, Nat.add(before, Nat.sub(String.length(w), String.length(rest))))
+
+# a file with an entry that does not replay as the file means it stops
+# the start, with the entry's number and the byte it starts at (the file
+# read again, as the windows read first are let go)
+@unsafe
+def restore_refused_at(+lg: Log, +path: String, +i: Nat, +why: String, p: File & Nat) -> IO(R.Ds & Nat):
+  (f, +at) = p
   do IO<R.Ds & Nat>:
     Unit <- File.close(f)
-    log.die(R.Ds & Nat, lg, "Bad command reading the append only file " ++ path ++ ": entry " ++ Nat.show(1n+i) ++ ", at byte " ++ Nat.show(A.offset(s, i)) ++ ": " ++ why)
+    log.die(R.Ds & Nat, lg, "Bad command reading the append only file " ++ path ++ ": entry " ++ Nat.show(1n+i) ++ ", at byte " ++ Nat.show(at) ++ ": " ++ why)
 
 @unsafe
 def restore_refused(+lg: Log, +path: String, +i: Nat, +why: String) -> IO(R.Ds & Nat):
   do IO<R.Ds & Nat>:
     f : File <- IO.try(File, File.open(path, "r"))
-    p : File & String <- read_all(f, Nil{})
+    p : File & Nat <- offset_win(f, i, "", 0n)
     restore_refused_at(lg, path, i, why, p)
 
 # the databases of the entries, when each replays as the file means it
@@ -13576,10 +13644,11 @@ def restore_checked(+lg: Log, +trunc: Bool, +path: String, +size: Nat, +n: Nat, 
       restore_refused(lg, path, i, why)
 
 # a file that ends inside a transaction (A.untx): the transaction is
-# reverted and the file cut back to before its MULTI, as Redis does,
-# unless aof-load-truncated is no: then it stops the start, as a file
-# that ends in an entry cut short does; what follows the last whole
-# entry must be an entry cut short, or nothing
+# reverted and the file cut back to before its MULTI (keep: the byte the
+# MULTI starts at, restore_revert), as Redis does, unless
+# aof-load-truncated is no: then it stops the start, as a file that ends
+# in an entry cut short does; what follows the last whole entry must be
+# an entry cut short, or nothing
 @unsafe
 def restore_reverted(+lg: Log, +path: String, +size: Nat, +keep: Nat, +n: Nat, r: A.Replay) -> IO(R.Ds & Nat):
   match r:
@@ -13592,38 +13661,59 @@ def restore_reverted(+lg: Log, +path: String, +size: Nat, +keep: Nat, +n: Nat, r
       restore_refused(lg, path, i, why)
 
 @unsafe
-def restore_revert(trunc: Bool, +lg: Log, +path: String, +size: Nat, +more: Nat, +keep: List<&2, List<&2, String>>, +k: Nat) -> IO(R.Ds & Nat):
+def restore_revert_at(+lg: Log, +path: String, +size: Nat, +k: Nat, r: A.Replay, p: File & Nat) -> IO(R.Ds & Nat):
+  (f, +at) = p
+  do IO<R.Ds & Nat>:
+    Unit <- File.close(f)
+    restore_reverted(lg, path, size, at, k, r)
+
+# the file cut back to the byte its transaction's MULTI starts at (entry k,
+# the first the start left out), as Redis's valid_before_multi: found by
+# reading the file again a window at a time (offset_win), which counts
+# the bytes as they are in the file, however its entries are written
+@unsafe
+def restore_revert(trunc: Bool, +lg: Log, +path: String, +size: Nat, +k: Nat, r: A.Replay) -> IO(R.Ds & Nat):
   match trunc:
     case True{}:
       do IO<R.Ds & Nat>:
         Unit <- log(lg, 3, "Revert incomplete MULTI/EXEC transaction in AOF file " ++ path)
-        restore_reverted(lg, path, size, String.length(A.encode(keep)), k, A.checked(keep, more))
+        f : File <- IO.try(File, File.open(path, "r"))
+        p : File & Nat <- offset_win(f, k, "", 0n)
+        restore_revert_at(lg, path, size, k, r, p)
     case False{}:
       log.die(R.Ds & Nat, lg, uxeof(path))
 
 @unsafe
-def restore_tx(open: Bool, ok: Bool, +lg: Log, +trunc: Bool, +path: String, +size: Nat, +more: Nat, +reqs: List<&2, List<&2, String>>, +kept: List<&2, List<&2, String>>, +k: Nat, +rest: String) -> IO(R.Ds & Nat):
+def restore_tx(open: Bool, ok: Bool, +lg: Log, +trunc: Bool, +path: String, +size: Nat, +k: Nat, r: A.Replay, +rest: String) -> IO(R.Ds & Nat):
   match open ok:
     case False{} _:
-      restore_checked(lg, trunc, path, size, List.length(&2, List<&2, String>, reqs), A.checked(reqs, more), rest)
+      restore_checked(lg, trunc, path, size, k, r, rest)
     case True{} True{}:
-      restore_revert(trunc, lg, path, size, more, kept, k)
+      restore_revert(trunc, lg, path, size, k, r)
     case True{} False{}:
       log.die(R.Ds & Nat, lg, "Bad file format reading the append only file " ++ path ++ ": no entry at byte " ++ Nat.show(Nat.sub(size, String.length(rest))))
 
+# what the start made of the file (aof.bend: A.Start): the check's
+# verdict on the entries it keeps, their number, the entries of a
+# transaction the file ends inside, and what follows the last whole
+# entry
 @unsafe
-def restore_load(+lg: Log, +trunc: Bool, +path: String, +size: Nat, +more: Nat, l: List<&2, List<&2, String>> & String) -> IO(R.Ds & Nat):
-  (+reqs, +rest) = l
-  +kept = A.untx(reqs)
-  +k = List.length(&2, List<&2, String>, kept)
-  restore_tx(Nat.is_lt(k, List.length(&2, List<&2, String>, reqs)), Bool.or(String.is_empty(rest), cut_short(rest)), lg, trunc, path, size, more, reqs, kept, k, rest)
+def restore_start(+lg: Log, +trunc: Bool, +path: String, +size: Nat, st: A.Start) -> IO(R.Ds & Nat):
+  match st:
+    case A.Start{r, +k, +cut, +rest}:
+      restore_tx(Bool.not(List.is_empty(&2, List<&2, String>, cut)), Bool.or(String.is_empty(rest), cut_short(rest)), lg, trunc, path, size, k, r, rest)
 
 @unsafe
-def restore_read(+lg: Log, +trunc: Bool, +path: String, +more: Nat, p: File & String) -> IO(R.Ds & Nat):
-  (f, +s) = p
+def restore_got(+lg: Log, +trunc: Bool, +path: String, q: A.Start & Nat) -> IO(R.Ds & Nat):
+  (st, +size) = q
+  restore_start(lg, trunc, path, size, st)
+
+@unsafe
+def restore_read(+lg: Log, +trunc: Bool, +path: String, p: File & (A.Start & Nat)) -> IO(R.Ds & Nat):
+  (f, q) = p
   do IO<R.Ds & Nat>:
     Unit <- File.close(f)
-    restore_load(lg, trunc, path, String.length(s), more, A.load(s))
+    restore_got(lg, trunc, path, q)
 
 # ENOENT: the one failure to open a file that means it is not there
 def enoent() -> U32:
@@ -13655,8 +13745,8 @@ def restore_open(+lg: Log, +trunc: Bool, +path: String, +more: Nat, m: Result<&1
       restore_fail(lg, path, more, e)
     case Done{f}:
       do IO<R.Ds & Nat>:
-        p : File & String <- read_all(f, Nil{})
-        restore_read(lg, trunc, path, more, p)
+        p : File & (A.Start & Nat) <- restore_win(f, A.wins.new(more), more, 0n, 1048576)
+        restore_read(lg, trunc, path, p)
 
 # the databases a file holds (1 + more of them), and the file's size;
 # empty ones for a file not there yet

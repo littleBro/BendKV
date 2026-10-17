@@ -3,7 +3,7 @@
 A Redis-compatible key-value server written in [Bend2](https://github.com/bendlang/bend),
 whose core is formally verified: the command semantics, the hash trie behind them, the
 append-only file, the databases, the connection state and the configuration are proved
-against 67 laws,
+against 68 laws,
 checked by Bend
 and rechecked by the BendTT kernel, whose soundness is proved in Lean.
 
@@ -60,7 +60,7 @@ counts are proved to be the trie's own.
 | Keys | 2 | key comparison is exactly string equality, down to the bits of `U32` |
 | Commands | 24 | no command changes a key it does not write, neither its value nor its time (`frame`); reads keep the database (the commands of hashes, lists, sets and sorted sets, PFADD, PFCOUNT of one key and PFDEBUG are reads and updates of their key, LMOVE, LMPOP, SMOVE, ZMPOP and the operations of several sets and sorted sets of their keys, so these laws and those below hold of them); a key whose time has passed is there for no command, and the sweep of expired keys deletes no key that is there; GET, DEL, APPEND, SETRANGE, SETNX, INCR, GETDEL, PERSIST, PTTL, SET with KEEPTTL, RENAME, MSETNX and BITOP behave as specified, on keys of the types they take (SET, SETNX, the times and the key commands take any), a key they add counted; a pipelined batch runs exactly as its commands in order; the cache hints before a batch change nothing |
 | Commuting | 5 | commands on different keys commute: replies and key contents are the same in either order, and adjacent independent commands in a batch can be swapped, when neither writes a key the other's writes depend on (RENAME moves a value from one key to another, MSETNX sets its keys only when none is there, BITOP sets its destination from its sources, LMOVE pushes onto its destination what it pops from its source, LMPOP pops from the first of its keys that is there, a STORE of a set operation sets its destination to what its sources make, SMOVE moves a member from its source to its destination, a STORE of a sorted-set operation or of a range sets its destination to what its sources or its source make, ZMPOP pops from the first of its keys that is there); SORT, whose patterns may read any key, swaps with reads alone |
-| Persistence | 9 | logging changes no reply; the file reads back as written, times included; after any history, each batch at its own time, on any of the databases, the server restores exactly the databases it held; a file cut by a crash at any byte restores the databases after some prefix of its acts in which every transaction is whole, never a partial act or transaction; the start's replay, which first checks that each entry replays as written, is that replay whenever the check refuses none |
+| Persistence | 10 | logging changes no reply; the file reads back as written, times included; after any history, each batch at its own time, on any of the databases, the server restores exactly the databases it held; a file cut by a crash at any byte restores the databases after some prefix of its acts in which every transaction is whole, never a partial act or transaction; the start's replay, which first checks that each entry replays as written, is that replay whenever the check refuses none; the start, which reads its file a window at a time, makes of any windows what it makes of the whole file |
 | Databases | 6 | SELECT changes no database and focuses the one it names; SWAPDB puts each of two databases in the other's place; FLUSHALL empties them all; MOVE takes a key's entry, its value and its time, out of the selected database and sets it in the other; COPY sets a key's entry at another key, in the selected database or another, when that key is not there or REPLACE is given |
 | Key count | 2 | after any history, the counts every database keeps are its trie's own, how many keys it holds and how many of them have a time, and its trie holds each key once; so DBSIZE answers the number of keys in its trie |
 | Sessions | 5 | however the server dispatches a batch, it runs as its commands in order; a batch changes the databases and the log as its executed commands do; a client that has not authenticated against a password cannot read or change any key |
@@ -605,7 +605,14 @@ translation stays in the trusted base.
   whole entry at any size; a file that ends inside a transaction (a crash cut it as it
   was written) has the transaction reverted and is cut back to before its MULTI, as Redis
   does ("Revert incomplete MULTI/EXEC transaction"; with `aof-load-truncated no` both stop
-  the start instead). A file with an entry the start cannot replay as it was written (an
+  the start instead). Where BendKV differs: a file that ends inside a transaction, then in
+  an entry cut short, BendKV cuts back to before the MULTI, where Redis cuts it after the
+  transaction's last whole entry and leaves the MULTI and the entries it queued for its
+  next start to revert; the databases are the same. The start reads the file a window
+  at a time (1 MiB, or as long as an entry that runs past the window), so that what it
+  holds at once is a window, a transaction until its EXEC and the databases it builds,
+  not the whole file (section 3zzzg of [docs/FINDINGS.md](docs/FINDINGS.md)). A file
+  with an entry the start cannot replay as it was written (an
   unknown command, a wrong number of arguments, an argument that does not read, a
   database not there, a MULTI inside another, an EXEC without one) stops the start,
   naming the entry and the byte it starts at, the file left as it was, where Redis stops
@@ -720,7 +727,7 @@ loads no RDB file.
 
 ```bash
 make smoke     BEND="$B"   # the pure path end to end and the append-only file, no network; fails on any mismatch
-make test      BEND="$B"   # needs redis-server, redis-cli and a C compiler
+make test      BEND="$B"   # needs redis-server, redis-cli, redis-benchmark and a C compiler
 make perfcheck BEND="$B"   # instructions, misses and prefetches per request against a baseline (needs valgrind)
 make gencheck              # the generated parts (trie, its proofs, the parameter and command tables, the counts) are up to date
 make bench     BEND="$B"   # redis-benchmark: BendKV against Redis
@@ -822,7 +829,10 @@ connections that end every way one can, many times
 (the client closing or resetting, QUIT, a protocol error), on a BendKV of their own whose
 table of channels is read to show that each closed the channel it opened,
 restarts from the append-only file (every database read back, including after a
-truncated tail or a transaction left open), kills at random moments while clients write
+truncated tail or a transaction left open; files whose entries, transactions and values
+straddle the windows the start reads them in, started on by BendKV and by Redis alike,
+`tests/aof_window_test.py`; and the resident memory after a restart from a file of a
+million SETs, `tools/restore_mem.sh`), kills at random moments while clients write
 (`tests/crash_test.py`: rounds of a SIGKILL under load, some while a rewrite runs, some
 starts killed as they load the file, each start holding the databases after a prefix of
 the commands sent, every one acknowledged among them), disk failures
@@ -900,7 +910,7 @@ away.
 <!-- BEGIN gen_counts: numbers -->
 | what | how many | counted in |
 |---|---:|---|
-| laws | 67 | `proof/LAWS.bend` (by group: [What is proved](#what-is-proved)) |
+| laws | 68 | `proof/LAWS.bend` (by group: [What is proved](#what-is-proved)) |
 | patches to the Bend compiler | 35 | `bend-patches/apply.sh` |
 | constructors of `Cmd`, a parsed command | 30 | `src/redis.bend` |
 | Redis 7.0.15's parameters, all of which CONFIG serves | 178 | `tools/data/redis-configs.json` |
@@ -910,7 +920,7 @@ away.
 | `src/map.bend` | 4,400 | 1,200 | yes |
 | `src/redis.bend` | 18,000 | 7,300 | yes |
 | `src/batch.bend` | 84 |  | yes |
-| `src/aof.bend` | 1,200 |  | yes |
+| `src/aof.bend` | 1,300 |  | yes |
 | `src/session.bend` | 2,700 |  | yes |
 | `src/config.bend` | 1,200 | 180 | yes |
 | `src/acl.bend` | 2,100 | 600 | no |

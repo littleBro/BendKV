@@ -7538,6 +7538,54 @@ instructions per request (3,419, 4,183 and 4,527 on main, built here and counted
 turn); with 100 clients in BLPOP, GET 3,525 and SET 4,310, 3.0% and 3.1% above (main
 3.1% and 3.4%).
 
+## 69. The start reads its file in windows
+
+**What changed** (FINDINGS 3zzzg). The start read its append-only file whole into one
+string, listed its entries and replayed the list, and the heap kept that peak as the
+process's memory for good. It now reads the file 1 MiB at a time and runs each window's
+entries as they come, so that it holds a window and the databases it builds.
+
+**Measured** (`tools/restore_mem.sh`: a million SETs of 100-byte values on random keys,
+about 632,000 keys, a file of 144,000,000 bytes, the automatic rewrite off; three runs of
+main's build and three of this one, in turns, then two of Redis 7.0.15 under the same
+script, on the 4-vCPU VM with other work on it; kB as `/proc` gives them):
+
+| | main | windows | Redis 7.0.15 |
+|---|---:|---:|---:|
+| VmRSS after the load (kB) | 145,848–146,116 | 146,184–146,768 | 146,432–146,476 |
+| VmRSS after the restart (kB) | 589,620–589,708 | 147,952–148,968 | 145,936–146,028 |
+| after the restart / before | 4.04 | 1.01–1.02 | 1.00 |
+| the restore: ms to the first PONG | 2,671–3,097 | 1,420–1,532 | 1,572–2,221 |
+
+`used_memory` after the restart is that after the load less 2 to 3.5 kB, in both builds.
+The restore takes half the time it took: it no longer copies the file into one string,
+lists its entries or makes all their acts before it runs them, and it touches a quarter
+of the memory.
+
+**The rewrite during the load** (`PCT=100`: the cron starts a rewrite when the file passes
+64 MB; the counts once it has ended; three runs of each build, in turns):
+
+| | main | windows |
+|---|---:|---:|
+| VmHWM during the load (kB) | 395,836–407,352 | 408,372–420,496 |
+| VmRSS after it (kB) | 334,972–343,032 | 343,976–352,272 |
+| VmRSS after a restart from the rewritten file (kB) | 532,588–537,316 | 147,892–149,000 |
+| the restore: ms to the first PONG | 1,226–1,808 | 1,220–1,328 |
+
+The rewrite is the same code in both builds: six more runs of each, the counts read once
+the rewrite had ended, gave peaks of 407,476–419,516 kB on main and 402,204–420,572 kB
+with the windows. It is the peak issue #32 measured (413 MB, and 344 MB after it), and
+the heap keeps it (FINDINGS 3zzzg, "What is left"). Redis rewrites in a child process,
+whose pages are not the server's: 146,628–148,144 kB after the load.
+
+**`make perfcheck`** (the same machine, one build after the other): GET 3,423, SET 4,183
+and INCR 4,527 instructions per request (main 3,407, 4,180 and 4,546); with 100 clients
+in BLPOP, GET 3,529 and SET 4,326, 3.1% and 3.4% above the counts without them (main 3.4%
+and 3.9%); the misses and prefetches within 1.2% of the baseline in both. No request runs
+the start's code: GET counted again alone (`tools/callgrind_req.sh`, `TESTS=get`) takes
+3,417 instructions on both builds, so the 16 between them above are the count's spread
+from one run to the next.
+
 ## 70. ACL users
 
 **What was added** (FINDINGS 3zzzh). A call of a client whose user is restricted (may
