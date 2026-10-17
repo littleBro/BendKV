@@ -909,6 +909,14 @@ def srv.gone(s: Srv, +id: Nat) -> Srv:
     case Srv{pass, cfg, info, mm}:
       Srv{pass, cfg, I.info.gone(info, id), mm}
 
+# a client gone while it waited, whose call is never counted: a blocking
+# command's, but WAIT's (Redis 7.2's freeClient unblocks it, and only
+# WAIT's unblocking counts it: unblockClientWaitingReplicas)
+def srv.dropped(s: Srv, +id: Nat) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.drop(info, id), mm}
+
 def srv.slow(s: Srv, +us: Nat, +at: Nat, +xs: List<&2, String>, +peer: String, +name: String) -> Srv:
   match s:
     case Srv{pass, cfg, info, mm}:

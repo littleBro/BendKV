@@ -25,6 +25,7 @@ BSD-3. Redis 8.10.2 was only run; its sources were not read (AGENTS.md, rule 10)
 | 1. LSET takes its index modulo 2^32 | refuses | **bug** | refuses | **bug** |
 | 2. A failed AUTH in a pipeline gets no reply | replies | **bug** | **bug** | replies |
 | 3. CONFIG SET tls-port crashes a server built without TLS | refuses | **bug** | refuses | **bug** |
+| 4. CLIENT UNBLOCK with ERROR counts a WAIT twice | counts once | **bug** | **bug** | **bug** |
 
 ## 1. LSET takes its index modulo 2^32
 
@@ -111,3 +112,42 @@ Without TLS, `connectionTypeTls()` returns NULL. `connTypeConfigure` calls
 **To report to:** Valkey, and Redis for its 7.2 branch. Only a client allowed CONFIG SET
 (an @admin and @dangerous command) can cause it. Even so, a crash may be better sent
 through the projects' security channels than as a public issue.
+
+## 4. CLIENT UNBLOCK with ERROR counts a WAIT twice
+
+**What happens.** `CLIENT UNBLOCK <id> ERROR` unblocks a client that waits in WAIT, and the client
+gets one error reply. The server counts two calls of WAIT:
+- two calls in INFO commandstats, one of them failed;
+- two in `total_commands_processed`;
+- two entries in the slow log, and two samples in the latency histogram.
+
+Any other blocking command unblocked this way counts one call, and so does a WAIT unblocked with
+`TIMEOUT`.
+
+**How to see it.** Run each line in its own shell, against a server with no replica:
+
+```
+$ redis-cli config resetstat
+$ redis-cli wait 1 0                  # blocks: no replica will acknowledge
+$ redis-cli client list               # the waiting client's id
+$ redis-cli client unblock <id> error
+$ redis-cli info commandstats | grep wait
+```
+
+- **7.0.15** counts `calls=1`, `failed_calls=1`.
+- **7.2.16 and 8.10.2** count `calls=2`, `failed_calls=1`.
+- **Valkey 9.1.2** counts `calls=2`, `rejected_calls=1`, `failed_calls=0`.
+
+WAITAOF is unblocked through the same path.
+
+**Where.** The call is counted twice on its way out:
+- Redis 7.2.16: `unblockClientOnError` (`src/blocked.c`, line 735) counts it, failed
+  (`updateStatsOnUnblock`). Then `unblockClient` calls `unblockClientWaitingReplicas`
+  (`src/replication.c`, line 3615), which counts it again.
+- Valkey 9.1.2: `unblockClientOnError` (`src/blocked.c`, line 820) counts it, as rejected. Then
+  `unblockClientWaitingReplicas` (`src/replication.c`, line 5105) counts it again.
+
+The second count is meant for a WAIT whose time is up: `replyToBlockedClientTimedOut` counts nothing
+for one.
+
+**To report to:** Redis, for 7.2 and 8, and Valkey.

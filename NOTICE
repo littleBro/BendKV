@@ -124,6 +124,11 @@ parts of it are written from 7.2.16's sources:
   error's text on one line); src/server.bend, from script.c (a call's
   ACL failure) and script_lua.c (SCRIPT KILL's line in the log); and
   src/rdb.bend, from functions.c (FUNCTION RESTORE of the pre-GA format).
+- Blocked calls: a call that blocks counted when its client is unblocked
+  (served, its time up, or by CLIENT UNBLOCK), not when it blocks, and
+  never when its client goes while it waits but in WAIT (blocked.c's
+  updateStatsOnUnblock, server.c's call() and replication.c), in
+  src/info.bend and src/server.bend.
 
 Bend (bend-patches/): patches to the Bend compiler and its runtime
 (github.com/bendlang/bend at 1cce499, Bend 2.0.35), Copyright 2026

@@ -9672,6 +9672,36 @@ node's entries around, and the keyspace drops the old version.
   write runs, which needs every write of a stream to write its stream back, the writes
   that change nothing too, with no effect; XDEL's walk from the newest entry, in place.
 
+## 3zzzzb. Blocked calls counted as Redis 7.2.16 counts them
+
+**What changed** (#128, kind H: `src/info.bend`, `src/server.bend`, `src/session.bend`). Redis 7.2
+counts a call that blocks when its client is unblocked. It counts it in `updateStatsOnUnblock`, or
+in `call()` when a key serves the client and the command runs again. Redis 7.0 counted it when it
+blocked. BendKV now counts as 7.2 does:
+- **While its client waits**, the call is in no count. INFO commandstats shows nothing of it, and
+  `total_commands_processed` has not counted it.
+- **When its client is unblocked**, the call counts once. That holds when a key serves it, when its
+  time is up, and when CLIENT UNBLOCK unblocks it. It counts in `calls` and in
+  `total_commands_processed`. Its share of the window's time goes to `usec` and to the latency
+  histogram, and the slow log takes it.
+- **Failed calls.** An error reply (an UNBLOCKED error, a WRONGTYPE) counts the call failed.
+  CLIENT UNBLOCK with TIMEOUT does not; 7.0 counted every call it unblocked failed.
+- **A client that goes while it waits** leaves its call uncounted: its connection closed, or
+  CLIENT KILL closed it. WAIT is the exception, and so is a SAVE that waits for its save. Redis
+  7.2's `freeClient` counts only WAIT's, through `unblockClientWaitingReplicas`.
+- **The window's share** (section 3zzz). A blocked call's share stays with its client (`Wt`), as
+  before, and goes to `usec` once. 7.0 counted it twice: when the call ran, and again when the
+  client was unblocked.
+
+**Not copied.** In 7.2.16, 8.10.2 and Valkey 9.1.2, CLIENT UNBLOCK with ERROR counts a WAIT twice
+(`docs/UPSTREAM.md`, bug 4). BendKV counts it once, failed. `admin_test` checks this on BendKV
+alone, and compares the rest with 7.2.16.
+
+**What it costs.** Nothing on a request's path: the counts only move from the moment a client blocks
+to the moment it is unblocked. A client may go while the window still holds its call; then the
+call is taken out of the window (`fresh.drop`), one walk of the window's entries for each such
+client.
+
 ## 4. Where a request's time goes, and hiding the memory waits
 
 With the eight patches, BendKV ran fewer instructions on GET and SET than Redis, missed
