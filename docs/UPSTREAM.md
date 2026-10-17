@@ -22,7 +22,9 @@ BSD-3. Redis 8.10.2 was only run; its sources were not read (AGENTS.md, rule 10)
 
 Bug 5 turned up later, when RDB 11 came in on the branch of 7.2.16, and was replayed on
 7.0.15 and 7.2.16 only. Bug 6 turned up as the last difference of HyperLogLog's test, and
-was replayed on all four.
+was replayed on all four. Bugs 7 and 8 were differences from 7.0.15 that BendKV already
+kept (`docs/FINDINGS.md`, sections 3zzk and 3zzzb), replayed on all four as the documents
+moved to 7.2.16.
 
 | bug | 7.0.15 | 7.2.16 | 8.10.2 | Valkey 9.1.2 |
 |---|---|---|---|---|
@@ -32,6 +34,8 @@ was replayed on all four.
 | 4. CLIENT UNBLOCK with ERROR counts a WAIT twice | counts once | **bug** | **bug** | **bug** |
 | 5. RESTORE with a time to live near 2^63 ms makes a key | no key | **bug** | not run | not run |
 | 6. PFADD reads the byte after a sparse HyperLogLog's end | **bug** | **bug** | **bug** | **bug** |
+| 7. CLIENT UNBLOCK of a client CLIENT PAUSE holds crashes the server | **bug** | **bug** | answers 0 | answers 0 |
+| 8. CLIENT TRACKING answers an overlap of its prefixes twice | **bug** | **bug** | answers once | answers once |
 
 ## 1. LSET takes its index modulo 2^32
 
@@ -258,3 +262,75 @@ on an allocator. tests/hll_test.py checks that alone, and does not fail on a com
 reads such a value and is answered otherwise.
 
 **To report to:** Redis, for 7.2 and 8, and Valkey.
+
+## 7. CLIENT UNBLOCK of a client CLIENT PAUSE holds crashes the server
+
+**What happens.** While CLIENT PAUSE holds a client's command back, `CLIENT UNBLOCK <id>`
+of that client stops the server, with a "Guru Meditation: Unknown btype in
+replyToBlockedClientTimedOut()". `CLIENT UNBLOCK <id> ERROR` answers 1 and fails the held
+command with `-UNBLOCKED client unblocked via CLIENT UNBLOCK`, though it never ran. 8.10.2
+and Valkey 9.1.2 answer 0 to both, and the command runs once the pause ends.
+
+**How to see it.** Run each line in its own shell:
+
+```
+$ redis-cli client pause 10000 write
+$ redis-cli set k v                   # held back by the pause
+$ redis-cli client list               # the held client's id
+$ redis-cli client unblock <id>       # 7.0.15 and 7.2.16 stop here
+```
+
+**Where.** CLIENT UNBLOCK asks whether its client may time out, and a client that the pause
+holds may not:
+- Redis 7.2.16: `clientCommand` (`src/networking.c`, line 3271) asks
+  `moduleBlockedClientMayTimeout` (`src/module.c`, line 8353), which says yes for every
+  kind of block but a module's, so for `BLOCKED_POSTPONE`, the pause's
+  (`blockPostponeClient`, `src/blocked.c`, line 633), too.
+  - Without ERROR, `unblockClientOnTimeout` (`src/blocked.c`, line 726) calls
+    `replyToBlockedClientTimedOut` (line 229), which has no reply for that kind and
+    panics (line 244).
+  - With ERROR, `unblockClientOnError` (line 735) replies the error and unblocks the client.
+- Valkey 9.1.2: `blockedClientMayTimeout` (`src/blocked.c`, line 260) says yes for lists,
+  sorted sets, streams and WAIT, and for a module's block with a timeout callback, so the
+  pause's gets 0.
+
+**What BendKV does.** It answers 0, as 8.10.2 and Valkey do, and the command runs once the
+pause ends (`tests/pause_test.py`).
+
+**To report to:** Redis, for its 7.2 branch.
+
+## 8. CLIENT TRACKING answers an overlap of its prefixes twice
+
+**What happens.** `CLIENT TRACKING ON BCAST` with prefixes that overlap answers an error.
+When the overlap is found past the first prefix, it then answers OK as well, and turns
+tracking on with all the prefixes. So the client gets two replies to one command, and
+every reply after it is one command late. 8.10.2 and Valkey 9.1.2 answer the error alone.
+
+**How to see it.**
+
+```
+python3 -c '
+import socket, time
+def req(*a):
+    return b"*%d\r\n" % len(a) + b"".join(b"$%d\r\n%s\r\n" % (len(x), x) for x in a)
+s = socket.create_connection(("127.0.0.1", 6379))
+s.sendall(req(b"HELLO", b"3"))
+time.sleep(0.2); s.recv(4096)
+s.sendall(req(b"CLIENT", b"TRACKING", b"on", b"BCAST", b"PREFIX", b"x", b"PREFIX", b"a", b"PREFIX", b"ab"))
+time.sleep(0.2); print(s.recv(4096))'
+```
+
+7.0.15 and 7.2.16 print the error, then `+OK`. With the overlap between the first two
+prefixes (`PREFIX a PREFIX ab`), they answer the error alone.
+
+**Where.**
+- Redis 7.2.16: `checkPrefixCollisionsOrReply` (`src/tracking.c`, line 112) replies the
+  error for two given prefixes that overlap, then returns `i`, the index of the first of
+  the two (line 146). Its caller (`src/networking.c`, line 3424) takes only 0 as the
+  error, so past the first prefix it goes on to `enableTracking` and OK.
+- Valkey 9.1.2: the same check returns 0 (`src/tracking.c`, line 146).
+
+**What BendKV does.** It answers the error alone, and leaves the tracking as it was
+(`tests/tracking_test.py`).
+
+**To report to:** Redis, for its 7.2 branch.
