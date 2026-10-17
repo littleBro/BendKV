@@ -428,7 +428,7 @@ translation stays in the trusted base.
   that gets messages, to a client that waited); user is the client's (ACL), redir the
   client its invalidations go to (0 itself, -1 when it does not track), resp 2 or 3.
 - **Scripts:** EVAL, EVALSHA, EVAL_RO, EVALSHA_RO and SCRIPT (LOAD, EXISTS, FLUSH, KILL,
-  HELP), on Redis 7.0.15's own Lua (its sandbox, `redis.call`, `redis.pcall` and the rest
+  HELP), on Redis 7.2.16's own Lua (its sandbox, `redis.call`, `redis.pcall` and the rest
   of its API, cjson, cmsgpack, struct, bit, the shebang and its flags, `redis.setresp`,
   Redis's random numbers), driven a step at a time from the actor: a script's calls run as
   a client's commands run (their statistics, MONITOR's lines, keyspace events, the keys
@@ -438,8 +438,8 @@ translation stays in the trusted base.
   client is answered BUSY but for the commands Redis lets run then; SCRIPT KILL ends a
   script that has not written (UNKILLABLE otherwise), and SHUTDOWN NOSAVE stops the server.
   With CLIENT TRACKING a script's calls are its caller's, as in Redis: the caller's own
-  invalidations come after the script's reply, and a read remembers the KEYS the script
-  declared. With ACL a script's calls are checked with its caller's user, as in Redis, a
+  invalidations come after the script's reply, and each read-only call remembers the keys
+  it reads. With ACL a script's calls are checked with its caller's user, as in Redis, a
   call refused going to ACL LOG in context lua, and `redis.acl_check_cmd` answers by
   that user's rules. Where BendKV differs: a script runs once the group of requests that brought it has run
   (no client can tell the order of requests that came together), SCRIPT DEBUG is not
@@ -447,7 +447,7 @@ translation stays in the trusted base.
   `redis.acl_check_cmd` of a command with a number of arguments its arity does not allow
   answers true (FINDINGS.md, section 3zzzd).
 - **Functions:** FUNCTION (LOAD, DELETE, FLUSH, LIST, STATS, KILL, DUMP, RESTORE, HELP),
-  FCALL and FCALL_RO, on the same engine, as Redis 7.0.15 runs them:
+  FCALL and FCALL_RO, on the same engine, as Redis 7.2.16 runs them:
   - **Libraries.** They are loaded as Redis loads them: the `#!lua name=` line, and
     `redis.register_function` with its positional and named arguments and its flags,
     with Redis's errors for each. The library API holds at load time, the globals are
@@ -1096,8 +1096,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 ## License
 
 BendKV is licensed under the [Apache License, Version 2.0](LICENSE). It includes, and
-ports code from, software under other licenses: Redis 7.0.15 (BSD 3-Clause), Lua 5.1.5
-and its libraries (MIT), and Bend, which `bend-patches/` changes (Apache 2.0).
+ports code from, software under other licenses: Redis 7.0.15 and 7.2.16 (BSD 3-Clause),
+Lua 5.1.5 and its libraries (MIT), and Bend, which `bend-patches/` changes (Apache 2.0).
 [NOTICE](NOTICE) lists them file by file. Contributions come under BendKV's license
 ([CONTRIBUTING.md](CONTRIBUTING.md#license)).
 

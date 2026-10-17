@@ -1719,7 +1719,7 @@ make clients BEND="$B" # redis-py's and go-redis's test suites on Redis and on B
    pushed at once but to a client of RESP3 that others redirect to and that sends
    nothing, which gets them with its next reply (section 3zzzb of FINDINGS.md); checked
    by tests against Redis byte for byte. Lua scripts: EVAL, EVALSHA, EVAL_RO, EVALSHA_RO
-   and SCRIPT on Redis 7.0.15's own Lua, driven a step at a time from the actor, a
+   and SCRIPT on Redis 7.2.16's own Lua, driven a step at a time from the actor, a
    script's calls run as EXEC runs its commands (section 3zzzd of FINDINGS.md); Lua's
    functions, FUNCTION and FCALL, on the same engine, their libraries in both files
    (section 3zzzp); checked by tests against Redis byte for byte. ACL users: Redis's

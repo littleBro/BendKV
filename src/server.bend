@@ -20063,6 +20063,7 @@ def run(+items: List<&2, C.CItem>, +post: Bool, +aof: Maybe<&2, String>, +sync: 
     Unit <- log.raw.at(Bool.and(String.eq(T.cfg(items, "always-show-logo"), "yes"), U32.is_le(log.level(lg), 2)), lm, T.logo(T.cfg(items, "port"), pid))
     Unit <- log.if(Bool.not(String.eq(T.cfg(items, "always-show-logo"), "yes")), lm, 2, "Running mode=standalone, port=" ++ T.cfg(items, "port") ++ ".")
     Unit <- log(lm, 2, "Server initialized")
+    Unit <- L.Engine.deprecated(Bool.pick(U32, String.eq(T.cfg(items, "lua-enable-deprecated-api"), "yes"), 1, 0))
     Unit <- modules(Bool.not(String.is_empty(mod)), mcfg, mod, lm)
     +tl : Chan(Tally) <- Chan.new(Tally, 1)
     ok : Bool <- Chan.send(Tally, tl, Tally{0n, 0n})

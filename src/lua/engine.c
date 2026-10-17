@@ -1333,8 +1333,9 @@ static const char* sc_lua_builtins_allow_list[] = {
 };
 
 // the builtins Redis 7.2 deprecates for the sandbox's sake: kept out of
-// the globals unless lua-enable-deprecated-api is set, which BendKV does
-// not take (its default, no)
+// the globals unless lua-enable-deprecated-api is yes, which only the
+// start sets (Engine.deprecated: the parameter is immutable), before any
+// state is made
 static const char* sc_lua_builtins_deprecated[] = {
   "newproxy", "setfenv", "getfenv", NULL,
 };
@@ -2938,6 +2939,22 @@ Term engine_next_run(Env e, Term* f, IoWork* w) {
 
 static void __attribute__((constructor)) engine_next_use(void) {
   io_eff(CID(Engine.next), engine_next_run);
+}
+
+#endif
+
+#ifdef CID(Engine.deprecated)
+
+// Engine.deprecated(on): lua-enable-deprecated-api, as the start reads it
+// (1: yes), for the states made from then on
+Term engine_deprecated_run(Env e, Term* f, IoWork* w) {
+  (void)e; (void)w;
+  sc_lua_enable_deprecated_api = (u64)f[0] != 0;
+  return term_pak(CID(Unit), 0);
+}
+
+static void __attribute__((constructor)) engine_deprecated_use(void) {
+  io_eff(CID(Engine.deprecated), engine_deprecated_run);
 }
 
 #endif

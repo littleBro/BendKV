@@ -9162,7 +9162,9 @@ the move's other kinds (below).
 - **The sandbox.**
   - `newproxy`, `setfenv` and `getfenv` leave the globals. Redis lets them back with
     `lua-enable-deprecated-api yes`, a hidden parameter that only the start sets, `no` by
-    default; BendKV keeps it at `no`.
+    default. BendKV reads it as the start does, before any Lua state is made
+    (`Engine.deprecated`): EVAL's state and the functions' both keep them or both leave
+    them out, a library loaded from the files at the start too (`tests/start_test.py`).
   - The metatables of the basic types are read-only, as the globals are (CVE-2025-46818).
     A string's is the one Lua sets, and `getmetatable('').__index.upper = f` now fails
     with "Attempt to modify a readonly table", in EVAL's state and in the functions'.
