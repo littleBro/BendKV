@@ -440,7 +440,7 @@ started, then fails, where Redis answers with an error (FINDINGS 3zzzq).
 
 Redis's own suite measures the server; a client library's suite measures what an
 application sees through it. `tools/client_suite.py` runs two of them against BendKV and
-against Redis 7.0.15 the same way, each at a fixed version taken from its language's
+against Redis 7.2.16 the same way, each at a fixed version taken from its language's
 registry, each run against a server started for it, in a directory of its own:
 
 - **redis-py 8.1.0** (PyPI): its tests of the sync and asyncio clients, in RESP2 and in
@@ -452,9 +452,9 @@ registry, each run against a server started for it, in a directory of its own:
   starts no ring, sentinel or cluster of its own, but its specs of those and of modules.
   It speaks RESP3 (HELLO 3 as it connects), and some of its specs RESP2.
 
-A client's suite is written for the newest Redis: its tests of versions after 7.0 skip
-themselves (go-redis is told the server is 7.0), and of the rest what counts is what
-Redis 7.0.15 passes. A test that fails runs again up to twice before it counts as
+A client's suite is written for the newest Redis: its tests of versions after 7.2 skip
+themselves (go-redis is told the server is 7.2), and of the rest what counts is what
+Redis 7.2.16 passes. A test that fails runs again up to twice before it counts as
 failed, in both suites; one that passes on BendKV only after such a rerun, where Redis
 passes it at the first attempt, is reported (a race in BendKV passes so), and from
 2026-11-15 on it counts as failed. CI's heavy tier runs the three suites before a pull
@@ -470,11 +470,19 @@ and one that fails for another reason fails the job too.
 make clients                       # the three suites, against Redis and build/bendkv
 ```
 
-| suite | Redis 7.0.15 passes | BendKV passes |
+| suite | Redis 7.2.16 passes | BendKV passes |
 |---|---:|---:|
-| redis-py 8.1.0, RESP2 | 2,753 | **2,708 (98.4%)** |
-| redis-py 8.1.0, RESP3 | 2,753 | **2,708 (98.4%)** |
-| go-redis v9.23.0, RESP3 | 460 | **447 (97.2%)** |
+| redis-py 8.1.0, RESP2 | 2,772 | **2,723 (98.2%)** |
+| redis-py 8.1.0, RESP3 | 2,772 | **2,723 (98.2%)** |
+| go-redis v9.23.0, RESP3 | 463 | **449 (97.0%)** |
+
+Against Redis 7.0.15 BendKV passed 2,708 of the 2,753 tests it passes in redis-py, and
+447 of 460 in go-redis. 7.2.16 passes each of those, and 19 more in redis-py and 3 in
+go-redis. BendKV passes 15 of redis-py's 19 (ACL GETUSER, SETUSER and LOG with 7.2's
+fields, CLIENT NO-TOUCH, ZRANK and ZREVRANK with WITHSCORE) and 2 of go-redis's 3
+(WITHSCORE's). It fails four of redis-py's, which create a stream's group
+(`test_xinfo_consumers`, of 7.2, in the sync and asyncio clients, and
+`test_xgroup_create_entriesread`), and go-redis's test of WAITAOF, a command of 7.2.
 
 redis-py's tests give in RESP3 what they give in RESP2, test by test, against Redis and
 against BendKV: the same tests pass, and the same fail. (Its three tests of subscribing
@@ -483,9 +491,9 @@ alike.)
 
 Every test BendKV fails of those Redis passes fails on what BendKV does not have:
 
-- **A command it does not have:** in redis-py, streams' groups (XGROUP 36, XACK 3,
-  XREADGROUP 2), MODULE 2 and REPLICAOF 1 (44 tests in each protocol); in go-redis,
-  streams' groups (XGROUP, 12 tests).
+- **A command it does not have:** in redis-py, streams' groups (XGROUP 40, XACK 3,
+  XREADGROUP 2), MODULE 2 and REPLICAOF 1 (48 tests in each protocol); in go-redis,
+  streams' groups (XGROUP, 12 tests) and WAITAOF (1).
   Functions (section 3zzzp of [FINDINGS.md](FINDINGS.md)) brought redis-py's 7 tests of
   FUNCTION and FCALL in each protocol (LOAD, LIST, DELETE, FLUSH, DUMP and RESTORE, FCALL
   and FCALL_RO) and its test of COMMAND LIST, which wants more than 300 commands, and
