@@ -3189,7 +3189,7 @@ def obj(+k: Nat, s: String) -> Maybe<&2, KV.Val>:
 # of its members in their order (SET_LISTPACK), a large one as its count
 # and members (SET, in the order of its trie); a small sorted set as one listpack
 # (ZSET_LISTPACK) of its members and scores (a score as a listpack keeps
-# it: F.f64.show_lp), a large one as its count, then its members and
+# it: F.f64.show), a large one as its count, then its members and
 # their scores' bits from the greatest down (ZSET_2). The value's type
 # (rdbSaveObjectType) comes before it: in a payload right before it
 # (put.val), in a file before the key (The file, below).
@@ -3280,7 +3280,7 @@ def zel.words(es: List<&2, KV.ZEl>) -> List<&2, String>:
     case Nil{}:
       Nil{}
     case Con{KV.ZEl{m, +d}, rest}:
-      m <> (F.f64.show_lp(d) <> zel.words(rest))
+      m <> (F.f64.show(d) <> zel.words(rest))
 
 def put.z2(es: List<&2, KV.ZEl>, rest: String) -> String:
   match es:

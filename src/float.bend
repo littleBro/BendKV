@@ -7,7 +7,8 @@
 # a tie, as the FPU does in its default mode. Text comes in as glibc's
 # strtod and strtold read it (decimal, hex, inf and infinity, nan) and goes
 # out as its printf writes "%.17g" and "%.17Lf": exactly, from the exact
-# decimal value of the number.
+# decimal value of the number; or, for a double, as Redis 7.2 writes one,
+# with Grisu2 (section Grisu2).
 
 import Base
 
@@ -1423,6 +1424,507 @@ def fl.show_g(x: Fl) -> String:
     case FNum{+neg, +m, +e}:
       g.fin(big.is_zero(m), neg, m, e)
 
+# Grisu2
+# ------
+# Redis 7.2 writes a double that is not an integer with fpconv_dtoa (its
+# deps/fpconv): Florian Loitsch's Grisu2, as night-shift's fpconv_dtoa.c
+# and fpconv_powers.h have it (Boost Software License 1.0: NOTICE), which
+# this section ports step for step. Grisu2 finds digits that read back as
+# the double: few, though not always the fewest. None of the sums,
+# products and shifts of its 64-bit integers passes 2^64 (of a product it
+# keeps the high half), so none wraps in C, and each is exact here. A
+# binary exponent is biased by 4096 here, and so is the decimal one (K).
+
+# a 64-bit integer of Grisu2's, as its high and low 32 bits (the high ones
+# 2^32 or more for a sum past 2^64, which round_digit's comparisons make)
+type U64 is Data:
+  U64{h: Nat, l: Nat}
+
+# 2^32 (a Nat's literal stops below it)
+def u.b32() -> Nat:
+  Nat.mul(65536n, 65536n)
+
+def u.add(a: U64, b: U64) -> U64:
+  match a b:
+    case U64{+ah, +al} U64{+bh, +bl}:
+      +l = Nat.add(al, bl)
+      +c = Nat.is_le(u.b32(), l)
+      U64{Nat.add(Nat.add(ah, bh), Bool.pick(Nat, c, 1n, 0n)), Bool.pick(Nat, c, Nat.sub(l, u.b32()), l)}
+
+# a - b, for a at least b
+def u.sub(a: U64, b: U64) -> U64:
+  match a b:
+    case U64{+ah, +al} U64{+bh, +bl}:
+      +ok = Nat.is_le(bl, al)
+      U64{Nat.sub(Nat.sub(ah, bh), Bool.pick(Nat, ok, 0n, 1n)), Bool.pick(Nat, ok, Nat.sub(al, bl), Nat.sub(Nat.add(al, u.b32()), bl))}
+
+def u.lt(a: U64, b: U64) -> Bool:
+  match a b:
+    case U64{+ah, +al} U64{+bh, +bl}:
+      Bool.or(Nat.is_lt(ah, bh), Bool.and(Nat.is_eq(ah, bh), Nat.is_lt(al, bl)))
+
+def u.mul10(a: U64) -> U64:
+  match a:
+    case U64{+h, +l}:
+      +x = Nat.mul(l, 10n)
+      U64{Nat.add(Nat.mul(h, 10n), Nat.div(x, u.b32())), Nat.mod(x, u.b32())}
+
+# a >> s, and a mod 2^s, for s from 32 to 60 (pk: 2^(s - 32))
+def u.shr(a: U64, +pk: Nat) -> Nat:
+  match a:
+    case U64{+h, l}:
+      Nat.div(h, pk)
+
+def u.low(a: U64, +pk: Nat) -> U64:
+  match a:
+    case U64{+h, +l}:
+      U64{Nat.mod(h, pk), l}
+
+def u.pow2.of(hi: Bool, +k: Nat) -> U64:
+  match hi:
+    case True{}:
+      U64{nat.pow2(Nat.sub(k, 32n)), 0n}
+    case False{}:
+      U64{0n, nat.pow2(k)}
+
+# 2^k, k below 64
+def u.pow2(+k: Nat) -> U64:
+  u.pow2.of(Nat.is_le(32n, k), k)
+
+# f * 2^z, for f (fh above 2^32, lo below) and z with it below 2^64
+def u.shl.of(hi: Bool, +fh: Nat, +lo: Nat, +z: Nat) -> U64:
+  match hi:
+    case True{}:
+      U64{Nat.mul(lo, nat.pow2(Nat.sub(z, 32n))), 0n}
+    case False{}:
+      +q = nat.pow2(Nat.sub(32n, z))
+      +p = nat.pow2(z)
+      U64{Nat.add(Nat.mul(fh, p), Nat.div(lo, q)), Nat.mul(Nat.mod(lo, q), p)}
+
+# multiply: the high 64 bits of a * b, rounded as Grisu2 rounds them (2^31
+# added below them, the low 32 bits of the low half left out), from the
+# product's 16-bit columns
+def u.mul(a: U64, b: U64) -> U64:
+  match a b:
+    case U64{+ah, +al} U64{+bh, +bl}:
+      +a0 = Nat.mod(al, 65536n)
+      +a1 = Nat.div(al, 65536n)
+      +a2 = Nat.mod(ah, 65536n)
+      +a3 = Nat.div(ah, 65536n)
+      +b0 = Nat.mod(bl, 65536n)
+      +b1 = Nat.div(bl, 65536n)
+      +b2 = Nat.mod(bh, 65536n)
+      +b3 = Nat.div(bh, 65536n)
+      +c1 = Nat.add(Nat.add(Nat.mul(a0, b1), Nat.mul(a1, b0)), Nat.div(Nat.mul(a0, b0), 65536n))
+      +c2 = Nat.add(Nat.add(Nat.add(Nat.mul(a0, b2), Nat.mul(a1, b1)), Nat.mul(a2, b0)), Nat.div(c1, 65536n))
+      +c3 = Nat.add(Nat.add(Nat.add(Nat.mul(a0, b3), Nat.mul(a1, b2)), Nat.add(Nat.mul(a2, b1), Nat.mul(a3, b0))), Nat.div(c2, 65536n))
+      +c4 = Nat.add(Nat.add(Nat.add(Nat.mul(a1, b3), Nat.mul(a2, b2)), Nat.mul(a3, b1)), Nat.div(c3, 65536n))
+      +c5 = Nat.add(Nat.add(Nat.mul(a2, b3), Nat.mul(a3, b2)), Nat.div(c4, 65536n))
+      +c6 = Nat.add(Nat.mul(a3, b3), Nat.div(c5, 65536n))
+      +up = Nat.is_le(u.b32(), Nat.add(Nat.add(Nat.mod(c2, 65536n), Nat.mul(Nat.mod(c3, 65536n), 65536n)), 2147483648n))
+      +lo = Nat.add(Nat.add(Nat.mod(c4, 65536n), Nat.mul(Nat.mod(c5, 65536n), 65536n)), Bool.pick(Nat, up, 1n, 0n))
+      U64{Nat.add(c6, Nat.div(lo, u.b32())), Nat.mod(lo, u.b32())}
+
+# a number of Grisu2's (Fp): f * 2^(e - 4096), f below 2^64
+type G2 is Data:
+  G2{f: U64, e: Nat}
+
+# the cached power i of ten (powers_ten): about 10^(8i - 348), its f with
+# its bit 63 set
+def g2.pow(+i: Nat) -> G2:
+  match i:
+    case 0n:
+      G2{U64{4203730336n, 136053384n}, 2876n}
+    case 1n:
+      G2{U64{3132023167n, 2722021238n}, 2903n}
+    case 2n:
+      G2{U64{2333539104n, 810921078n}, 2930n}
+    case 3n:
+      G2{U64{3477244234n, 1573795306n}, 2956n}
+    case 4n:
+      G2{U64{2590748842n, 1432697645n}, 2983n}
+    case 5n:
+      G2{U64{3860516611n, 1025131999n}, 3009n}
+    case 6n:
+      G2{U64{2876309015n, 3348809418n}, 3036n}
+    case 7n:
+      G2{U64{4286034428n, 3200048207n}, 3062n}
+    case 8n:
+      G2{U64{3193344495n, 1097586188n}, 3089n}
+    case 9n:
+      G2{U64{2379227053n, 2424306748n}, 3116n}
+    case 10n:
+      G2{U64{3545324584n, 827693699n}, 3142n}
+    case 11n:
+      G2{U64{2641472655n, 2913388981n}, 3169n}
+    case 12n:
+      G2{U64{3936100983n, 602835915n}, 3195n}
+    case 13n:
+      G2{U64{2932623761n, 1081627501n}, 3222n}
+    case 14n:
+      G2{U64{2184974969n, 1572261463n}, 3249n}
+    case 15n:
+      G2{U64{3255866422n, 1308317239n}, 3275n}
+    case 16n:
+      G2{U64{2425809519n, 944281679n}, 3302n}
+    case 17n:
+      G2{U64{3614737867n, 629291719n}, 3328n}
+    case 18n:
+      G2{U64{2693189581n, 2545915892n}, 3355n}
+    case 19n:
+      G2{U64{4013165208n, 388672741n}, 3381n}
+    case 20n:
+      G2{U64{2990041083n, 708162190n}, 3408n}
+    case 21n:
+      G2{U64{2227754207n, 3536207675n}, 3435n}
+    case 22n:
+      G2{U64{3319612455n, 450088378n}, 3461n}
+    case 23n:
+      G2{U64{2473304014n, 3139815830n}, 3488n}
+    case 24n:
+      G2{U64{3685510180n, 2103616900n}, 3514n}
+    case 25n:
+      G2{U64{2745919064n, 224385782n}, 3541n}
+    case 26n:
+      G2{U64{4091738259n, 3737383206n}, 3567n}
+    case 27n:
+      G2{U64{3048582568n, 2868871352n}, 3594n}
+    case 28n:
+      G2{U64{2271371013n, 1820084875n}, 3621n}
+    case 29n:
+      G2{U64{3384606560n, 885076051n}, 3647n}
+    case 30n:
+      G2{U64{2521728396n, 2444895829n}, 3674n}
+    case 31n:
+      G2{U64{3757668132n, 1881767613n}, 3700n}
+    case 32n:
+      G2{U64{2799680927n, 3102062735n}, 3727n}
+    case 33n:
+      G2{U64{4171849679n, 2289335700n}, 3753n}
+    case 34n:
+      G2{U64{3108270227n, 2410191823n}, 3780n}
+    case 35n:
+      G2{U64{2315841784n, 3205436779n}, 3807n}
+    case 36n:
+      G2{U64{3450873173n, 1697722806n}, 3833n}
+    case 37n:
+      G2{U64{2571100870n, 3497754540n}, 3860n}
+    case 38n:
+      G2{U64{3831238852n, 707476230n}, 3886n}
+    case 39n:
+      G2{U64{2854495385n, 1769181907n}, 3913n}
+    case 40n:
+      G2{U64{4253529586n, 2197867022n}, 3939n}
+    case 41n:
+      G2{U64{3169126500n, 2450594539n}, 3966n}
+    case 42n:
+      G2{U64{2361183241n, 1867548876n}, 3993n}
+    case 43n:
+      G2{U64{3518437208n, 3793315116n}, 4019n}
+    case 44n:
+      G2{U64{2621440000n, 0n}, 4046n}
+    case 45n:
+      G2{U64{3906250000n, 0n}, 4072n}
+    case 46n:
+      G2{U64{2910383045n, 2892103680n}, 4099n}
+    case 47n:
+      G2{U64{2168404344n, 4170451332n}, 4126n}
+    case 48n:
+      G2{U64{3231174267n, 3372684723n}, 4152n}
+    case 49n:
+      G2{U64{2407412430n, 2078956656n}, 4179n}
+    case 50n:
+      G2{U64{3587324068n, 2884206696n}, 4205n}
+    case 51n:
+      G2{U64{2672764710n, 395977285n}, 4232n}
+    case 52n:
+      G2{U64{3982729777n, 3569679143n}, 4258n}
+    case 53n:
+      G2{U64{2967364920n, 2361961896n}, 4285n}
+    case 54n:
+      G2{U64{2210859150n, 447440347n}, 4312n}
+    case 55n:
+      G2{U64{3294436857n, 1114709402n}, 4338n}
+    case 56n:
+      G2{U64{2454546732n, 2786846552n}, 4365n}
+    case 57n:
+      G2{U64{3657559652n, 443583978n}, 4391n}
+    case 58n:
+      G2{U64{2725094297n, 2599384906n}, 4418n}
+    case 59n:
+      G2{U64{4060706939n, 3028118405n}, 4444n}
+    case 60n:
+      G2{U64{3025462433n, 2044532855n}, 4471n}
+    case 61n:
+      G2{U64{2254145170n, 1536935362n}, 4498n}
+    case 62n:
+      G2{U64{3358938053n, 3365297469n}, 4524n}
+    case 63n:
+      G2{U64{2502603868n, 4204241075n}, 4551n}
+    case 64n:
+      G2{U64{3729170365n, 2577424355n}, 4577n}
+    case 65n:
+      G2{U64{2778448436n, 3677981733n}, 4604n}
+    case 66n:
+      G2{U64{4140210802n, 2744688476n}, 4630n}
+    case 67n:
+      G2{U64{3084697427n, 1424604878n}, 4657n}
+    case 68n:
+      G2{U64{2298278679n, 4062331362n}, 4684n}
+    case 69n:
+      G2{U64{3424702107n, 3546052773n}, 4710n}
+    case 70n:
+      G2{U64{2551601907n, 2065781727n}, 4737n}
+    case 71n:
+      G2{U64{3802183132n, 2535403578n}, 4763n}
+    case 72n:
+      G2{U64{2832847187n, 1558426518n}, 4790n}
+    case 73n:
+      G2{U64{4221271257n, 2762425404n}, 4816n}
+    case 74n:
+      G2{U64{3145092172n, 2812560400n}, 4843n}
+    case 75n:
+      G2{U64{2343276271n, 3057687578n}, 4870n}
+    case 76n:
+      G2{U64{3491753744n, 2790753324n}, 4896n}
+    case 77n:
+      G2{U64{2601559269n, 3918606633n}, 4923n}
+    case 78n:
+      G2{U64{3876625403n, 2711358621n}, 4949n}
+    case 79n:
+      G2{U64{2888311001n, 1648096297n}, 4976n}
+    case 80n:
+      G2{U64{2151959390n, 2057817989n}, 5003n}
+    case 81n:
+      G2{U64{3206669376n, 61660461n}, 5029n}
+    case 82n:
+      G2{U64{2389154863n, 1581580175n}, 5056n}
+    case 83n:
+      G2{U64{3560118173n, 2626467905n}, 5082n}
+    case 84n:
+      G2{U64{2652494738n, 3034782633n}, 5109n}
+    case 85n:
+      G2{U64{3952525166n, 3135207385n}, 5135n}
+    case _:
+      G2{U64{2944860731n, 2616258155n}, 5162n}
+
+def g2.e(p: G2) -> Nat:
+  match p:
+    case G2{f, +e}:
+      e
+
+# find_cachedpow10, for an upper boundary of exponent eu: the index of the
+# power that brings eu + 64 to between -60 and -32. The first guess is
+# -(eu + 87) * log10(2), rounded toward 0, over 8 (30103 / 100000 for
+# log10(2) gives the same integer as C's double for every eu there is);
+# then a step at a time (st: 1 up, 2 down, 0 there), two at most.
+def g2.est(+eu: Nat) -> Nat:
+  +lo = Nat.is_le(eu, 4009n)
+  +a = Nat.div(Nat.mul(Bool.pick(Nat, lo, Nat.sub(4009n, eu), Nat.sub(eu, 4009n)), 30103n), 100000n)
+  Nat.div(Bool.pick(Nat, lo, Nat.add(348n, a), Nat.sub(348n, a)), 8n)
+
+def g2.step(+eu: Nat, +i: Nat) -> Nat:
+  +c = Nat.add(eu, g2.e(g2.pow(i)))
+  Bool.pick(Nat, Nat.is_lt(c, 8068n), 1n, Bool.pick(Nat, Nat.is_lt(8096n, c), 2n, 0n))
+
+def g2.idx(fuel: Nat, st: Nat, +eu: Nat, +i: Nat) -> Nat:
+  match fuel:
+    case 0n:
+      i
+    case 1n+f:
+      match st:
+        case 0n:
+          i
+        case 1n:
+          +j = Nat.add(i, 1n)
+          g2.idx(f, g2.step(eu, j), eu, j)
+        case _:
+          +j = Nat.sub(i, 1n)
+          g2.idx(f, g2.step(eu, j), eu, j)
+
+# round_digit: while the digits are above the double by rem, which is
+# below frac, and another kv off (still within delta) brings them nearer,
+# the last digit one less; how many times (6 at most for a double)
+def g2.rd.ok(+rem: U64, +kv: U64, +frac: U64, +delta: U64) -> Bool:
+  +r2 = u.add(rem, kv)
+  Bool.and(u.lt(rem, frac), Bool.and(Bool.not(u.lt(delta, r2)), u.lt(u.add(r2, rem), u.add(frac, frac))))
+
+def g2.rd(fuel: Nat, go: Bool, +rem: U64, +kv: U64, +frac: U64, +delta: U64, +n: Nat) -> Nat:
+  match fuel:
+    case 0n:
+      n
+    case 1n+f:
+      match go:
+        case False{}:
+          n
+        case True{}:
+          +r2 = u.add(rem, kv)
+          g2.rd(f, g2.rd.ok(r2, kv, frac, delta), r2, kv, frac, delta, Nat.add(n, 1n))
+
+def g2.less(+ds: String, m: Nat) -> String:
+  match m:
+    case 0n:
+      ds
+    case 1n+p:
+      +n = Nat.sub(String.length(ds), 1n)
+      String.take(ds, n) ++ String.from_list([Chr{U32.from_nat(Nat.sub(U32.to_nat(String.code_at(ds, n)), Nat.add(p, 1n)))}])
+
+def g2.round(+ds: String, +delta: U64, +rem: U64, +kv: U64, +frac: U64) -> String:
+  g2.less(ds, g2.rd(16n, g2.rd.ok(rem, kv, frac, delta), rem, kv, frac, delta, 0n))
+
+# generate_digits' state: going, with what is left of the upper boundary
+# above its point (p1, below 2^32) and below it (p2), delta and the digits
+# so far; or done, with the digits and K
+type G2G is Data:
+  G2Go{p1: Nat, p2: U64, delta: U64, ds: String}
+  G2Done{ds: String, k: Nat}
+
+# a digit after ds: none while it is a leading 0
+def g2.dig(+ds: String, +d: Nat) -> String:
+  Bool.pick(String, Bool.or(Nat.is_ne(d, 0n), Nat.is_ne(String.length(ds), 0n)), ds ++ Nat.show(d), ds)
+
+def g2.l1.at(done: Bool, +p1: Nat, +p2: U64, +delta: U64, +ds: String, +tmp: U64, +div: Nat, +pk: Nat, +wf: U64, +k: Nat) -> G2G:
+  match done:
+    case True{}:
+      G2Done{g2.round(ds, delta, tmp, U64{Nat.mul(div, pk), 0n}, wf), k}
+    case False{}:
+      G2Go{p1, p2, delta, ds}
+
+# the first loop: p1's digits by div, 10^9 down to 10^0 (j: kappa, as it
+# is after the digit), until what is left (tmp) is within delta
+def g2.l1(k: Nat, st: G2G, +div: Nat, +wf: U64, +pk: Nat, +kb: Nat) -> G2G:
+  match k:
+    case 0n:
+      st
+    case 1n+(+j):
+      match st:
+        case G2Go{+p1, +p2, +delta, +ds}:
+          +r1 = Nat.mod(p1, div)
+          +tmp = u.add(U64{Nat.mul(r1, pk), 0n}, p2)
+          g2.l1(j, g2.l1.at(Bool.not(u.lt(delta, tmp)), r1, p2, delta, g2.dig(ds, Nat.div(p1, div)), tmp, div, pk, wf, Nat.add(kb, j)), Nat.div(div, 10n), wf, pk, kb)
+        case G2Done{ds, kk}:
+          G2Done{ds, kk}
+
+def g2.l2.at(done: Bool, +p2: U64, +delta: U64, +ds: String, +pk: Nat, +wf: U64, +k: Nat) -> G2G:
+  match done:
+    case True{}:
+      G2Done{g2.round(ds, delta, p2, U64{pk, 0n}, wf), k}
+    case False{}:
+      G2Go{0n, p2, delta, ds}
+
+# the second loop: p2's digits, one at a time (each times 10: delta,
+# and wf, the upper boundary less the double, for round_digit), until
+# what is left is below delta; K one less each time (16 at most)
+def g2.l2(fuel: Nat, st: G2G, +pk: Nat, +kb: Nat, +wf: U64) -> G2G:
+  match fuel:
+    case 0n:
+      st
+    case 1n+f:
+      match st:
+        case G2Go{p1, +p2, +delta, +ds}:
+          +p2x = u.mul10(p2)
+          +dx = u.mul10(delta)
+          +rx = u.low(p2x, pk)
+          +k = Nat.sub(kb, 1n)
+          +wx = u.mul10(wf)
+          g2.l2(f, g2.l2.at(u.lt(rx, dx), rx, dx, g2.dig(ds, u.shr(p2x, pk)), pk, wx, k), pk, k, wx)
+        case G2Done{ds, kk}:
+          G2Done{ds, kk}
+
+# generate_digits, from the double (w), its boundaries (up, lo), all
+# scaled by the cached power, the shift s of their point (from 32 to 60;
+# pk: 2^(s - 32)), and K so far (kb)
+def g2.digits(+w: U64, +up: U64, +lo: U64, +pk: Nat, +kb: Nat) -> G2G:
+  +wf = u.sub(up, w)
+  g2.l2(20n, g2.l1(10n, G2Go{u.shr(up, pk), u.low(up, pk), u.sub(up, lo), ""}, 1000000000n, wf, pk, kb), pk, kb, wf)
+
+def g2.run.of(p: G2, +w: U64, +up: U64, +lo: U64, +eu: Nat, +i: Nat) -> G2G:
+  match p:
+    case G2{+pf, +pe}:
+      g2.digits(u.mul(w, pf), u.sub(u.mul(up, pf), U64{0n, 1n}), u.add(u.mul(lo, pf), U64{0n, 1n}), nat.pow2(Nat.sub(Nat.sub(8128n, Nat.add(eu, pe)), 32n)), Nat.sub(4444n, Nat.mul(8n, i)))
+
+# grisu2, for a double f * 2^(e - 4096) (f not 0, below 2^53: fh above
+# 2^32, lo below; p2: f is 2^52, whose lower boundary is nearer): f
+# normalized (w, its bit 63 set: shifted by z), its boundaries half an
+# ulp above and below (a quarter below for p2), the cached power for
+# their exponent, and K, that power's exponent negated
+def g2.run(+fh: Nat, +lo: Nat, +e: Nat, +p2: Bool) -> G2G:
+  +z = Nat.sub(64n, Bool.pick(Nat, Nat.is_ne(fh, 0n), Nat.add(32n, nat.bl48(fh)), nat.bl48(lo)))
+  +w = u.shl.of(Nat.is_le(32n, z), fh, lo, z)
+  +eu = Nat.sub(e, z)
+  +g = g2.est(eu)
+  +i = g2.idx(4n, g2.step(eu, g), eu, g)
+  g2.run.of(g2.pow(i), w, u.add(w, u.pow2(Nat.sub(z, 1n))), u.sub(w, u.pow2(Nat.sub(z, Bool.pick(Nat, p2, 2n, 1n)))), eu, i)
+
+# emit_digits: the digits ds of ds * 10^(K - 4096), as fpconv_dtoa lays
+# them out: an integer, with K '0's after them, when that makes fewer
+# than 7 more; a fraction for a K from -6, or for an exponent below 4 in
+# magnitude; else d.ddde+X, of 18 digits at most (17 for a negative
+# number, neg), X with no leading '0' (the exponent's magnitude, expo, of
+# all the digits, its sign of those kept)
+def g2.sci(+ds: String, +n: Nat, +kb: Nat, +expo: Nat, +neg: Bool) -> String:
+  +m = Nat.min(n, Bool.pick(Nat, neg, 17n, 18n))
+  String.take(ds, 1n) ++ Bool.pick(String, Nat.is_lt(1n, m), "." ++ String.drop(String.take(ds, m), 1n), "") ++ "e" ++ Bool.pick(String, Nat.is_lt(Nat.add(kb, Nat.sub(m, 1n)), 4096n), "-", "+") ++ Nat.show(expo)
+
+def g2.frac(+ds: String, +n: Nat, +kb: Nat) -> String:
+  Bool.pick(String, Nat.is_le(Nat.add(n, kb), 4096n), "0." ++ str.zeros(Nat.sub(4096n, Nat.add(kb, n))) ++ ds, String.take(ds, Nat.sub(Nat.add(n, kb), 4096n)) ++ "." ++ String.drop(ds, Nat.sub(Nat.add(n, kb), 4096n)))
+
+def g2.emit.of(int: Bool, frac: Bool, +ds: String, +n: Nat, +kb: Nat, +expo: Nat, +neg: Bool) -> String:
+  match int:
+    case True{}:
+      ds ++ str.zeros(Nat.sub(kb, 4096n))
+    case False{}:
+      match frac:
+        case True{}:
+          g2.frac(ds, n, kb)
+        case False{}:
+          g2.sci(ds, n, kb, expo, neg)
+
+def g2.emit(+ds: String, +kb: Nat, +neg: Bool) -> String:
+  +n = String.length(ds)
+  +x = Nat.add(kb, Nat.sub(n, 1n))
+  +expo = Bool.pick(Nat, Nat.is_le(4096n, x), Nat.sub(x, 4096n), Nat.sub(4096n, x))
+  +pos = Nat.is_le(4096n, kb)
+  g2.emit.of(Bool.and(pos, Nat.is_lt(expo, Nat.add(n, 7n))), Bool.and(Bool.not(pos), Bool.or(Nat.is_lt(4089n, kb), Nat.is_lt(expo, 4n))), ds, n, kb, expo, neg)
+
+def g2.fin(st: G2G, +neg: Bool) -> String:
+  match st:
+    case G2Done{+ds, +kb}:
+      g2.emit(ds, kb, neg)
+    case G2Go{p1, p2, delta, ds}:
+      ds
+
+# a finite double, not 0, of exponent field ex: its significand (the
+# hidden bit with a normal one's) and its exponent (1 for ex 0)
+def g2.num(+neg: Bool, +ex: Nat, +fh: Nat, +lo: Nat) -> String:
+  +normal = Nat.is_ne(ex, 0n)
+  g2.fin(g2.run(Bool.pick(Nat, normal, Nat.add(fh, 1048576n), fh), lo, Nat.add(Nat.max(ex, 1n), 3021n), Bool.and(normal, Bool.and(Nat.is_eq(fh, 0n), Nat.is_eq(lo, 0n)))), neg)
+
+def f64.dtoa.of(special: Bool, zero: Bool, +neg: Bool, +ex: Nat, +fh: Nat, +lo: Nat) -> String:
+  match special:
+    case True{}:
+      Bool.pick(String, Bool.or(Nat.is_ne(fh, 0n), Nat.is_ne(lo, 0n)), "nan", "inf")
+    case False{}:
+      match zero:
+        case True{}:
+          "0"
+        case False{}:
+          g2.num(neg, ex, fh, lo)
+
+# a double as fpconv_dtoa writes it (Redis 7.2's AOF rewrite: rio.c's
+# rioWriteBulkDouble): '-' for one whose sign is set, then 0, nan, inf,
+# or Grisu2's digits
+def f64.dtoa(+d: F64) -> String:
+  match d:
+    case F64{+hi, +lo}:
+      +ex = Nat.mod(Nat.div(hi, 1048576n), 2048n)
+      +fh = Nat.mod(hi, 1048576n)
+      +neg = Nat.is_le(2147483648n, hi)
+      Bool.pick(String, neg, "-", "") ++ f64.dtoa.of(Nat.is_eq(ex, 2047n), Bool.and(Nat.is_eq(ex, 0n), Bool.and(Nat.is_eq(fh, 0n), Nat.is_eq(lo, 0n))), neg, ex, fh, lo)
+
+# Doubles as text
+# ---------------
+
 def f64.int.go(hi: Bool, +neg: Bool, +s: Nat, +m: Nat, +lo: Nat) -> Maybe<&2, String>:
   match hi:
     case True{}:
@@ -1439,19 +1941,19 @@ def f64.int.of(+neg: Bool, +ex: Nat, +fh: Nat, +lo: Nat) -> Maybe<&2, String>:
   +m = Nat.add(fh, 1048576n)
   f64.int.go(Nat.is_le(32n, s), neg, s, m, lo)
 
-def f64.show.int(m: Maybe<&2, String>, d: F64) -> String:
+def f64.g.int(m: Maybe<&2, String>, d: F64) -> String:
   match m:
     case Some{s}:
       s
     case None{}:
       fl.show_g(f64.to(d))
 
-def f64.show.of(small: Bool, zero: Bool, +d: F64) -> String:
+def f64.g.of(small: Bool, zero: Bool, +d: F64) -> String:
   match small:
     case True{}:
       match d:
         case F64{+hi, +lo}:
-          f64.show.int(f64.int.of(Nat.is_le(2147483648n, hi), Nat.mod(Nat.div(hi, 1048576n), 2048n), Nat.mod(hi, 1048576n), lo), d)
+          f64.g.int(f64.int.of(Nat.is_le(2147483648n, hi), Nat.mod(Nat.div(hi, 1048576n), 2048n), Nat.mod(hi, 1048576n), lo), d)
     case False{}:
       match zero:
         case True{}:
@@ -1461,48 +1963,66 @@ def f64.show.of(small: Bool, zero: Bool, +d: F64) -> String:
         case False{}:
           fl.show_g(f64.to(d))
 
-# a double as Redis writes one ("%.17g"; "inf" and "-inf"): an integer
-# below 2^47 at once
-def f64.show(+d: F64) -> String:
+# a double as "%.17g" writes it ("inf" and "-inf"), as Redis writes a
+# sorted set's score in a table where ZSCAN reads it (ld2string's
+# LD_STR_AUTO, "%.17Lg" of the double): an integer below 2^47 at once
+def f64.show_g(+d: F64) -> String:
   match d:
     case F64{+hi, +lo}:
       +ex = Nat.mod(Nat.div(hi, 1048576n), 2048n)
-      f64.show.of(Bool.and(Nat.is_le(1023n, ex), Nat.is_le(ex, 1069n)), Bool.and(Bool.and(Nat.is_eq(ex, 0n), Nat.is_eq(Nat.mod(hi, 1048576n), 0n)), Nat.is_eq(lo, 0n)), F64{hi, lo})
+      f64.g.of(Bool.and(Nat.is_le(1023n, ex), Nat.is_le(ex, 1069n)), Bool.and(Bool.and(Nat.is_eq(ex, 0n), Nat.is_eq(Nat.mod(hi, 1048576n), 0n)), Nat.is_eq(lo, 0n)), F64{hi, lo})
 
-# A double as a listpack keeps a sorted set's score (zzlInsertAt): an
-# integral one of magnitude at most 2^62 as its integer's digits (Redis's
-# double2ll, then ll2string), any other as Redis writes a double
-# (d2string: %.17g, inf, -inf). Below 2^47 the two are the same
-# (f64.show), so only the exponent fields from 1070 to 1085 are read here:
-# the 53 bits of the significand (m) are shifted by the exponent, the
-# bits shifted out below the point all 0 for an integer.
-def f64.lp.of(int: Bool, +neg: Bool, +v: List<&2, Nat>, +d: F64) -> String:
+# An integral double of magnitude 2^62 at most as its integer's digits
+# (Redis's double2ll, then ll2string), for an exponent field from 1023
+# to 1085: below 1070, an integer below 2^47 (f64.int.of); from 1070, the
+# 53 bits of the significand (m) shifted by the exponent, the bits
+# shifted out below the point all 0 for an integer.
+def f64.ll.of(int: Bool, +neg: Bool, +v: List<&2, Nat>) -> Maybe<&2, String>:
   match int:
     case True{}:
-      Bool.pick(String, neg, "-", "") ++ big.to_dec(v)
+      Some{Bool.pick(String, neg, "-", "") ++ big.to_dec(v)}
     case False{}:
-      f64.show(d)
+      None{}
 
-def f64.lp.big(+hi: Nat, +lo: Nat, +ex: Nat) -> String:
+def f64.ll.big(+hi: Nat, +lo: Nat, +ex: Nat) -> Maybe<&2, String>:
   +fh = Nat.mod(hi, 1048576n)
   +m = big.add(big.shl(big.of(Nat.add(fh, 1048576n)), 32n), big.of(lo))
   +up = Nat.is_le(1075n, ex)
   +sh = Bool.pick(Nat, up, Nat.sub(ex, 1075n), Nat.sub(1075n, ex))
   +fits = Bool.or(Nat.is_lt(ex, 1085n), Bool.and(Nat.is_eq(fh, 0n), Nat.is_eq(lo, 0n)))
-  f64.lp.of(Bool.and(fits, Bool.or(up, Bool.not(big.low_nz(m, sh)))), Nat.is_le(2147483648n, hi), Bool.pick(List<&2, Nat>, up, big.shl(m, sh), big.shr(m, sh)), F64{hi, lo})
+  f64.ll.of(Bool.and(fits, Bool.or(up, Bool.not(big.low_nz(m, sh)))), Nat.is_le(2147483648n, hi), Bool.pick(List<&2, Nat>, up, big.shl(m, sh), big.shr(m, sh)))
 
-def f64.lp.if(big: Bool, +hi: Nat, +lo: Nat, +ex: Nat) -> String:
-  match big:
+def f64.ll.if(small: Bool, +hi: Nat, +lo: Nat, +ex: Nat) -> Maybe<&2, String>:
+  match small:
     case True{}:
-      f64.lp.big(hi, lo, ex)
+      f64.int.of(Nat.is_le(2147483648n, hi), ex, Nat.mod(hi, 1048576n), lo)
     case False{}:
-      f64.show(F64{hi, lo})
+      f64.ll.big(hi, lo, ex)
 
-def f64.show_lp(+d: F64) -> String:
+def f64.show.of(m: Maybe<&2, String>, +d: F64) -> String:
+  match m:
+    case Some{s}:
+      s
+    case None{}:
+      f64.dtoa(d)
+
+def f64.show.if(int: Bool, +nan: Bool, +hi: Nat, +lo: Nat, +ex: Nat) -> String:
+  match int:
+    case True{}:
+      f64.show.of(f64.ll.if(Nat.is_le(ex, 1069n), hi, lo, ex), F64{hi, lo})
+    case False{}:
+      Bool.pick(String, nan, "nan", f64.dtoa(F64{hi, lo}))
+
+# a double as Redis 7.2 writes one (util.c's d2string), in a reply
+# (addReplyDouble) and in a listpack of a sorted set (zzlInsertAt): "nan"
+# for any NaN, an integral one of magnitude 2^62 at most as its integer,
+# any other as fpconv_dtoa writes it (0, -0, inf, -inf among them)
+def f64.show(+d: F64) -> String:
   match d:
     case F64{+hi, +lo}:
       +ex = Nat.mod(Nat.div(hi, 1048576n), 2048n)
-      f64.lp.if(Bool.and(Nat.is_le(1070n, ex), Nat.is_le(ex, 1085n)), hi, lo, ex)
+      +nan = Bool.and(Nat.is_eq(ex, 2047n), Bool.or(Nat.is_ne(Nat.mod(hi, 1048576n), 0n), Nat.is_ne(lo, 0n)))
+      f64.show.if(Bool.and(Nat.is_le(1023n, ex), Nat.is_le(ex, 1085n)), nan, hi, lo, ex)
 
 # the digits of n, a number times 10^17, with the point 17 digits from
 # the right, the '0's that end it and a point left last taken out
