@@ -6535,6 +6535,170 @@ alone: locally GET is 3,420 (main 3,419), SET 4,186 (4,183), INCR 4,528 (4,527).
 - Protected mode is still BendKV's: it listens on the loopback alone, where Redis
   listens on every address and answers a client from elsewhere with a DENIED error.
 
+## 3zzzg. The start reads its file in windows
+
+**What was left** (issue #32). The start read its append-only file whole: `read_all`
+read it 16 MB at a time and glued the pieces into one string, `A.load` made the list of
+all its entries, and `A.untx`, `A.checked` (the entries' marks and acts, the check) and
+the replay ran over that list. The runtime's heap never gives memory back to the system
+(the twenty-ninth patch's account: what the heap "has taken from the corpus"), so the
+start's peak, the file, its entries and their acts at once beside the databases, stayed
+the process's resident memory for good: four times what the server held before the
+restart, on a file of a million SETs. A container sized at twice the data was killed at
+the restart. A file the start refused was read whole once more, for the byte its bad
+entry starts at.
+
+**What the start does** (`src/aof.bend`: The start, Reading in windows;
+`src/server.bend`: Restoring).
+
+- It reads the file 1 MiB at a time (`restore_win`), each window after what the window
+  before left: the start of an entry that window ends inside. `A.load` gives a window's
+  whole entries and what follows the last of them, which the next window starts with
+  (`A.wins.step`). After a window that holds no whole entry (an entry longer than a
+  window), the next read is as long as what it left (`win.want`, 1 GiB at most), so the
+  window at least doubles until it holds the entry, and an entry of any length is read
+  again a few times at most.
+- Each entry runs as it comes (`A.win.ent`): its act on the databases, and its mark and
+  act through the check, one step of `check.go` kept as a value (`A.Ck`: on at entry i,
+  with the MULTI still open if there is one, or stopped at entry i, with why). From a
+  MULTI on, the entries are held until its EXEC runs them (`A.WinTx`), since a
+  transaction the file ends inside is reverted (`A.untx`). So the start holds a window,
+  its entries, those of a transaction still open, and the databases it builds.
+- After the last window, it makes of what it holds what it made of the whole file
+  (`A.Start`): the check's verdict on the entries it keeps, their number, the entries of
+  a transaction the file ends inside, and what follows the last whole entry. The shell
+  does with them what it did: it cuts an entry cut short, reverts a transaction left
+  open or refuses the file, with the same messages.
+- Two bytes are found by reading the file again a window at a time, as the start read
+  it, counting the entries of each window until the one that holds the entry wanted
+  (`offset_win`). One is the byte a refused entry starts at, which the refusal names.
+  The other is the byte a reverted transaction's MULTI starts at, where the file is cut,
+  as Redis cuts it (`valid_before_multi`). That byte is the file's own, however its
+  entries are written: Redis reads `*01` and a bulk with no length (`$`) as it reads
+  `*1` and `$0`, and written again these would be shorter or longer. Main computed the
+  cut from the kept entries written again, and cut one byte into an entry written
+  `$01` before the MULTI. The first version of this branch computed it from the
+  transaction's entries written again, and cut whole entries away when those held
+  bulks with no length (the review of #78).
+
+**The law** (`load_windows`, LAWS.bend: Persistence). Its statement waits for a
+person's approval in the pull request:
+
+```
+law load_windows:
+  for +ws: List<&2, String>
+  for +n: Nat
+  {A.windows(ws, n) == A.start(A.cat(ws), n) : A.Start}
+```
+
+`A.windows(ws, n)` is what the start makes of the windows `ws`, with 1 + n databases,
+entry by entry as the shell runs it. `A.start(s, n)` is what it makes of the file `s`
+read whole, from `A.load`, `A.untx` and `A.checked`, the functions the laws `aof_load`,
+`recover`, `recover_cut`, `load_cut` and `checked_replay` are about. The law holds for
+any windows, so for those the reads give, whatever their lengths: the laws about the
+whole file are about the start that reads it in windows. With `checked_replay`, when
+the check refuses no entry, the databases the start builds are those `A.restore` gives
+of the file, the function `recover` and `recover_cut` are about, and the entries it
+reverts, written again, then what follows them, are what `A.restore` leaves. The law is
+stated of the start's verdict, its count and what it leaves, not of its databases
+alone. It says nothing of the read loop itself, of the byte a cut is made at, or of
+`offset_win`: those the window test checks against Redis.
+
+**The proof** (PROOF.bend: Windows, 1,045 lines).
+
+- An entry read with more bytes after it reads the same and leaves them after what it
+  left (`ps_entry`), each part of the parser in turn: a number line, a bulk's bytes and
+  its `\r\n`, the bulks of an entry. The parser had to change for it. It matched literal
+  chars (`SCon{'\r', t}`), which compile to a tree of 32 levels on the char's bits that a
+  proof cannot step through for a char it does not know; it now compares the char's code
+  (`U32.is_eq(x, 13)`) in `num.lf`, `bulk.lf`, `bulk.end`, `bulk` and `entry`. The proofs
+  before it check unchanged.
+- An entry takes a byte at least, so the loader's fuel, a string's length, lasts on any
+  string, and more fuel reads the same (`lg_fuel`). So the loader reads a ++ b as a's
+  entries, then those of what a left with b after it (`load_cat`).
+- The check entry by entry is `A.checked`'s (`ck_all`): why it stops at an entry is why
+  for that entry's act alone (`why_at`).
+- What the start holds after the entries P is what `A.untx`, `A.checked` and the replay
+  make of P (`WInv`). One more entry keeps it (`inv_step`: a MULTI moves untx's cut to
+  itself, an EXEC takes the cut away, any other entry leaves it), and at the end what it
+  holds gives what the start makes of the whole file (`inv_done`). The windows, one
+  after another, put `load_cat` and that together (`wins_inv`).
+
+Eight mutations of the start in windows break the proof where they spoil the start:
+
+| mutation | where the proof fails |
+|---|---|
+| an entry run without its step of the check | `inv_all` |
+| an EXEC that forgets the entries held before it | `inv_tx` |
+| a second MULTI that keeps the first one's cut | `inv_tx` |
+| a MULTI inside another that goes on | `ck_con` |
+| the entries of a transaction left open given newest first | `inv_done` |
+| a window read before what the last one left | `wins_inv` |
+| a bulk whose window ends before its `\r\n` read as whole | `ps_bulkend` |
+| a number line whose window ends after its `\r` read as whole | `ps_numlf` |
+
+**What it gives** (section 69 of PERFORMANCE.md). RSS after a restart is what it was
+before it, where it was four times that, with the same `used_memory`, and the start
+takes half the time it took: the file is no longer copied whole, nor its entries
+listed. `make perfcheck`'s counts are main's to within half a percent: no request runs
+the start's code.
+
+**Tests.**
+
+- `tests/aof_check.bend` (`make smoke`) reads its files in windows of 1, 2, 3, 7, 64 and
+  4,096 bytes, and compares what the start makes of each with what it makes of the file
+  read whole (`A.windows` against `A.start`): its stream's file, whole and cut inside
+  its last entry, its file of several databases, and seven more: a transaction left
+  open, one left open and then an entry cut short, a refusal inside a transaction left
+  open and inside one closed, a MULTI inside one left open and inside one closed after
+  it, and transactions and a long value followed by bytes that are no entry.
+  `make smoke` also runs it given a wrong expectation (`win`), which must fail it.
+- `tests/aof_window_test.py` (`make test`) starts BendKV and redis-server 7.0.15 on files
+  of 11 to 16 MB whose entries, transactions and values straddle the windows: a
+  transaction across the first window's end, an entry whose count's line the second's
+  end cuts, a value the third's end cuts, values of 1.5 and 5 MiB, a transaction that
+  holds one of 1.25 MiB, SELECTs; then that file with its last entry cut short inside a
+  long value, with a transaction left open (an entry longer than a window in it), with
+  one left open and then an entry cut short, and with an unknown command after it. Then
+  two small files whose transaction left open holds entries Redis reads but does not
+  write (bulks with no length, a MULTI written `*01`), and one whose entry ends exactly
+  at the first window's end. Each with aof-load-truncated yes and no: both servers start
+  or both refuse, and say why; every database reads back the same on both, and the file
+  is cut to the same length.
+- `make test` runs `tools/restore_mem.sh`, which fails when RSS after the restart is
+  more than 1.3 times RSS before it. It fails too when a start or the load fails, when a
+  server is gone before its RSS is read, or when the restart does not hold the keys the
+  load left: a guard that cannot read what it compares does not pass.
+
+**Where BendKV differs.** The window test found a difference that was there before the
+windows: a file that ends inside a transaction and then in an entry cut short. BendKV
+cuts it back to before the MULTI and reverts the transaction at once; Redis cuts the
+entry and leaves the MULTI and the entries it queued for its next start, which reverts
+them. The databases are the same. README.md and COMPATIBILITY.md list it.
+
+**What is left.**
+
+- A transaction is held whole until its EXEC, as Redis queues a transaction's commands
+  in its loading client until its EXEC.
+- The rewrite. Its peak during a load is what it was (section 69 of PERFORMANCE.md): its
+  snapshot keeps the databases as they were when it started while the writes make new
+  nodes, and it keeps the entries appended meanwhile, and the heap keeps that peak as
+  the process's memory. To give free memory back to the system is the runtime's work, a
+  patch that would `madvise` away the pages of free nodes past a threshold, which the
+  start no longer needs.
+- An RDB file loaded at the start (pull request #72) is read whole, and its checksum is
+  computed over all of it at the end. Its loader already goes from one opcode to the
+  next on a state (`fl.step`: what is left of the file, the databases, the counts). To
+  read the file in windows, a step that runs out of bytes would ask for the next window
+  where it now ends the load as a short read, the CRC64 would be carried from one
+  window to the next (Redis's `rdbLoad` updates it as it reads), a window would grow
+  for a value longer than one (a string or a listpack of any length), and a test would
+  read files in windows of many sizes against the whole, as `tests/aof_check.bend` does
+  here.
+
+**What it costs.** 238 lines more in `src/aof.bend` and 77 in `src/server.bend`; with
+the proof, `make check` takes 14 s here and `make verdict` 1 min 40 s.
+
 ## 3zzzh. ACL: users, what they may run, and the log
 
 **What was left.** ACL was an unknown command. AUTH took the one password, and a client
