@@ -23,8 +23,8 @@ numbers are in [tools/](../tools/README.md).
    holding up the `TCP.post` writer (section 40), the twenty-sixth fixes the fifth
    (section 41), the thirty-first has a walker that reads a tree borrow it from a caller
    that owns it (section 51), and the thirty-second keeps the string of a value that is a
-   string or else something else as the string itself, with no node (section 56). Eight
-   more only add effects or natives: the twentieth, the
+   string or else something else as the string itself, with no node (section 56). Nine
+   more only add or widen effects or natives: the twentieth, the
    process and the clock for starting as `redis-server` does; the twenty-fourth, cutting a
    file of any size and syncing a directory (`File.sync_dir`); the twenty-fifth, waiting
    for a socket on a channel (`TCP.watch`, section 41); the twenty-seventh, a socket's
@@ -32,7 +32,9 @@ numbers are in [tools/](../tools/README.md).
    another's place and a name removed (section 47); the twenty-ninth, the heap's account
    (`IO.heap`); the thirtieth, words outside the heap (`Mem.touch`, `Mem.cell`; both
    section 48); the thirty-third, C's doubles (`F64`, section 60); the thirty-fifth, the
-   monotonic clock without an effect (`Clock.us`, section 64). The thirty-fourth
+   monotonic clock without an effect (`Clock.us`, section 64); the thirty-sixth, listeners
+   on IPv6 and on unix sockets and systemd's notification (FINDINGS.md, section 3zzze).
+   The thirty-fourth
    changes only a build with AddressSanitizer, whose heap it lets ASan check
    (FINDINGS.md, section 3zzp). Before section 14
    there were twenty patches: the sixteenth (effect pairs) was taken out in section 14,
@@ -7295,6 +7297,75 @@ clock twice, adds the time to the command's counters and records it in the comma
 histogram. The histogram's four levels take a quarter of them. Most of the rest are the
 updates of `Info` and the passes of the group, which travels in 13 registers and is saved
 to the frame and loaded back around each call that is not a tail call.
+
+## 65. ZADD and ZINCRBY in place
+
+**What was left** (sections 54, 55). HSET, and SADD of a new member, take their collection
+out of the keyspace and change it in place. ZADD and ZINCRBY still copied the paths they
+changed in a sorted set's tree and trie, and the keyspace dropped the old ones after. A
+prototype that took every write's value (section 54) put ZADD at −28% and ZINCRBY at −34%;
+each needed a test before the take that the write changes the sorted set, and a proof
+of it.
+
+**The change** (FINDINGS 3zzza). A ZADD to a large sorted set whose first pair adds its
+member or gives it another score takes the sorted set out of the keyspace; the test reads
+the member's score in the trie and the pair's score as ZADD reads them, and only then
+checks the options and the pairs. The sorted set's tree then turned out shared while a
+write changed it: `zt.ins` read the side it went down after giving it to the insertion,
+which shares it first, so the insertion copied each node of its path. Each side is now
+compared before it goes down, and the tree and the trie go to their writes whole.
+
+**Measured on main of 15 October** (callgrind, instructions per command, one at a time; a
+sorted set of 100,000 elements, as `tools/colls.sh` makes it, and one of 100):
+
+| command | before | the take alone | both | |
+|---|---:|---:|---:|---:|
+| ZADD of a new score to a member there | 76,861 | 61,025 | 49,427 | −35.7% |
+| ZINCRBY | 77,882 | 65,684 | 53,807 | −30.9% |
+| ZADD of a new member | 47,668 | 43,874 | 33,922 | −28.8% |
+| ZADD of three new members | 103,228 | 90,131 | 58,387 | −43.4% |
+| ZADD of the score a member has | 23,696 | 25,035 | 24,955 | +5.3% |
+| ZADD XX of a member not there | 24,894 | 25,928 | 25,849 | +3.8% |
+| ZINCRBY on the sorted set of 100 (not taken) | 93,911 | 94,047 | 89,607 | −4.6% |
+| ZSCORE | 17,790 | 17,845 | 17,789 | |
+
+The table's runs hold z and zs alone and go in this order: ZADD z 1 m50000 (the score a
+member has), ZADD z <random> m50000 (a new score), ZADD z 1 n:<random> (a new member),
+three new members at once, ZINCRBY z 1 m50000, ZADD z XX 1 x:<random>, ZINCRBY zs 1
+m50. `tools/colls.sh` runs ZINCRBY z 1 m50000 right after ZADD z 1 m50000, so its member
+starts from the score 1, where the table's starts from a random score, elsewhere in the
+tree: hence 68,728 there and 77,882 here before the change.
+
+The first test checked the options and the pairs before it read the member: a ZADD that
+changes nothing paid 2,929 instructions for it (+12%); checked last, 1,339. Of the rest of
+a ZINCRBY's test, its increment, added in software (FINDINGS 3zk), is most. `tools/colls.sh`
+(which now also runs ZADD of a new score and of a new member): ZINCRBY 68,728 → 50,220,
+ZADD of a new score 76,830 → 49,443, of a new member 47,807 → 33,854, of the score a
+member has 23,695 → 24,950; the other commands as before, within 0.4%. `make perfcheck`:
+GET 3,302, SET 4,067 and INCR 4,417 instructions per request (main 3,302, 4,069 and
+4,411).
+
+**On main of 16 October** (merged with small sorted sets in one string, FINDINGS 3zzzn,
+and with streams). `tools/colls.sh`, main's build and the merge's:
+
+| command | main | merge | |
+|---|---:|---:|---:|
+| ZADD of a new score to a member there | 73,485 | 55,234 | −24.8% |
+| ZINCRBY | 68,182 | 57,792 | −15.2% |
+| ZADD of a new member | 55,964 | 39,738 | −29.0% |
+| ZADD of the score a member has | 29,445 | 30,682 | +4.2% |
+| the other commands of `colls.sh` | | | −1.3% to +0.1% |
+
+ZADD of a new score and ZINCRBY now keep 5,800 and 7,600 instructions more than the
+change left them on the older main (49,443 and 50,220), while main's own costs for them
+moved little; where those instructions go is not measured yet. `make perfcheck` on the
+merge: GET 3,490, SET 4,285 and INCR 4,604 (main 3,484, 4,246 and 4,588).
+
+**What is left.** The test reads the trie and parses the first score, and the write does
+both again; an update given the test's reading would do each once. ZINCRBY's soft-float
+addition takes thousands of instructions where C's takes one; the runtime's doubles
+(section 60) would serve it. ZREM, the ZPOPs and the ZREMRANGEBYs still copy their paths:
+each needs a test of its own.
 
 ## 66. CLIENT TRACKING
 

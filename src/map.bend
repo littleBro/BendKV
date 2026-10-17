@@ -4872,18 +4872,34 @@ def zt.balance(+m: String, +d: F.F64, +l: ZTree, +r: ZTree) -> ZTree:
   zt.bal.of(Nat.is_le(Nat.add(sl, sr), 1n), Nat.is_lt(Nat.mul(3n, sl), sr), Nat.is_lt(Nat.mul(3n, sr), sl), m, d, l, r)
 
 # t with the element (m, d) in its place (t does not hold m); c is how
-# (d, m) compares with t's root
+# (d, m) compares with t's root. A side is compared with (d, m) before it
+# goes down (+cl, +cr): read after it was given to the insertion, it would be
+# shared while the insertion runs, which would copy each node it passes,
+# and a tree the insertion owns alone (a sorted set taken out of the
+# keyspace, R.upd.takes) is changed in place.
 def zt.ins(t: ZTree, c: Cmp, +m: String, +d: F.F64) -> ZTree:
   match t c:
     case ZTip{} _:
       ZBin{1n, m, d, ZTip{}, ZTip{}}
-    case ZBin{n, +k, +e, +l, +r} LT{}:
-      zt.balance(k, e, zt.ins(l, zt.at(l, d, m), m, d), r)
-    case ZBin{n, +k, +e, +l, +r} _:
-      zt.balance(k, e, l, zt.ins(r, zt.at(r, d, m), m, d))
+    case ZBin{n, +k, +e, +l, r} LT{}:
+      +cl = zt.at(l, d, m)
+      zt.balance(k, e, zt.ins(l, cl, m, d), r)
+    case ZBin{n, +k, +e, l, +r} _:
+      +cr = zt.at(r, d, m)
+      zt.balance(k, e, l, zt.ins(r, cr, m, d))
 
 def zt.add(+t: ZTree, +m: String, +d: F.F64) -> ZTree:
   zt.ins(t, zt.at(t, d, m), m, d)
+
+# zt.add of a tree given to it: its root is compared where it is matched,
+# so that a tree held once is changed in place
+def zt.add.own(t: ZTree, +m: String, +d: F.F64) -> ZTree:
+  match t:
+    case ZTip{}:
+      ZBin{1n, m, d, ZTip{}, ZTip{}}
+    case ZBin{+n, +k, +e, l, r}:
+      +c = zel.cmp(d, m, e, k)
+      zt.ins(ZBin{n, k, e, l, r}, c, m, d)
 
 # an element cut from the end of a tree, and the tree left
 type ZCut is Data:
@@ -4954,20 +4970,31 @@ def zt.glue(+l: ZTree, +r: ZTree) -> ZTree:
   zt.glue.of(Nat.is_lt(zt.size(r), zt.size(l)), l, r)
 
 # t without the element (m, d), which it holds; c is how (d, m) compares
-# with t's root
+# with t's root (a side is compared before it goes down, as in zt.ins)
 def zt.rm(t: ZTree, c: Cmp, +m: String, +d: F.F64) -> ZTree:
   match t c:
     case ZTip{} _:
       ZTip{}
-    case ZBin{n, +k, +e, +l, +r} LT{}:
-      zt.balance(k, e, zt.rm(l, zt.at(l, d, m), m, d), r)
-    case ZBin{n, +k, +e, +l, +r} GT{}:
-      zt.balance(k, e, l, zt.rm(r, zt.at(r, d, m), m, d))
-    case ZBin{n, k, e, +l, +r} EQ{}:
+    case ZBin{n, +k, +e, +l, r} LT{}:
+      +cl = zt.at(l, d, m)
+      zt.balance(k, e, zt.rm(l, cl, m, d), r)
+    case ZBin{n, +k, +e, l, +r} GT{}:
+      +cr = zt.at(r, d, m)
+      zt.balance(k, e, l, zt.rm(r, cr, m, d))
+    case ZBin{n, k, e, l, r} EQ{}:
       zt.glue(l, r)
 
 def zt.del(+t: ZTree, +m: String, +d: F.F64) -> ZTree:
   zt.rm(t, zt.at(t, d, m), m, d)
+
+# zt.del of a tree given to it, as zt.add.own
+def zt.del.own(t: ZTree, +m: String, +d: F.F64) -> ZTree:
+  match t:
+    case ZTip{}:
+      ZTip{}
+    case ZBin{+n, +k, +e, l, r}:
+      +c = zel.cmp(d, m, e, k)
+      zt.rm(ZBin{n, k, e, l, r}, c, m, d)
 
 # how many elements of t come before (d, m), which it holds; c is how
 # (d, m) compares with t's root
@@ -5741,6 +5768,9 @@ def zset.rank(+m: String, +z: Zset) -> Maybe<&2, Nat>:
 # z with m of score d added (z does not hold m): a small one turns large
 # when it would pass 128 elements, or m passes 64 bytes, and a small
 # one's string turns its tree when it would pass one buffer
+def zset.big.of(+tr: ZTree, +m: String, +d: F.F64) -> Zset:
+  ZBig{zt.add(tr, m, d), set(F.F64, zt.trie(tr, empty(F.F64)), m, d)}
+
 def zset.add.packed(room: Bool, +n: Nat, +b: String, +m: String, +e: F.F64) -> Zset:
   match room:
     case True{}:
@@ -5757,12 +5787,12 @@ def zset.add.small(fits: Bool, +n: Nat, +b: String, +m: String, +d: F.F64) -> Zs
       +tr = zt.build(n, zb.all(n, b))
       ZBig{zt.add(tr, m, d), set(F.F64, zt.trie(tr, empty(F.F64)), m, d)}
 
-def zset.add.wide(fits: Bool, +tr: ZTree, +m: String, +d: F.F64) -> Zset:
+def zset.add.wide(fits: Bool, tr: ZTree, +m: String, +d: F.F64) -> Zset:
   match fits:
     case True{}:
-      ZWide{zt.add(tr, m, zset.norm(d))}
+      ZWide{zt.add.own(tr, m, zset.norm(d))}
     case False{}:
-      ZBig{zt.add(tr, m, d), set(F.F64, zt.trie(tr, empty(F.F64)), m, d)}
+      zset.big.of(tr, m, d)
 
 def zset.add(z: Zset, +m: String, +d: F.F64) -> Zset:
   match z:
@@ -5770,18 +5800,18 @@ def zset.add(z: Zset, +m: String, +d: F.F64) -> Zset:
       zset.add.small(Bool.and(Nat.is_lt(n, 128n), Nat.is_le(String.length(m), 64n)), n, b, m, d)
     case ZWide{+tr}:
       zset.add.wide(Bool.and(Nat.is_lt(zt.size(tr), 128n), Nat.is_le(String.length(m), 64n)), tr, m, d)
-    case ZBig{+tr, +t}:
-      ZBig{zt.add(tr, m, d), set(F.F64, t, m, d)}
+    case ZBig{tr, t}:
+      ZBig{zt.add.own(tr, m, d), set(F.F64, t, m, d)}
 
 # z without m, which it holds with score d
 def zset.del(z: Zset, +m: String, +d: F.F64) -> Zset:
   match z:
     case ZSmall{+n, +b}:
       ZSmall{Nat.sub(n, 1n), zb.del(b, zb.find(m, b, n))}
-    case ZWide{+tr}:
-      ZWide{zt.del(tr, m, d)}
-    case ZBig{+tr, +t}:
-      ZBig{zt.del(tr, m, d), del(F.F64, t, m)}
+    case ZWide{tr}:
+      ZWide{zt.del.own(tr, m, d)}
+    case ZBig{tr, t}:
+      ZBig{zt.del.own(tr, m, d), del(F.F64, t, m)}
 
 # z without m, which it holds with score d, its element at index i of a
 # small one's string (zset.find)
@@ -5789,10 +5819,10 @@ def zset.del.at(z: Zset, +i: Nat, +m: String, +d: F.F64) -> Zset:
   match z:
     case ZSmall{+n, +b}:
       ZSmall{Nat.sub(n, 1n), pk.cut(b, i, zb.next(b, i))}
-    case ZWide{+tr}:
-      ZWide{zt.del(tr, m, d)}
-    case ZBig{+tr, +t}:
-      ZBig{zt.del(tr, m, d), del(F.F64, t, m)}
+    case ZWide{tr}:
+      ZWide{zt.del.own(tr, m, d)}
+    case ZBig{tr, t}:
+      ZBig{zt.del.own(tr, m, d), del(F.F64, t, m)}
 
 # z with m's score, old, set to d, m's element at index i of a small
 # one's string (zset.find)
@@ -5800,10 +5830,10 @@ def zset.set(z: Zset, +i: Nat, +m: String, +old: F.F64, +d: F.F64) -> Zset:
   match z:
     case ZSmall{+n, +b}:
       ZSmall{n, zb.set(b, n, i, m, zset.norm(d))}
-    case ZWide{+tr}:
-      ZWide{zt.add(zt.del(tr, m, old), m, zset.norm(d))}
-    case ZBig{+tr, +t}:
-      ZBig{zt.add(zt.del(tr, m, old), m, d), set(F.F64, t, m, d)}
+    case ZWide{tr}:
+      ZWide{zt.add.own(zt.del.own(tr, m, old), m, zset.norm(d))}
+    case ZBig{tr, t}:
+      ZBig{zt.add.own(zt.del.own(tr, m, old), m, d), set(F.F64, t, m, d)}
 
 # the elements of z at the ranks from a to b - 1, in order (last first
 # when rev)

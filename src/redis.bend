@@ -3777,6 +3777,11 @@ def zopts.xx(+o: ZOpts) -> Bool:
     case ZOpts{nx, +xx, gt, lt, ch, incr}:
       xx
 
+def zopts.is_incr(+o: ZOpts) -> Bool:
+  match o:
+    case ZOpts{nx, xx, gt, lt, ch, +incr}:
+      incr
+
 def zopts.one(b: Bool) -> Nat:
   match b:
     case True{}:
@@ -21070,13 +21075,65 @@ def zadd.old.of(nx: Bool, nan: Bool, keep: Bool, same: Bool, +sc: F.F64, +c: F.F
     case False{} False{} False{} False{}:
       ZAdd{KV.zset.set(z, i, m, c, sc), added, Nat.add(upd, 1n), Nat.add(done, 1n), sc}
 
-# a member there, of score c (i: where KV.zset.find found it)
+# a member there, of score c (i: where KV.zset.find found it). The NaN
+# test runs under INCR alone: a score read without INCR is never a NaN
+# (F.f64.parse refuses one, as Redis's string2d does), and PROOF.bend's
+# zadd_at_some needs the pairs without INCR never to answer a NaN
 def zadd.old(+o: ZOpts, +c: F.F64, +i: Nat, +d: F.F64, +m: String, z: KV.Zset, +added: Nat, +upd: Nat, +done: Nat, last: F.F64) -> ZAdd:
   match o:
     case ZOpts{+nx, xx, +gt, +lt, ch, +incr}:
       +sc = zadd.score(incr, c, d)
       +cmp = F.f64.cmp(sc, c)
-      zadd.old.of(nx, F.f64.is_nan(sc), Bool.or(Bool.and(lt, Bool.not(Cmp.is_lt(cmp))), Bool.and(gt, Bool.not(Cmp.is_gt(cmp)))), Cmp.is_eq(cmp), sc, c, i, m, z, added, upd, done, last)
+      zadd.old.of(nx, Bool.and(incr, F.f64.is_nan(sc)), Bool.or(Bool.and(lt, Bool.not(Cmp.is_lt(cmp))), Bool.and(gt, Bool.not(Cmp.is_gt(cmp)))), Cmp.is_eq(cmp), sc, c, i, m, z, added, upd, done, last)
+
+# zadd.old.of's last case: the member takes another score
+def zadd.sure.of(nx: Bool, nan: Bool, keep: Bool, same: Bool) -> Bool:
+  match nx nan keep same:
+    case False{} False{} False{} False{}:
+      True{}
+    case _ _ _ _:
+      False{}
+
+# whether ZADD's first pair, of score d, changes for sure a sorted set
+# where its member's score is c (in zadd.sure, cur: None when the member
+# is not there): it adds the member (but under XX), or gives it another
+# score
+def zadd.sure.old(+o: ZOpts, +c: F.F64, +d: F.F64) -> Bool:
+  match o:
+    case ZOpts{+nx, xx, +gt, +lt, ch, +incr}:
+      +sc = zadd.score(incr, c, d)
+      +cmp = F.f64.cmp(sc, c)
+      zadd.sure.of(nx, Bool.and(incr, F.f64.is_nan(sc)), Bool.or(Bool.and(lt, Bool.not(Cmp.is_lt(cmp))), Bool.and(gt, Bool.not(Cmp.is_gt(cmp)))), Cmp.is_eq(cmp))
+
+def zadd.sure(cur: Maybe<&2, F.F64>, +o: ZOpts, +d: F.F64) -> Bool:
+  match cur:
+    case Some{+c}:
+      zadd.sure.old(o, c, d)
+    case None{}:
+      Bool.not(zopts.xx(o))
+
+# whether a ZADD of options o and pairs ps changes for sure a sorted set
+# whose members' scores are t (PROOF.bend: takes_zadd): its first pair
+# adds its member or gives it another score, under INCR that pair is
+# alone, and its options and pairs are fine (zadd.check, read only then).
+# The pairs after the first add members, change their scores or leave
+# them be: none takes one away.
+def zadd.takes.at(+o: ZOpts, +ps: List<&2, ZPair>, +t: KV.Trie<F.F64>) -> Bool:
+  match ps:
+    case Con{ZPair{+s, +m}, +rest}:
+      Bool.and(Bool.or(Bool.not(zopts.is_incr(o)), List.is_empty(&2, ZPair, rest)), zadd.sure(KV.get(F.F64, t, m), o, zadd.num(F.f64.parse(s))))
+    case Nil{}:
+      False{}
+
+def zadd.takes.if(sure: Bool, +o: ZOpts, +ps: List<&2, ZPair>) -> Bool:
+  match sure:
+    case True{}:
+      Maybe.is_none(&2, Reply, zadd.check(o, ps))
+    case False{}:
+      False{}
+
+def zadd.takes(+o: ZOpts, +ps: List<&2, ZPair>, +t: KV.Trie<F.F64>) -> Bool:
+  zadd.takes.if(zadd.takes.at(o, ps, t), o, ps)
 
 def zadd.at(cur: KV.ZHit, +o: ZOpts, +d: F.F64, +m: String, z: KV.Zset, +added: Nat, +upd: Nat, +done: Nat, last: F.F64) -> ZAdd:
   match cur:
@@ -22254,20 +22311,25 @@ def upd.put(t: KV.Trie<KV.Val>, +k: String, +h: U32, +n: Nat, +x: Nat, now: Nat,
 
 # whether an update of a key whose entry there at now is m takes the key's
 # value out of the keyspace while it changes it: an HSET of pairs to a
-# hash, or an SADD to a trie of members that lacks its first member,
-# which write the collection over for sure (PROOF.bend: takes_over). The
-# keyspace holding the collection meanwhile would make the write copy the
-# path it changes in it, and the keyspace drop the old path after. A set
-# kept in a string (an intset, KV.MInts; a small set of strings, KV.MSmall
-# and KV.MLong) is not taken: its write makes its string anew whatever
-# holds it, so the take would save nothing and its test cost a find
-# (FINDINGS.md, section 3zzzs).
+# hash, an SADD to a trie of members that lacks its first member, or a
+# ZADD (ZINCRBY) to a large sorted set whose first pair adds its member or
+# gives it another score, which write the collection over for sure
+# (PROOF.bend: takes_over). The keyspace holding the collection meanwhile
+# would make the write copy the path it changes in it, and the keyspace
+# drop the old path after. A set kept in a string (an intset, KV.MInts; a
+# small set of strings, KV.MSmall and KV.MLong) is not taken: its write
+# makes its string anew whatever holds it, so the take would save nothing
+# and its test cost a find (FINDINGS.md, section 3zzzs). Nor is a small
+# sorted set (a listpack, kept in a string or, past one buffer, as a tree
+# of at most 128 elements): its paths are short.
 def upd.takes(+op: UpdOp, +m: Maybe<&2, KV.Item<KV.Val>>) -> Bool:
   match op m:
     case UHash{HWSet{Con{p, rest}, mset}} Some{KV.Item{KV.VColl{KV.CHash{h}}, e}}:
       True{}
     case UMems{SWAdd{Con{+x, rest}}} Some{KV.Item{KV.VColl{KV.CMems{KV.MBig{n, +t}}}, e}}:
       Bool.not(KV.has(Unit, t, x))
+    case UZset{ZWAdd{+o, +ps}} Some{KV.Item{KV.VColl{KV.CZset{KV.ZBig{tr, +t}}}, e}}:
+      zadd.takes(o, ps, t)
     case _ _:
       False{}
 

@@ -157,8 +157,9 @@ thirty-second keeps the string of a value that is a string or else something els
 the string itself, with no node, in every program without GPU calls (section 3zzg);
 the thirty-third adds C's doubles, `F64`, run as C runs them, strtod and libm with them
 (section 3zzm); the thirty-fourth lets AddressSanitizer check the heap, in a build
-with ASan only (section 3zzp); and the thirty-fifth reads the monotonic clock without
-an effect, `Clock.us` (section 3zzz).
+with ASan only (section 3zzp); the thirty-fifth reads the monotonic clock without
+an effect, `Clock.us` (section 3zzz); and the thirty-sixth listens on IPv6 addresses
+and unix sockets and sends systemd its notifications (section 3zzze).
 The sections before 3l
 number the patches as they were then: patch 16 was effect pairs, taken out in 3l with
 `TCP.post_list` of patch 11, and their patches 17–20 are today's 16–19. None changes the
@@ -203,6 +204,7 @@ to agree with the list definition, and `IO` is still a function of `R` and `k`.
 | f64 natives (33rd) | `F64`, C's double as the two 32-bit halves of its bits, with `F64.read` (strtod), the four operations, libm's functions, the comparisons and the conversions, each a law of base that the C lane runs as C runs it, on the libm it links | GEO's positions, geohashes, cells and distances, Redis's bit for bit on 309 positions and 80 searches; ZADD's scores read by glibc's strtod itself (section 3zzm) |
 | heap asan (34th) | in a build with AddressSanitizer alone, `heap_free` poisons the node it frees and holds it in a quarantine of its size class before its free chain hands it out again, so that a read through a stale pointer gets ASan's report and stack; any other build is byte for byte as before | the `sanitize` job (`tools/sanitize.sh`): the server under ASan, UBSan and TSan with no report, and patch 26's bug found again when it is taken out (section 3zzp) |
 | clock us (35th) | `Clock.us(k)` is the host's monotonic clock in µs mod 2^32, read once `k` is known, with no effect: a pure loop times its own steps; `@unsafe`, as no law reads it | the timing of calls: a reading after each request of the actor's group, where an `IO.clock` made the group a loop of effects; GET one at a time 13,002 → 12,215 instructions (section 3zzz) |
+| unix v6 (36th) | `TCP.listen` takes IPv6 addresses (each socket IPv6 alone); `TCP.listen_unix` listens on a unix socket; `TCP.name` names a unix socket's ends `/unixsocket:0`; `IO.notify` sends systemd's `NOTIFY_SOCKET` a datagram | the start of a stock configuration: `bind`'s IPv6 addresses, `unixsocket` and `unixsocketperm`, `supervised systemd` (section 3zzze) |
 
 The ratios in the last column come from different series and drift by ±0.06–0.08
 between series; PERFORMANCE.md gives each one with its pairs.
@@ -1337,8 +1339,9 @@ its "PID:" when asked, "Ready to accept connections", and on a busy port "Failed
 listening on port N (TCP), aborting.": Redis's test suite reads the last two, the second
 to try another port. It listens on each address of `bind` with Redis's rules: a `-` makes
 an address optional, and an address lost for a reason Redis lets go is a warning. Two
-things it cannot do as Redis does. It listens on IPv4 only, so an IPv6 address is let go,
-as on a host without IPv6. And it cannot see a client's address, so protected mode with
+things it cannot do as Redis does. It listened on IPv4 only, so an IPv6 address was let
+go, as on a host without IPv6 (section 3zzze adds IPv6, a unix socket and systemd's
+notifications). And it cannot see a client's address, so protected mode with
 no password (where Redis takes only clients on the loopback) listens on the loopback only:
 `*` and `0.0.0.0` become `127.0.0.1`, other addresses are left out, each with a warning.
 Client ids stay one sequence over all the listeners, through a channel they share.
@@ -5921,6 +5924,103 @@ need Lua: one fills a set with a script, and the next resets the events that set
 expiry would have given. unit/slowlog passes 7 of its 9. The other two use ACL and
 MIGRATE.
 
+## 3zzza. ZADD and ZINCRBY in place: the sorted set taken out of the keyspace
+
+**What was left** (sections 3zzd, 3zze). HSET, and SADD of a member new to a set, take
+their collection out of the keyspace and change it in place. ZADD and ZINCRBY still made
+a new version of the sorted set while the keyspace held the old one, so each copied the
+paths it changed in the tree and in the trie, and the keyspace dropped the old ones
+after: on a sorted set of 100,000 elements, ZADD of a new score to a member there took
+73,485 instructions, ZINCRBY 68,182 and ZADD of a new member 55,964 (main of 16 October).
+A ZADD can change
+nothing: a member there with the score it has, XX of a member not there, NX of one there,
+a GT or an LT that keeps the score, or an INCR whose sum is a NaN. Such a write answers
+CKeep and drops the sorted set it was given, which a sorted set taken out of the
+keyspace cannot afford, so the take needs a test that the write changes it, with its proof in
+`proof/PROOF.bend` (`takes_over`).
+
+**The test** (`src/redis.bend`: `upd.takes`, `zadd.takes`).
+
+- A ZADD (or a ZINCRBY: a ZADD with INCR) to a large sorted set (a skiplist, which keeps a
+  trie of its members' scores) takes it when its first pair adds its member (but under
+  XX), or gives it another score: not under NX, no NaN under INCR, not kept by GT or LT,
+  and a score other than the one it has. That is the last case of `zadd.old.of`, and the
+  test reads it as ZADD does: the member's score in the trie, the pair's score parsed,
+  and under INCR their sum.
+- Under INCR that pair is alone. Then, and only then, the options and pairs pass
+  `zadd.check`.
+- The pairs after the first add members, give them other scores or leave them be: none
+  takes one away. So a ZADD whose first pair changes the sorted set changes it.
+- A small sorted set (a listpack) is not taken. Kept in one string (section 3zzzn), its
+  write makes a new string whatever the take; kept as a tree past one buffer (`ZWide`),
+  it holds at most 128 elements, so the paths its write copies are short.
+- ZADD's NaN test runs under INCR alone. Redis's `zsetAdd` refuses a NaN score whatever
+  the options and checks the sum under INCR, but a score ZADD reads is never a NaN:
+  `string2d` refuses one as it parses, and so does `F.f64.parse`. So only the sum can be
+  a NaN, no reply changes, and the proof needs no lemma about the parser
+  (`zadd_at_some` needs the pairs without INCR never to answer a NaN; a comment at
+  `zadd.old` says so).
+
+**The tree** (`src/map.bend`: Sorted sets). The take alone gave less than it should:
+ZADD of a new member took 43,874 instructions with it, of which 6,400 went to dropping
+an old path at the end (main of 15 October). The tree was shared while the insertion
+ran.
+
+- `zt.ins` (and `zt.rm`) compared the element with the side it was about to go down
+  only after giving that side to the insertion. A field read after it is given away is
+  shared first (the twenty-sixth patch's `term_keep`).
+- So the insertion found each node of its path shared, copied it, and the old path lived
+  until the write's end.
+- Now each side is compared before it goes down (`+cl = zt.at(l, d, m)`).
+- `zset.add`, `zset.set`, `zset.del` and `zset.del.at` give a large sorted set's tree
+  and trie, and a wide one's tree, to their writes: `zt.add.own` and `zt.del.own` compare
+  the root where they match it.
+- A tree held once is then changed in place, as the trie is.
+
+**The proofs.** `takes_over` covers the new case (`takes_zset`, then `takes_zadd`).
+
+- The first pair's state adds or changes a member (`zadd_sure_some`, through
+  `zadd_of_sure` and `zadd_new_sure`). ZADD reads the member where `zset.find` finds it:
+  in a large sorted set, its score in the trie (`zset.hit.big`), which the test reads.
+- Without INCR, the pairs after it keep that so (`zadd_go_some`, `zadd_step_some`,
+  `zadd_at_some`: with the NaN test under INCR, they never answer a NaN). Under INCR
+  there are none (`zadd_rest_some`).
+- A state that added or changed a member answers CZset, which writes the sorted set over
+  (`zadd_res_over`, `zadd_fin_over`).
+- Two proofs that unfolded the update (`zset_replay`, `znew_zadd`) rewrite through
+  `db_upd_eq`, as `mems_replay` and `snew_sadd` did in section 3zze.
+
+`make check` and `make verdict` pass.
+
+**What it gives** (`tools/colls.sh`, instructions per command; ZADD of a new score and of
+a new member are new there), on main of 16 October:
+
+| command | before | after | |
+|---|---:|---:|---:|
+| ZADD of a new score to a member there | 73,485 | 55,234 | −24.8% |
+| ZINCRBY | 68,182 | 57,792 | −15.2% |
+| ZADD of a new member | 55,964 | 39,738 | −29.0% |
+| ZADD of the score a member has | 29,445 | 30,682 | +4.2% |
+| the other commands of `colls.sh` | | −1.3% to +0.1% | |
+
+On main of 15 October, before small sorted sets in one string (section 3zzzn), the
+same change gave −35.6%, −26.9% and −29.2% on the first three (from 76,830, 68,728 and
+47,807 to 49,443, 50,220 and 33,854). In the runs of PERFORMANCE 65's first table, the
+take alone gave −20.6%, −15.7% and −8.0%, and a ZADD of three new members fell from
+103,228 instructions to 58,387 (−43%). On the newer main, ZADD of a new score and
+ZINCRBY keep 5,800 and 7,600 instructions more than they did; where those go is not
+measured yet. GET, SET and INCR are as before (PERFORMANCE 65).
+
+**What is left.**
+
+- The test reads the trie and parses the first score, and the write does both again.
+  ZINCRBY adds its increment twice, in software (section 3zk). A ZADD that changes
+  nothing pays the test: +4%.
+- ZREM, ZPOPMIN, ZPOPMAX and the ZREMRANGEBY family still copy their paths: each needs a
+  test of its own (ZREM's: that the members it removes leave the sorted set not empty).
+- A small sorted set finds a member by a walk of its elements.
+- Where the gains lost on the newer main went (above).
+
 ## 3zzzb. CLIENT TRACKING: client-side caching
 
 **What was left.** CLIENT TRACKING was an unknown subcommand. CLIENT CACHING, GETREDIR
@@ -6436,6 +6536,101 @@ of their own, each in a fresh directory, 124 checks:
 
 `tests/admin_test.py` compares SHUTDOWN SAVE and a save that fails with Redis's;
 `tests/start_test.py` starts both servers on a dump.rdb, which BendKV refused before.
+
+## 3zzze. A unix socket, IPv6 and systemd: the start of a stock configuration
+
+**What was left.** Redis's own `redis.conf` binds `127.0.0.1 -::1`; the configuration
+of Ubuntu's package binds `127.0.0.1 ::1`, and its unit is `Type=notify` with
+`supervised systemd`. Applications on the same host often reach Redis through
+`unixsocket`, and a client that resolves `localhost` to `::1` (Node.js 17 and later)
+reaches it over IPv6. BendKV listened on IPv4 alone: it let an IPv6 address go with a
+warning, ignored `unixsocket`, and refused `supervised systemd` ("cannot notify
+(READY=1)"). The runtime had no IPv6 listener, no unix listener, and no way to send
+systemd a datagram.
+
+**The runtime** (patch 36, `unix-v6.patch`, effects only).
+
+- `TCP.listen` takes an IPv6 address (a host with a `:`), its socket IPv6 alone
+  (`IPV6_V6ONLY`), as Redis's `anetV6Only` sets it, so that `0.0.0.0` and `::` can both
+  be bound.
+- `TCP.listen_unix(path, perm)` listens on a unix socket as Redis's `anetUnixServer`
+  does: bound, given `perm`'s mode when `perm` is not 0, listening. A path that is there
+  already fails (EADDRINUSE): the effect deletes nothing, and BendKV removes the file a
+  run before left (`File.unlink`) before it listens, as Redis's `initServer` does.
+  `TCP.accept` takes its connections.
+- `TCP.name` names either end of a unix socket `/unixsocket:0`, as Redis's
+  `anetFdToString` does.
+- `IO.notify(msg)` sends one datagram to the unix socket `$NOTIFY_SOCKET` names (a path,
+  or an abstract name after `@`), as `sd_notify` sends it.
+
+**The start** (`src/startup.bend`: The addresses; `src/server.bend`: Listening, The
+start, SHUTDOWN).
+
+- `bind`'s IPv6 addresses are listened on, with `::*` as every IPv6 address. One the host
+  cannot have (no IPv6) is let go with Redis's line ("unable to bind socket, errno:
+  97"). Protected mode with no password listens on `::1` for `::`, as it listens on
+  `127.0.0.1` for `0.0.0.0`.
+- `unixsocket` and `unixsocketperm` are listened on after the TCP addresses. A socket that
+  cannot be had stops the start with Redis's line ("Failed opening Unix socket: ...");
+  a path longer than `sun_path` holds is checked first, as `anetUnixServer` checks it
+  ("unix socket path too long (120), must be under 108"). A unix socket alone (port 0)
+  is a start.
+- The log says "The server is now ready to accept connections at <path>", and "Ready to
+  accept connections" only when some TCP listener is up, as Redis's `main` says them.
+  SHUTDOWN removes the socket's file ("Removing the unix socket file.").
+- `supervised systemd`, or `auto` with `NOTIFY_SOCKET` set: systemd is told
+  "STATUS=BendKV is loading...", then "STATUS=Ready to accept connections" and
+  "READY=1" once the server serves, and "STOPPING=1" at SHUTDOWN, as Redis tells it.
+  `daemonize` is then let go, as Redis lets it go under a supervisor.
+- Without `NOTIFY_SOCKET`, `supervised systemd` is a warning ("systemd supervision error:
+  NOTIFY_SOCKET not found!") and no supervision, as in a Redis built with libsystemd.
+  Upstart is still refused: BendKV cannot stop itself to signal it.
+
+**A unix socket's client** (`src/server.bend`: Clients) is named as Redis's
+`genClientAddrString` names it. CLIENT LIST's `addr` and `laddr` are the socket's path
+with port 0, and its flags have `U`. A monitor's line names it `unix:<path>`, as
+`replicationFeedMonitors` does.
+
+**A bug in the table of parameters.** `unixsocketperm` is octal, and its bounds were
+written in decimal (0 and 511), against which its octal digits were compared: 700, 755
+and 770 were refused ("between 0 and 511"). `tools/gen_config.py` now writes an octal
+parameter's bounds in octal, as Redis's message gives them ("between 0 and 777").
+
+**Tests** (`tests/start_test.py`, against redis-server 7.0.15).
+
+- A unix socket under systemd's supervision, on both servers:
+  - the socket's mode;
+  - PING through it;
+  - CLIENT LIST's `addr`, `laddr` and flags;
+  - a monitor's line;
+  - the datagrams systemd gets, Redis's "Redis is loading" read as BendKV's;
+  - the log's lines;
+  - the socket's file after SHUTDOWN.
+
+  The case runs twice: `NOTIFY_SOCKET` names a path, then an abstract name (`@`).
+- IPv6's loopback in Redis's own `bind 127.0.0.1 -::1`. On a host with IPv6 both servers
+  answer on `::1`; on a host without it, both let it go with the same line. The VM of
+  these measurements has no IPv6.
+- Refused as Redis refuses them: an octal value past its bound, a digit 8, a unix
+  socket whose directory is not there, and one whose path is too long. Started as Redis starts: an octal value with a
+  leading zero.
+
+**What it costs.** Nothing on a request's path: the listeners act at the start, the
+names when a client joins, and the notifications at the start and at SHUTDOWN. A join
+almost cost more. The first `cl.at` chose a client's name with `Bool.pick`, which
+evaluates both arms, so every join walked the configuration for `unixsocket`, twice
+(the two ends). That is about 125,000 instructions per join. `make perfcheck` joins
+20 clients in its 20,000 requests, so it counted GET +3.6% on CI, past its tolerance,
+with SET and INCR at +2.5%. A `match` reads the parameter for a unix socket's client
+alone: locally GET is 3,420 (main 3,419), SET 4,186 (4,183), INCR 4,528 (4,527).
+
+**Where BendKV differs.**
+
+- STATUS says "BendKV is loading...", as its log names it.
+- A notification that cannot reach `NOTIFY_SOCKET` logs one line ("sd_notify could not
+  reach NOTIFY_SOCKET"), where Redis gives `sd_notify`'s error number.
+- Protected mode is still BendKV's: it listens on the loopback alone, where Redis
+  listens on every address and answers a client from elsewhere with a DENIED error.
 
 ## 3zzzg. The start reads its file in windows
 
