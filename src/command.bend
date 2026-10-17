@@ -328,6 +328,24 @@ def cmd.eval() -> Top:
     [R.RBulk{"summary"}, R.RBulk{"Execute a Lua script server side"}, R.RBulk{"since"}, R.RBulk{"2.6.0"}, R.RBulk{"group"}, R.RBulk{"scripting"}, R.RBulk{"complexity"}, R.RBulk{"Depends on the script that is executed."}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"script"}, R.RBulk{"type"}, R.RBulk{"string"}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"numkeys"}, R.RBulk{"type"}, R.RBulk{"integer"}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"key"}, R.RBulk{"type"}, R.RBulk{"key"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{0n}}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"optional"}, R.RStatus{"multiple"}]}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"arg"}, R.RBulk{"type"}, R.RBulk{"string"}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"optional"}, R.RStatus{"multiple"}]}]}]}]},
   []}
 
+def cmd.eval_ro() -> Top:
+  Top{Desc{"eval_ro", R.INeg{2n}, ["slow", "scripting"], [], KByEval{}, True{},
+    [R.RBulk{"eval_ro"}, R.RInt{R.INeg{2n}}, R.RSet{[R.RStatus{"readonly"}, R.RStatus{"noscript"}, R.RStatus{"stale"}, R.RStatus{"skip_monitor"}, R.RStatus{"no_mandatory_keys"}, R.RStatus{"movablekeys"}]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RSet{[R.RStatus{"@slow"}, R.RStatus{"@scripting"}]}, R.RSet{[]}, R.RSet{[R.RMap{[R.RBulk{"notes"}, R.RBulk{"We cannot tell how the keys will be used so we assume the worst, RO and ACCESS"}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"RO"}, R.RStatus{"access"}]}, R.RBulk{"begin_search"}, R.RMap{[R.RBulk{"type"}, R.RBulk{"index"}, R.RBulk{"spec"}, R.RMap{[R.RBulk{"index"}, R.RInt{R.IPos{2n}}]}]}, R.RBulk{"find_keys"}, R.RMap{[R.RBulk{"type"}, R.RBulk{"keynum"}, R.RBulk{"spec"}, R.RMap{[R.RBulk{"keynumidx"}, R.RInt{R.IPos{0n}}, R.RBulk{"firstkey"}, R.RInt{R.IPos{1n}}, R.RBulk{"keystep"}, R.RInt{R.IPos{1n}}]}]}]}]}],
+    [R.RBulk{"summary"}, R.RBulk{"Execute a read-only Lua script server side"}, R.RBulk{"since"}, R.RBulk{"7.0.0"}, R.RBulk{"group"}, R.RBulk{"scripting"}, R.RBulk{"complexity"}, R.RBulk{"Depends on the script that is executed."}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"script"}, R.RBulk{"type"}, R.RBulk{"string"}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"numkeys"}, R.RBulk{"type"}, R.RBulk{"integer"}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"key"}, R.RBulk{"type"}, R.RBulk{"key"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{0n}}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"optional"}, R.RStatus{"multiple"}]}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"arg"}, R.RBulk{"type"}, R.RBulk{"string"}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"optional"}, R.RStatus{"multiple"}]}]}]}]},
+  []}
+
+def cmd.evalsha() -> Top:
+  Top{Desc{"evalsha", R.INeg{2n}, ["slow", "scripting"], [], KByEval{}, True{},
+    [R.RBulk{"evalsha"}, R.RInt{R.INeg{2n}}, R.RSet{[R.RStatus{"noscript"}, R.RStatus{"stale"}, R.RStatus{"skip_monitor"}, R.RStatus{"no_mandatory_keys"}, R.RStatus{"movablekeys"}]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RSet{[R.RStatus{"@slow"}, R.RStatus{"@scripting"}]}, R.RSet{[]}, R.RSet{[R.RMap{[R.RBulk{"flags"}, R.RSet{[R.RStatus{"RW"}, R.RStatus{"access"}, R.RStatus{"update"}]}, R.RBulk{"begin_search"}, R.RMap{[R.RBulk{"type"}, R.RBulk{"index"}, R.RBulk{"spec"}, R.RMap{[R.RBulk{"index"}, R.RInt{R.IPos{2n}}]}]}, R.RBulk{"find_keys"}, R.RMap{[R.RBulk{"type"}, R.RBulk{"keynum"}, R.RBulk{"spec"}, R.RMap{[R.RBulk{"keynumidx"}, R.RInt{R.IPos{0n}}, R.RBulk{"firstkey"}, R.RInt{R.IPos{1n}}, R.RBulk{"keystep"}, R.RInt{R.IPos{1n}}]}]}]}]}],
+    [R.RBulk{"summary"}, R.RBulk{"Execute a Lua script server side"}, R.RBulk{"since"}, R.RBulk{"2.6.0"}, R.RBulk{"group"}, R.RBulk{"scripting"}, R.RBulk{"complexity"}, R.RBulk{"Depends on the script that is executed."}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"sha1"}, R.RBulk{"type"}, R.RBulk{"string"}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"numkeys"}, R.RBulk{"type"}, R.RBulk{"integer"}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"key"}, R.RBulk{"type"}, R.RBulk{"key"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{0n}}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"optional"}, R.RStatus{"multiple"}]}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"arg"}, R.RBulk{"type"}, R.RBulk{"string"}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"optional"}, R.RStatus{"multiple"}]}]}]}]},
+  []}
+
+def cmd.evalsha_ro() -> Top:
+  Top{Desc{"evalsha_ro", R.INeg{2n}, ["slow", "scripting"], [], KByEval{}, True{},
+    [R.RBulk{"evalsha_ro"}, R.RInt{R.INeg{2n}}, R.RSet{[R.RStatus{"readonly"}, R.RStatus{"noscript"}, R.RStatus{"stale"}, R.RStatus{"skip_monitor"}, R.RStatus{"no_mandatory_keys"}, R.RStatus{"movablekeys"}]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RSet{[R.RStatus{"@slow"}, R.RStatus{"@scripting"}]}, R.RSet{[]}, R.RSet{[R.RMap{[R.RBulk{"flags"}, R.RSet{[R.RStatus{"RO"}, R.RStatus{"access"}]}, R.RBulk{"begin_search"}, R.RMap{[R.RBulk{"type"}, R.RBulk{"index"}, R.RBulk{"spec"}, R.RMap{[R.RBulk{"index"}, R.RInt{R.IPos{2n}}]}]}, R.RBulk{"find_keys"}, R.RMap{[R.RBulk{"type"}, R.RBulk{"keynum"}, R.RBulk{"spec"}, R.RMap{[R.RBulk{"keynumidx"}, R.RInt{R.IPos{0n}}, R.RBulk{"firstkey"}, R.RInt{R.IPos{1n}}, R.RBulk{"keystep"}, R.RInt{R.IPos{1n}}]}]}]}]}],
+    [R.RBulk{"summary"}, R.RBulk{"Execute a read-only Lua script server side"}, R.RBulk{"since"}, R.RBulk{"7.0.0"}, R.RBulk{"group"}, R.RBulk{"scripting"}, R.RBulk{"complexity"}, R.RBulk{"Depends on the script that is executed."}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"sha1"}, R.RBulk{"type"}, R.RBulk{"string"}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"numkeys"}, R.RBulk{"type"}, R.RBulk{"integer"}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"key"}, R.RBulk{"type"}, R.RBulk{"key"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{0n}}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"optional"}, R.RStatus{"multiple"}]}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"arg"}, R.RBulk{"type"}, R.RBulk{"string"}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"optional"}, R.RStatus{"multiple"}]}]}]}]},
+  []}
+
 def cmd.exec() -> Top:
   Top{Desc{"exec", R.IPos{1n}, ["slow", "transaction"], [], KBySpecs{}, False{},
     [R.RBulk{"exec"}, R.RInt{R.IPos{1n}}, R.RSet{[R.RStatus{"noscript"}, R.RStatus{"loading"}, R.RStatus{"stale"}, R.RStatus{"skip_slowlog"}]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RSet{[R.RStatus{"@slow"}, R.RStatus{"@transaction"}]}, R.RSet{[]}, R.RSet{[]}],
@@ -358,6 +376,18 @@ def cmd.expiretime() -> Top:
     [R.RBulk{"summary"}, R.RBulk{"Get the expiration Unix timestamp for a key"}, R.RBulk{"since"}, R.RBulk{"7.0.0"}, R.RBulk{"group"}, R.RBulk{"generic"}, R.RBulk{"complexity"}, R.RBulk{"O(1)"}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"key"}, R.RBulk{"type"}, R.RBulk{"key"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{0n}}]}]}]},
   []}
 
+def cmd.fcall() -> Top:
+  Top{Desc{"fcall", R.INeg{2n}, ["slow", "scripting"], [], KByEval{}, True{},
+    [R.RBulk{"fcall"}, R.RInt{R.INeg{2n}}, R.RSet{[R.RStatus{"noscript"}, R.RStatus{"stale"}, R.RStatus{"skip_monitor"}, R.RStatus{"no_mandatory_keys"}, R.RStatus{"movablekeys"}]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RSet{[R.RStatus{"@slow"}, R.RStatus{"@scripting"}]}, R.RSet{[]}, R.RSet{[R.RMap{[R.RBulk{"notes"}, R.RBulk{"We cannot tell how the keys will be used so we assume the worst, RW and UPDATE"}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"RW"}, R.RStatus{"access"}, R.RStatus{"update"}]}, R.RBulk{"begin_search"}, R.RMap{[R.RBulk{"type"}, R.RBulk{"index"}, R.RBulk{"spec"}, R.RMap{[R.RBulk{"index"}, R.RInt{R.IPos{2n}}]}]}, R.RBulk{"find_keys"}, R.RMap{[R.RBulk{"type"}, R.RBulk{"keynum"}, R.RBulk{"spec"}, R.RMap{[R.RBulk{"keynumidx"}, R.RInt{R.IPos{0n}}, R.RBulk{"firstkey"}, R.RInt{R.IPos{1n}}, R.RBulk{"keystep"}, R.RInt{R.IPos{1n}}]}]}]}]}],
+    [R.RBulk{"summary"}, R.RBulk{"Invoke a function"}, R.RBulk{"since"}, R.RBulk{"7.0.0"}, R.RBulk{"group"}, R.RBulk{"scripting"}, R.RBulk{"complexity"}, R.RBulk{"Depends on the function that is executed."}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"function"}, R.RBulk{"type"}, R.RBulk{"string"}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"numkeys"}, R.RBulk{"type"}, R.RBulk{"integer"}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"key"}, R.RBulk{"type"}, R.RBulk{"key"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{0n}}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"optional"}, R.RStatus{"multiple"}]}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"arg"}, R.RBulk{"type"}, R.RBulk{"string"}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"optional"}, R.RStatus{"multiple"}]}]}]}]},
+  []}
+
+def cmd.fcall_ro() -> Top:
+  Top{Desc{"fcall_ro", R.INeg{2n}, ["slow", "scripting"], [], KByEval{}, True{},
+    [R.RBulk{"fcall_ro"}, R.RInt{R.INeg{2n}}, R.RSet{[R.RStatus{"readonly"}, R.RStatus{"noscript"}, R.RStatus{"stale"}, R.RStatus{"skip_monitor"}, R.RStatus{"no_mandatory_keys"}, R.RStatus{"movablekeys"}]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RSet{[R.RStatus{"@slow"}, R.RStatus{"@scripting"}]}, R.RSet{[]}, R.RSet{[R.RMap{[R.RBulk{"notes"}, R.RBulk{"We cannot tell how the keys will be used so we assume the worst, RO and ACCESS"}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"RO"}, R.RStatus{"access"}]}, R.RBulk{"begin_search"}, R.RMap{[R.RBulk{"type"}, R.RBulk{"index"}, R.RBulk{"spec"}, R.RMap{[R.RBulk{"index"}, R.RInt{R.IPos{2n}}]}]}, R.RBulk{"find_keys"}, R.RMap{[R.RBulk{"type"}, R.RBulk{"keynum"}, R.RBulk{"spec"}, R.RMap{[R.RBulk{"keynumidx"}, R.RInt{R.IPos{0n}}, R.RBulk{"firstkey"}, R.RInt{R.IPos{1n}}, R.RBulk{"keystep"}, R.RInt{R.IPos{1n}}]}]}]}]}],
+    [R.RBulk{"summary"}, R.RBulk{"Invoke a read-only function"}, R.RBulk{"since"}, R.RBulk{"7.0.0"}, R.RBulk{"group"}, R.RBulk{"scripting"}, R.RBulk{"complexity"}, R.RBulk{"Depends on the function that is executed."}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"function"}, R.RBulk{"type"}, R.RBulk{"string"}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"numkeys"}, R.RBulk{"type"}, R.RBulk{"integer"}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"key"}, R.RBulk{"type"}, R.RBulk{"key"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{0n}}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"optional"}, R.RStatus{"multiple"}]}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"arg"}, R.RBulk{"type"}, R.RBulk{"string"}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"optional"}, R.RStatus{"multiple"}]}]}]}]},
+  []}
+
 def cmd.flushall() -> Top:
   Top{Desc{"flushall", R.INeg{0n}, ["keyspace", "write", "slow", "dangerous"], [], KBySpecs{}, False{},
     [R.RBulk{"flushall"}, R.RInt{R.INeg{0n}}, R.RSet{[R.RStatus{"write"}]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RSet{[R.RStatus{"@keyspace"}, R.RStatus{"@write"}, R.RStatus{"@slow"}, R.RStatus{"@dangerous"}]}, R.RSet{[R.RBulk{"request_policy:all_shards"}, R.RBulk{"response_policy:all_succeeded"}]}, R.RSet{[]}],
@@ -374,11 +404,25 @@ def cmd.function() -> Top:
   Top{Desc{"function", R.INeg{1n}, ["slow"], [], KBySpecs{}, False{},
     [R.RBulk{"function"}, R.RInt{R.INeg{1n}}, R.RSet{[]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RSet{[R.RStatus{"@slow"}]}, R.RSet{[]}, R.RSet{[]}],
     [R.RBulk{"summary"}, R.RBulk{"A container for function commands"}, R.RBulk{"since"}, R.RBulk{"7.0.0"}, R.RBulk{"group"}, R.RBulk{"scripting"}, R.RBulk{"complexity"}, R.RBulk{"Depends on subcommand."}]},
-  [Desc{"function|flush", R.INeg{1n}, ["write", "slow", "scripting"], [], KBySpecs{}, False{},
+  [Desc{"function|delete", R.IPos{3n}, ["write", "slow", "scripting"], [], KBySpecs{}, False{},
+    [R.RBulk{"function|delete"}, R.RInt{R.IPos{3n}}, R.RSet{[R.RStatus{"write"}, R.RStatus{"noscript"}]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RSet{[R.RStatus{"@write"}, R.RStatus{"@slow"}, R.RStatus{"@scripting"}]}, R.RSet{[R.RBulk{"request_policy:all_shards"}, R.RBulk{"response_policy:all_succeeded"}]}, R.RSet{[]}],
+    [R.RBulk{"summary"}, R.RBulk{"Delete a function by name"}, R.RBulk{"since"}, R.RBulk{"7.0.0"}, R.RBulk{"group"}, R.RBulk{"scripting"}, R.RBulk{"complexity"}, R.RBulk{"O(1)"}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"library-name"}, R.RBulk{"type"}, R.RBulk{"string"}]}]}]}, Desc{"function|dump", R.IPos{2n}, ["slow", "scripting"], [], KBySpecs{}, False{},
+    [R.RBulk{"function|dump"}, R.RInt{R.IPos{2n}}, R.RSet{[R.RStatus{"noscript"}]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RSet{[R.RStatus{"@slow"}, R.RStatus{"@scripting"}]}, R.RSet{[]}, R.RSet{[]}],
+    [R.RBulk{"summary"}, R.RBulk{"Dump all functions into a serialized binary payload"}, R.RBulk{"since"}, R.RBulk{"7.0.0"}, R.RBulk{"group"}, R.RBulk{"scripting"}, R.RBulk{"complexity"}, R.RBulk{"O(N) where N is the number of functions"}]}, Desc{"function|flush", R.INeg{1n}, ["write", "slow", "scripting"], [], KBySpecs{}, False{},
     [R.RBulk{"function|flush"}, R.RInt{R.INeg{1n}}, R.RSet{[R.RStatus{"write"}, R.RStatus{"noscript"}]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RSet{[R.RStatus{"@write"}, R.RStatus{"@slow"}, R.RStatus{"@scripting"}]}, R.RSet{[R.RBulk{"request_policy:all_shards"}, R.RBulk{"response_policy:all_succeeded"}]}, R.RSet{[]}],
     [R.RBulk{"summary"}, R.RBulk{"Deleting all functions"}, R.RBulk{"since"}, R.RBulk{"7.0.0"}, R.RBulk{"group"}, R.RBulk{"scripting"}, R.RBulk{"complexity"}, R.RBulk{"O(N) where N is the number of functions deleted"}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"async"}, R.RBulk{"type"}, R.RBulk{"oneof"}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"optional"}]}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"async"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"token"}, R.RBulk{"ASYNC"}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"sync"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"token"}, R.RBulk{"SYNC"}]}]}]}]}]}, Desc{"function|help", R.IPos{2n}, ["slow", "scripting"], [], KBySpecs{}, False{},
     [R.RBulk{"function|help"}, R.RInt{R.IPos{2n}}, R.RSet{[R.RStatus{"loading"}, R.RStatus{"stale"}]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RSet{[R.RStatus{"@slow"}, R.RStatus{"@scripting"}]}, R.RSet{[]}, R.RSet{[]}],
-    [R.RBulk{"summary"}, R.RBulk{"Show helpful text about the different subcommands"}, R.RBulk{"since"}, R.RBulk{"7.0.0"}, R.RBulk{"group"}, R.RBulk{"scripting"}, R.RBulk{"complexity"}, R.RBulk{"O(1)"}]}]}
+    [R.RBulk{"summary"}, R.RBulk{"Show helpful text about the different subcommands"}, R.RBulk{"since"}, R.RBulk{"7.0.0"}, R.RBulk{"group"}, R.RBulk{"scripting"}, R.RBulk{"complexity"}, R.RBulk{"O(1)"}]}, Desc{"function|kill", R.IPos{2n}, ["slow", "scripting"], [], KBySpecs{}, False{},
+    [R.RBulk{"function|kill"}, R.RInt{R.IPos{2n}}, R.RSet{[R.RStatus{"noscript"}, R.RStatus{"allow_busy"}]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RSet{[R.RStatus{"@slow"}, R.RStatus{"@scripting"}]}, R.RSet{[R.RBulk{"request_policy:all_shards"}, R.RBulk{"response_policy:one_succeeded"}]}, R.RSet{[]}],
+    [R.RBulk{"summary"}, R.RBulk{"Kill the function currently in execution."}, R.RBulk{"since"}, R.RBulk{"7.0.0"}, R.RBulk{"group"}, R.RBulk{"scripting"}, R.RBulk{"complexity"}, R.RBulk{"O(1)"}]}, Desc{"function|list", R.INeg{1n}, ["slow", "scripting"], [], KBySpecs{}, False{},
+    [R.RBulk{"function|list"}, R.RInt{R.INeg{1n}}, R.RSet{[R.RStatus{"noscript"}]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RSet{[R.RStatus{"@slow"}, R.RStatus{"@scripting"}]}, R.RSet{[R.RBulk{"nondeterministic_output_order"}]}, R.RSet{[]}],
+    [R.RBulk{"summary"}, R.RBulk{"List information about all the functions"}, R.RBulk{"since"}, R.RBulk{"7.0.0"}, R.RBulk{"group"}, R.RBulk{"scripting"}, R.RBulk{"complexity"}, R.RBulk{"O(N) where N is the number of functions"}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"library-name-pattern"}, R.RBulk{"type"}, R.RBulk{"string"}, R.RBulk{"token"}, R.RBulk{"LIBRARYNAME"}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"optional"}]}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"withcode"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"token"}, R.RBulk{"WITHCODE"}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"optional"}]}]}]}]}, Desc{"function|load", R.INeg{2n}, ["write", "slow", "scripting"], [], KBySpecs{}, False{},
+    [R.RBulk{"function|load"}, R.RInt{R.INeg{2n}}, R.RSet{[R.RStatus{"write"}, R.RStatus{"denyoom"}, R.RStatus{"noscript"}]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RSet{[R.RStatus{"@write"}, R.RStatus{"@slow"}, R.RStatus{"@scripting"}]}, R.RSet{[R.RBulk{"request_policy:all_shards"}, R.RBulk{"response_policy:all_succeeded"}]}, R.RSet{[]}],
+    [R.RBulk{"summary"}, R.RBulk{"Create a function with the given arguments (name, code, description)"}, R.RBulk{"since"}, R.RBulk{"7.0.0"}, R.RBulk{"group"}, R.RBulk{"scripting"}, R.RBulk{"complexity"}, R.RBulk{"O(1) (considering compilation time is redundant)"}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"replace"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"token"}, R.RBulk{"REPLACE"}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"optional"}]}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"function-code"}, R.RBulk{"type"}, R.RBulk{"string"}]}]}]}, Desc{"function|restore", R.INeg{2n}, ["write", "slow", "scripting"], [], KBySpecs{}, False{},
+    [R.RBulk{"function|restore"}, R.RInt{R.INeg{2n}}, R.RSet{[R.RStatus{"write"}, R.RStatus{"denyoom"}, R.RStatus{"noscript"}]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RSet{[R.RStatus{"@write"}, R.RStatus{"@slow"}, R.RStatus{"@scripting"}]}, R.RSet{[R.RBulk{"request_policy:all_shards"}, R.RBulk{"response_policy:all_succeeded"}]}, R.RSet{[]}],
+    [R.RBulk{"summary"}, R.RBulk{"Restore all the functions on the given payload"}, R.RBulk{"since"}, R.RBulk{"7.0.0"}, R.RBulk{"group"}, R.RBulk{"scripting"}, R.RBulk{"complexity"}, R.RBulk{"O(N) where N is the number of functions on the payload"}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"serialized-value"}, R.RBulk{"type"}, R.RBulk{"string"}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"policy"}, R.RBulk{"type"}, R.RBulk{"oneof"}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"optional"}]}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"flush"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"token"}, R.RBulk{"FLUSH"}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"append"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"token"}, R.RBulk{"APPEND"}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"replace"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"token"}, R.RBulk{"REPLACE"}]}]}]}]}]}, Desc{"function|stats", R.IPos{2n}, ["slow", "scripting"], [], KBySpecs{}, False{},
+    [R.RBulk{"function|stats"}, R.RInt{R.IPos{2n}}, R.RSet{[R.RStatus{"noscript"}, R.RStatus{"allow_busy"}]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RSet{[R.RStatus{"@slow"}, R.RStatus{"@scripting"}]}, R.RSet{[R.RBulk{"nondeterministic_output"}, R.RBulk{"request_policy:all_shards"}, R.RBulk{"response_policy:special"}]}, R.RSet{[]}],
+    [R.RBulk{"summary"}, R.RBulk{"Return information about the function currently running (name, description, duration)"}, R.RBulk{"since"}, R.RBulk{"7.0.0"}, R.RBulk{"group"}, R.RBulk{"scripting"}, R.RBulk{"complexity"}, R.RBulk{"O(1)"}]}]}
 
 def cmd.geoadd() -> Top:
   Top{Desc{"geoadd", R.INeg{4n}, ["write", "geo", "slow"], [KSpec{["RW", "update"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}, False{},
@@ -992,6 +1036,22 @@ def cmd.scard() -> Top:
     [R.RBulk{"summary"}, R.RBulk{"Get the number of members in a set"}, R.RBulk{"since"}, R.RBulk{"1.0.0"}, R.RBulk{"group"}, R.RBulk{"set"}, R.RBulk{"complexity"}, R.RBulk{"O(1)"}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"key"}, R.RBulk{"type"}, R.RBulk{"key"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{0n}}]}]}]},
   []}
 
+def cmd.script() -> Top:
+  Top{Desc{"script", R.INeg{1n}, ["slow"], [], KBySpecs{}, False{},
+    [R.RBulk{"script"}, R.RInt{R.INeg{1n}}, R.RSet{[]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RSet{[R.RStatus{"@slow"}]}, R.RSet{[]}, R.RSet{[]}],
+    [R.RBulk{"summary"}, R.RBulk{"A container for Lua scripts management commands"}, R.RBulk{"since"}, R.RBulk{"2.6.0"}, R.RBulk{"group"}, R.RBulk{"scripting"}, R.RBulk{"complexity"}, R.RBulk{"Depends on subcommand."}]},
+  [Desc{"script|exists", R.INeg{2n}, ["slow", "scripting"], [], KBySpecs{}, False{},
+    [R.RBulk{"script|exists"}, R.RInt{R.INeg{2n}}, R.RSet{[R.RStatus{"noscript"}]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RSet{[R.RStatus{"@slow"}, R.RStatus{"@scripting"}]}, R.RSet{[R.RBulk{"request_policy:all_shards"}, R.RBulk{"response_policy:agg_logical_and"}]}, R.RSet{[]}],
+    [R.RBulk{"summary"}, R.RBulk{"Check existence of scripts in the script cache."}, R.RBulk{"since"}, R.RBulk{"2.6.0"}, R.RBulk{"group"}, R.RBulk{"scripting"}, R.RBulk{"complexity"}, R.RBulk{"O(N) with N being the number of scripts to check (so checking a single script is an O(1) operation)."}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"sha1"}, R.RBulk{"type"}, R.RBulk{"string"}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"multiple"}]}]}]}]}, Desc{"script|flush", R.INeg{1n}, ["slow", "scripting"], [], KBySpecs{}, False{},
+    [R.RBulk{"script|flush"}, R.RInt{R.INeg{1n}}, R.RSet{[R.RStatus{"noscript"}]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RSet{[R.RStatus{"@slow"}, R.RStatus{"@scripting"}]}, R.RSet{[R.RBulk{"request_policy:all_nodes"}, R.RBulk{"response_policy:all_succeeded"}]}, R.RSet{[]}],
+    [R.RBulk{"summary"}, R.RBulk{"Remove all the scripts from the script cache."}, R.RBulk{"since"}, R.RBulk{"2.6.0"}, R.RBulk{"group"}, R.RBulk{"scripting"}, R.RBulk{"complexity"}, R.RBulk{"O(N) with N being the number of scripts in cache"}, R.RBulk{"history"}, R.RSet{[R.RArray{[R.RBulk{"6.2.0"}, R.RBulk{"Added the `ASYNC` and `SYNC` flushing mode modifiers."}]}]}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"async"}, R.RBulk{"type"}, R.RBulk{"oneof"}, R.RBulk{"since"}, R.RBulk{"6.2.0"}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"optional"}]}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"async"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"token"}, R.RBulk{"ASYNC"}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"sync"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"token"}, R.RBulk{"SYNC"}]}]}]}]}]}, Desc{"script|help", R.IPos{2n}, ["slow", "scripting"], [], KBySpecs{}, False{},
+    [R.RBulk{"script|help"}, R.RInt{R.IPos{2n}}, R.RSet{[R.RStatus{"loading"}, R.RStatus{"stale"}]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RSet{[R.RStatus{"@slow"}, R.RStatus{"@scripting"}]}, R.RSet{[]}, R.RSet{[]}],
+    [R.RBulk{"summary"}, R.RBulk{"Show helpful text about the different subcommands"}, R.RBulk{"since"}, R.RBulk{"5.0.0"}, R.RBulk{"group"}, R.RBulk{"scripting"}, R.RBulk{"complexity"}, R.RBulk{"O(1)"}]}, Desc{"script|kill", R.IPos{2n}, ["slow", "scripting"], [], KBySpecs{}, False{},
+    [R.RBulk{"script|kill"}, R.RInt{R.IPos{2n}}, R.RSet{[R.RStatus{"noscript"}, R.RStatus{"allow_busy"}]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RSet{[R.RStatus{"@slow"}, R.RStatus{"@scripting"}]}, R.RSet{[R.RBulk{"request_policy:all_shards"}, R.RBulk{"response_policy:one_succeeded"}]}, R.RSet{[]}],
+    [R.RBulk{"summary"}, R.RBulk{"Kill the script currently in execution."}, R.RBulk{"since"}, R.RBulk{"2.6.0"}, R.RBulk{"group"}, R.RBulk{"scripting"}, R.RBulk{"complexity"}, R.RBulk{"O(1)"}]}, Desc{"script|load", R.IPos{3n}, ["slow", "scripting"], [], KBySpecs{}, False{},
+    [R.RBulk{"script|load"}, R.RInt{R.IPos{3n}}, R.RSet{[R.RStatus{"noscript"}, R.RStatus{"stale"}]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RSet{[R.RStatus{"@slow"}, R.RStatus{"@scripting"}]}, R.RSet{[R.RBulk{"request_policy:all_nodes"}, R.RBulk{"response_policy:all_succeeded"}]}, R.RSet{[]}],
+    [R.RBulk{"summary"}, R.RBulk{"Load the specified Lua script into the script cache."}, R.RBulk{"since"}, R.RBulk{"2.6.0"}, R.RBulk{"group"}, R.RBulk{"scripting"}, R.RBulk{"complexity"}, R.RBulk{"O(N) with N being the length in bytes of the script body."}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"script"}, R.RBulk{"type"}, R.RBulk{"string"}]}]}]}]}
+
 def cmd.sdiff() -> Top:
   Top{Desc{"sdiff", R.INeg{1n}, ["read", "set", "slow"], [KSpec{["RO", "access"], 1n, R.INeg{0n}, 1n, 0n}], KBySpecs{}, False{},
     [R.RBulk{"sdiff"}, R.RInt{R.INeg{1n}}, R.RSet{[R.RStatus{"readonly"}]}, R.RInt{R.IPos{1n}}, R.RInt{R.INeg{0n}}, R.RInt{R.IPos{1n}}, R.RSet{[R.RStatus{"@read"}, R.RStatus{"@set"}, R.RStatus{"@slow"}]}, R.RSet{[R.RBulk{"nondeterministic_output_order"}]}, R.RSet{[R.RMap{[R.RBulk{"flags"}, R.RSet{[R.RStatus{"RO"}, R.RStatus{"access"}]}, R.RBulk{"begin_search"}, R.RMap{[R.RBulk{"type"}, R.RBulk{"index"}, R.RBulk{"spec"}, R.RMap{[R.RBulk{"index"}, R.RInt{R.IPos{1n}}]}]}, R.RBulk{"find_keys"}, R.RMap{[R.RBulk{"type"}, R.RBulk{"range"}, R.RBulk{"spec"}, R.RMap{[R.RBulk{"lastkey"}, R.RInt{R.INeg{0n}}, R.RBulk{"keystep"}, R.RInt{R.IPos{1n}}, R.RBulk{"limit"}, R.RInt{R.IPos{0n}}]}]}]}]}],
@@ -1246,6 +1306,18 @@ def cmd.watch() -> Top:
     [R.RBulk{"summary"}, R.RBulk{"Watch the given keys to determine execution of the MULTI/EXEC block"}, R.RBulk{"since"}, R.RBulk{"2.2.0"}, R.RBulk{"group"}, R.RBulk{"transactions"}, R.RBulk{"complexity"}, R.RBulk{"O(1) for every key."}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"key"}, R.RBulk{"type"}, R.RBulk{"key"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{0n}}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"multiple"}]}]}]}]},
   []}
 
+def cmd.xadd() -> Top:
+  Top{Desc{"xadd", R.INeg{4n}, ["write", "stream", "fast"], [KSpec{["RW", "update"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}, False{},
+    [R.RBulk{"xadd"}, R.RInt{R.INeg{4n}}, R.RSet{[R.RStatus{"write"}, R.RStatus{"denyoom"}, R.RStatus{"fast"}]}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RSet{[R.RStatus{"@write"}, R.RStatus{"@stream"}, R.RStatus{"@fast"}]}, R.RSet{[R.RBulk{"nondeterministic_output"}]}, R.RSet{[R.RMap{[R.RBulk{"notes"}, R.RBulk{"UPDATE instead of INSERT because of the optional trimming feature"}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"RW"}, R.RStatus{"update"}]}, R.RBulk{"begin_search"}, R.RMap{[R.RBulk{"type"}, R.RBulk{"index"}, R.RBulk{"spec"}, R.RMap{[R.RBulk{"index"}, R.RInt{R.IPos{1n}}]}]}, R.RBulk{"find_keys"}, R.RMap{[R.RBulk{"type"}, R.RBulk{"range"}, R.RBulk{"spec"}, R.RMap{[R.RBulk{"lastkey"}, R.RInt{R.IPos{0n}}, R.RBulk{"keystep"}, R.RInt{R.IPos{1n}}, R.RBulk{"limit"}, R.RInt{R.IPos{0n}}]}]}]}]}],
+    [R.RBulk{"summary"}, R.RBulk{"Appends a new entry to a stream"}, R.RBulk{"since"}, R.RBulk{"5.0.0"}, R.RBulk{"group"}, R.RBulk{"stream"}, R.RBulk{"complexity"}, R.RBulk{"O(1) when adding a new entry, O(N) when trimming where N being the number of entries evicted."}, R.RBulk{"history"}, R.RSet{[R.RArray{[R.RBulk{"6.2.0"}, R.RBulk{"Added the `NOMKSTREAM` option, `MINID` trimming strategy and the `LIMIT` option."}]}, R.RArray{[R.RBulk{"7.0.0"}, R.RBulk{"Added support for the `<ms>-*` explicit ID form."}]}]}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"key"}, R.RBulk{"type"}, R.RBulk{"key"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{0n}}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"nomkstream"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"token"}, R.RBulk{"NOMKSTREAM"}, R.RBulk{"since"}, R.RBulk{"6.2.0"}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"optional"}]}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"trim"}, R.RBulk{"type"}, R.RBulk{"block"}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"optional"}]}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"strategy"}, R.RBulk{"type"}, R.RBulk{"oneof"}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"maxlen"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"token"}, R.RBulk{"MAXLEN"}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"minid"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"token"}, R.RBulk{"MINID"}, R.RBulk{"since"}, R.RBulk{"6.2.0"}]}]}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"operator"}, R.RBulk{"type"}, R.RBulk{"oneof"}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"optional"}]}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"equal"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"token"}, R.RBulk{"="}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"approximately"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"token"}, R.RBulk{"~"}]}]}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"threshold"}, R.RBulk{"type"}, R.RBulk{"string"}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"count"}, R.RBulk{"type"}, R.RBulk{"integer"}, R.RBulk{"token"}, R.RBulk{"LIMIT"}, R.RBulk{"since"}, R.RBulk{"6.2.0"}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"optional"}]}]}]}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"id_or_auto"}, R.RBulk{"type"}, R.RBulk{"oneof"}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"auto_id"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"token"}, R.RBulk{"*"}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"id"}, R.RBulk{"type"}, R.RBulk{"string"}]}]}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"field_value"}, R.RBulk{"type"}, R.RBulk{"block"}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"multiple"}]}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"field"}, R.RBulk{"type"}, R.RBulk{"string"}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"value"}, R.RBulk{"type"}, R.RBulk{"string"}]}]}]}]}]},
+  []}
+
+def cmd.xdel() -> Top:
+  Top{Desc{"xdel", R.INeg{2n}, ["write", "stream", "fast"], [KSpec{["RW", "delete"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}, False{},
+    [R.RBulk{"xdel"}, R.RInt{R.INeg{2n}}, R.RSet{[R.RStatus{"write"}, R.RStatus{"fast"}]}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RSet{[R.RStatus{"@write"}, R.RStatus{"@stream"}, R.RStatus{"@fast"}]}, R.RSet{[]}, R.RSet{[R.RMap{[R.RBulk{"flags"}, R.RSet{[R.RStatus{"RW"}, R.RStatus{"delete"}]}, R.RBulk{"begin_search"}, R.RMap{[R.RBulk{"type"}, R.RBulk{"index"}, R.RBulk{"spec"}, R.RMap{[R.RBulk{"index"}, R.RInt{R.IPos{1n}}]}]}, R.RBulk{"find_keys"}, R.RMap{[R.RBulk{"type"}, R.RBulk{"range"}, R.RBulk{"spec"}, R.RMap{[R.RBulk{"lastkey"}, R.RInt{R.IPos{0n}}, R.RBulk{"keystep"}, R.RInt{R.IPos{1n}}, R.RBulk{"limit"}, R.RInt{R.IPos{0n}}]}]}]}]}],
+    [R.RBulk{"summary"}, R.RBulk{"Removes the specified entries from the stream. Returns the number of items actually deleted, that may be different from the number of IDs passed in case certain IDs do not exist."}, R.RBulk{"since"}, R.RBulk{"5.0.0"}, R.RBulk{"group"}, R.RBulk{"stream"}, R.RBulk{"complexity"}, R.RBulk{"O(1) for each single item to delete in the stream, regardless of the stream size."}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"key"}, R.RBulk{"type"}, R.RBulk{"key"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{0n}}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"id"}, R.RBulk{"type"}, R.RBulk{"string"}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"multiple"}]}]}]}]},
+  []}
+
 def cmd.xinfo() -> Top:
   Top{Desc{"xinfo", R.INeg{1n}, ["slow"], [], KBySpecs{}, False{},
     [R.RBulk{"xinfo"}, R.RInt{R.INeg{1n}}, R.RSet{[]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RSet{[R.RStatus{"@slow"}]}, R.RSet{[]}, R.RSet{[]}],
@@ -1288,6 +1360,18 @@ def cmd.xrevrange() -> Top:
   Top{Desc{"xrevrange", R.INeg{3n}, ["read", "stream", "slow"], [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}, False{},
     [R.RBulk{"xrevrange"}, R.RInt{R.INeg{3n}}, R.RSet{[R.RStatus{"readonly"}]}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RSet{[R.RStatus{"@read"}, R.RStatus{"@stream"}, R.RStatus{"@slow"}]}, R.RSet{[]}, R.RSet{[R.RMap{[R.RBulk{"flags"}, R.RSet{[R.RStatus{"RO"}, R.RStatus{"access"}]}, R.RBulk{"begin_search"}, R.RMap{[R.RBulk{"type"}, R.RBulk{"index"}, R.RBulk{"spec"}, R.RMap{[R.RBulk{"index"}, R.RInt{R.IPos{1n}}]}]}, R.RBulk{"find_keys"}, R.RMap{[R.RBulk{"type"}, R.RBulk{"range"}, R.RBulk{"spec"}, R.RMap{[R.RBulk{"lastkey"}, R.RInt{R.IPos{0n}}, R.RBulk{"keystep"}, R.RInt{R.IPos{1n}}, R.RBulk{"limit"}, R.RInt{R.IPos{0n}}]}]}]}]}],
     [R.RBulk{"summary"}, R.RBulk{"Return a range of elements in a stream, with IDs matching the specified IDs interval, in reverse order (from greater to smaller IDs) compared to XRANGE"}, R.RBulk{"since"}, R.RBulk{"5.0.0"}, R.RBulk{"group"}, R.RBulk{"stream"}, R.RBulk{"complexity"}, R.RBulk{"O(N) with N being the number of elements returned. If N is constant (e.g. always asking for the first 10 elements with COUNT), you can consider it O(1)."}, R.RBulk{"history"}, R.RSet{[R.RArray{[R.RBulk{"6.2.0"}, R.RBulk{"Added exclusive ranges."}]}]}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"key"}, R.RBulk{"type"}, R.RBulk{"key"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{0n}}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"end"}, R.RBulk{"type"}, R.RBulk{"string"}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"start"}, R.RBulk{"type"}, R.RBulk{"string"}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"count"}, R.RBulk{"type"}, R.RBulk{"integer"}, R.RBulk{"token"}, R.RBulk{"COUNT"}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"optional"}]}]}]}]},
+  []}
+
+def cmd.xsetid() -> Top:
+  Top{Desc{"xsetid", R.INeg{2n}, ["write", "stream", "fast"], [KSpec{["RW", "update"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}, False{},
+    [R.RBulk{"xsetid"}, R.RInt{R.INeg{2n}}, R.RSet{[R.RStatus{"write"}, R.RStatus{"denyoom"}, R.RStatus{"fast"}]}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RSet{[R.RStatus{"@write"}, R.RStatus{"@stream"}, R.RStatus{"@fast"}]}, R.RSet{[]}, R.RSet{[R.RMap{[R.RBulk{"flags"}, R.RSet{[R.RStatus{"RW"}, R.RStatus{"update"}]}, R.RBulk{"begin_search"}, R.RMap{[R.RBulk{"type"}, R.RBulk{"index"}, R.RBulk{"spec"}, R.RMap{[R.RBulk{"index"}, R.RInt{R.IPos{1n}}]}]}, R.RBulk{"find_keys"}, R.RMap{[R.RBulk{"type"}, R.RBulk{"range"}, R.RBulk{"spec"}, R.RMap{[R.RBulk{"lastkey"}, R.RInt{R.IPos{0n}}, R.RBulk{"keystep"}, R.RInt{R.IPos{1n}}, R.RBulk{"limit"}, R.RInt{R.IPos{0n}}]}]}]}]}],
+    [R.RBulk{"summary"}, R.RBulk{"An internal command for replicating stream values"}, R.RBulk{"since"}, R.RBulk{"5.0.0"}, R.RBulk{"group"}, R.RBulk{"stream"}, R.RBulk{"complexity"}, R.RBulk{"O(1)"}, R.RBulk{"history"}, R.RSet{[R.RArray{[R.RBulk{"7.0.0"}, R.RBulk{"Added the `entries_added` and `max_deleted_entry_id` arguments."}]}]}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"key"}, R.RBulk{"type"}, R.RBulk{"key"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{0n}}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"last-id"}, R.RBulk{"type"}, R.RBulk{"string"}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"entries_added"}, R.RBulk{"type"}, R.RBulk{"integer"}, R.RBulk{"token"}, R.RBulk{"ENTRIESADDED"}, R.RBulk{"since"}, R.RBulk{"7.0.0"}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"optional"}]}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"max_deleted_entry_id"}, R.RBulk{"type"}, R.RBulk{"string"}, R.RBulk{"token"}, R.RBulk{"MAXDELETEDID"}, R.RBulk{"since"}, R.RBulk{"7.0.0"}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"optional"}]}]}]}]},
+  []}
+
+def cmd.xtrim() -> Top:
+  Top{Desc{"xtrim", R.INeg{3n}, ["write", "stream", "slow"], [KSpec{["RW", "delete"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}, False{},
+    [R.RBulk{"xtrim"}, R.RInt{R.INeg{3n}}, R.RSet{[R.RStatus{"write"}]}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RSet{[R.RStatus{"@write"}, R.RStatus{"@stream"}, R.RStatus{"@slow"}]}, R.RSet{[R.RBulk{"nondeterministic_output"}]}, R.RSet{[R.RMap{[R.RBulk{"flags"}, R.RSet{[R.RStatus{"RW"}, R.RStatus{"delete"}]}, R.RBulk{"begin_search"}, R.RMap{[R.RBulk{"type"}, R.RBulk{"index"}, R.RBulk{"spec"}, R.RMap{[R.RBulk{"index"}, R.RInt{R.IPos{1n}}]}]}, R.RBulk{"find_keys"}, R.RMap{[R.RBulk{"type"}, R.RBulk{"range"}, R.RBulk{"spec"}, R.RMap{[R.RBulk{"lastkey"}, R.RInt{R.IPos{0n}}, R.RBulk{"keystep"}, R.RInt{R.IPos{1n}}, R.RBulk{"limit"}, R.RInt{R.IPos{0n}}]}]}]}]}],
+    [R.RBulk{"summary"}, R.RBulk{"Trims the stream to (approximately if '~' is passed) a certain size"}, R.RBulk{"since"}, R.RBulk{"5.0.0"}, R.RBulk{"group"}, R.RBulk{"stream"}, R.RBulk{"complexity"}, R.RBulk{"O(N), with N being the number of evicted entries. Constant times are very small however, since entries are organized in macro nodes containing multiple entries that can be released with a single deallocation."}, R.RBulk{"history"}, R.RSet{[R.RArray{[R.RBulk{"6.2.0"}, R.RBulk{"Added the `MINID` trimming strategy and the `LIMIT` option."}]}]}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"key"}, R.RBulk{"type"}, R.RBulk{"key"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{0n}}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"trim"}, R.RBulk{"type"}, R.RBulk{"block"}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"strategy"}, R.RBulk{"type"}, R.RBulk{"oneof"}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"maxlen"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"token"}, R.RBulk{"MAXLEN"}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"minid"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"token"}, R.RBulk{"MINID"}, R.RBulk{"since"}, R.RBulk{"6.2.0"}]}]}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"operator"}, R.RBulk{"type"}, R.RBulk{"oneof"}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"optional"}]}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"equal"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"token"}, R.RBulk{"="}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"approximately"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"token"}, R.RBulk{"~"}]}]}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"threshold"}, R.RBulk{"type"}, R.RBulk{"string"}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"count"}, R.RBulk{"type"}, R.RBulk{"integer"}, R.RBulk{"token"}, R.RBulk{"LIMIT"}, R.RBulk{"since"}, R.RBulk{"6.2.0"}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"optional"}]}]}]}]}]}]},
   []}
 
 def cmd.zadd() -> Top:
@@ -1484,7 +1568,7 @@ def cmd.zunionstore() -> Top:
 
 # the commands, by name
 def table() -> List<&2, Top>:
-  [cmd.acl(), cmd.append(), cmd.auth(), cmd.bgrewriteaof(), cmd.bgsave(), cmd.bitcount(), cmd.bitfield(), cmd.bitfield_ro(), cmd.bitop(), cmd.bitpos(), cmd.blmove(), cmd.blmpop(), cmd.blpop(), cmd.brpop(), cmd.brpoplpush(), cmd.bzmpop(), cmd.bzpopmax(), cmd.bzpopmin(), cmd.client(), cmd.command(), cmd.config(), cmd.copy(), cmd.dbsize(), cmd.decr(), cmd.decrby(), cmd.del(), cmd.discard(), cmd.dump(), cmd.echo(), cmd.eval(), cmd.exec(), cmd.exists(), cmd.expire(), cmd.expireat(), cmd.expiretime(), cmd.flushall(), cmd.flushdb(), cmd.function(), cmd.geoadd(), cmd.geodist(), cmd.geohash(), cmd.geopos(), cmd.georadius(), cmd.georadius_ro(), cmd.georadiusbymember(), cmd.georadiusbymember_ro(), cmd.geosearch(), cmd.geosearchstore(), cmd.get(), cmd.getbit(), cmd.getdel(), cmd.getex(), cmd.getrange(), cmd.getset(), cmd.hdel(), cmd.hello(), cmd.hexists(), cmd.hget(), cmd.hgetall(), cmd.hincrby(), cmd.hincrbyfloat(), cmd.hkeys(), cmd.hlen(), cmd.hmget(), cmd.hmset(), cmd.hrandfield(), cmd.hscan(), cmd.hset(), cmd.hsetnx(), cmd.hstrlen(), cmd.hvals(), cmd.incr(), cmd.incrby(), cmd.incrbyfloat(), cmd.info(), cmd.keys(), cmd.lastsave(), cmd.latency(), cmd.lcs(), cmd.lindex(), cmd.linsert(), cmd.llen(), cmd.lmove(), cmd.lmpop(), cmd.lolwut(), cmd.lpop(), cmd.lpos(), cmd.lpush(), cmd.lpushx(), cmd.lrange(), cmd.lrem(), cmd.lset(), cmd.ltrim(), cmd.memory(), cmd.mget(), cmd.monitor(), cmd.move(), cmd.mset(), cmd.msetnx(), cmd.multi(), cmd.object(), cmd.persist(), cmd.pexpire(), cmd.pexpireat(), cmd.pexpiretime(), cmd.pfadd(), cmd.pfcount(), cmd.pfdebug(), cmd.pfmerge(), cmd.pfselftest(), cmd.ping(), cmd.psetex(), cmd.psubscribe(), cmd.pttl(), cmd.publish(), cmd.pubsub(), cmd.punsubscribe(), cmd.quit(), cmd.randomkey(), cmd.rename(), cmd.renamenx(), cmd.reset(), cmd.restore(), cmd.role(), cmd.rpop(), cmd.rpoplpush(), cmd.rpush(), cmd.rpushx(), cmd.sadd(), cmd.save(), cmd.scan(), cmd.scard(), cmd.sdiff(), cmd.sdiffstore(), cmd.select(), cmd.set(), cmd.setbit(), cmd.setex(), cmd.setnx(), cmd.setrange(), cmd.shutdown(), cmd.sinter(), cmd.sintercard(), cmd.sinterstore(), cmd.sismember(), cmd.slowlog(), cmd.smembers(), cmd.smismember(), cmd.smove(), cmd.sort(), cmd.sort_ro(), cmd.spop(), cmd.spublish(), cmd.srandmember(), cmd.srem(), cmd.sscan(), cmd.ssubscribe(), cmd.strlen(), cmd.subscribe(), cmd.substr(), cmd.sunion(), cmd.sunionstore(), cmd.sunsubscribe(), cmd.swapdb(), cmd.time(), cmd.touch(), cmd.ttl(), cmd.type(), cmd.unlink(), cmd.unsubscribe(), cmd.unwatch(), cmd.wait(), cmd.watch(), cmd.xinfo(), cmd.xlen(), cmd.xpending(), cmd.xrange(), cmd.xread(), cmd.xrevrange(), cmd.zadd(), cmd.zcard(), cmd.zcount(), cmd.zdiff(), cmd.zdiffstore(), cmd.zincrby(), cmd.zinter(), cmd.zintercard(), cmd.zinterstore(), cmd.zlexcount(), cmd.zmpop(), cmd.zmscore(), cmd.zpopmax(), cmd.zpopmin(), cmd.zrandmember(), cmd.zrange(), cmd.zrangebylex(), cmd.zrangebyscore(), cmd.zrangestore(), cmd.zrank(), cmd.zrem(), cmd.zremrangebylex(), cmd.zremrangebyrank(), cmd.zremrangebyscore(), cmd.zrevrange(), cmd.zrevrangebylex(), cmd.zrevrangebyscore(), cmd.zrevrank(), cmd.zscan(), cmd.zscore(), cmd.zunion(), cmd.zunionstore()]
+  [cmd.acl(), cmd.append(), cmd.auth(), cmd.bgrewriteaof(), cmd.bgsave(), cmd.bitcount(), cmd.bitfield(), cmd.bitfield_ro(), cmd.bitop(), cmd.bitpos(), cmd.blmove(), cmd.blmpop(), cmd.blpop(), cmd.brpop(), cmd.brpoplpush(), cmd.bzmpop(), cmd.bzpopmax(), cmd.bzpopmin(), cmd.client(), cmd.command(), cmd.config(), cmd.copy(), cmd.dbsize(), cmd.decr(), cmd.decrby(), cmd.del(), cmd.discard(), cmd.dump(), cmd.echo(), cmd.eval(), cmd.eval_ro(), cmd.evalsha(), cmd.evalsha_ro(), cmd.exec(), cmd.exists(), cmd.expire(), cmd.expireat(), cmd.expiretime(), cmd.fcall(), cmd.fcall_ro(), cmd.flushall(), cmd.flushdb(), cmd.function(), cmd.geoadd(), cmd.geodist(), cmd.geohash(), cmd.geopos(), cmd.georadius(), cmd.georadius_ro(), cmd.georadiusbymember(), cmd.georadiusbymember_ro(), cmd.geosearch(), cmd.geosearchstore(), cmd.get(), cmd.getbit(), cmd.getdel(), cmd.getex(), cmd.getrange(), cmd.getset(), cmd.hdel(), cmd.hello(), cmd.hexists(), cmd.hget(), cmd.hgetall(), cmd.hincrby(), cmd.hincrbyfloat(), cmd.hkeys(), cmd.hlen(), cmd.hmget(), cmd.hmset(), cmd.hrandfield(), cmd.hscan(), cmd.hset(), cmd.hsetnx(), cmd.hstrlen(), cmd.hvals(), cmd.incr(), cmd.incrby(), cmd.incrbyfloat(), cmd.info(), cmd.keys(), cmd.lastsave(), cmd.latency(), cmd.lcs(), cmd.lindex(), cmd.linsert(), cmd.llen(), cmd.lmove(), cmd.lmpop(), cmd.lolwut(), cmd.lpop(), cmd.lpos(), cmd.lpush(), cmd.lpushx(), cmd.lrange(), cmd.lrem(), cmd.lset(), cmd.ltrim(), cmd.memory(), cmd.mget(), cmd.monitor(), cmd.move(), cmd.mset(), cmd.msetnx(), cmd.multi(), cmd.object(), cmd.persist(), cmd.pexpire(), cmd.pexpireat(), cmd.pexpiretime(), cmd.pfadd(), cmd.pfcount(), cmd.pfdebug(), cmd.pfmerge(), cmd.pfselftest(), cmd.ping(), cmd.psetex(), cmd.psubscribe(), cmd.pttl(), cmd.publish(), cmd.pubsub(), cmd.punsubscribe(), cmd.quit(), cmd.randomkey(), cmd.rename(), cmd.renamenx(), cmd.reset(), cmd.restore(), cmd.role(), cmd.rpop(), cmd.rpoplpush(), cmd.rpush(), cmd.rpushx(), cmd.sadd(), cmd.save(), cmd.scan(), cmd.scard(), cmd.script(), cmd.sdiff(), cmd.sdiffstore(), cmd.select(), cmd.set(), cmd.setbit(), cmd.setex(), cmd.setnx(), cmd.setrange(), cmd.shutdown(), cmd.sinter(), cmd.sintercard(), cmd.sinterstore(), cmd.sismember(), cmd.slowlog(), cmd.smembers(), cmd.smismember(), cmd.smove(), cmd.sort(), cmd.sort_ro(), cmd.spop(), cmd.spublish(), cmd.srandmember(), cmd.srem(), cmd.sscan(), cmd.ssubscribe(), cmd.strlen(), cmd.subscribe(), cmd.substr(), cmd.sunion(), cmd.sunionstore(), cmd.sunsubscribe(), cmd.swapdb(), cmd.time(), cmd.touch(), cmd.ttl(), cmd.type(), cmd.unlink(), cmd.unsubscribe(), cmd.unwatch(), cmd.wait(), cmd.watch(), cmd.xadd(), cmd.xdel(), cmd.xinfo(), cmd.xlen(), cmd.xpending(), cmd.xrange(), cmd.xread(), cmd.xrevrange(), cmd.xsetid(), cmd.xtrim(), cmd.zadd(), cmd.zcard(), cmd.zcount(), cmd.zdiff(), cmd.zdiffstore(), cmd.zincrby(), cmd.zinter(), cmd.zintercard(), cmd.zinterstore(), cmd.zlexcount(), cmd.zmpop(), cmd.zmscore(), cmd.zpopmax(), cmd.zpopmin(), cmd.zrandmember(), cmd.zrange(), cmd.zrangebylex(), cmd.zrangebyscore(), cmd.zrangestore(), cmd.zrank(), cmd.zrem(), cmd.zremrangebylex(), cmd.zremrangebyrank(), cmd.zremrangebyscore(), cmd.zrevrange(), cmd.zrevrangebylex(), cmd.zrevrangebyscore(), cmd.zrevrank(), cmd.zscan(), cmd.zscore(), cmd.zunion(), cmd.zunionstore()]
 
 # Redis's ACL categories (ACL CAT)
 def categories() -> List<&2, String>:
@@ -2388,30 +2472,36 @@ def ro.key(+key: Nat) -> Maybe<&2, Ro>:
     case 199n:
       Some{Ro{R.IPos{2n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
     case 205n:
-      Some{Ro{R.IPos{2n}, [KSpec{["RO"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+      Some{Ro{R.INeg{2n}, [], KByEval{}}}
     case 206n:
+      Some{Ro{R.INeg{2n}, [], KByEval{}}}
+    case 209n:
+      Some{Ro{R.INeg{2n}, [], KByEval{}}}
+    case 211n:
+      Some{Ro{R.IPos{2n}, [KSpec{["RO"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 212n:
       Some{Ro{R.INeg{3n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
-    case 207n:
+    case 213n:
       Some{Ro{R.INeg{3n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
-    case 208n:
+    case 214n:
       Some{Ro{R.INeg{3n}, [KSpecKw{["RO", "access"], "STREAMS", 1n, R.INeg{0n}, 1n, 2n}], KBySpecs{}}}
-    case 210n:
+    case 216n:
       Some{Ro{R.INeg{2n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
-    case 243n:
+    case 260n:
       Some{Ro{R.IPos{3n}, [KSpec{["RO"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
-    case 244n:
+    case 261n:
       Some{Ro{R.IPos{3n}, [KSpec{["RO"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
-    case 245n:
+    case 262n:
       Some{Ro{R.IPos{3n}, [KSpec{["RO"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
-    case 246n:
+    case 263n:
       Some{Ro{R.IPos{3n}, [KSpec{["RO"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
-    case 248n:
+    case 265n:
       Some{Ro{R.INeg{2n}, [KSpec{["RO"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
-    case 284n:
+    case 306n:
       Some{Ro{R.INeg{2n}, [KSpec{["RO", "access"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
-    case 285n:
+    case 307n:
       Some{Ro{R.IPos{3n}, [KSpec{["RO", "access"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
-    case 286n:
+    case 308n:
       Some{Ro{R.IPos{4n}, [KSpec{["RO", "access"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
     case _:
       None{}
@@ -2827,95 +2917,95 @@ def spec.key(+key: Nat) -> Maybe<&2, Ro>:
     case 203n:
       Some{Ro{R.IPos{1n}, [], KBySpecs{}}}
     case 204n:
-      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
+      Some{Ro{R.INeg{2n}, [], KByEval{}}}
     case 205n:
-      Some{Ro{R.IPos{2n}, [KSpec{["RO"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+      Some{Ro{R.INeg{2n}, [], KByEval{}}}
     case 206n:
-      Some{Ro{R.INeg{3n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+      Some{Ro{R.INeg{2n}, [], KByEval{}}}
     case 207n:
-      Some{Ro{R.INeg{3n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
     case 208n:
-      Some{Ro{R.INeg{3n}, [KSpecKw{["RO", "access"], "STREAMS", 1n, R.INeg{0n}, 1n, 2n}], KBySpecs{}}}
+      Some{Ro{R.INeg{2n}, [], KByEval{}}}
     case 209n:
-      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
+      Some{Ro{R.INeg{2n}, [], KByEval{}}}
     case 210n:
-      Some{Ro{R.INeg{2n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
-    case 211n:
-      Some{Ro{R.INeg{0n}, [], KBySpecs{}}}
-    case 212n:
-      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
-    case 213n:
-      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
-    case 214n:
-      Some{Ro{R.IPos{3n}, [], KBySpecs{}}}
-    case 215n:
-      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
-    case 216n:
-      Some{Ro{R.IPos{3n}, [], KBySpecs{}}}
-    case 217n:
-      Some{Ro{R.IPos{3n}, [], KBySpecs{}}}
-    case 218n:
-      Some{Ro{R.INeg{2n}, [], KBySpecs{}}}
-    case 219n:
-      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
-    case 220n:
-      Some{Ro{R.IPos{3n}, [], KBySpecs{}}}
-    case 221n:
-      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
-    case 222n:
       Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
+    case 211n:
+      Some{Ro{R.IPos{2n}, [KSpec{["RO"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 212n:
+      Some{Ro{R.INeg{3n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 213n:
+      Some{Ro{R.INeg{3n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 214n:
+      Some{Ro{R.INeg{3n}, [KSpecKw{["RO", "access"], "STREAMS", 1n, R.INeg{0n}, 1n, 2n}], KBySpecs{}}}
+    case 215n:
+      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
+    case 216n:
+      Some{Ro{R.INeg{2n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 217n:
+      Some{Ro{R.INeg{4n}, [KSpec{["RW", "update"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 218n:
+      Some{Ro{R.INeg{3n}, [KSpec{["RW", "delete"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 219n:
+      Some{Ro{R.INeg{2n}, [KSpec{["RW", "delete"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 220n:
+      Some{Ro{R.INeg{2n}, [KSpec{["RW", "update"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 221n:
+      Some{Ro{R.INeg{0n}, [], KBySpecs{}}}
+    case 222n:
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
     case 223n:
       Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
     case 224n:
-      Some{Ro{R.INeg{2n}, [], KBySpecs{}}}
+      Some{Ro{R.IPos{3n}, [], KBySpecs{}}}
     case 225n:
-      Some{Ro{R.INeg{2n}, [], KBySpecs{}}}
-    case 226n:
       Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case 226n:
+      Some{Ro{R.IPos{3n}, [], KBySpecs{}}}
     case 227n:
-      Some{Ro{R.INeg{2n}, [], KBySpecs{}}}
+      Some{Ro{R.IPos{3n}, [], KBySpecs{}}}
     case 228n:
-      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
+      Some{Ro{R.INeg{2n}, [], KBySpecs{}}}
     case 229n:
       Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
     case 230n:
-      Some{Ro{R.INeg{2n}, [], KBySpecs{}}}
+      Some{Ro{R.IPos{3n}, [], KBySpecs{}}}
     case 231n:
-      Some{Ro{R.INeg{3n}, [], KBySpecs{}}}
-    case 232n:
       Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case 232n:
+      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
     case 233n:
       Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
     case 234n:
-      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+      Some{Ro{R.INeg{2n}, [], KBySpecs{}}}
     case 235n:
-      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
+      Some{Ro{R.INeg{2n}, [], KBySpecs{}}}
     case 236n:
-      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
-    case 237n:
-      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
-    case 238n:
       Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case 237n:
+      Some{Ro{R.INeg{2n}, [], KBySpecs{}}}
+    case 238n:
+      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
     case 239n:
       Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
     case 240n:
-      Some{Ro{R.INeg{3n}, [], KBySpecs{}}}
+      Some{Ro{R.INeg{2n}, [], KBySpecs{}}}
     case 241n:
-      Some{Ro{R.INeg{3n}, [], KBySpecs{}}}
+      Some{Ro{R.IPos{3n}, [], KBySpecs{}}}
     case 242n:
-      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
     case 243n:
-      Some{Ro{R.IPos{3n}, [KSpec{["RO"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
-    case 244n:
-      Some{Ro{R.IPos{3n}, [KSpec{["RO"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
-    case 245n:
-      Some{Ro{R.IPos{3n}, [KSpec{["RO"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
-    case 246n:
-      Some{Ro{R.IPos{3n}, [KSpec{["RO"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
-    case 247n:
       Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case 244n:
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case 245n:
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case 246n:
+      Some{Ro{R.INeg{2n}, [], KBySpecs{}}}
+    case 247n:
+      Some{Ro{R.INeg{2n}, [], KBySpecs{}}}
     case 248n:
-      Some{Ro{R.INeg{2n}, [KSpec{["RO"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+      Some{Ro{R.INeg{3n}, [], KBySpecs{}}}
     case 249n:
       Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
     case 250n:
@@ -2923,74 +3013,118 @@ def spec.key(+key: Nat) -> Maybe<&2, Ro>:
     case 251n:
       Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
     case 252n:
-      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
     case 253n:
       Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
     case 254n:
-      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
     case 255n:
       Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
     case 256n:
-      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
     case 257n:
-      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
+      Some{Ro{R.INeg{3n}, [], KBySpecs{}}}
     case 258n:
-      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
+      Some{Ro{R.INeg{3n}, [], KBySpecs{}}}
     case 259n:
-      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
     case 260n:
-      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+      Some{Ro{R.IPos{3n}, [KSpec{["RO"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
     case 261n:
-      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+      Some{Ro{R.IPos{3n}, [KSpec{["RO"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
     case 262n:
-      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+      Some{Ro{R.IPos{3n}, [KSpec{["RO"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
     case 263n:
-      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+      Some{Ro{R.IPos{3n}, [KSpec{["RO"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
     case 264n:
-      Some{Ro{R.IPos{3n}, [], KBySpecs{}}}
-    case 265n:
       Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case 265n:
+      Some{Ro{R.INeg{2n}, [KSpec{["RO"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
     case 266n:
-      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
     case 267n:
-      Some{Ro{R.IPos{3n}, [], KBySpecs{}}}
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
     case 268n:
       Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
     case 269n:
-      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
     case 270n:
       Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
     case 271n:
-      Some{Ro{R.INeg{2n}, [], KBySpecs{}}}
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
     case 272n:
-      Some{Ro{R.INeg{3n}, [], KBySpecs{}}}
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
     case 273n:
       Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
     case 274n:
-      Some{Ro{R.IPos{3n}, [], KBySpecs{}}}
+      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
     case 275n:
-      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
     case 276n:
-      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
     case 277n:
       Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
     case 278n:
-      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
     case 279n:
       Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
     case 280n:
-      Some{Ro{R.INeg{2n}, [], KBySpecs{}}}
-    case 281n:
       Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case 281n:
+      Some{Ro{R.IPos{3n}, [], KBySpecs{}}}
     case 282n:
       Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
     case 283n:
-      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
     case 284n:
-      Some{Ro{R.INeg{2n}, [KSpec{["RO", "access"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+      Some{Ro{R.IPos{3n}, [], KBySpecs{}}}
     case 285n:
-      Some{Ro{R.IPos{3n}, [KSpec{["RO", "access"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
     case 286n:
+      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
+    case 287n:
+      Some{Ro{R.IPos{3n}, [], KBySpecs{}}}
+    case 288n:
+      Some{Ro{R.INeg{2n}, [], KBySpecs{}}}
+    case 289n:
+      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
+    case 290n:
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case 291n:
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case 292n:
+      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
+    case 293n:
+      Some{Ro{R.INeg{2n}, [], KBySpecs{}}}
+    case 294n:
+      Some{Ro{R.INeg{3n}, [], KBySpecs{}}}
+    case 295n:
+      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
+    case 296n:
+      Some{Ro{R.IPos{3n}, [], KBySpecs{}}}
+    case 297n:
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case 298n:
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case 299n:
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case 300n:
+      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
+    case 301n:
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case 302n:
+      Some{Ro{R.INeg{2n}, [], KBySpecs{}}}
+    case 303n:
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case 304n:
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case 305n:
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case 306n:
+      Some{Ro{R.INeg{2n}, [KSpec{["RO", "access"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 307n:
+      Some{Ro{R.IPos{3n}, [KSpec{["RO", "access"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 308n:
       Some{Ro{R.IPos{4n}, [KSpec{["RO", "access"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
     case _:
       None{}

@@ -32,9 +32,9 @@
 # whether MONITOR sees its calls, whether a monitor may run it, whether
 # CLIENT PAUSE WRITE holds it back, whether MULTI may queue it, whether
 # Redis flags it fast and whether the slow log skips it (from its flags),
-# and the word each code rides in (twelve bits, six of them set). The
-# fourth writes there how a request's name finds its command (Step 4
-# below), from the same numbers.
+# and the word a call of each key that runs rides in (twelve bits, six of
+# them set). The fourth writes there how a request's name finds its
+# command (Step 4 below), from the same numbers.
 #
 # The descriptions are data from Redis 7.0.15 (src/commands/*.json, BSD
 # 3-clause, Copyright (c) 2009-2012 Salvatore Sanfilippo and Redis
@@ -53,7 +53,8 @@ COMMANDS = {
     "unblock", "unpause"], "command": ["count", "docs",
     "getkeys", "getkeysandflags", "help", "info", "list"], "config": ["get", "help",
     "resetstat", "rewrite", "set"], "dbsize": [], "decr": [], "decrby": [], "del": [],
-    "echo": [], "exists": [], "flushall": [], "flushdb": [], "function": ["flush", "help"],
+    "echo": [], "exists": [], "flushall": [], "flushdb": [], "function": ["delete", "dump",
+    "flush", "help", "kill", "list", "load", "restore", "stats"],
     "get": [], "getset": [], "hello": [], "incr": [], "incrby": [], "info": [], "keys": [],
     "mget": [], "mset": [], "ping": [], "quit": [], "reset": [], "select": [], "set": [],
     "randomkey": [], "scan": [], "setnx": [], "strlen": [], "type": [], "unlink": [],
@@ -66,6 +67,8 @@ COMMANDS = {
     "bitfield_ro": [], "hset": [], "hsetnx": [], "hget": [], "hmget": [], "hmset": [],
     "hdel": [], "hlen": [], "hstrlen": [], "hexists": [], "hkeys": [], "hvals": [],
     "hgetall": [], "hincrby": [], "hscan": [], "hrandfield": [], "eval": [],
+    "evalsha": [], "eval_ro": [], "evalsha_ro": [], "script": ["exists", "flush", "help", "kill", "load"],
+    "fcall": [], "fcall_ro": [],
     "memory": ["doctor", "help", "malloc-stats", "purge", "stats", "usage"], "lpush": [], "rpush": [], "lpushx": [], "rpushx": [],
     "lpop": [], "rpop": [], "llen": [], "lindex": [], "lrange": [], "lset": [],
     "linsert": [], "lrem": [], "ltrim": [], "lpos": [], "lmove": [], "rpoplpush": [],
@@ -94,7 +97,7 @@ COMMANDS = {
     "acl": ["cat", "deluser", "dryrun", "genpass", "getuser", "help", "list", "load", "log",
             "save", "setuser", "users", "whoami"], "bgsave": [], "xlen": [], "xrange": [],
     "xrevrange": [], "xread": [], "xinfo": ["consumers", "groups", "help", "stream"],
-    "xpending": []}
+    "xpending": [], "xadd": [], "xtrim": [], "xdel": [], "xsetid": []}
 
 # Step 1: redis-server -> facts
 # -----------------------------
@@ -241,7 +244,9 @@ GETKEYS = {"set": "KBySet{}", "bitfield": "KByBitfield{}"}
 # BLMPOP and BZMPOP as LMPOP after their timeout, and the STOREs their
 # destination first (OW, update) and then the keys, or, by their function,
 # the keys and then the destination
-KEYNUM = {"eval": "KByEval{}", "lmpop": "KByLmpop{}", "sintercard": "KBySintercard{}",
+KEYNUM = {"eval": "KByEval{}", "evalsha": "KByEval{}", "eval_ro": "KByEval{}", "evalsha_ro": "KByEval{}",
+          "fcall": "KByEval{}", "fcall_ro": "KByEval{}",
+          "lmpop": "KByLmpop{}", "sintercard": "KBySintercard{}",
           "zunion": "KBySintercard{}", "zinter": "KBySintercard{}", "zdiff": "KBySintercard{}",
           "zintercard": "KBySintercard{}", "zmpop": "KByLmpop{}", "zunionstore": "KByZstore{}",
           "zinterstore": "KByZstore{}", "zdiffstore": "KByZstore{}", "blmpop": "KByBlmpop{}",
@@ -419,10 +424,15 @@ def generate():
 # order of their own (client_id, function_id, config_id, command_id); 0 is
 # none. What a
 # call counts as is a code, 3 times its key plus its class (0 runs, 1 is
-# refused, 2 fails as it parses), and a request carries its code as a
-# word of twelve bits with six of them set (the code-th such word, in
+# refused, 2 fails as it parses). A request that runs carries its key as a
+# word of twelve bits with six of them set (the key-th such word, in
 # increasing order): the words or-ed together over a batch have six bits
-# set exactly when all of them are one word. The block between "# BEGIN
+# set exactly when all of them are one word. One that does not run carries
+# the word of all twelve bits, and its code in the hint's bits, which it
+# leaves unused (redis.bend: stat.hash): its batch is never one of one word.
+# So 924 words hold 923 keys (one is none's), where a word for each code,
+# three a key, held 307: functions and the writes of a stream came to 308.
+# The block between "# BEGIN
 # gen_commands: stats" and "# END gen_commands: stats" in src/redis.bend
 # holds the keys, their names and arities (from the JSON), the keys whose
 # calls can fail as they run (RISKY), and the words.
@@ -456,7 +466,11 @@ SBEGIN, SEND = "# BEGIN gen_commands: stats\n", "# END gen_commands: stats\n"
 # there (BUSYKEY), a time or a payload read once the key is found, and
 # the reads of a stream on a key of another kind (WRONGTYPE), XREAD's IDs
 # read once their key is found, XINFO on a key not there and on options
-# read once it is found, and XPENDING on a group not there (NOGROUP).
+# read once it is found, XPENDING on a group not there (NOGROUP), and the
+# writes of a stream on a key of another kind (WRONGTYPE), XADD on IDs
+# not past the stream's last or on elements too large, XDEL on IDs read
+# once the key is found, and XSETID on a key not there or below the
+# stream's entries.
 # (SET's time
 # can overflow too, past 9 * 10^18 ms only: SET is left out, so that a
 # batch of SETs needs no look at its replies.)
@@ -476,13 +490,23 @@ RISKY = {"incr", "decr", "incrby", "decrby", "expire", "pexpire", "setex", "pset
          "zrandmember", "sort", "sort_ro", "pfadd", "pfcount", "pfmerge", "pfdebug", "pfselftest",
          "geoadd", "geodist", "geohash", "geopos", "georadius", "georadius_ro", "georadiusbymember",
          "georadiusbymember_ro", "geosearch", "geosearchstore", "restore", "xlen", "xrange",
-         "xrevrange", "xread", "xinfo|consumers", "xinfo|groups", "xinfo|stream", "xpending"}
+         "xrevrange", "xread", "xinfo|consumers", "xinfo|groups", "xinfo|stream", "xpending",
+         "xadd", "xtrim", "xdel", "xsetid"}
 
 # BendKV's commands that may be replicated (MAY_REPLICATE in Redis's
 # src/commands/*.json), a flag COMMAND INFO hides: a monitor may not run
 # them, as it may not run a command that reads or writes a key, and
 # CLIENT PAUSE WRITE holds them back, as it holds back those that write
-MAY_REPLICATE = {"publish", "spublish", "eval", "pfcount"}
+MAY_REPLICATE = {"publish", "spublish", "eval", "evalsha", "fcall", "pfcount"}
+# the commands of scripts and functions, which feed the monitors
+# themselves (stat.unseen)
+EVALS = {"eval", "evalsha", "eval_ro", "evalsha_ro", "fcall", "fcall_ro"}
+# the commands that need the engine of scripts (stat.engine): the server
+# runs them once the group is run (server.bend, Scripts), EXEC with one
+# queued too; FUNCTION KILL and HELP alone of FUNCTION's do not
+ENGINE = EVALS | {"script|load", "script|exists", "script|flush", "function|load",
+                  "function|delete", "function|list", "function|stats", "function|dump",
+                  "function|restore", "function|flush"}
 
 # How a call of each command counts its changes, for INFO's
 # rdb_changes_since_last_save and the save points (Redis's server.dirty,
@@ -529,14 +553,16 @@ DIRTY = {
     "zunionstore": "store", "zinterstore": "store", "zdiffstore": "store", "zrangestore": "store",
     "pfadd": "int", "pfmerge": "one", "pfdebug": "wok", "geoadd": "zadd", "georadius": "nstore",
     "georadiusbymember": "nstore", "geosearchstore": "nstore", "sort": "nstore",
-    "function|flush": "one", "eval": "w"}
+    "function|flush": "one", "function|load": "one", "function|delete": "one",
+    "function|restore": "one", "eval": "w", "xadd": "bulk", "xtrim": "int", "xdel": "int",
+    "xsetid": "one"}
 
 # the parser's commands with subcommands, by the function that numbers
 # their subcommands
 CONTAINERS = {"client": "client_id", "function": "function_id", "config": "config_id",
               "command": "command_id", "object": "object_id", "memory": "memory_id",
               "pubsub": "pubsub_id", "slowlog": "slowlog_id", "latency": "latency_id",
-              "acl": "acl_id", "xinfo": "xinfo_id"}
+              "script": "script_id", "acl": "acl_id", "xinfo": "xinfo_id"}
 
 # the names a numbering def of redis.bend gives its numbers
 def numbering(src, fn):
@@ -618,8 +644,8 @@ def stats_keys(src):
 def stats_block(src, facts):
     ar = arities(facts)
     tops, keys = stats_keys(src)
-    if 3 * (len(keys) + 1) > len(WORDS):
-        raise SystemExit("gen_commands.py: more codes than words")
+    if len(keys) + 1 > len(WORDS):
+        raise SystemExit("gen_commands.py: more keys than words")
     out = ["# a command's key, by its number in the parser (cmd_id); 0 for none",
            "def stat.top(+id: Nat) -> Nat:", "  match id:"]
     for k, (name, kind, i) in enumerate(keys, 1):
@@ -654,12 +680,21 @@ def stats_block(src, facts):
             out += ["    case %dn:" % k, "      True{}"]
     out += ["    case _:", "      False{}", ""]
     fl = flag_sets(facts)
+    out += ["# whether a call of the command of a key needs the engine of scripts:",
+            "# EVAL and its kin, SCRIPT LOAD, EXISTS and FLUSH (server.bend, Scripts)",
+            "def stat.engine(+key: Nat) -> Bool:", "  match key:"]
+    for k, (name, kind, i) in enumerate(keys, 1):
+        if name in ENGINE:
+            out += ["    case %dn:" % k, "      True{}"]
+    out += ["    case _:", "      False{}", ""]
     out += ["# whether a call of the command of a key goes unseen by MONITOR: an",
             "# administrative command (admin), or one that feeds the monitors",
-            "# itself (skip_monitor), as Redis's call() leaves them out",
+            "# itself (skip_monitor), as Redis's call() leaves them out; EVAL and",
+            "# its kin feed them before they run (evalCommand), as the server",
+            "# feeds them when their script starts (server.bend, Scripts)",
             "def stat.unseen(+key: Nat) -> Bool:", "  match key:"]
     for k, (name, kind, i) in enumerate(keys, 1):
-        if fl[name] & {"admin", "skip_monitor"}:
+        if fl[name] & {"admin", "skip_monitor"} and name not in EVALS:
             out += ["    case %dn:" % k, "      True{}"]
     out += ["    case _:", "      False{}", ""]
     out += ["# whether the command of a key reads or writes keys, or may be",
@@ -676,18 +711,33 @@ def stats_block(src, facts):
         if "write" in fl[name] or name in MAY_REPLICATE:
             out += ["    case %dn:" % k, "      True{}"]
     out += ["    case _:", "      False{}", ""]
+    out += ["# whether the command of a key writes (write): a script that may not",
+            "# write is refused it, and a script that ran one cannot be killed;",
+            "# while a background save that failed stops writes (MISCONF), Redis",
+            "# refuses it",
+            "def stat.write(+key: Nat) -> Bool:", "  match key:"]
+    for k, (name, kind, i) in enumerate(keys, 1):
+        if "write" in fl[name]:
+            out += ["    case %dn:" % k, "      True{}"]
+    out += ["    case _:", "      False{}", ""]
+    out += ["# whether a script may not call the command of a key (noscript)",
+            "def stat.noscript(+key: Nat) -> Bool:", "  match key:"]
+    for k, (name, kind, i) in enumerate(keys, 1):
+        if "noscript" in fl[name]:
+            out += ["    case %dn:" % k, "      True{}"]
+    out += ["    case _:", "      False{}", ""]
+    out += ["# whether the command of a key runs while a script is busy (allow_busy):",
+            "# every other answers BUSY then",
+            "def stat.allow_busy(+key: Nat) -> Bool:", "  match key:"]
+    for k, (name, kind, i) in enumerate(keys, 1):
+        if "allow_busy" in fl[name]:
+            out += ["    case %dn:" % k, "      True{}"]
+    out += ["    case _:", "      False{}", ""]
     out += ["# whether the command of a key may take memory (denyoom): past",
             "# maxmemory with nothing left to evict, Redis refuses it",
             "def stat.denyoom(+key: Nat) -> Bool:", "  match key:"]
     for k, (name, kind, i) in enumerate(keys, 1):
         if "denyoom" in fl[name]:
-            out += ["    case %dn:" % k, "      True{}"]
-    out += ["    case _:", "      False{}", ""]
-    out += ["# whether the command of a key writes (write): while a background save",
-            "# that failed stops writes (MISCONF), Redis refuses it",
-            "def stat.write(+key: Nat) -> Bool:", "  match key:"]
-    for k, (name, kind, i) in enumerate(keys, 1):
-        if "write" in fl[name]:
             out += ["    case %dn:" % k, "      True{}"]
     out += ["    case _:", "      False{}", ""]
     for name in DIRTY:
@@ -741,32 +791,32 @@ def stats_block(src, facts):
         if fk[name] == 1 and name not in NOTOUCH:
             out += ["    case %dn:" % k, "      True{}"]
     out += ["    case _:", "      False{}", ""]
-    ncodes = 3 * (len(keys) + 1)
-    out += ["# a code's word", "def stat.cw(+code: Nat) -> U32:", "  match code:"]
-    for c in range(ncodes):
-        out += ["    case %dn:" % c, "      %d" % WORDS[c]]
+    nkeys = len(keys) + 1
+    out += ["# the word of a call of a key that runs", "def stat.kw(+key: Nat) -> U32:", "  match key:"]
+    for k in range(nkeys):
+        out += ["    case %dn:" % k, "      %d" % WORDS[k]]
     out += ["    case _:", "      %d" % WORDS[0], ""]
     # by the word's high six bits, then its low six, so that no match
     # names a number past 63 (a match on a number unfolds it, and the
     # proof kernel's elaboration goes as deep as the largest one)
-    his = sorted({WORDS[c] >> 6 for c in range(ncodes)})
+    his = sorted({WORDS[k] >> 6 for k in range(nkeys)})
     for hi in his:
-        out += ["def stat.code.lo%d(+lo: Nat) -> Nat:" % hi, "  match lo:"]
-        for c in range(ncodes):
-            if WORDS[c] >> 6 == hi:
-                out += ["    case %dn:" % (WORDS[c] & 63), "      %dn" % c]
+        out += ["def stat.key.lo%d(+lo: Nat) -> Nat:" % hi, "  match lo:"]
+        for k in range(nkeys):
+            if WORDS[k] >> 6 == hi:
+                out += ["    case %dn:" % (WORDS[k] & 63), "      %dn" % k]
         out += ["    case _:", "      0n", ""]
-    out += ["def stat.code.hl(+hi: Nat, +lo: Nat) -> Nat:", "  match hi:"]
+    out += ["def stat.key.hl(+hi: Nat, +lo: Nat) -> Nat:", "  match hi:"]
     for hi in his:
-        out += ["    case %dn:" % hi, "      stat.code.lo%d(lo)" % hi]
+        out += ["    case %dn:" % hi, "      stat.key.lo%d(lo)" % hi]
     out += ["    case _:", "      0n", ""]
-    out += ["# a word's code (0 for one no code has)", "def stat.code.cw(+w: Nat) -> Nat:",
-            "  stat.code.hl(Nat.div(w, 64n), Nat.mod(w, 64n))", ""]
+    out += ["# a word's key (0 for one no key has)", "def stat.key.cw(+w: Nat) -> Nat:",
+            "  stat.key.hl(Nat.div(w, 64n), Nat.mod(w, 64n))", ""]
     out += ["# the high twelve bits of the hash of a call of GET, SET, INCR and",
             "# RESTORE that runs, as the parser writes them"]
     for name in ("get", "set", "incr", "restore"):
         k = [x[0] for x in keys].index(name) + 1
-        out += ["def stat.mark.%s() -> U32:" % name, "  %d" % (WORDS[3 * k] << 20), ""]
+        out += ["def stat.mark.%s() -> U32:" % name, "  %d" % (WORDS[k] << 20), ""]
     return "\n".join(out[:-1]) + "\n"
 
 # Step 4: the parser's numbers -> dispatch

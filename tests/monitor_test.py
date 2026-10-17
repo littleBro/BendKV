@@ -19,7 +19,8 @@ call() and replicationFeedMonitors do: the lines of commands as sent
 request in three reads), what is not shown (unknown commands, the wrong
 number of arguments, CONFIG, CLIENT LIST, KILL and NO-EVICT, MONITOR),
 transactions (MULTI, the queued commands at EXEC, before EXEC; errors,
-DISCARD, a nested MULTI, WATCH, an EXEC refused), the database after
+DISCARD, a nested MULTI, WATCH, an EXEC refused), a script's calls
+(their client lua, a line's address kept as it is), the database after
 SELECT and SWAPDB, the redaction of AUTH and HELLO, blocking commands
 (shown when they block, not when served; the rest of a pipeline after
 one), the monitor's own commands (its reply first, then its line; a
@@ -55,7 +56,7 @@ def nm(x, cs):
         return [nm(y, cs) for y in x]
     m = LINE.match(x) if isinstance(x, str) else None
     if m:
-        tag = next((c.tag for c in cs if c.addr == m.group(4)), "?")
+        tag = "lua" if m.group(4) == "lua" else next((c.tag for c in cs if c.addr == m.group(4)), "?")
         return "+T [%s %s] %s" % (m.group(3), tag, m.group(5))
     return norm(x, cs)
 
@@ -177,6 +178,10 @@ def scenarios(port, log):
           enc(["EXEC"]) + enc(["WATCH", "x"]) + enc(["UNWATCH"]) + enc(["EXEC", "foo"]))
     log("4 multi kin", [a.read() for _ in range(10)], mk.lines(m, cs))
     log("4 multi monitor", a.cmd("MULTI"), a.cmd("MONITOR"), a.cmd("EXEC"), mk.lines(m, cs))
+    # a script's calls: the script command's line, then each call's, its
+    # client lua (the address a line keeps as it is)
+    log("4 script", a.cmd("EVAL", "redis.call('set', KEYS[1], ARGV[1]) return redis.call('get', KEYS[1])", "1", "sk", "v"),
+        a.cmd("EVAL", "return redis.pcall('incr', KEYS[1])", "1", "sk"), mk.lines(m, cs))
     # 5. the database after the command
     log("5 db", a.cmd("SELECT", "3"), a.cmd("SET", "x", "1"), a.cmd("SELECT", "9"), a.cmd("SWAPDB", "3", "4"),
         a.cmd("SWAPDB", "3", "4"), a.cmd("MOVE", "k", "3"), mk.lines(m, cs))

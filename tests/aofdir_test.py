@@ -29,6 +29,11 @@ compared. Each scenario has fresh directories of its own.
    write the manifest without them.
 8. appendonly no, with the directory: BGREWRITEAOF writes a new base
    into it and makes the incremental files history; the same manifests.
+9. Functions: Redis loads libraries, rewrites (its base an RDB file, or
+   commands) and changes them after, in the new incremental file; both
+   start on its directory, with the same libraries and FCALL's replies.
+   BendKV then rewrites (a base of commands) and loads one more; both
+   start on its directory, with the same libraries.
 
     python3 tests/aofdir_test.py --bin build/bendkv --bendkv 6380 --redis 6391 --dir build/aofdir
 """
@@ -498,6 +503,62 @@ def off(a, root):
     same("the new base's commands", sorted(b.split(b"*")), sorted(r.split(b"*")))
 
 
+# 9. Functions: libraries in a base, an RDB file or commands, and FUNCTION
+# commands in the incremental files
+LIB = "#!lua name=%s\nredis.register_function('%s', function(keys, args) return '%s' end)"
+
+
+# FUNCTION LIST's libraries, in the order of their reprs: each server
+# lists them in its own order (Redis's is its dict's)
+def libraries(c):
+    r = cmd(c, "FUNCTION", "LIST", "WITHCODE")
+    if isinstance(r, tuple) and r[0] == b"*":
+        return sorted(r[1], key=repr)
+    return r
+
+
+def calls(c):
+    return [cmd(c, "FCALL", f, 0) for f in ("fa", "fb", "fc")]
+
+
+def functions(a, root):
+    for preamble in ("yes", "no"):
+        print("== functions in Redis's directory, aof-use-rdb-preamble %s" % preamble)
+        p = Pair(a, root, "fn-" + preamble)
+        pr, cr = start(p.argv("r", "--appendonly", "yes", "--aof-use-rdb-preamble", preamble), a.redis, p.log("r"))
+        cmd(cr, "FUNCTION", "LOAD", LIB % ("a", "fa", "a1"))
+        cmd(cr, "FUNCTION", "LOAD", LIB % ("b", "fb", "b1"))
+        cmd(cr, "SET", "k", "v")
+        rewrite(cr)
+        cmd(cr, "FUNCTION", "DELETE", "a")
+        cmd(cr, "FUNCTION", "LOAD", "REPLACE", LIB % ("b", "fb", "b2"))
+        cmd(cr, "FUNCTION", "LOAD", LIB % ("c", "fc", "c1"))
+        want = libraries(cr), calls(cr)
+        down(pr, cr)
+        copy(p.r, p.b)
+        (pb, cb, lb), (pr, cr, lr) = p.start("--appendonly", "yes")
+        same("the libraries after the start", libraries(cb), libraries(cr))
+        same("they are the ones Redis made", libraries(cb), want[0])
+        same("FCALL of each function", calls(cb), calls(cr))
+        same("they answer as before the start", calls(cb), want[1])
+        same("the databases", keyspace(a.bendkv), keyspace(a.redis))
+        same("the lines of the start", logged(lb), logged(lr))
+        # BendKV's rewrite: its base of commands, a FUNCTION LOAD of each
+        # library first
+        rewrite(cb)
+        cmd(cb, "FUNCTION", "LOAD", LIB % ("d", "fd", "d1"))
+        want = libraries(cb)
+        down(pb, cb)
+        down(pr, cr)
+        copy(p.b, p.r)
+        (pb, cb, lb), (pr, cr, lr) = p.start("--appendonly", "yes")
+        same("the libraries on BendKV's directory", libraries(cb), libraries(cr))
+        same("they are the ones BendKV made", libraries(cb), want)
+        same("the lines of that start", logged(lb), logged(lr))
+        down(pb, cb)
+        down(pr, cr)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--bin", default="build/bendkv")
@@ -517,6 +578,7 @@ def main():
     cut(a, root)
     history(a, root)
     off(a, root)
+    functions(a, root)
     if FAILS:
         print("FAILED: %d checks" % len(FAILS))
         sys.exit(1)

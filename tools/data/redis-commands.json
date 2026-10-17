@@ -8566,6 +8566,515 @@
     }
    ]
   },
+  "eval_ro": {
+   "docs": {
+    "%": [
+     "summary",
+     "Execute a read-only Lua script server side",
+     "since",
+     "7.0.0",
+     "group",
+     "scripting",
+     "complexity",
+     "Depends on the script that is executed.",
+     "arguments",
+     [
+      {
+       "%": [
+        "name",
+        "script",
+        "type",
+        "string"
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "numkeys",
+        "type",
+        "integer"
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "key",
+        "type",
+        "key",
+        "key_spec_index",
+        0,
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          },
+          {
+           "+": "multiple"
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "arg",
+        "type",
+        "string",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          },
+          {
+           "+": "multiple"
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    ]
+   },
+   "info": [
+    "eval_ro",
+    -3,
+    {
+     "~": [
+      {
+       "+": "readonly"
+      },
+      {
+       "+": "noscript"
+      },
+      {
+       "+": "stale"
+      },
+      {
+       "+": "skip_monitor"
+      },
+      {
+       "+": "no_mandatory_keys"
+      },
+      {
+       "+": "movablekeys"
+      }
+     ]
+    },
+    0,
+    0,
+    0,
+    {
+     "~": [
+      {
+       "+": "@slow"
+      },
+      {
+       "+": "@scripting"
+      }
+     ]
+    },
+    {
+     "~": []
+    },
+    {
+     "~": [
+      {
+       "%": [
+        "notes",
+        "We cannot tell how the keys will be used so we assume the worst, RO and ACCESS",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "RO"
+          },
+          {
+           "+": "access"
+          }
+         ]
+        },
+        "begin_search",
+        {
+         "%": [
+          "type",
+          "index",
+          "spec",
+          {
+           "%": [
+            "index",
+            2
+           ]
+          }
+         ]
+        },
+        "find_keys",
+        {
+         "%": [
+          "type",
+          "keynum",
+          "spec",
+          {
+           "%": [
+            "keynumidx",
+            0,
+            "firstkey",
+            1,
+            "keystep",
+            1
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "~": []
+    }
+   ]
+  },
+  "evalsha": {
+   "docs": {
+    "%": [
+     "summary",
+     "Execute a Lua script server side",
+     "since",
+     "2.6.0",
+     "group",
+     "scripting",
+     "complexity",
+     "Depends on the script that is executed.",
+     "arguments",
+     [
+      {
+       "%": [
+        "name",
+        "sha1",
+        "type",
+        "string"
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "numkeys",
+        "type",
+        "integer"
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "key",
+        "type",
+        "key",
+        "key_spec_index",
+        0,
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          },
+          {
+           "+": "multiple"
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "arg",
+        "type",
+        "string",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          },
+          {
+           "+": "multiple"
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    ]
+   },
+   "info": [
+    "evalsha",
+    -3,
+    {
+     "~": [
+      {
+       "+": "noscript"
+      },
+      {
+       "+": "stale"
+      },
+      {
+       "+": "skip_monitor"
+      },
+      {
+       "+": "no_mandatory_keys"
+      },
+      {
+       "+": "movablekeys"
+      }
+     ]
+    },
+    0,
+    0,
+    0,
+    {
+     "~": [
+      {
+       "+": "@slow"
+      },
+      {
+       "+": "@scripting"
+      }
+     ]
+    },
+    {
+     "~": []
+    },
+    {
+     "~": [
+      {
+       "%": [
+        "flags",
+        {
+         "~": [
+          {
+           "+": "RW"
+          },
+          {
+           "+": "access"
+          },
+          {
+           "+": "update"
+          }
+         ]
+        },
+        "begin_search",
+        {
+         "%": [
+          "type",
+          "index",
+          "spec",
+          {
+           "%": [
+            "index",
+            2
+           ]
+          }
+         ]
+        },
+        "find_keys",
+        {
+         "%": [
+          "type",
+          "keynum",
+          "spec",
+          {
+           "%": [
+            "keynumidx",
+            0,
+            "firstkey",
+            1,
+            "keystep",
+            1
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "~": []
+    }
+   ]
+  },
+  "evalsha_ro": {
+   "docs": {
+    "%": [
+     "summary",
+     "Execute a read-only Lua script server side",
+     "since",
+     "7.0.0",
+     "group",
+     "scripting",
+     "complexity",
+     "Depends on the script that is executed.",
+     "arguments",
+     [
+      {
+       "%": [
+        "name",
+        "sha1",
+        "type",
+        "string"
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "numkeys",
+        "type",
+        "integer"
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "key",
+        "type",
+        "key",
+        "key_spec_index",
+        0,
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          },
+          {
+           "+": "multiple"
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "arg",
+        "type",
+        "string",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          },
+          {
+           "+": "multiple"
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    ]
+   },
+   "info": [
+    "evalsha_ro",
+    -3,
+    {
+     "~": [
+      {
+       "+": "readonly"
+      },
+      {
+       "+": "noscript"
+      },
+      {
+       "+": "stale"
+      },
+      {
+       "+": "skip_monitor"
+      },
+      {
+       "+": "no_mandatory_keys"
+      },
+      {
+       "+": "movablekeys"
+      }
+     ]
+    },
+    0,
+    0,
+    0,
+    {
+     "~": [
+      {
+       "+": "@slow"
+      },
+      {
+       "+": "@scripting"
+      }
+     ]
+    },
+    {
+     "~": []
+    },
+    {
+     "~": [
+      {
+       "%": [
+        "flags",
+        {
+         "~": [
+          {
+           "+": "RO"
+          },
+          {
+           "+": "access"
+          }
+         ]
+        },
+        "begin_search",
+        {
+         "%": [
+          "type",
+          "index",
+          "spec",
+          {
+           "%": [
+            "index",
+            2
+           ]
+          }
+         ]
+        },
+        "find_keys",
+        {
+         "%": [
+          "type",
+          "keynum",
+          "spec",
+          {
+           "%": [
+            "keynumidx",
+            0,
+            "firstkey",
+            1,
+            "keystep",
+            1
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "~": []
+    }
+   ]
+  },
   "exec": {
    "docs": {
     "%": [
@@ -9251,6 +9760,348 @@
     }
    ]
   },
+  "fcall": {
+   "docs": {
+    "%": [
+     "summary",
+     "Invoke a function",
+     "since",
+     "7.0.0",
+     "group",
+     "scripting",
+     "complexity",
+     "Depends on the function that is executed.",
+     "arguments",
+     [
+      {
+       "%": [
+        "name",
+        "function",
+        "type",
+        "string"
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "numkeys",
+        "type",
+        "integer"
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "key",
+        "type",
+        "key",
+        "key_spec_index",
+        0,
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          },
+          {
+           "+": "multiple"
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "arg",
+        "type",
+        "string",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          },
+          {
+           "+": "multiple"
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    ]
+   },
+   "info": [
+    "fcall",
+    -3,
+    {
+     "~": [
+      {
+       "+": "noscript"
+      },
+      {
+       "+": "stale"
+      },
+      {
+       "+": "skip_monitor"
+      },
+      {
+       "+": "no_mandatory_keys"
+      },
+      {
+       "+": "movablekeys"
+      }
+     ]
+    },
+    0,
+    0,
+    0,
+    {
+     "~": [
+      {
+       "+": "@slow"
+      },
+      {
+       "+": "@scripting"
+      }
+     ]
+    },
+    {
+     "~": []
+    },
+    {
+     "~": [
+      {
+       "%": [
+        "notes",
+        "We cannot tell how the keys will be used so we assume the worst, RW and UPDATE",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "RW"
+          },
+          {
+           "+": "access"
+          },
+          {
+           "+": "update"
+          }
+         ]
+        },
+        "begin_search",
+        {
+         "%": [
+          "type",
+          "index",
+          "spec",
+          {
+           "%": [
+            "index",
+            2
+           ]
+          }
+         ]
+        },
+        "find_keys",
+        {
+         "%": [
+          "type",
+          "keynum",
+          "spec",
+          {
+           "%": [
+            "keynumidx",
+            0,
+            "firstkey",
+            1,
+            "keystep",
+            1
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "~": []
+    }
+   ]
+  },
+  "fcall_ro": {
+   "docs": {
+    "%": [
+     "summary",
+     "Invoke a read-only function",
+     "since",
+     "7.0.0",
+     "group",
+     "scripting",
+     "complexity",
+     "Depends on the function that is executed.",
+     "arguments",
+     [
+      {
+       "%": [
+        "name",
+        "function",
+        "type",
+        "string"
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "numkeys",
+        "type",
+        "integer"
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "key",
+        "type",
+        "key",
+        "key_spec_index",
+        0,
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          },
+          {
+           "+": "multiple"
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "arg",
+        "type",
+        "string",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          },
+          {
+           "+": "multiple"
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    ]
+   },
+   "info": [
+    "fcall_ro",
+    -3,
+    {
+     "~": [
+      {
+       "+": "readonly"
+      },
+      {
+       "+": "noscript"
+      },
+      {
+       "+": "stale"
+      },
+      {
+       "+": "skip_monitor"
+      },
+      {
+       "+": "no_mandatory_keys"
+      },
+      {
+       "+": "movablekeys"
+      }
+     ]
+    },
+    0,
+    0,
+    0,
+    {
+     "~": [
+      {
+       "+": "@slow"
+      },
+      {
+       "+": "@scripting"
+      }
+     ]
+    },
+    {
+     "~": []
+    },
+    {
+     "~": [
+      {
+       "%": [
+        "notes",
+        "We cannot tell how the keys will be used so we assume the worst, RO and ACCESS",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "RO"
+          },
+          {
+           "+": "access"
+          }
+         ]
+        },
+        "begin_search",
+        {
+         "%": [
+          "type",
+          "index",
+          "spec",
+          {
+           "%": [
+            "index",
+            2
+           ]
+          }
+         ]
+        },
+        "find_keys",
+        {
+         "%": [
+          "type",
+          "keynum",
+          "spec",
+          {
+           "%": [
+            "keynumidx",
+            0,
+            "firstkey",
+            1,
+            "keystep",
+            1
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "~": []
+    }
+   ]
+  },
   "flushall": {
    "docs": {
     "%": [
@@ -9495,6 +10346,43 @@
      "subcommands",
      {
       "%": [
+       "function|delete",
+       {
+        "%": [
+         "summary",
+         "Delete a function by name",
+         "since",
+         "7.0.0",
+         "group",
+         "scripting",
+         "complexity",
+         "O(1)",
+         "arguments",
+         [
+          {
+           "%": [
+            "name",
+            "library-name",
+            "type",
+            "string"
+           ]
+          }
+         ]
+        ]
+       },
+       "function|dump",
+       {
+        "%": [
+         "summary",
+         "Dump all functions into a serialized binary payload",
+         "since",
+         "7.0.0",
+         "group",
+         "scripting",
+         "complexity",
+         "O(N) where N is the number of functions"
+        ]
+       },
        "function|flush",
        {
         "%": [
@@ -9562,6 +10450,199 @@
          "complexity",
          "O(1)"
         ]
+       },
+       "function|kill",
+       {
+        "%": [
+         "summary",
+         "Kill the function currently in execution.",
+         "since",
+         "7.0.0",
+         "group",
+         "scripting",
+         "complexity",
+         "O(1)"
+        ]
+       },
+       "function|list",
+       {
+        "%": [
+         "summary",
+         "List information about all the functions",
+         "since",
+         "7.0.0",
+         "group",
+         "scripting",
+         "complexity",
+         "O(N) where N is the number of functions",
+         "arguments",
+         [
+          {
+           "%": [
+            "name",
+            "library-name-pattern",
+            "type",
+            "string",
+            "token",
+            "LIBRARYNAME",
+            "flags",
+            {
+             "~": [
+              {
+               "+": "optional"
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "%": [
+            "name",
+            "withcode",
+            "type",
+            "pure-token",
+            "token",
+            "WITHCODE",
+            "flags",
+            {
+             "~": [
+              {
+               "+": "optional"
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        ]
+       },
+       "function|load",
+       {
+        "%": [
+         "summary",
+         "Create a function with the given arguments (name, code, description)",
+         "since",
+         "7.0.0",
+         "group",
+         "scripting",
+         "complexity",
+         "O(1) (considering compilation time is redundant)",
+         "arguments",
+         [
+          {
+           "%": [
+            "name",
+            "replace",
+            "type",
+            "pure-token",
+            "token",
+            "REPLACE",
+            "flags",
+            {
+             "~": [
+              {
+               "+": "optional"
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "%": [
+            "name",
+            "function-code",
+            "type",
+            "string"
+           ]
+          }
+         ]
+        ]
+       },
+       "function|restore",
+       {
+        "%": [
+         "summary",
+         "Restore all the functions on the given payload",
+         "since",
+         "7.0.0",
+         "group",
+         "scripting",
+         "complexity",
+         "O(N) where N is the number of functions on the payload",
+         "arguments",
+         [
+          {
+           "%": [
+            "name",
+            "serialized-value",
+            "type",
+            "string"
+           ]
+          },
+          {
+           "%": [
+            "name",
+            "policy",
+            "type",
+            "oneof",
+            "flags",
+            {
+             "~": [
+              {
+               "+": "optional"
+              }
+             ]
+            },
+            "arguments",
+            [
+             {
+              "%": [
+               "name",
+               "flush",
+               "type",
+               "pure-token",
+               "token",
+               "FLUSH"
+              ]
+             },
+             {
+              "%": [
+               "name",
+               "append",
+               "type",
+               "pure-token",
+               "token",
+               "APPEND"
+              ]
+             },
+             {
+              "%": [
+               "name",
+               "replace",
+               "type",
+               "pure-token",
+               "token",
+               "REPLACE"
+              ]
+             }
+            ]
+           ]
+          }
+         ]
+        ]
+       },
+       "function|stats",
+       {
+        "%": [
+         "summary",
+         "Return information about the function currently running (name, description, duration)",
+         "since",
+         "7.0.0",
+         "group",
+         "scripting",
+         "complexity",
+         "O(1)"
+        ]
        }
       ]
      }
@@ -9590,6 +10671,81 @@
      "~": []
     },
     [
+     [
+      "function|delete",
+      3,
+      {
+       "~": [
+        {
+         "+": "write"
+        },
+        {
+         "+": "noscript"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@write"
+        },
+        {
+         "+": "@slow"
+        },
+        {
+         "+": "@scripting"
+        }
+       ]
+      },
+      {
+       "~": [
+        "request_policy:all_shards",
+        "response_policy:all_succeeded"
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "function|dump",
+      2,
+      {
+       "~": [
+        {
+         "+": "noscript"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@slow"
+        },
+        {
+         "+": "@scripting"
+        }
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
      [
       "function|flush",
       -2,
@@ -9660,6 +10816,210 @@
       },
       {
        "~": []
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "function|kill",
+      2,
+      {
+       "~": [
+        {
+         "+": "noscript"
+        },
+        {
+         "+": "allow_busy"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@slow"
+        },
+        {
+         "+": "@scripting"
+        }
+       ]
+      },
+      {
+       "~": [
+        "request_policy:all_shards",
+        "response_policy:one_succeeded"
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "function|list",
+      -2,
+      {
+       "~": [
+        {
+         "+": "noscript"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@slow"
+        },
+        {
+         "+": "@scripting"
+        }
+       ]
+      },
+      {
+       "~": [
+        "nondeterministic_output_order"
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "function|load",
+      -3,
+      {
+       "~": [
+        {
+         "+": "write"
+        },
+        {
+         "+": "denyoom"
+        },
+        {
+         "+": "noscript"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@write"
+        },
+        {
+         "+": "@slow"
+        },
+        {
+         "+": "@scripting"
+        }
+       ]
+      },
+      {
+       "~": [
+        "request_policy:all_shards",
+        "response_policy:all_succeeded"
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "function|restore",
+      -3,
+      {
+       "~": [
+        {
+         "+": "write"
+        },
+        {
+         "+": "denyoom"
+        },
+        {
+         "+": "noscript"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@write"
+        },
+        {
+         "+": "@slow"
+        },
+        {
+         "+": "@scripting"
+        }
+       ]
+      },
+      {
+       "~": [
+        "request_policy:all_shards",
+        "response_policy:all_succeeded"
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "function|stats",
+      2,
+      {
+       "~": [
+        {
+         "+": "noscript"
+        },
+        {
+         "+": "allow_busy"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@slow"
+        },
+        {
+         "+": "@scripting"
+        }
+       ]
+      },
+      {
+       "~": [
+        "nondeterministic_output",
+        "request_policy:all_shards",
+        "response_policy:special"
+       ]
       },
       {
        "~": []
@@ -25037,6 +26397,384 @@
     }
    ]
   },
+  "script": {
+   "docs": {
+    "%": [
+     "summary",
+     "A container for Lua scripts management commands",
+     "since",
+     "2.6.0",
+     "group",
+     "scripting",
+     "complexity",
+     "Depends on subcommand.",
+     "subcommands",
+     {
+      "%": [
+       "script|exists",
+       {
+        "%": [
+         "summary",
+         "Check existence of scripts in the script cache.",
+         "since",
+         "2.6.0",
+         "group",
+         "scripting",
+         "complexity",
+         "O(N) with N being the number of scripts to check (so checking a single script is an O(1) operation).",
+         "arguments",
+         [
+          {
+           "%": [
+            "name",
+            "sha1",
+            "type",
+            "string",
+            "flags",
+            {
+             "~": [
+              {
+               "+": "multiple"
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        ]
+       },
+       "script|flush",
+       {
+        "%": [
+         "summary",
+         "Remove all the scripts from the script cache.",
+         "since",
+         "2.6.0",
+         "group",
+         "scripting",
+         "complexity",
+         "O(N) with N being the number of scripts in cache",
+         "history",
+         {
+          "~": [
+           [
+            "6.2.0",
+            "Added the `ASYNC` and `SYNC` flushing mode modifiers."
+           ]
+          ]
+         },
+         "arguments",
+         [
+          {
+           "%": [
+            "name",
+            "async",
+            "type",
+            "oneof",
+            "since",
+            "6.2.0",
+            "flags",
+            {
+             "~": [
+              {
+               "+": "optional"
+              }
+             ]
+            },
+            "arguments",
+            [
+             {
+              "%": [
+               "name",
+               "async",
+               "type",
+               "pure-token",
+               "token",
+               "ASYNC"
+              ]
+             },
+             {
+              "%": [
+               "name",
+               "sync",
+               "type",
+               "pure-token",
+               "token",
+               "SYNC"
+              ]
+             }
+            ]
+           ]
+          }
+         ]
+        ]
+       },
+       "script|help",
+       {
+        "%": [
+         "summary",
+         "Show helpful text about the different subcommands",
+         "since",
+         "5.0.0",
+         "group",
+         "scripting",
+         "complexity",
+         "O(1)"
+        ]
+       },
+       "script|kill",
+       {
+        "%": [
+         "summary",
+         "Kill the script currently in execution.",
+         "since",
+         "2.6.0",
+         "group",
+         "scripting",
+         "complexity",
+         "O(1)"
+        ]
+       },
+       "script|load",
+       {
+        "%": [
+         "summary",
+         "Load the specified Lua script into the script cache.",
+         "since",
+         "2.6.0",
+         "group",
+         "scripting",
+         "complexity",
+         "O(N) with N being the length in bytes of the script body.",
+         "arguments",
+         [
+          {
+           "%": [
+            "name",
+            "script",
+            "type",
+            "string"
+           ]
+          }
+         ]
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   "info": [
+    "script",
+    -2,
+    {
+     "~": []
+    },
+    0,
+    0,
+    0,
+    {
+     "~": [
+      {
+       "+": "@slow"
+      }
+     ]
+    },
+    {
+     "~": []
+    },
+    {
+     "~": []
+    },
+    [
+     [
+      "script|exists",
+      -3,
+      {
+       "~": [
+        {
+         "+": "noscript"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@slow"
+        },
+        {
+         "+": "@scripting"
+        }
+       ]
+      },
+      {
+       "~": [
+        "request_policy:all_shards",
+        "response_policy:agg_logical_and"
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "script|flush",
+      -2,
+      {
+       "~": [
+        {
+         "+": "noscript"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@slow"
+        },
+        {
+         "+": "@scripting"
+        }
+       ]
+      },
+      {
+       "~": [
+        "request_policy:all_nodes",
+        "response_policy:all_succeeded"
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "script|help",
+      2,
+      {
+       "~": [
+        {
+         "+": "loading"
+        },
+        {
+         "+": "stale"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@slow"
+        },
+        {
+         "+": "@scripting"
+        }
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "script|kill",
+      2,
+      {
+       "~": [
+        {
+         "+": "noscript"
+        },
+        {
+         "+": "allow_busy"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@slow"
+        },
+        {
+         "+": "@scripting"
+        }
+       ]
+      },
+      {
+       "~": [
+        "request_policy:all_shards",
+        "response_policy:one_succeeded"
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "script|load",
+      3,
+      {
+       "~": [
+        {
+         "+": "noscript"
+        },
+        {
+         "+": "stale"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@slow"
+        },
+        {
+         "+": "@scripting"
+        }
+       ]
+      },
+      {
+       "~": [
+        "request_policy:all_nodes",
+        "response_policy:all_succeeded"
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ]
+    ]
+   ]
+  },
   "sdiff": {
    "docs": {
     "%": [
@@ -30848,6 +32586,473 @@
     }
    ]
   },
+  "xadd": {
+   "docs": {
+    "%": [
+     "summary",
+     "Appends a new entry to a stream",
+     "since",
+     "5.0.0",
+     "group",
+     "stream",
+     "complexity",
+     "O(1) when adding a new entry, O(N) when trimming where N being the number of entries evicted.",
+     "history",
+     {
+      "~": [
+       [
+        "6.2.0",
+        "Added the `NOMKSTREAM` option, `MINID` trimming strategy and the `LIMIT` option."
+       ],
+       [
+        "7.0.0",
+        "Added support for the `<ms>-*` explicit ID form."
+       ]
+      ]
+     },
+     "arguments",
+     [
+      {
+       "%": [
+        "name",
+        "key",
+        "type",
+        "key",
+        "key_spec_index",
+        0
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "nomkstream",
+        "type",
+        "pure-token",
+        "token",
+        "NOMKSTREAM",
+        "since",
+        "6.2.0",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "trim",
+        "type",
+        "block",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        },
+        "arguments",
+        [
+         {
+          "%": [
+           "name",
+           "strategy",
+           "type",
+           "oneof",
+           "arguments",
+           [
+            {
+             "%": [
+              "name",
+              "maxlen",
+              "type",
+              "pure-token",
+              "token",
+              "MAXLEN"
+             ]
+            },
+            {
+             "%": [
+              "name",
+              "minid",
+              "type",
+              "pure-token",
+              "token",
+              "MINID",
+              "since",
+              "6.2.0"
+             ]
+            }
+           ]
+          ]
+         },
+         {
+          "%": [
+           "name",
+           "operator",
+           "type",
+           "oneof",
+           "flags",
+           {
+            "~": [
+             {
+              "+": "optional"
+             }
+            ]
+           },
+           "arguments",
+           [
+            {
+             "%": [
+              "name",
+              "equal",
+              "type",
+              "pure-token",
+              "token",
+              "="
+             ]
+            },
+            {
+             "%": [
+              "name",
+              "approximately",
+              "type",
+              "pure-token",
+              "token",
+              "~"
+             ]
+            }
+           ]
+          ]
+         },
+         {
+          "%": [
+           "name",
+           "threshold",
+           "type",
+           "string"
+          ]
+         },
+         {
+          "%": [
+           "name",
+           "count",
+           "type",
+           "integer",
+           "token",
+           "LIMIT",
+           "since",
+           "6.2.0",
+           "flags",
+           {
+            "~": [
+             {
+              "+": "optional"
+             }
+            ]
+           }
+          ]
+         }
+        ]
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "id_or_auto",
+        "type",
+        "oneof",
+        "arguments",
+        [
+         {
+          "%": [
+           "name",
+           "auto_id",
+           "type",
+           "pure-token",
+           "token",
+           "*"
+          ]
+         },
+         {
+          "%": [
+           "name",
+           "id",
+           "type",
+           "string"
+          ]
+         }
+        ]
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "field_value",
+        "type",
+        "block",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "multiple"
+          }
+         ]
+        },
+        "arguments",
+        [
+         {
+          "%": [
+           "name",
+           "field",
+           "type",
+           "string"
+          ]
+         },
+         {
+          "%": [
+           "name",
+           "value",
+           "type",
+           "string"
+          ]
+         }
+        ]
+       ]
+      }
+     ]
+    ]
+   },
+   "info": [
+    "xadd",
+    -5,
+    {
+     "~": [
+      {
+       "+": "write"
+      },
+      {
+       "+": "denyoom"
+      },
+      {
+       "+": "fast"
+      }
+     ]
+    },
+    1,
+    1,
+    1,
+    {
+     "~": [
+      {
+       "+": "@write"
+      },
+      {
+       "+": "@stream"
+      },
+      {
+       "+": "@fast"
+      }
+     ]
+    },
+    {
+     "~": [
+      "nondeterministic_output"
+     ]
+    },
+    {
+     "~": [
+      {
+       "%": [
+        "notes",
+        "UPDATE instead of INSERT because of the optional trimming feature",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "RW"
+          },
+          {
+           "+": "update"
+          }
+         ]
+        },
+        "begin_search",
+        {
+         "%": [
+          "type",
+          "index",
+          "spec",
+          {
+           "%": [
+            "index",
+            1
+           ]
+          }
+         ]
+        },
+        "find_keys",
+        {
+         "%": [
+          "type",
+          "range",
+          "spec",
+          {
+           "%": [
+            "lastkey",
+            0,
+            "keystep",
+            1,
+            "limit",
+            0
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "~": []
+    }
+   ]
+  },
+  "xdel": {
+   "docs": {
+    "%": [
+     "summary",
+     "Removes the specified entries from the stream. Returns the number of items actually deleted, that may be different from the number of IDs passed in case certain IDs do not exist.",
+     "since",
+     "5.0.0",
+     "group",
+     "stream",
+     "complexity",
+     "O(1) for each single item to delete in the stream, regardless of the stream size.",
+     "arguments",
+     [
+      {
+       "%": [
+        "name",
+        "key",
+        "type",
+        "key",
+        "key_spec_index",
+        0
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "id",
+        "type",
+        "string",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "multiple"
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    ]
+   },
+   "info": [
+    "xdel",
+    -3,
+    {
+     "~": [
+      {
+       "+": "write"
+      },
+      {
+       "+": "fast"
+      }
+     ]
+    },
+    1,
+    1,
+    1,
+    {
+     "~": [
+      {
+       "+": "@write"
+      },
+      {
+       "+": "@stream"
+      },
+      {
+       "+": "@fast"
+      }
+     ]
+    },
+    {
+     "~": []
+    },
+    {
+     "~": [
+      {
+       "%": [
+        "flags",
+        {
+         "~": [
+          {
+           "+": "RW"
+          },
+          {
+           "+": "delete"
+          }
+         ]
+        },
+        "begin_search",
+        {
+         "%": [
+          "type",
+          "index",
+          "spec",
+          {
+           "%": [
+            "index",
+            1
+           ]
+          }
+         ]
+        },
+        "find_keys",
+        {
+         "%": [
+          "type",
+          "range",
+          "spec",
+          {
+           "%": [
+            "lastkey",
+            0,
+            "keystep",
+            1,
+            "limit",
+            0
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "~": []
+    }
+   ]
+  },
   "xinfo": {
    "docs": {
     "%": [
@@ -32121,6 +34326,413 @@
           },
           {
            "+": "access"
+          }
+         ]
+        },
+        "begin_search",
+        {
+         "%": [
+          "type",
+          "index",
+          "spec",
+          {
+           "%": [
+            "index",
+            1
+           ]
+          }
+         ]
+        },
+        "find_keys",
+        {
+         "%": [
+          "type",
+          "range",
+          "spec",
+          {
+           "%": [
+            "lastkey",
+            0,
+            "keystep",
+            1,
+            "limit",
+            0
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "~": []
+    }
+   ]
+  },
+  "xsetid": {
+   "docs": {
+    "%": [
+     "summary",
+     "An internal command for replicating stream values",
+     "since",
+     "5.0.0",
+     "group",
+     "stream",
+     "complexity",
+     "O(1)",
+     "history",
+     {
+      "~": [
+       [
+        "7.0.0",
+        "Added the `entries_added` and `max_deleted_entry_id` arguments."
+       ]
+      ]
+     },
+     "arguments",
+     [
+      {
+       "%": [
+        "name",
+        "key",
+        "type",
+        "key",
+        "key_spec_index",
+        0
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "last-id",
+        "type",
+        "string"
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "entries_added",
+        "type",
+        "integer",
+        "token",
+        "ENTRIESADDED",
+        "since",
+        "7.0.0",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "max_deleted_entry_id",
+        "type",
+        "string",
+        "token",
+        "MAXDELETEDID",
+        "since",
+        "7.0.0",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    ]
+   },
+   "info": [
+    "xsetid",
+    -3,
+    {
+     "~": [
+      {
+       "+": "write"
+      },
+      {
+       "+": "denyoom"
+      },
+      {
+       "+": "fast"
+      }
+     ]
+    },
+    1,
+    1,
+    1,
+    {
+     "~": [
+      {
+       "+": "@write"
+      },
+      {
+       "+": "@stream"
+      },
+      {
+       "+": "@fast"
+      }
+     ]
+    },
+    {
+     "~": []
+    },
+    {
+     "~": [
+      {
+       "%": [
+        "flags",
+        {
+         "~": [
+          {
+           "+": "RW"
+          },
+          {
+           "+": "update"
+          }
+         ]
+        },
+        "begin_search",
+        {
+         "%": [
+          "type",
+          "index",
+          "spec",
+          {
+           "%": [
+            "index",
+            1
+           ]
+          }
+         ]
+        },
+        "find_keys",
+        {
+         "%": [
+          "type",
+          "range",
+          "spec",
+          {
+           "%": [
+            "lastkey",
+            0,
+            "keystep",
+            1,
+            "limit",
+            0
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "~": []
+    }
+   ]
+  },
+  "xtrim": {
+   "docs": {
+    "%": [
+     "summary",
+     "Trims the stream to (approximately if '~' is passed) a certain size",
+     "since",
+     "5.0.0",
+     "group",
+     "stream",
+     "complexity",
+     "O(N), with N being the number of evicted entries. Constant times are very small however, since entries are organized in macro nodes containing multiple entries that can be released with a single deallocation.",
+     "history",
+     {
+      "~": [
+       [
+        "6.2.0",
+        "Added the `MINID` trimming strategy and the `LIMIT` option."
+       ]
+      ]
+     },
+     "arguments",
+     [
+      {
+       "%": [
+        "name",
+        "key",
+        "type",
+        "key",
+        "key_spec_index",
+        0
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "trim",
+        "type",
+        "block",
+        "arguments",
+        [
+         {
+          "%": [
+           "name",
+           "strategy",
+           "type",
+           "oneof",
+           "arguments",
+           [
+            {
+             "%": [
+              "name",
+              "maxlen",
+              "type",
+              "pure-token",
+              "token",
+              "MAXLEN"
+             ]
+            },
+            {
+             "%": [
+              "name",
+              "minid",
+              "type",
+              "pure-token",
+              "token",
+              "MINID",
+              "since",
+              "6.2.0"
+             ]
+            }
+           ]
+          ]
+         },
+         {
+          "%": [
+           "name",
+           "operator",
+           "type",
+           "oneof",
+           "flags",
+           {
+            "~": [
+             {
+              "+": "optional"
+             }
+            ]
+           },
+           "arguments",
+           [
+            {
+             "%": [
+              "name",
+              "equal",
+              "type",
+              "pure-token",
+              "token",
+              "="
+             ]
+            },
+            {
+             "%": [
+              "name",
+              "approximately",
+              "type",
+              "pure-token",
+              "token",
+              "~"
+             ]
+            }
+           ]
+          ]
+         },
+         {
+          "%": [
+           "name",
+           "threshold",
+           "type",
+           "string"
+          ]
+         },
+         {
+          "%": [
+           "name",
+           "count",
+           "type",
+           "integer",
+           "token",
+           "LIMIT",
+           "since",
+           "6.2.0",
+           "flags",
+           {
+            "~": [
+             {
+              "+": "optional"
+             }
+            ]
+           }
+          ]
+         }
+        ]
+       ]
+      }
+     ]
+    ]
+   },
+   "info": [
+    "xtrim",
+    -4,
+    {
+     "~": [
+      {
+       "+": "write"
+      }
+     ]
+    },
+    1,
+    1,
+    1,
+    {
+     "~": [
+      {
+       "+": "@write"
+      },
+      {
+       "+": "@stream"
+      },
+      {
+       "+": "@slow"
+      }
+     ]
+    },
+    {
+     "~": [
+      "nondeterministic_output"
+     ]
+    },
+    {
+     "~": [
+      {
+       "%": [
+        "flags",
+        {
+         "~": [
+          {
+           "+": "RW"
+          },
+          {
+           "+": "delete"
           }
          ]
         },

@@ -16,8 +16,9 @@ their files, and BendKV's holds what Redis's base holds, command for
 command: a SELECT of each database with keys, a key's SET, RPUSH, SADD,
 HMSET or ZADD (64 elements or pairs to a command, scores as %.17g
 writes them) and its PEXPIREAT; the elements of a set, a hash and a
-sorted set in any order. BendKV started from its rewritten file, and
-Redis from it, hold the databases.
+sorted set in any order; before them, the FUNCTION LOAD of each library
+(in any order). BendKV started from its rewritten file, and Redis from
+it, hold the databases and the libraries.
 
 Writes while a rewrite runs: many keys, so that it takes a while, a
 rewrite, and then writes of each kind on several databases (SWAPDB,
@@ -49,7 +50,7 @@ import subprocess
 import sys
 import time
 
-from aof_redis_test import redis, same, start, stop
+from aof_redis_test import libraries, redis, same, same_libraries, start, stop
 from aof_test import value
 from diff_test import Conn
 
@@ -233,6 +234,8 @@ SCORES = [b"0", b"1", b"-1", b"1.5", b"0.1", b"-0.25", b"1e-300", b"3.14159e100"
 # some with times to expire at, on databases 0, 3 and 15
 def fill(r):
     out = []
+    out.append([b"FUNCTION", b"LOAD", b"#!lua name=rw1\nredis.register_function('rwf', function() return 1 end)\n"])
+    out.append([b"FUNCTION", b"LOAD", b"#!lua name=rw2\nredis.register_function{function_name='rwg', callback=function() return 2 end, flags={'no-writes'}}\n"])
     out.append([b"SELECT", b"0"])
     for i in range(30):
         out.append([b"SET", b"s%d" % i, b"v%d" % i] + ([b"PXAT", b"%d" % (T + i)] if i % 4 == 0 else []))
@@ -300,6 +303,11 @@ def describe(es):
         if name == b"SELECT":
             db = int(e[1])
             sels.append(db)
+            continue
+        if name == b"FUNCTION":
+            d = keys.setdefault("libraries", {"cmds": [], "items": [], "exp": None})
+            d["cmds"].append((name, e[1].upper(), db))
+            d["items"] = sorted(d["items"] + [e[2:]])
             continue
         k = (db, e[1])
         d = keys.setdefault(k, {"cmds": [], "items": [], "exp": None})
@@ -482,6 +490,8 @@ def main():
         time.sleep(0.01)
         kr, kb = keyspace(a.redis), keyspace(a.bendkv)
         same("the same databases on both", kr, kb)
+        lb = libraries(cb)
+        same_libraries("the same libraries on both", libraries(cr), lb)
         for c in (cr, cb):
             if cmd(c, b"BGREWRITEAOF") != (b"+", b"Background append only file rewriting started"):
                 sys.exit("FAIL: BGREWRITEAOF did not start")
@@ -516,16 +526,20 @@ def main():
     pb, cb = bendkv(a, sub("bendkv", "bendkv.aof"), "always", sub("bendkv2.log"))
     try:
         k = keyspace(a.bendkv)
+        lk = libraries(cb)
     finally:
         stop(pb)
     same("BendKV restores the databases from its rewritten file", k, kb)
+    same_libraries("BendKV restores the libraries from its rewritten file", lk, lb)
     shutil.copy(sub("bendkv", "bendkv.aof"), sub("rload", "appendonly.aof"))
     p, c = start(redis(a.redis, sub("rload"), "--appendfilename", "appendonly.aof"), a.redis, sub("rload.log"))
     try:
         k = keyspace(a.redis)
+        lk = libraries(c)
     finally:
         stop(p)
     same("Redis restores the databases from BendKV's rewritten file", k, kb)
+    same_libraries("Redis restores the libraries from BendKV's rewritten file", lk, lb)
 
     # writes while a rewrite runs, then more after it
     for x in ["redis2", "bendkv2", "rload2"]:

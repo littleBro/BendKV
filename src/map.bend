@@ -4872,18 +4872,34 @@ def zt.balance(+m: String, +d: F.F64, +l: ZTree, +r: ZTree) -> ZTree:
   zt.bal.of(Nat.is_le(Nat.add(sl, sr), 1n), Nat.is_lt(Nat.mul(3n, sl), sr), Nat.is_lt(Nat.mul(3n, sr), sl), m, d, l, r)
 
 # t with the element (m, d) in its place (t does not hold m); c is how
-# (d, m) compares with t's root
+# (d, m) compares with t's root. A side is compared with (d, m) before it
+# goes down (+cl, +cr): read after it was given to the insertion, it would be
+# shared while the insertion runs, which would copy each node it passes,
+# and a tree the insertion owns alone (a sorted set taken out of the
+# keyspace, R.upd.takes) is changed in place.
 def zt.ins(t: ZTree, c: Cmp, +m: String, +d: F.F64) -> ZTree:
   match t c:
     case ZTip{} _:
       ZBin{1n, m, d, ZTip{}, ZTip{}}
-    case ZBin{n, +k, +e, +l, +r} LT{}:
-      zt.balance(k, e, zt.ins(l, zt.at(l, d, m), m, d), r)
-    case ZBin{n, +k, +e, +l, +r} _:
-      zt.balance(k, e, l, zt.ins(r, zt.at(r, d, m), m, d))
+    case ZBin{n, +k, +e, +l, r} LT{}:
+      +cl = zt.at(l, d, m)
+      zt.balance(k, e, zt.ins(l, cl, m, d), r)
+    case ZBin{n, +k, +e, l, +r} _:
+      +cr = zt.at(r, d, m)
+      zt.balance(k, e, l, zt.ins(r, cr, m, d))
 
 def zt.add(+t: ZTree, +m: String, +d: F.F64) -> ZTree:
   zt.ins(t, zt.at(t, d, m), m, d)
+
+# zt.add of a tree given to it: its root is compared where it is matched,
+# so that a tree held once is changed in place
+def zt.add.own(t: ZTree, +m: String, +d: F.F64) -> ZTree:
+  match t:
+    case ZTip{}:
+      ZBin{1n, m, d, ZTip{}, ZTip{}}
+    case ZBin{+n, +k, +e, l, r}:
+      +c = zel.cmp(d, m, e, k)
+      zt.ins(ZBin{n, k, e, l, r}, c, m, d)
 
 # an element cut from the end of a tree, and the tree left
 type ZCut is Data:
@@ -4954,20 +4970,31 @@ def zt.glue(+l: ZTree, +r: ZTree) -> ZTree:
   zt.glue.of(Nat.is_lt(zt.size(r), zt.size(l)), l, r)
 
 # t without the element (m, d), which it holds; c is how (d, m) compares
-# with t's root
+# with t's root (a side is compared before it goes down, as in zt.ins)
 def zt.rm(t: ZTree, c: Cmp, +m: String, +d: F.F64) -> ZTree:
   match t c:
     case ZTip{} _:
       ZTip{}
-    case ZBin{n, +k, +e, +l, +r} LT{}:
-      zt.balance(k, e, zt.rm(l, zt.at(l, d, m), m, d), r)
-    case ZBin{n, +k, +e, +l, +r} GT{}:
-      zt.balance(k, e, l, zt.rm(r, zt.at(r, d, m), m, d))
-    case ZBin{n, k, e, +l, +r} EQ{}:
+    case ZBin{n, +k, +e, +l, r} LT{}:
+      +cl = zt.at(l, d, m)
+      zt.balance(k, e, zt.rm(l, cl, m, d), r)
+    case ZBin{n, +k, +e, l, +r} GT{}:
+      +cr = zt.at(r, d, m)
+      zt.balance(k, e, l, zt.rm(r, cr, m, d))
+    case ZBin{n, k, e, l, r} EQ{}:
       zt.glue(l, r)
 
 def zt.del(+t: ZTree, +m: String, +d: F.F64) -> ZTree:
   zt.rm(t, zt.at(t, d, m), m, d)
+
+# zt.del of a tree given to it, as zt.add.own
+def zt.del.own(t: ZTree, +m: String, +d: F.F64) -> ZTree:
+  match t:
+    case ZTip{}:
+      ZTip{}
+    case ZBin{+n, +k, +e, l, r}:
+      +c = zel.cmp(d, m, e, k)
+      zt.rm(ZBin{n, k, e, l, r}, c, m, d)
 
 # how many elements of t come before (d, m), which it holds; c is how
 # (d, m) compares with t's root
@@ -5741,6 +5768,9 @@ def zset.rank(+m: String, +z: Zset) -> Maybe<&2, Nat>:
 # z with m of score d added (z does not hold m): a small one turns large
 # when it would pass 128 elements, or m passes 64 bytes, and a small
 # one's string turns its tree when it would pass one buffer
+def zset.big.of(+tr: ZTree, +m: String, +d: F.F64) -> Zset:
+  ZBig{zt.add(tr, m, d), set(F.F64, zt.trie(tr, empty(F.F64)), m, d)}
+
 def zset.add.packed(room: Bool, +n: Nat, +b: String, +m: String, +e: F.F64) -> Zset:
   match room:
     case True{}:
@@ -5757,12 +5787,12 @@ def zset.add.small(fits: Bool, +n: Nat, +b: String, +m: String, +d: F.F64) -> Zs
       +tr = zt.build(n, zb.all(n, b))
       ZBig{zt.add(tr, m, d), set(F.F64, zt.trie(tr, empty(F.F64)), m, d)}
 
-def zset.add.wide(fits: Bool, +tr: ZTree, +m: String, +d: F.F64) -> Zset:
+def zset.add.wide(fits: Bool, tr: ZTree, +m: String, +d: F.F64) -> Zset:
   match fits:
     case True{}:
-      ZWide{zt.add(tr, m, zset.norm(d))}
+      ZWide{zt.add.own(tr, m, zset.norm(d))}
     case False{}:
-      ZBig{zt.add(tr, m, d), set(F.F64, zt.trie(tr, empty(F.F64)), m, d)}
+      zset.big.of(tr, m, d)
 
 def zset.add(z: Zset, +m: String, +d: F.F64) -> Zset:
   match z:
@@ -5770,18 +5800,18 @@ def zset.add(z: Zset, +m: String, +d: F.F64) -> Zset:
       zset.add.small(Bool.and(Nat.is_lt(n, 128n), Nat.is_le(String.length(m), 64n)), n, b, m, d)
     case ZWide{+tr}:
       zset.add.wide(Bool.and(Nat.is_lt(zt.size(tr), 128n), Nat.is_le(String.length(m), 64n)), tr, m, d)
-    case ZBig{+tr, +t}:
-      ZBig{zt.add(tr, m, d), set(F.F64, t, m, d)}
+    case ZBig{tr, t}:
+      ZBig{zt.add.own(tr, m, d), set(F.F64, t, m, d)}
 
 # z without m, which it holds with score d
 def zset.del(z: Zset, +m: String, +d: F.F64) -> Zset:
   match z:
     case ZSmall{+n, +b}:
       ZSmall{Nat.sub(n, 1n), zb.del(b, zb.find(m, b, n))}
-    case ZWide{+tr}:
-      ZWide{zt.del(tr, m, d)}
-    case ZBig{+tr, +t}:
-      ZBig{zt.del(tr, m, d), del(F.F64, t, m)}
+    case ZWide{tr}:
+      ZWide{zt.del.own(tr, m, d)}
+    case ZBig{tr, t}:
+      ZBig{zt.del.own(tr, m, d), del(F.F64, t, m)}
 
 # z without m, which it holds with score d, its element at index i of a
 # small one's string (zset.find)
@@ -5789,10 +5819,10 @@ def zset.del.at(z: Zset, +i: Nat, +m: String, +d: F.F64) -> Zset:
   match z:
     case ZSmall{+n, +b}:
       ZSmall{Nat.sub(n, 1n), pk.cut(b, i, zb.next(b, i))}
-    case ZWide{+tr}:
-      ZWide{zt.del(tr, m, d)}
-    case ZBig{+tr, +t}:
-      ZBig{zt.del(tr, m, d), del(F.F64, t, m)}
+    case ZWide{tr}:
+      ZWide{zt.del.own(tr, m, d)}
+    case ZBig{tr, t}:
+      ZBig{zt.del.own(tr, m, d), del(F.F64, t, m)}
 
 # z with m's score, old, set to d, m's element at index i of a small
 # one's string (zset.find)
@@ -5800,10 +5830,10 @@ def zset.set(z: Zset, +i: Nat, +m: String, +old: F.F64, +d: F.F64) -> Zset:
   match z:
     case ZSmall{+n, +b}:
       ZSmall{n, zb.set(b, n, i, m, zset.norm(d))}
-    case ZWide{+tr}:
-      ZWide{zt.add(zt.del(tr, m, old), m, zset.norm(d))}
-    case ZBig{+tr, +t}:
-      ZBig{zt.add(zt.del(tr, m, old), m, d), set(F.F64, t, m, d)}
+    case ZWide{tr}:
+      ZWide{zt.add.own(zt.del.own(tr, m, old), m, zset.norm(d))}
+    case ZBig{tr, t}:
+      ZBig{zt.add.own(zt.del.own(tr, m, old), m, d), set(F.F64, t, m, d)}
 
 # the elements of z at the ranks from a to b - 1, in order (last first
 # when rev)
@@ -6198,6 +6228,90 @@ def xns.rep(t: XNodes, c: Cmp, +x: XNode) -> XNodes:
 def xns.set(+x: XNode, +t: XNodes) -> XNodes:
   xns.rep(t, xns.at(t, xnode.mid(x)), x)
 
+# a node's element cut from the end of a tree, and the tree left
+type XNCut is Data:
+  XNCut{x: XNode, t: XNodes}
+
+def xns.cutl.fix(c: XNCut, +x: XNode, r: XNodes) -> XNCut:
+  match c:
+    case XNCut{+cx, +ct}:
+      XNCut{cx, xns.balance(x, ct, r)}
+
+# the first element of the node of x between l and r, cut from it
+def xns.cutl(l: XNodes, +x: XNode, r: XNodes) -> XNCut:
+  match l:
+    case XNTip{}:
+      XNCut{x, r}
+    case XNBin{n, +lx, ll, lr}:
+      xns.cutl.fix(xns.cutl(ll, lx, lr), x, r)
+
+def xns.cutr.fix(c: XNCut, +x: XNode, l: XNodes) -> XNCut:
+  match c:
+    case XNCut{+cx, +ct}:
+      XNCut{cx, xns.balance(x, l, ct)}
+
+# the last element of the node of x between l and r, cut from it
+def xns.cutr(r: XNodes, +x: XNode, l: XNodes) -> XNCut:
+  match r:
+    case XNTip{}:
+      XNCut{x, l}
+    case XNBin{n, +rx, rl, rr}:
+      xns.cutr.fix(xns.cutr(rr, rx, rl), x, l)
+
+def xns.glue.lfix(c: XNCut, r: XNodes) -> XNodes:
+  match c:
+    case XNCut{+x, +l}:
+      xns.balance(x, l, r)
+
+def xns.glue.rfix(l: XNodes, c: XNCut) -> XNodes:
+  match c:
+    case XNCut{+x, +r}:
+      xns.balance(x, l, r)
+
+# the larger side l's last element takes the place of the one taken out
+def xns.glue.l(l: XNodes, r: XNodes) -> XNodes:
+  match l:
+    case XNTip{}:
+      r
+    case XNBin{n, +lx, ll, lr}:
+      xns.glue.lfix(xns.cutr(lr, lx, ll), r)
+
+# or r's first element (r a tip: both sides are)
+def xns.glue.r(l: XNodes, r: XNodes) -> XNodes:
+  match r:
+    case XNTip{}:
+      l
+    case XNBin{n, +rx, rl, rr}:
+      xns.glue.rfix(l, xns.cutl(rl, rx, rr))
+
+def xns.glue.of(lbig: Bool, l: XNodes, r: XNodes) -> XNodes:
+  match lbig:
+    case True{}:
+      xns.glue.l(l, r)
+    case False{}:
+      xns.glue.r(l, r)
+
+# the elements of l and then those of r, the sides of a node whose
+# element is taken out
+def xns.glue(+l: XNodes, +r: XNodes) -> XNodes:
+  xns.glue.of(Nat.is_lt(xns.size(r), xns.size(l)), l, r)
+
+# t without the element of key k (t as it was when it holds none); c is
+# how k compares with t's root's
+def xns.rm(t: XNodes, c: Cmp, +k: XId) -> XNodes:
+  match t c:
+    case XNTip{} _:
+      XNTip{}
+    case XNBin{n, +y, +l, +r} LT{}:
+      xns.balance(y, xns.rm(l, xns.at(l, k), k), r)
+    case XNBin{n, +y, +l, +r} GT{}:
+      xns.balance(y, l, xns.rm(r, xns.at(r, k), k))
+    case XNBin{n, y, +l, +r} EQ{}:
+      xns.glue(l, r)
+
+def xns.del(+k: XId, +t: XNodes) -> XNodes:
+  xns.rm(t, xns.at(t, k), k)
+
 # a node's element, made before the walk goes on (as it.el)
 def xns.el(+x: XNode) -> XNode:
   x
@@ -6331,6 +6445,90 @@ def xpl.rep(t: XPel, c: Cmp, +x: XNack) -> XPel:
 
 def xpl.set(+x: XNack, +t: XPel) -> XPel:
   xpl.rep(t, xpl.at(t, xnack.id(x)), x)
+
+# a node's element cut from the end of a tree, and the tree left
+type XPCut is Data:
+  XPCut{x: XNack, t: XPel}
+
+def xpl.cutl.fix(c: XPCut, +x: XNack, r: XPel) -> XPCut:
+  match c:
+    case XPCut{+cx, +ct}:
+      XPCut{cx, xpl.balance(x, ct, r)}
+
+# the first element of the node of x between l and r, cut from it
+def xpl.cutl(l: XPel, +x: XNack, r: XPel) -> XPCut:
+  match l:
+    case XPTip{}:
+      XPCut{x, r}
+    case XPBin{n, +lx, ll, lr}:
+      xpl.cutl.fix(xpl.cutl(ll, lx, lr), x, r)
+
+def xpl.cutr.fix(c: XPCut, +x: XNack, l: XPel) -> XPCut:
+  match c:
+    case XPCut{+cx, +ct}:
+      XPCut{cx, xpl.balance(x, l, ct)}
+
+# the last element of the node of x between l and r, cut from it
+def xpl.cutr(r: XPel, +x: XNack, l: XPel) -> XPCut:
+  match r:
+    case XPTip{}:
+      XPCut{x, l}
+    case XPBin{n, +rx, rl, rr}:
+      xpl.cutr.fix(xpl.cutr(rr, rx, rl), x, l)
+
+def xpl.glue.lfix(c: XPCut, r: XPel) -> XPel:
+  match c:
+    case XPCut{+x, +l}:
+      xpl.balance(x, l, r)
+
+def xpl.glue.rfix(l: XPel, c: XPCut) -> XPel:
+  match c:
+    case XPCut{+x, +r}:
+      xpl.balance(x, l, r)
+
+# the larger side l's last element takes the place of the one taken out
+def xpl.glue.l(l: XPel, r: XPel) -> XPel:
+  match l:
+    case XPTip{}:
+      r
+    case XPBin{n, +lx, ll, lr}:
+      xpl.glue.lfix(xpl.cutr(lr, lx, ll), r)
+
+# or r's first element (r a tip: both sides are)
+def xpl.glue.r(l: XPel, r: XPel) -> XPel:
+  match r:
+    case XPTip{}:
+      l
+    case XPBin{n, +rx, rl, rr}:
+      xpl.glue.rfix(l, xpl.cutl(rl, rx, rr))
+
+def xpl.glue.of(lbig: Bool, l: XPel, r: XPel) -> XPel:
+  match lbig:
+    case True{}:
+      xpl.glue.l(l, r)
+    case False{}:
+      xpl.glue.r(l, r)
+
+# the elements of l and then those of r, the sides of a node whose
+# element is taken out
+def xpl.glue(+l: XPel, +r: XPel) -> XPel:
+  xpl.glue.of(Nat.is_lt(xpl.size(r), xpl.size(l)), l, r)
+
+# t without the element of key k (t as it was when it holds none); c is
+# how k compares with t's root's
+def xpl.rm(t: XPel, c: Cmp, +k: XId) -> XPel:
+  match t c:
+    case XPTip{} _:
+      XPTip{}
+    case XPBin{n, +y, +l, +r} LT{}:
+      xpl.balance(y, xpl.rm(l, xpl.at(l, k), k), r)
+    case XPBin{n, +y, +l, +r} GT{}:
+      xpl.balance(y, l, xpl.rm(r, xpl.at(r, k), k))
+    case XPBin{n, y, +l, +r} EQ{}:
+      xpl.glue(l, r)
+
+def xpl.del(+k: XId, +t: XPel) -> XPel:
+  xpl.rm(t, xpl.at(t, k), k)
 
 # a node's element, made before the walk goes on (as it.el)
 def xpl.el(+x: XNack) -> XNack:
@@ -6466,6 +6664,90 @@ def xis.rep(t: XIds, c: Cmp, +x: XId) -> XIds:
 def xis.set(+x: XId, +t: XIds) -> XIds:
   xis.rep(t, xis.at(t, xid.self(x)), x)
 
+# a node's element cut from the end of a tree, and the tree left
+type XICut is Data:
+  XICut{x: XId, t: XIds}
+
+def xis.cutl.fix(c: XICut, +x: XId, r: XIds) -> XICut:
+  match c:
+    case XICut{+cx, +ct}:
+      XICut{cx, xis.balance(x, ct, r)}
+
+# the first element of the node of x between l and r, cut from it
+def xis.cutl(l: XIds, +x: XId, r: XIds) -> XICut:
+  match l:
+    case XITip{}:
+      XICut{x, r}
+    case XIBin{n, +lx, ll, lr}:
+      xis.cutl.fix(xis.cutl(ll, lx, lr), x, r)
+
+def xis.cutr.fix(c: XICut, +x: XId, l: XIds) -> XICut:
+  match c:
+    case XICut{+cx, +ct}:
+      XICut{cx, xis.balance(x, l, ct)}
+
+# the last element of the node of x between l and r, cut from it
+def xis.cutr(r: XIds, +x: XId, l: XIds) -> XICut:
+  match r:
+    case XITip{}:
+      XICut{x, l}
+    case XIBin{n, +rx, rl, rr}:
+      xis.cutr.fix(xis.cutr(rr, rx, rl), x, l)
+
+def xis.glue.lfix(c: XICut, r: XIds) -> XIds:
+  match c:
+    case XICut{+x, +l}:
+      xis.balance(x, l, r)
+
+def xis.glue.rfix(l: XIds, c: XICut) -> XIds:
+  match c:
+    case XICut{+x, +r}:
+      xis.balance(x, l, r)
+
+# the larger side l's last element takes the place of the one taken out
+def xis.glue.l(l: XIds, r: XIds) -> XIds:
+  match l:
+    case XITip{}:
+      r
+    case XIBin{n, +lx, ll, lr}:
+      xis.glue.lfix(xis.cutr(lr, lx, ll), r)
+
+# or r's first element (r a tip: both sides are)
+def xis.glue.r(l: XIds, r: XIds) -> XIds:
+  match r:
+    case XITip{}:
+      l
+    case XIBin{n, +rx, rl, rr}:
+      xis.glue.rfix(l, xis.cutl(rl, rx, rr))
+
+def xis.glue.of(lbig: Bool, l: XIds, r: XIds) -> XIds:
+  match lbig:
+    case True{}:
+      xis.glue.l(l, r)
+    case False{}:
+      xis.glue.r(l, r)
+
+# the elements of l and then those of r, the sides of a node whose
+# element is taken out
+def xis.glue(+l: XIds, +r: XIds) -> XIds:
+  xis.glue.of(Nat.is_lt(xis.size(r), xis.size(l)), l, r)
+
+# t without the element of key k (t as it was when it holds none); c is
+# how k compares with t's root's
+def xis.rm(t: XIds, c: Cmp, +k: XId) -> XIds:
+  match t c:
+    case XITip{} _:
+      XITip{}
+    case XIBin{n, +y, +l, +r} LT{}:
+      xis.balance(y, xis.rm(l, xis.at(l, k), k), r)
+    case XIBin{n, +y, +l, +r} GT{}:
+      xis.balance(y, l, xis.rm(r, xis.at(r, k), k))
+    case XIBin{n, y, +l, +r} EQ{}:
+      xis.glue(l, r)
+
+def xis.del(+k: XId, +t: XIds) -> XIds:
+  xis.rm(t, xis.at(t, k), k)
+
 # a node's element, made before the walk goes on (as it.el)
 def xis.el(+x: XId) -> XId:
   x
@@ -6600,6 +6882,90 @@ def xcs.rep(t: XCons, c: Cmp, +x: XCon) -> XCons:
 def xcs.set(+x: XCon, +t: XCons) -> XCons:
   xcs.rep(t, xcs.at(t, xcon.name(x)), x)
 
+# a node's element cut from the end of a tree, and the tree left
+type XCCut is Data:
+  XCCut{x: XCon, t: XCons}
+
+def xcs.cutl.fix(c: XCCut, +x: XCon, r: XCons) -> XCCut:
+  match c:
+    case XCCut{+cx, +ct}:
+      XCCut{cx, xcs.balance(x, ct, r)}
+
+# the first element of the node of x between l and r, cut from it
+def xcs.cutl(l: XCons, +x: XCon, r: XCons) -> XCCut:
+  match l:
+    case XCTip{}:
+      XCCut{x, r}
+    case XCBin{n, +lx, ll, lr}:
+      xcs.cutl.fix(xcs.cutl(ll, lx, lr), x, r)
+
+def xcs.cutr.fix(c: XCCut, +x: XCon, l: XCons) -> XCCut:
+  match c:
+    case XCCut{+cx, +ct}:
+      XCCut{cx, xcs.balance(x, l, ct)}
+
+# the last element of the node of x between l and r, cut from it
+def xcs.cutr(r: XCons, +x: XCon, l: XCons) -> XCCut:
+  match r:
+    case XCTip{}:
+      XCCut{x, l}
+    case XCBin{n, +rx, rl, rr}:
+      xcs.cutr.fix(xcs.cutr(rr, rx, rl), x, l)
+
+def xcs.glue.lfix(c: XCCut, r: XCons) -> XCons:
+  match c:
+    case XCCut{+x, +l}:
+      xcs.balance(x, l, r)
+
+def xcs.glue.rfix(l: XCons, c: XCCut) -> XCons:
+  match c:
+    case XCCut{+x, +r}:
+      xcs.balance(x, l, r)
+
+# the larger side l's last element takes the place of the one taken out
+def xcs.glue.l(l: XCons, r: XCons) -> XCons:
+  match l:
+    case XCTip{}:
+      r
+    case XCBin{n, +lx, ll, lr}:
+      xcs.glue.lfix(xcs.cutr(lr, lx, ll), r)
+
+# or r's first element (r a tip: both sides are)
+def xcs.glue.r(l: XCons, r: XCons) -> XCons:
+  match r:
+    case XCTip{}:
+      l
+    case XCBin{n, +rx, rl, rr}:
+      xcs.glue.rfix(l, xcs.cutl(rl, rx, rr))
+
+def xcs.glue.of(lbig: Bool, l: XCons, r: XCons) -> XCons:
+  match lbig:
+    case True{}:
+      xcs.glue.l(l, r)
+    case False{}:
+      xcs.glue.r(l, r)
+
+# the elements of l and then those of r, the sides of a node whose
+# element is taken out
+def xcs.glue(+l: XCons, +r: XCons) -> XCons:
+  xcs.glue.of(Nat.is_lt(xcs.size(r), xcs.size(l)), l, r)
+
+# t without the element of key k (t as it was when it holds none); c is
+# how k compares with t's root's
+def xcs.rm(t: XCons, c: Cmp, +k: String) -> XCons:
+  match t c:
+    case XCTip{} _:
+      XCTip{}
+    case XCBin{n, +y, +l, +r} LT{}:
+      xcs.balance(y, xcs.rm(l, xcs.at(l, k), k), r)
+    case XCBin{n, +y, +l, +r} GT{}:
+      xcs.balance(y, l, xcs.rm(r, xcs.at(r, k), k))
+    case XCBin{n, y, +l, +r} EQ{}:
+      xcs.glue(l, r)
+
+def xcs.del(+k: String, +t: XCons) -> XCons:
+  xcs.rm(t, xcs.at(t, k), k)
+
 # a node's element, made before the walk goes on (as it.el)
 def xcs.el(+x: XCon) -> XCon:
   x
@@ -6733,6 +7099,90 @@ def xgs.rep(t: XGroups, c: Cmp, +x: XGroup) -> XGroups:
 
 def xgs.set(+x: XGroup, +t: XGroups) -> XGroups:
   xgs.rep(t, xgs.at(t, xgroup.name(x)), x)
+
+# a node's element cut from the end of a tree, and the tree left
+type XGCut is Data:
+  XGCut{x: XGroup, t: XGroups}
+
+def xgs.cutl.fix(c: XGCut, +x: XGroup, r: XGroups) -> XGCut:
+  match c:
+    case XGCut{+cx, +ct}:
+      XGCut{cx, xgs.balance(x, ct, r)}
+
+# the first element of the node of x between l and r, cut from it
+def xgs.cutl(l: XGroups, +x: XGroup, r: XGroups) -> XGCut:
+  match l:
+    case XGTip{}:
+      XGCut{x, r}
+    case XGBin{n, +lx, ll, lr}:
+      xgs.cutl.fix(xgs.cutl(ll, lx, lr), x, r)
+
+def xgs.cutr.fix(c: XGCut, +x: XGroup, l: XGroups) -> XGCut:
+  match c:
+    case XGCut{+cx, +ct}:
+      XGCut{cx, xgs.balance(x, l, ct)}
+
+# the last element of the node of x between l and r, cut from it
+def xgs.cutr(r: XGroups, +x: XGroup, l: XGroups) -> XGCut:
+  match r:
+    case XGTip{}:
+      XGCut{x, l}
+    case XGBin{n, +rx, rl, rr}:
+      xgs.cutr.fix(xgs.cutr(rr, rx, rl), x, l)
+
+def xgs.glue.lfix(c: XGCut, r: XGroups) -> XGroups:
+  match c:
+    case XGCut{+x, +l}:
+      xgs.balance(x, l, r)
+
+def xgs.glue.rfix(l: XGroups, c: XGCut) -> XGroups:
+  match c:
+    case XGCut{+x, +r}:
+      xgs.balance(x, l, r)
+
+# the larger side l's last element takes the place of the one taken out
+def xgs.glue.l(l: XGroups, r: XGroups) -> XGroups:
+  match l:
+    case XGTip{}:
+      r
+    case XGBin{n, +lx, ll, lr}:
+      xgs.glue.lfix(xgs.cutr(lr, lx, ll), r)
+
+# or r's first element (r a tip: both sides are)
+def xgs.glue.r(l: XGroups, r: XGroups) -> XGroups:
+  match r:
+    case XGTip{}:
+      l
+    case XGBin{n, +rx, rl, rr}:
+      xgs.glue.rfix(l, xgs.cutl(rl, rx, rr))
+
+def xgs.glue.of(lbig: Bool, l: XGroups, r: XGroups) -> XGroups:
+  match lbig:
+    case True{}:
+      xgs.glue.l(l, r)
+    case False{}:
+      xgs.glue.r(l, r)
+
+# the elements of l and then those of r, the sides of a node whose
+# element is taken out
+def xgs.glue(+l: XGroups, +r: XGroups) -> XGroups:
+  xgs.glue.of(Nat.is_lt(xgs.size(r), xgs.size(l)), l, r)
+
+# t without the element of key k (t as it was when it holds none); c is
+# how k compares with t's root's
+def xgs.rm(t: XGroups, c: Cmp, +k: String) -> XGroups:
+  match t c:
+    case XGTip{} _:
+      XGTip{}
+    case XGBin{n, +y, +l, +r} LT{}:
+      xgs.balance(y, xgs.rm(l, xgs.at(l, k), k), r)
+    case XGBin{n, +y, +l, +r} GT{}:
+      xgs.balance(y, l, xgs.rm(r, xgs.at(r, k), k))
+    case XGBin{n, y, +l, +r} EQ{}:
+      xgs.glue(l, r)
+
+def xgs.del(+k: String, +t: XGroups) -> XGroups:
+  xgs.rm(t, xgs.at(t, k), k)
 
 # a node's element, made before the walk goes on (as it.el)
 def xgs.el(+x: XGroup) -> XGroup:
