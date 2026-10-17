@@ -4764,14 +4764,13 @@ def parse_linsert(w: Nat, k: String, p: String, v: String) -> Cmd:
     case _:
       Bad{RError{"ERR syntax error"}}
 
-# LPOS's options as Redis reads them, in turn: RANK (a long, not 0),
-# COUNT and MAXLEN (longs at least 0); an option without its argument,
-# or any other word, is a syntax error. The last of an option counts.
-# RANK LLONG_MIN, whose negation wraps in C, reads from the last
-# element, takes the first match on, and with COUNT never stops: every
-# match.
+# LPOS's options as Redis reads them, in turn: RANK (a long from
+# -LONG_MAX to LONG_MAX, not 0), COUNT and MAXLEN (longs at least 0); an
+# option without its argument, or any other word, is a syntax error. The
+# last of an option counts. Redis 7.2 refuses RANK LLONG_MIN
+# (getRangeLongFromObjectOrReply), whose negation 7.0 wrapped in C.
 type LPosSt is Data:
-  LPosSt{neg: Bool, rank: Nat, min: Bool, cnt: Maybe<&2, Nat>, maxlen: Nat}
+  LPosSt{neg: Bool, rank: Nat, cnt: Maybe<&2, Nat>, maxlen: Nat}
   LPosErr{r: Reply}
 
 def lpos.rank(l: LL, cnt: Maybe<&2, Nat>, maxlen: Nat) -> LPosSt:
@@ -4779,21 +4778,22 @@ def lpos.rank(l: LL, cnt: Maybe<&2, Nat>, maxlen: Nat) -> LPosSt:
     case LL{+neg, +hi, +lo}:
       +zero = Bool.and(Nat.is_eq(hi, 0n), Nat.is_eq(lo, 0n))
       +min = Bool.and(neg, Bool.and(Nat.is_eq(hi, dec.llmax()), Nat.is_eq(lo, 854775808n)))
-      Bool.pick(LPosSt, zero, LPosErr{RError{"ERR RANK can't be zero: use 1 to start from the first match, 2 from the second ... or use negative to start from the end of the list"}}, LPosSt{neg, lnum.mag(Nat.is_lt(hi, 140737n), hi, lo), min, cnt, maxlen})
+      Bool.pick(LPosSt, min, LPosErr{RError{"ERR value is out of range, value must between -9223372036854775807 and 9223372036854775807"}},
+        Bool.pick(LPosSt, zero, LPosErr{RError{"ERR RANK can't be zero: use 1 to start from the first match, 2 from the second ... or use negative to start from the end of the list"}}, LPosSt{neg, lnum.mag(Nat.is_lt(hi, 140737n), hi, lo), cnt, maxlen}))
     case LLBad{}:
       LPosErr{e_int()}
 
-def lpos.count(m: Maybe<&2, Nat>, neg: Bool, rank: Nat, min: Bool, maxlen: Nat) -> LPosSt:
+def lpos.count(m: Maybe<&2, Nat>, neg: Bool, rank: Nat, maxlen: Nat) -> LPosSt:
   match m:
     case Some{c}:
-      LPosSt{neg, rank, min, Some{c}, maxlen}
+      LPosSt{neg, rank, Some{c}, maxlen}
     case None{}:
       LPosErr{RError{"ERR COUNT can't be negative"}}
 
-def lpos.maxlen(m: Maybe<&2, Nat>, neg: Bool, rank: Nat, min: Bool, cnt: Maybe<&2, Nat>) -> LPosSt:
+def lpos.maxlen(m: Maybe<&2, Nat>, neg: Bool, rank: Nat, cnt: Maybe<&2, Nat>) -> LPosSt:
   match m:
     case Some{x}:
-      LPosSt{neg, rank, min, cnt, x}
+      LPosSt{neg, rank, cnt, x}
     case None{}:
       LPosErr{RError{"ERR MAXLEN can't be negative"}}
 
@@ -4801,14 +4801,14 @@ def lpos.maxlen(m: Maybe<&2, Nat>, neg: Bool, rank: Nat, min: Bool, cnt: Maybe<&
 def lpos.word(+w: String) -> Nat:
   Bool.pick(Nat, is_word(w, "RANK"), 1n, Bool.pick(Nat, is_word(w, "COUNT"), 2n, Bool.pick(Nat, is_word(w, "MAXLEN"), 3n, 0n)))
 
-def lpos.opt(w: Nat, +v: String, neg: Bool, rank: Nat, min: Bool, cnt: Maybe<&2, Nat>, maxlen: Nat) -> LPosSt:
+def lpos.opt(w: Nat, +v: String, neg: Bool, rank: Nat, cnt: Maybe<&2, Nat>, maxlen: Nat) -> LPosSt:
   match w:
     case 1n:
       lpos.rank(ll.read(v), cnt, maxlen)
     case 2n:
-      lpos.count(lcount(v), neg, rank, min, maxlen)
+      lpos.count(lcount(v), neg, rank, maxlen)
     case 3n:
-      lpos.maxlen(lcount(v), neg, rank, min, cnt)
+      lpos.maxlen(lcount(v), neg, rank, cnt)
     case _:
       LPosErr{RError{"ERR syntax error"}}
 
@@ -4816,36 +4816,22 @@ def lpos.opts(xs: List<&2, String>, st: LPosSt) -> LPosSt:
   match xs st:
     case Nil{} st:
       st
-    case Con{+w, Con{+v, rest}} LPosSt{neg, rank, min, cnt, maxlen}:
-      lpos.opts(rest, lpos.opt(lpos.word(w), v, neg, rank, min, cnt, maxlen))
-    case Con{w, Nil{}} LPosSt{neg, rank, min, cnt, maxlen}:
+    case Con{+w, Con{+v, rest}} LPosSt{neg, rank, cnt, maxlen}:
+      lpos.opts(rest, lpos.opt(lpos.word(w), v, neg, rank, cnt, maxlen))
+    case Con{w, Nil{}} LPosSt{neg, rank, cnt, maxlen}:
       LPosErr{RError{"ERR syntax error"}}
     case _ LPosErr{r}:
       LPosErr{r}
 
-def lpos.all(cnt: Maybe<&2, Nat>) -> Maybe<&2, Nat>:
-  match cnt:
-    case Some{c}:
-      Some{0n}
-    case None{}:
-      None{}
-
-def lpos.mk(min: Bool, neg: Bool, rank: Nat, cnt: Maybe<&2, Nat>, maxlen: Nat) -> LPosOpts:
-  match min:
-    case True{}:
-      LPosOpts{True{}, 1n, lpos.all(cnt), maxlen}
-    case False{}:
-      LPosOpts{neg, rank, cnt, maxlen}
-
 def lpos.fin(st: LPosSt) -> LPosOpts:
   match st:
-    case LPosSt{neg, rank, min, cnt, maxlen}:
-      lpos.mk(min, neg, rank, cnt, maxlen)
+    case LPosSt{neg, rank, cnt, maxlen}:
+      LPosOpts{neg, rank, cnt, maxlen}
     case LPosErr{r}:
       LPosBad{r}
 
 def lpos.args(args: List<&2, String>) -> LPosOpts:
-  lpos.fin(lpos.opts(args, LPosSt{False{}, 1n, False{}, None{}, 0n}))
+  lpos.fin(lpos.opts(args, LPosSt{False{}, 1n, None{}, 0n}))
 
 def parse_lpos(o: LPosOpts, k: String, args: List<&2, String>) -> Cmd:
   match o:
@@ -7358,8 +7344,9 @@ def xro.word(+w: String) -> Nat:
   +up = String.to_upper(cstr(w))
   Bool.pick(Nat, String.eq(up, "BLOCK"), 1n, Bool.pick(Nat, String.eq(up, "COUNT"), 2n, Bool.pick(Nat, String.eq(up, "STREAMS"), 3n, Bool.pick(Nat, String.eq(up, "GROUP"), 4n, Bool.pick(Nat, String.eq(up, "NOACK"), 5n, 0n)))))
 
+# (Redis 7.2 names the command in it as its full name: 'xread')
 def e_xunbalanced() -> Reply:
-  RError{"ERR Unbalanced XREAD list of streams: for each stream key an ID or '$' must be specified."}
+  RError{"ERR Unbalanced 'xread' list of streams: for each stream key an ID or '$' must be specified."}
 
 # an option of word k, with more words after it
 def xro.opt(+k: Nat, +more: Nat, +c: Nat, +b: Bool) -> XRo:
@@ -19994,11 +19981,11 @@ def xdel.run(+ids: List<&2, String>, +x: KV.XStream) -> Out:
     case Nil{}:
       Out{r_int(0n), CKeep{}}
 
-# XSETID: on a stream with entries, an ID below its last live one or an
-# entries-added below its length is an error; else the last ID, the
-# entries added (when given) and the greatest ID deleted (when given, but
-# 0-0) set. Redis 7.0 does not check the ID against the greatest deleted
-# one the stream holds (7.2 does)
+# XSETID: an ID below the greatest one deleted from the stream is an
+# error, as Redis 7.2 checks it first (7.0 did not); on a stream with
+# entries, so is an ID below its last live one or an entries-added below
+# its length; else the last ID, the entries added (when given) and the
+# greatest ID deleted (when given, but 0-0) set
 def xsetid.top.of(m: Maybe<&2, KV.XId>) -> KV.XId:
   match m:
     case Some{t}:
@@ -20016,7 +20003,8 @@ def xsetid.few(+added: Maybe<&2, KV.XN>, +n: Nat) -> Bool:
 def xsetid.code(+id: KV.XId, +added: Maybe<&2, KV.XN>, +x: KV.XStream) -> Nat:
   +n = KV.xstream.len(x)
   +some = Nat.is_lt(0n, n)
-  Bool.pick(Nat, Bool.and(some, Cmp.is_lt(KV.xid.cmp(id, xsetid.top.of(X.xs.top(x))))), 1n, Bool.pick(Nat, Bool.and(some, xsetid.few(added, n)), 2n, 0n))
+  Bool.pick(Nat, Cmp.is_lt(KV.xid.cmp(id, X.xstream.maxdel(x))), 3n,
+    Bool.pick(Nat, Bool.and(some, Cmp.is_lt(KV.xid.cmp(id, xsetid.top.of(X.xs.top(x))))), 1n, Bool.pick(Nat, Bool.and(some, xsetid.few(added, n)), 2n, 0n)))
 
 def xsetid.added.or(m: Maybe<&2, KV.XN>, +d: KV.XN) -> KV.XN:
   match m:
@@ -20038,8 +20026,10 @@ def xsetid.chk(c: Nat, +id: KV.XId, +added: Maybe<&2, KV.XN>, +md: KV.XId, +ws: 
       Out{r_ok(), CStream{XWSetId{ws}, xsetid.set(x, id, added, md)}}
     case 1n:
       Out{RError{"ERR The ID specified in XSETID is smaller than the target stream top item"}, CKeep{}}
-    case _:
+    case 2n:
       Out{RError{"ERR The entries_added specified in XSETID is smaller than the target stream length"}, CKeep{}}
+    case _:
+      Out{RError{"ERR The ID specified in XSETID is smaller than current max_deleted_entry_id"}, CKeep{}}
 
 def xsetid.run.of(+ws: List<&2, String>, s: XS, +x: KV.XStream) -> Out:
   match s:

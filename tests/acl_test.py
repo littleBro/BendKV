@@ -58,21 +58,34 @@ def line(s):
     return " ".join(f for f in s.split() if f.split("=", 1)[0] not in VOLATILE)
 
 
-def entry(e):
-    """An ACL LOG entry as a sorted list of its fields, its age dropped and
-    its client's line without the volatile fields."""
+def entry(e, base):
+    """An ACL LOG entry as a list of its fields: its age dropped, its
+    client's line without the volatile fields, its times (ms since 1970)
+    as whether they are such, the last update not before the creation,
+    and its entry-id less base, the least of its reply's: a test runs on
+    servers that other tests have used."""
     out = []
+    f = dict(zip(e[0::2], e[1::2]))
     for i in range(0, len(e), 2):
         k, v = e[i], e[i + 1]
         if k == "age-seconds":
             continue
+        if k == "entry-id":
+            v = int(v[1:]) - base
+        elif k == "timestamp-created":
+            v = bool(re.fullmatch(r":\d{13}", v))
+        elif k == "timestamp-last-updated":
+            v = bool(re.fullmatch(r":\d{13}", v)) and v >= f.get("timestamp-created", "")
         out.append((k, line(v) if k == "client-info" else v))
     return out
 
 
 def log_of(r, *args):
     x = r.cmd("ACL", "LOG", *args)
-    return [entry(e) for e in x] if isinstance(x, list) else x
+    if not isinstance(x, list):
+        return x
+    ids = [int(v[1:]) for e in x for k, v in zip(e[0::2], e[1::2]) if k == "entry-id"]
+    return [entry(e, min(ids, default=0)) for e in x]
 
 
 def counts(r):

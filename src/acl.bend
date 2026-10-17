@@ -737,9 +737,18 @@ type User is Data:
 # an entry of the ACL LOG: how many events it counts, why (command, key,
 # channel or auth), where (toplevel or multi), what (the command's full
 # name, the key, the channel, or AUTH as typed), the user, when it last
-# counted one (ms since 1970), and its client's line (CLIENT LIST's) then
+# counted one (ms since 1970), its client's line (CLIENT LIST's) then,
+# its number (entry-id: the entries made before it) and when it was made
+# (timestamp-created), as Redis 7.2 keeps them
 type Ent is Data:
-  Ent{count: Nat, why: String, ctx: String, obj: String, user: String, at: Nat, info: String}
+  Ent{count: Nat, why: String, ctx: String, obj: String, user: String, at: Nat, info: String, id: Nat, made: Nat}
+
+# the ACL LOG: its entries, newest first, and how many were made, which
+# ACL LOG RESET keeps (Redis's ACLLogEntryCount). LogOf, a log that holds
+# a log, is never built: it makes Log a node of its own
+type Log is Data:
+  Log{es: List<&2, Ent>, n: Nat}
+  LogOf{l: Log}
 
 # what the checks look up, each in a trie (map.bend) read in place: the
 # ids of the restricted clients (Restricted clients, below) and how many
@@ -754,7 +763,7 @@ type Ix is Data:
 # user (rp), ACL GENPASS's secret key and count of the blocks it made,
 # and the lookups of the checks (Ix)
 type Acl is Data:
-  Acl{dflt: User, users: List<&2, User>, log: List<&2, Ent>, gone: List<&2, String>, rp: String, key: String, ctr: Nat, ix: Ix}
+  Acl{dflt: User, users: List<&2, User>, log: Log, gone: List<&2, String>, rp: String, key: String, ctr: Nat, ix: Ix}
 
 # Small things
 # ------------
@@ -1557,10 +1566,17 @@ def acl.users(+a: Acl) -> List<&2, User>:
     case Acl{dflt, +users, log, gone, rp, key, ctr, ix}:
       users
 
+def log.es(+l: Log) -> List<&2, Ent>:
+  match l:
+    case Log{+es, n}:
+      es
+    case LogOf{x}:
+      log.es(x)
+
 def acl.log(+a: Acl) -> List<&2, Ent>:
   match a:
     case Acl{dflt, users, +log, gone, rp, key, ctr, ix}:
-      log
+      log.es(log)
 
 def acl.gone(+a: Acl) -> List<&2, String>:
   match a:
@@ -1672,7 +1688,7 @@ def acl.dflt.of(+pass: String) -> User:
 
 # key: GENPASS's secret, random hex digits the server read at its start
 def acl.new(+pass: String, key: String) -> Acl:
-  Acl{acl.dflt.of(pass), Nil{}, Nil{}, Nil{}, pass, key, 0n, Ix{KV.empty(Nat), 0n, KV.empty(User)}}
+  Acl{acl.dflt.of(pass), Nil{}, Log{Nil{}, 0n}, Nil{}, pass, key, 0n, Ix{KV.empty(Nat), 0n, KV.empty(User)}}
 
 # requirepass set: the default user's passwords reset, then the new one
 # or nopass (Redis's ACLUpdateDefaultUserPassword)
@@ -2316,13 +2332,14 @@ def user.verdict(v: Verdict, +c: Call) -> Verdict:
 def user.check(+u: User, +c: Call) -> Verdict:
   user.verdict(sels.check(user.sels(u), c, VNo{0n, 0n, ""}), c)
 
-# NOPERM's text for a call denied (processCommand's)
-def verdict.err(+v: Verdict) -> String:
+# NOPERM's text for a call of user n denied, as Redis 7.2's
+# processCommand words it (getAclErrorMessage, not verbose: the user and
+# the command named, not the key or the channel)
+def verdict.err(+v: Verdict, +n: String) -> String:
   match v:
     case VNo{+why, at, +obj}:
-      Bool.pick(String, Nat.is_eq(why, 1n), "NOPERM this user has no permissions to run the '" ++ obj ++ "' command",
-        Bool.pick(String, Nat.is_eq(why, 2n), "NOPERM this user has no permissions to access one of the keys used as arguments",
-          "NOPERM this user has no permissions to access one of the channels used as arguments"))
+      Bool.pick(String, Nat.is_eq(why, 1n), "NOPERM User " ++ n ++ " has no permissions to run the '" ++ obj ++ "' command",
+        Bool.pick(String, Nat.is_eq(why, 2n), "NOPERM No permissions to access a key", "NOPERM No permissions to access a channel"))
     case VOk{}:
       ""
 
@@ -2336,14 +2353,16 @@ def verdict.exec(+v: Verdict) -> String:
     case VOk{}:
       ""
 
-# ACL DRYRUN's reply: OK, or why not as a bulk string
-def verdict.dry(+v: Verdict) -> R.Reply:
+# ACL DRYRUN's reply for user n: OK, or why not as a bulk string, as
+# Redis 7.2 words it (getAclErrorMessage, verbose: the user named, and
+# the command, the key or the channel)
+def verdict.dry(+v: Verdict, +n: String) -> R.Reply:
   match v:
     case VOk{}:
       R.r_ok()
     case VNo{+why, at, +obj}:
-      R.RBulk{Bool.pick(String, Nat.is_eq(why, 1n), "This user has no permissions to run the '" ++ obj ++ "' command",
-        Bool.pick(String, Nat.is_eq(why, 2n), "This user has no permissions to access the '" ++ obj ++ "' key", "This user has no permissions to access the '" ++ obj ++ "' channel"))}
+      R.RBulk{"User " ++ n ++ Bool.pick(String, Nat.is_eq(why, 1n), " has no permissions to run the '" ++ obj ++ "' command",
+        Bool.pick(String, Nat.is_eq(why, 2n), " has no permissions to access the '" ++ obj ++ "' key", " has no permissions to access the '" ++ obj ++ "' channel"))}
 
 # the reason ACL LOG gives a verdict
 def verdict.why(+v: Verdict) -> String:
@@ -2704,7 +2723,7 @@ def dry.call(+u: User, r: CallR, +cmd: String) -> R.Reply:
   match r:
     case CallOk{c}:
       +c0 = c
-      verdict.dry(user.check(u, c0))
+      verdict.dry(user.check(u, c0), user.name(u))
     case CallNone{}:
       R.RError{R.e_fmt("ERR Command '" ++ R.cstr(cmd) ++ "' not found")}
     case CallArity{name}:
@@ -2781,20 +2800,26 @@ def acl.keeps(+u: User, chs: List<&2, String>, pats: List<&2, String>) -> Bool:
 
 def ent.same(+x: Ent, +e: Ent) -> Bool:
   match x e:
-    case Ent{c0, +w0, +x0, +o0, +u0, +t0, i0} Ent{c1, +w1, +x1, +o1, +u1, +t1, i1}:
+    case Ent{c0, +w0, +x0, +o0, +u0, +t0, i0, d0, m0} Ent{c1, +w1, +x1, +o1, +u1, +t1, i1, d1, m1}:
       Bool.and(Bool.and(Bool.and(String.eq(w0, w1), String.eq(x0, x1)), Bool.and(String.eq(o0, o1), String.eq(u0, u1))),
         Nat.is_le(Bool.pick(Nat, Nat.is_le(t0, t1), Nat.sub(t1, t0), Nat.sub(t0, t1)), 60000n))
 
 # the reason of an entry: "auth", "command", "key" or "channel"
 def ent.why(+e: Ent) -> String:
   match e:
-    case Ent{c, +w, x, o, u, t, i}:
+    case Ent{c, +w, x, o, u, t, i, d, m}:
       w
 
 def ent.bump(x: Ent, e: Ent) -> Ent:
   match x e:
-    case Ent{c0, w0, x0, o0, u0, t0, i0} Ent{c1, w1, x1, o1, u1, t1, i1}:
-      Ent{Nat.add(c0, 1n), w0, x0, o0, u0, t1, i1}
+    case Ent{c0, w0, x0, o0, u0, t0, i0, d0, m0} Ent{c1, w1, x1, o1, u1, t1, i1, d1, m1}:
+      Ent{Nat.add(c0, 1n), w0, x0, o0, u0, t1, i1, d0, m0}
+
+# a new entry, numbered n (the entries made before it)
+def ent.numbered(e: Ent, +n: Nat) -> Ent:
+  match e:
+    case Ent{c, w, x, o, u, t, i, d, m}:
+      Ent{c, w, x, o, u, t, i, n, m}
 
 type Pick is Data:
   Pick{hit: Maybe<&2, Ent>, rest: List<&2, Ent>}
@@ -2812,36 +2837,54 @@ def log.pick(k: Nat, +log: List<&2, Ent>, +e: Ent) -> Pick:
     case _ other:
       Pick{None{}, other}
 
-def log.put(p: Pick, e: Ent, +max: Nat) -> List<&2, Ent>:
+def log.put(p: Pick, e: Ent, +max: Nat, +n: Nat) -> Log:
   match p:
     case Pick{Some{x}, rest}:
-      ent.bump(x, e) <> rest
+      Log{ent.bump(x, e) <> rest, n}
     case Pick{None{}, rest}:
-      List.take(&2, Ent, e <> rest, max)
+      Log{List.take(&2, Ent, ent.numbered(e, n) <> rest, max), Nat.add(n, 1n)}
+
+def log.add(l: Log, e: Ent, +max: Nat) -> Log:
+  match l:
+    case Log{+es, +n}:
+      +e0 = e
+      log.put(log.pick(10n, es, e0), e0, max, n)
+    case LogOf{x}:
+      log.add(x, e, max)
 
 def acl.log.add(a: Acl, e: Ent, +max: Nat) -> Acl:
   match a:
-    case Acl{dflt, users, +log, gone, rp, key, ctr, ix}:
-      +e0 = e
-      Acl{dflt, users, log.put(log.pick(10n, log, e0), e0, max), gone, rp, key, ctr, ix}
+    case Acl{dflt, users, log, gone, rp, key, ctr, ix}:
+      Acl{dflt, users, log.add(log, e, max), gone, rp, key, ctr, ix}
+
+# ACL LOG RESET: no entry, the count of those made kept
+def log.reset(l: Log) -> Log:
+  match l:
+    case Log{es, +n}:
+      Log{Nil{}, n}
+    case LogOf{x}:
+      log.reset(x)
 
 def acl.log.reset(a: Acl) -> Acl:
   match a:
     case Acl{dflt, users, log, gone, rp, key, ctr, ix}:
-      Acl{dflt, users, Nil{}, gone, rp, key, ctr, ix}
+      Acl{dflt, users, log.reset(log), gone, rp, key, ctr, ix}
 
 # a Nat as a double
 def acl.dbl(+n: Nat) -> F.Fl:
   F.fl.round(F.fmt.d(), False{}, F.big.of(n), F.fl.eb(), False{})
 
+# an entry as ACL LOG answers it, with Redis 7.2's entry-id,
+# timestamp-created and timestamp-last-updated last
 def ent.reply(e: Ent, +now: Nat) -> R.Reply:
   match e:
-    case Ent{count, why, ctx, obj, user, +at, info}:
+    case Ent{count, why, ctx, obj, user, +at, info, id, made}:
       +age = Bool.pick(Nat, Nat.is_le(at, now), Nat.sub(now, at), 0n)
       R.RMap{[R.RBulk{"count"}, R.RInt{R.IPos{count}}, R.RBulk{"reason"}, R.RBulk{why}, R.RBulk{"context"}, R.RBulk{ctx},
         R.RBulk{"object"}, R.RBulk{obj}, R.RBulk{"username"}, R.RBulk{user},
         R.RBulk{"age-seconds"}, R.RDbl{F.fl.show_g(F.fl.div(F.fmt.d(), acl.dbl(age), acl.dbl(1000n)))},
-        R.RBulk{"client-info"}, R.RBulk{info}]}
+        R.RBulk{"client-info"}, R.RBulk{info}, R.RBulk{"entry-id"}, R.RInt{R.IPos{id}},
+        R.RBulk{"timestamp-created"}, R.RInt{R.IPos{made}}, R.RBulk{"timestamp-last-updated"}, R.RInt{R.IPos{at}}]}
 
 def ents.reply(es: List<&2, Ent>, +now: Nat) -> List<&2, R.Reply>:
   match es:
