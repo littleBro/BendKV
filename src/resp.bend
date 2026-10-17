@@ -1357,6 +1357,8 @@ def encode_onto(rs: List<&2, R.Reply>, out: String) -> String:
       agg_into("*", List.length(&2, R.Reply, xs), encode_onto(xs, encode_onto(rest, out)))
     case Con{R.RKPair{+xs}, rest}:
       agg_into("*", List.length(&2, R.Reply, xs), encode_onto(xs, encode_onto(rest, out)))
+    case Con{R.RRaw{s}, rest}:
+      s ++ encode_onto(rest, out)
 
 # RESP3 (Redis's networking.c): a null, and a null array, as _; a double
 # after a comma; a map's pairs counted after %, a set's items after ~, a
@@ -1404,6 +1406,8 @@ def encode3_onto(rs: List<&2, R.Reply>, out: String) -> String:
       agg_into("%", List.length(&2, R.Reply, xs), encode3_onto(xs, encode3_onto(rest, out)))
     case Con{R.RKPair{xs}, rest}:
       encode3_onto(xs, encode3_onto(rest, out))
+    case Con{R.RRaw{s}, rest}:
+      s ++ encode3_onto(rest, out)
 
 def encode(r: R.Reply) -> String:
   encode_onto([r], SNil{})

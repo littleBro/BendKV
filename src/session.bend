@@ -845,6 +845,20 @@ def srv.blocked(s: Srv, +n: Nat, +t: Nat) -> Srv:
     case Srv{pass, cfg, info, mm}:
       Srv{pass, cfg, I.info.blocked(info, n, t), mm}
 
+# the engine's facts of scripts (server.bend, Scripts): n scripts cached,
+# the Lua state's bytes (m), the cache's (c)
+def srv.scripts(s: Srv, +n: Nat, +m: Nat, +c: Nat) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.scripts(info, n, m, c), mm}
+
+# the engine's facts of functions (server.bend, Scripts): a functions in
+# b libraries, the bytes of their Lua state (d) and of their records (e)
+def srv.funcs(s: Srv, +a: Nat, +b: Nat, +d: Nat, +e: Nat) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.funcs(info, a, b, d, e), mm}
+
 # the tracking's counts, for INFO (server.bend: Tracking)
 def srv.tracking(s: Srv, +a: Nat, +b: Nat, +d: Nat, +e: Nat) -> Srv:
   match s:
@@ -958,6 +972,36 @@ def srv.acl.sort(+s: Srv, +n: String, +k: Nat, +argv: List<&2, String>) -> Maybe
   match s:
     case Srv{pass, cfg, info, +mm}:
       mm.acl.sort(mm, n, k, argv)
+
+# what the actor keeps of the server in its state after each batch of the
+# general way (server.bend: ps.tune), and for INFO (facts.held), read in
+# place, in one match each of Srv, Mm and INFO: 1 maxmemory set, 2 an LFU
+# policy, 4 a CONFIG SET changed maxmemory (kick), 8 some client
+# restricted, 16 the writes refused (MISCONF: info.bend's rdb.misconf).
+# Read with the readers of one field each, it cost a batch three copies
+# of Mm, 26 words and their children, about 590 instructions each
+# (PERFORMANCE 83): mm.max, mm.kick and mm.acl.any (by way of server.bend's
+# acl.on) own the Mm they are given, since some of their callers pass them
+# one they made, and an Mm the server still holds is copied to be owned;
+# and MISCONF's read through srv.rdb copied INFO's node.
+def mm.tune(+m: Mm) -> U32:
+  match m:
+    case Mm{rng, +max, +pol, smp, ten, lfl, lfd, +kick, pool, next, h0, k0, per, +acl}:
+      U32.or(U32.or(Bool.pick(U32, Nat.is_lt(0n, max), 1, 0), Bool.pick(U32, Bool.or(Nat.is_eq(pol, 3n), Nat.is_eq(pol, 4n)), 2, 0)), U32.or(Bool.pick(U32, kick, 4, 0), Bool.pick(U32, U.acl.any(acl), 8, 0)))
+    case MmOf{+n}:
+      mm.tune(n)
+
+def srv.tune(+s: Srv) -> U32:
+  match s:
+    case Srv{pass, cfg, +info, +mm}:
+      U32.or(mm.tune(mm), Bool.pick(U32, I.info.misconf(info), 16, 0))
+
+# whether a background save that failed refuses the writes, read in place
+# (I.info.rdb gives back a field, and so owns the INFO it is lent)
+def srv.misconf(+s: Srv) -> Bool:
+  match s:
+    case Srv{pass, cfg, +info, mm}:
+      I.info.misconf(info)
 
 # the client of id now the user of name n, among the restricted clients or
 # not (acl.bend: Restricted clients), and the client of id gone
@@ -1293,12 +1337,18 @@ def auth.login(+args: List<&2, String>, +s: Srv) -> Login:
 # acknowledgements no replica will send, waits as BlkWait for its timeout
 # (in ms, the parser's: R.wait.of), which no key serves either; it
 # answers 0, as Redis answers when no replica acknowledged, at once in
-# MULTI and when its time is up.
+# MULTI and when its time is up. A client whose script, or SCRIPT LOAD,
+# EXISTS or FLUSH, the server's engine runs waits as BlkScript (server.bend,
+# Scripts), which no key serves and no time ends either: the server
+# answers it when the engine is done, its replies before the command held
+# until then (rs, newest first), as Redis writes a script's caller's
+# replies once the script ends.
 type Blk is Data:
   BlkPop{c: R.Cmd, form: Nat, ms: List<&2, Nat>}
   BlkBad{r: R.Reply}
   BlkPause{}
   BlkWait{ms: List<&2, Nat>}
+  BlkScript{rs: List<&2, R.Reply>}
 
 # The timeout, as getTimeoutFromObjectOrReply reads one in seconds: a
 # long double as string2ld reads it, times 1000 (rounded as x87 rounds),
@@ -1526,6 +1576,8 @@ def blk.shape(+form: Nat, r: R.Reply) -> R.Reply:
       R.RKMap{xs}
     case R.RKPair{xs}:
       R.RKPair{xs}
+    case R.RRaw{x}:
+      R.RRaw{x}
 
 # the pop run once on db: its reply as the blocking command's
 def blk.reply(b: Blk, db: R.Db) -> R.Reply:
@@ -1538,6 +1590,8 @@ def blk.reply(b: Blk, db: R.Db) -> R.Reply:
       R.RNullA{}
     case BlkWait{ms}:
       R.RInt{R.IPos{0n}}
+    case BlkScript{rs}:
+      R.RNullA{}
 
 # the reply of a client whose time is up, or that CLIENT UNBLOCK unblocks
 # without an error, as Redis's replyToBlockedClientTimedOut: a null array
@@ -1574,6 +1628,8 @@ def blk.waits(b: Blk, db: R.Db) -> Bool:
     case BlkPop{c, form, ms}:
       blk.none(R.reply_of(R.exec(c, db)))
     case BlkWait{ms}:
+      True{}
+    case BlkScript{rs}:
       True{}
     case _:
       False{}
@@ -1674,6 +1730,8 @@ def blk.at(b: Blk, +k: String) -> R.Cmd:
       R.Bad{R.RNullA{}}
     case BlkWait{ms}:
       R.Bad{R.RInt{R.IPos{0n}}}
+    case BlkScript{rs}:
+      R.Bad{R.RNullA{}}
 
 # Databases
 # ---------
@@ -3520,6 +3578,28 @@ def acl.srv(+k: Nat, +args: List<&2, String>, +s: Srv) -> Srv:
 
 # a session command's reply, sent or not; the databases are there for
 # the commands that read them
+# SCRIPT as a session alone answers it: EXISTS that it knows no script
+# (a 0 for each sha), FLUSH OK, KILL that no script runs, LOAD that it
+# has no engine; the server answers them from its engine and its cache
+# (server.bend, Scripts)
+def script.zeros(+a: List<&2, String>) -> List<&2, R.Reply>:
+  match a:
+    case Nil{}:
+      Nil{}
+    case Con{x, rest}:
+      R.RInt{R.IPos{0n}} <> script.zeros(rest)
+
+def script.reply(+k: Nat, +a: List<&2, String>) -> R.Reply:
+  match k:
+    case 2n:
+      R.RArray{script.zeros(a)}
+    case 3n:
+      R.r_ok()
+    case 4n:
+      R.RError{"NOTBUSY No scripts in execution right now."}
+    case _:
+      R.RError{"ERR a session alone runs no Lua script"}
+
 def own_reply(+o: R.SessOp, +c: Conn, +s: Srv, +ds: R.Ds) -> Maybe<&2, R.Reply>:
   match o:
     case R.SHello{args}:
@@ -3616,6 +3696,10 @@ def own_reply(+o: R.SessOp, +c: Conn, +s: Srv, +ds: R.Ds) -> Maybe<&2, R.Reply>:
       say(conn.mode(c), admin.reply(k, a, s, ds))
     case R.SGeoStore{+k, a}:
       say(conn.mode(c), R.geo.store.reply(R.ds.focused(ds), k, a))
+    case R.SEval{h, xs}:
+      say(conn.mode(c), R.RError{"ERR a session alone runs no Lua script"})
+    case R.SScript{+k, +a}:
+      say(conn.mode(c), script.reply(k, a))
     case R.SRestore{+k, op}:
       say(conn.mode(c), R.reply_of(R.exec(R.Upd{k, op}, R.ds.focused(ds))))
     case R.SAcl{+k, +a}:
@@ -3719,6 +3803,10 @@ def own_conn(+o: R.SessOp, +c: Conn, +s: Srv) -> Conn:
     case R.SAdmin{k, a}:
       step_conn(c, s)
     case R.SGeoStore{k, a}:
+      step_conn(c, s)
+    case R.SEval{h, xs}:
+      step_conn(c, s)
+    case R.SScript{k, a}:
       step_conn(c, s)
     case R.SRestore{k, op}:
       step_conn(c, s)

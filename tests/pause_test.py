@@ -35,12 +35,10 @@ A scenario that raises fails the test, on either server: one that raised
 on both used to end both transcripts alike after the second scenario.
 
 The checks of BendKV alone: CLIENT UNBLOCK of a client held back answers
-0 and leaves it held back (Redis 7.0.15 crashes on it); EVAL of a script
-BendKV does not run is answered at once under a pause of writes (Redis
-holds back a script that does not declare no-writes, then runs it). The
-checks under load: 100 clients held back, each with a write, all
-answered in order once the pause ends, and 100 more released by the end
-of a pause's time.
+0 and leaves it held back (Redis 7.0.15 crashes on it). The checks under
+load: 100 clients held back, each with a write, all answered in order
+once the pause ends, and 100 more released by the end of a pause's
+time. Scripts under a pause are tests/script_test.py's (scenario 11).
 
     python3 tests/pause_test.py --bendkv 6380 --redis 6390
 """
@@ -268,9 +266,6 @@ def alone(port):
         bad.append("CLIENT UNBLOCK of a client held back did not answer 0")
     if a.read(0.2) != "TIMEOUT" or wait_blocked(r, 1) != 1:
         bad.append("CLIENT UNBLOCK let a client held back go")
-    x = r.cmd("EVAL", "return 1", "0")
-    if not (isinstance(x, str) and x.startswith("-ERR")):
-        bad.append("EVAL under a pause of writes: %r" % (x,))
     r.cmd("CLIENT", "UNPAUSE")
     if a.read() != "+OK":
         bad.append("the client held back was not answered")

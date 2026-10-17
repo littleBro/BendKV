@@ -63,21 +63,41 @@ verdict:
 
 build: build/bendkv
 
-build/bendkv: $(SRC)
-	mkdir -p build
-	CC=$(BEND_CC) $(BEND) src/server.bend -o build/bendkv
+# The emitted C is compiled here rather than by Bend, with the Lua engine
+# beside it: Redis 7.0.15's Lua and three of its helpers (deps/redis,
+# vendored as Redis ships them but for their casts of numbers, two
+# fixes of CVEs and Redis 7.2's test of a table's index: NOTICE,
+# built once into build/deps with Redis's flags),
+# whose headers src/lua/engine.c includes (tools/sanitize.sh and
+# tools/pgo_build.sh build the same sources with their own flags)
+DEPS_SRC = $(wildcard deps/redis/deps/lua/src/*.c) $(wildcard deps/redis/src/*.c)
+DEPS_OBJ = $(patsubst %.c,build/deps/%.o,$(notdir $(DEPS_SRC)))
+DEPS_H = $(wildcard deps/redis/deps/lua/src/*.h) $(wildcard deps/redis/src/*.h)
+DEPS_INC = -I deps/redis/deps/lua/src -I deps/redis/src
+DEPS_FLAGS = $(DEPS_INC) -DENABLE_CJSON_GLOBAL -DREDIS_STATIC= -DLUA_USE_MKSTEMP -D_GNU_SOURCE
+
+build/deps/%.o: deps/redis/deps/lua/src/%.c $(DEPS_H)
+	mkdir -p build/deps
+	$(BEND_CC) -std=c11 -O3 -c $< $(DEPS_FLAGS) -o $@
+
+build/deps/%.o: deps/redis/src/%.c $(DEPS_H)
+	mkdir -p build/deps
+	$(BEND_CC) -std=c11 -O3 -c $< $(DEPS_FLAGS) -o $@
+
+build/bendkv: build/bendkv.c $(DEPS_OBJ)
+	$(BEND_CC) -std=c11 -O3 build/bendkv.c $(DEPS_OBJ) $(DEPS_INC) -lpthread -lm -o build/bendkv
 
 # the server built with profile-guided optimization: an instrumented build
 # serves a redis-benchmark training load, and the server is built again
 # with its profile (tools/pgo_build.sh; needs llvm-profdata)
 pgo: build/bendkv-pgo
 
-build/bendkv.c: $(SRC)
+build/bendkv.c: $(SRC) src/lua/engine.c src/lua/engine.js
 	mkdir -p build
 	CC=$(BEND_CC) $(BEND) src/server.bend -o build/bendkv.c
 
-build/bendkv-pgo: build/bendkv.c tools/pgo_build.sh tools/pgo_exit.c
-	CC=$(BEND_CC) sh tools/pgo_build.sh build/bendkv.c build/bendkv-pgo
+build/bendkv-pgo: build/bendkv.c tools/pgo_build.sh tools/pgo_exit.c $(DEPS_SRC)
+	CC=$(BEND_CC) DEPS_SRC="$(DEPS_SRC)" DEPS_FLAGS="$(DEPS_FLAGS)" sh tools/pgo_build.sh build/bendkv.c build/bendkv-pgo
 
 # the pure checks, built once for bun: each must pass, and each must fail
 # (exit 1) when one kind of its checks is given a wrong expectation

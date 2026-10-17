@@ -5,8 +5,9 @@
 # 100000 members each (e0.., f0.. with values v, m0.., m0.. of scores
 # 0..), and a string key k; then each command runs N times from one
 # client, one request at a time, the counters zeroed before and dumped to
-# NAME.cg.N after. A write of a new member takes a random one of 10^6
-# (redis-benchmark's __rand_int__). Prints, per command: instructions.
+# NAME.cg.N after. A write of a new member, or of a new score, takes a
+# random one of 10^6 (redis-benchmark's __rand_int__). Prints, per
+# command: instructions.
 NAME=$1; PORT=$2; SERVER=$3
 rm -f "$NAME".cg*
 valgrind --tool=callgrind --callgrind-out-file="$NAME.cg" "$SERVER" --port "$PORT" > "$NAME.log" 2>&1 &
@@ -47,6 +48,8 @@ run spop 2000 SPOP s
 run zscore 2000 ZSCORE z m50000
 run zadd_old 2000 ZADD z 1 m50000
 run zincrby 2000 ZINCRBY z 1 m50000
+run zadd_score 2000 ZADD z __rand_int__ m50000
+run zadd_new 2000 ZADD z 1 n:__rand_int__
 echo "members: $(redis-cli -p "$PORT" llen l) $(redis-cli -p "$PORT" hlen h) $(redis-cli -p "$PORT" scard s) $(redis-cli -p "$PORT" zcard z)"
 kill $VP; wait $VP 2>/dev/null
 for f in $(ls "$NAME".cg.* | awk -F. '{print $NF, $0}' | sort -n | cut -d" " -f2-); do

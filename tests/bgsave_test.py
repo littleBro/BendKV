@@ -23,10 +23,14 @@ what both must agree on, as the part's comment says.
   Saving...").
 - A background save that fails (dump.rdb is a directory, so the rename
   fails): MISCONF for writes and PING, not for reads, in MULTI and at
-  EXEC; errorstats and rejected calls; a save that ends well, or
+  EXEC; for a script's writes, a script that may write, FCALL of a
+  function that may write and FUNCTION's writes; errorstats
+  and rejected calls; a save that ends well, or
   stop-writes-on-bgsave-error no, lifts it, for the commands after it in
   the same pipeline too (a CONFIG SET alone or in MULTI). The cron tries
   again 5 seconds after the failure, not before.
+- A background save of libraries of functions, and the start from its
+  file.
 - The parameters a save keeps from its start, as Redis's child keeps
   them from its fork: dbfilename changed in BGSAVE's own pipeline, and
   rdb-key-save-delay while it runs.
@@ -88,7 +92,13 @@ ZNEW = ("redis.call('del',KEYS[1]) local o=tonumber(ARGV[1]) local n=#ARGV for i
         "for j=2,o+1 do a[#a+1]=ARGV[j] end for j=i,math.min(i+999,n) do a[#a+1]=ARGV[j] end "
         "redis.call('zadd',KEYS[1],unpack(a)) end return 0")
 LMOVE = "redis.call('del',KEYS[2]) return redis.call('lmove',KEYS[1],KEYS[2],ARGV[1],ARGV[2])"
+# a library of two functions, one that may write and one with no-writes
+LIB = ("#!lua name=bglib\n"
+       "redis.register_function('wr', function(keys, args) return redis.call('set', keys[1], args[1]) end)\n"
+       "redis.register_function{function_name='rd', callback=function(keys, args) return redis.call('get', 'a') end, "
+       "flags={'no-writes'}}")
 SMOVE = "redis.call('del',KEYS[2]) return redis.call('smove',KEYS[1],KEYS[2],ARGV[1])"
+XNEW = "redis.call('del',KEYS[1]) return redis.call('xadd',KEYS[1],unpack(ARGV))"
 CASES = [
     # strings
     ("set", [], ["SET", "a", "1"], 1, None),
@@ -290,6 +300,24 @@ CASES = [
     ("sort store", [["RPUSH", "l", "3", "1", "2"]], ["SORT", "l", "STORE", "d"], 3, None),
     ("sort store empty over a key", [["SET", "d", "x"]], ["SORT", "l", "STORE", "d"], 1, None),
     ("sort", [["RPUSH", "l", "3", "1", "2"]], ["SORT", "l"], 0, None),
+    # streams: XADD one for the entry it adds (none for the entries its
+    # trim deletes), XTRIM and XDEL the entries they delete, XSETID one
+    ("xadd", [], ["XADD", "x", "1-1", "f", "v"], 1, None),
+    ("xadd star", [["XADD", "x", "1-1", "f", "v"]], ["XADD", "x", "*", "f", "v"], 1, None),
+    ("xadd nomkstream missing", [], ["XADD", "x", "NOMKSTREAM", "*", "f", "v"], 0, None),
+    ("xadd small id", [["XADD", "x", "5-1", "f", "v"]], ["XADD", "x", "1-1", "f", "v"], 0, None),
+    ("xadd that trims", [["XADD", "x", "1-1", "f", "v"], ["XADD", "x", "1-2", "f", "v"]],
+     ["XADD", "x", "MAXLEN", "1", "1-3", "f", "v"], 1, None),
+    ("xadd over a string", [["SET", "x", "s"]], ["XADD", "x", "1-1", "f", "v"], 0, None),
+    ("xtrim", [["XADD", "x", "1-1", "f", "v"], ["XADD", "x", "1-2", "f", "v"], ["XADD", "x", "1-3", "f", "v"]],
+     ["XTRIM", "x", "MAXLEN", "1"], 2, None),
+    ("xtrim nothing", [["XADD", "x", "1-1", "f", "v"]], ["XTRIM", "x", "MAXLEN", "5"], 0, None),
+    ("xdel", [["XADD", "x", "1-1", "f", "v"], ["XADD", "x", "1-2", "f", "v"]], ["XDEL", "x", "1-1", "1-2", "9-9"], 2, None),
+    ("xdel nothing", [["XADD", "x", "1-1", "f", "v"]], ["XDEL", "x", "9-9"], 0, None),
+    ("xsetid", [["XADD", "x", "1-1", "f", "v"]], ["XSETID", "x", "5-0"], 1, None),
+    ("xsetid small", [["XADD", "x", "5-1", "f", "v"]], ["XSETID", "x", "1-0"], 0, None),
+    ("xsetid missing", [], ["XSETID", "x", "1-0"], 0, None),
+    ("xlen", [["XADD", "x", "1-1", "f", "v"]], ["XLEN", "x"], 0, None),
     # BendKV's own scripts (the append-only file's: a new collection
     # where a key whose time had passed lay, a move to one), which Redis
     # runs as Lua: the DEL, then the command's changes
@@ -303,6 +331,8 @@ CASES = [
     ("eval lmove to itself", [["RPUSH", "l", "a", "b"]], ["EVAL", LMOVE, "2", "l", "l", "LEFT", "RIGHT"], 1, None),
     ("eval smove", [["SADD", "s", "a", "b"], ["SET", "t", "x"]], ["EVAL", SMOVE, "2", "s", "t", "a"], 3, None),
     ("eval smove missing", [["SADD", "s", "a", "b"]], ["EVAL", SMOVE, "2", "s", "t", "z"], 0, None),
+    ("eval new stream", [["SET", "x", "old"]], ["EVAL", XNEW, "1", "x", "1-1", "f", "v"], 2, None),
+    ("eval new stream missing", [], ["EVAL", XNEW, "1", "x", "MAXLEN", "0", "1-1", "f", "v"], 1, None),
     # others
     ("function flush", [], ["FUNCTION", "FLUSH"], 1, None),
     ("publish", [], ["PUBLISH", "c", "m"], 0, None),
@@ -433,6 +463,21 @@ def pipe(c, cmds):
     return [c.reply() for _ in cmds]
 
 
+def flist(c):
+    """FUNCTION LIST, each library's functions by name: Redis lists them in
+    its dictionary's order, which a random seed sets at each start"""
+    r = run(c, "FUNCTION", "LIST")
+    if r[0] != b"*":
+        return r
+    out = []
+    for lib in r[1]:
+        kv = lib[1]
+        lib = [(kv[j], (b"*", sorted(kv[j + 1][1], key=repr)) if kv[j][1] == b"functions" else kv[j + 1])
+               for j in range(0, len(kv), 2)]
+        out.append(lib)
+    return out
+
+
 def lines_in(s, *xs):
     lg = s.log()
     return [x in lg for x in xs]
@@ -555,8 +600,12 @@ def misconf_on(exe, d, log):
     """a background save that fails, and the writes refused after it"""
     s = Srv(exe, d, "--save", "3600 1")
     c, held, sub, mon = s.conn(), s.conn(), s.conn(), s.conn()
+    lua = s.conn()
     run(c, "SET", "a", "1")
     log("1 queued before", run(held, "MULTI"), run(held, "SET", "q", "1"), run(held, "GET", "a"))
+    # a script with a shebang that may write, queued before the failure
+    log("1 script queued before", run(lua, "MULTI"), run(lua, "EVAL", "#!lua\nreturn 1", "0"))
+    log("1 library", run(c, "FUNCTION", "LOAD", LIB))
     # the rename onto dump.rdb fails: a directory, not empty, is there
     os.makedirs(os.path.join(d, "dump.rdb", "x"))
     log("1 bgsave", run(c, "BGSAVE"), until(lambda: not running(c)))
@@ -574,6 +623,31 @@ def misconf_on(exe, d, log):
     log("2 stats", info(c, "errorstats", "errorstat_MISCONF"),
         re.sub(r"usec=\d+,usec_per_call=[0-9.]+,", "", info(c, "commandstats", "cmdstat_set") or ""),
         re.sub(r"usec=\d+,usec_per_call=[0-9.]+,", "", info(c, "commandstats", "cmdstat_ping") or ""))
+    # scripts (FINDINGS 3zzzd): a write a script without a shebang calls is
+    # refused in it (scriptVerifyWriteCommandAllow), reads and PING are not;
+    # a script whose shebang lets it write is refused before it runs, in
+    # MULTI flagging the transaction, and EXEC of one queued before the
+    # failure is aborted (its queued flags hold CMD_WRITE)
+    log("2 scripts", run(c, "EVAL", "return redis.call('set','k','v')", "0"),
+        run(c, "EVAL", "return redis.call('get','a')", "0"),
+        run(c, "EVAL", "return redis.pcall('set','k','v')", "0"),
+        run(c, "EVAL", "local r = redis.pcall('incr','n') return type(r)", "0"),
+        run(c, "EVAL", "return redis.call('ping')", "0"),
+        run(c, "EVAL", "#!lua\nreturn 1", "0"),
+        run(c, "EVAL", "#!lua flags=no-writes\nreturn redis.call('get','a')", "0"),
+        run(c, "EVAL_RO", "return redis.call('set','k','v')", "0"))
+    log("2 scripts in MULTI", run(c, "MULTI"), run(c, "EVAL", "return redis.call('set','k','v')", "0"),
+        run(c, "EXEC"), run(c, "MULTI"), run(c, "EVAL", "#!lua\nreturn 1", "0"), run(c, "EXEC"),
+        run(lua, "EXEC"), run(c, "EXISTS", "k"))
+    # functions (FINDINGS 3zzzp): FCALL and FCALL_RO of a function that may
+    # write refused before it runs (fcallGetCommandFlags), one with no-writes
+    # run; FUNCTION's writes refused, its reads run
+    log("2 functions", run(c, "FCALL", "wr", "1", "k", "v"), run(c, "FCALL_RO", "wr", "1", "k", "v"),
+        run(c, "FCALL", "rd", "0"), run(c, "FCALL_RO", "rd", "0"), run(c, "FUNCTION", "LOAD", "REPLACE", LIB),
+        run(c, "FUNCTION", "DELETE", "bglib"), run(c, "FUNCTION", "FLUSH"), flist(c))
+    log("2 scripts stats", info(c, "errorstats", "errorstat_MISCONF"),
+        re.sub(r"usec=\d+,usec_per_call=[0-9.]+,", "", info(c, "commandstats", "cmdstat_eval") or ""),
+        re.sub(r"usec=\d+,usec_per_call=[0-9.]+,", "", info(c, "commandstats", "cmdstat_set") or ""))
     # a CONFIG SET that lifts it or sets it again counts for the commands
     # after it in its own pipeline, alone or in MULTI, as Redis checks
     # each command (writeCommandsDeniedByDiskError in processCommand); and
@@ -603,10 +677,32 @@ def misconf_on(exe, d, log):
     log("4 fails", run(c, "BGSAVE"), until(lambda: not running(c)), run(c, "SET", "b", "8"))
     shutil.rmtree(os.path.join(d, "dump.rdb"))
     log("4 SAVE ends well", run(c, "SAVE"), field(c, "rdb_last_bgsave_status"), run(c, "SET", "b", "9"))
-    for x in (c, held, sub, mon):
+    for x in (c, held, sub, mon, lua):
         x.sock.close()
     talk(s.port, [["SHUTDOWN", "NOSAVE"]])
     log("4 exit", s.exit())
+
+
+def functions_on(exe, d, log):
+    """a background save of libraries, and the start from its file"""
+    s = Srv(exe, d, "--save", "")
+    c = s.conn()
+    run(c, "SET", "a", "1")
+    log("1 load", run(c, "FUNCTION", "LOAD", LIB), dirty(c))
+    log("1 bgsave", run(c, "BGSAVE"), until(lambda: not running(c)), field(c, "rdb_last_bgsave_status"))
+    talk(s.port, [["SHUTDOWN", "NOSAVE"]])
+    log("1 exit", s.exit())
+    s = Srv(exe, d, "--save", "")
+    c = s.conn()
+    log("2 start", flist(c), run(c, "FCALL", "rd", "0"), run(c, "FCALL", "wr", "1", "b", "2"),
+        run(c, "GET", "b"))
+    talk(s.port, [["SHUTDOWN", "NOSAVE"]])
+    log("2 exit", s.exit())
+
+
+def functions(a, root):
+    """BGSAVE writes the libraries of functions, which the start reads"""
+    both(a, root, "functions", functions_on)
 
 
 def misconf(a, root):
@@ -803,7 +899,7 @@ def main():
     root = os.path.abspath(a.dir)
     shutil.rmtree(root, ignore_errors=True)
     os.makedirs(root)
-    parts = [counts, bgsave, rewrite, points, misconf, retry, kept, gone, kills, defaults]
+    parts = [counts, bgsave, rewrite, points, misconf, functions, retry, kept, gone, kills, defaults]
     try:
         for part in parts:
             if a.only and part.__name__ not in a.only.split(","):

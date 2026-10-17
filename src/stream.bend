@@ -24,9 +24,15 @@ def xn.one() -> KV.XN:
 def xn.sub(+a: KV.XN, +b: KV.XN) -> KV.XN:
   KV.xn.add(a, KV.xn.neg(b))
 
-# whether a is 2^64 - 1 (-1 as a long long)
+# whether a is 2^64 - 1 (-1 as a long long). An XS is not: the match
+# comes first, so that a proof's comparison of a number it does not know
+# never reaches 2^64 - 1, which the checker would compute in unary
 def xn.is_max(+a: KV.XN) -> Bool:
-  KV.xn.is_eq(a, D.xn.max())
+  match a:
+    case KV.XS{n}:
+      False{}
+    case KV.XL{+h, +l}:
+      KV.xn.is_eq(KV.XL{h, l}, D.xn.max())
 
 # a's 64 bits as a long long's digits (%lld)
 def xn.show.ll(+a: KV.XN) -> String:
@@ -540,8 +546,13 @@ def xs.top.of(es: List<&2, XE>) -> Maybe<&2, KV.XId>:
       None{}
 
 # the last live entry's ID (streamLastValidID), none in an empty stream
+# (x matched first, as in xn.is_max)
 def xs.top(+x: KV.XStream) -> Maybe<&2, KV.XId>:
-  xs.top.of(xs.range(x, xid.zero(), xid.max(), 1n, True{}))
+  match x:
+    case KV.XStr{+n, +last, +first, +maxdel, +added, +nodes, +groups}:
+      xs.top.of(xs.range(KV.XStr{n, last, first, maxdel, added, nodes, groups}, xid.zero(), xid.max(), 1n, True{}))
+    case KV.XStrOf{+y}:
+      xs.top(y)
 
 # The radix tree's nodes
 # ----------------------
@@ -899,3 +910,670 @@ def xcs.pending(cs: List<&2, KV.XCon>, acc: List<&2, KV.XCon>) -> List<&2, KV.XC
       xcs.pending(rest, xcs.keep(Nat.is_eq(KV.xis.size(xcon.ids(x)), 0n), x, acc))
     case Nil{}:
       List.reverse(&2, KV.XCon, acc)
+
+# Writes
+# ------
+# XADD, XTRIM, XDEL and XSETID change a stream as Redis 7.0.15 changes it
+# (t_stream.c: streamAppendItem, streamTrim, streamDeleteItem and
+# streamIteratorRemoveEntry), node for node and byte for byte: an entry
+# is made as lpAppendInteger and lpAppend make its elements, and each
+# node's counts and sizes follow. The node limits are Redis's defaults,
+# 4096 bytes and 100 entries: stream-node-max-bytes and
+# stream-node-max-entries are not read, as a write of one key runs on
+# its database alone (and a file replays alike whatever they are).
+
+def xs.empty() -> KV.XStream:
+  KV.XStr{0n, xid.zero(), xid.zero(), xid.zero(), xn.zero(), KV.XNTip{}, KV.XGTip{}}
+
+# whether the stream holds the last ID there is, past which XADD adds
+# none
+# (x matched first, as in xn.is_max)
+def xs.exhausted(+x: KV.XStream) -> Bool:
+  match x:
+    case KV.XStr{n, +last, first, maxdel, added, nodes, groups}:
+      match last:
+        case KV.XId{+ms, +sq}:
+          Bool.and(xn.is_max(ms), xn.is_max(sq))
+    case KV.XStrOf{+y}:
+      xs.exhausted(y)
+
+# the char at i ends a C string: a NUL, or the end
+def su.cend(+s: String, +i: Nat) -> Bool:
+  +c = String.code_at(s, i)
+  Bool.or(U32.is_eq(c, 0), U32.is_eq(c, 4294967295))
+
+# XADD's ID word (streamParseStrictIDOrReply with seq_given): an ID, or
+# <ms>-*, whose sequence the stream gives, or none ("*" alone is XADD's
+# option loop's)
+type XIdP is Data:
+  XIdPBad{}
+  XIdPSeq{ms: KV.XN}
+  XIdPAt{id: KV.XId}
+
+def xid.seq.of(m: Maybe<&2, KV.XN>) -> XIdP:
+  match m:
+    case Some{ms}:
+      XIdPSeq{ms}
+    case None{}:
+      XIdPBad{}
+
+def xid.at.of(m: Maybe<&2, KV.XId>) -> XIdP:
+  match m:
+    case Some{id}:
+      XIdPAt{id}
+    case None{}:
+      XIdPBad{}
+
+def xid.add.text(star: Bool, +b: String, +dot: Nat, +s: String) -> XIdP:
+  match star:
+    case True{}:
+      xid.seq.of(su.ull(String.take(b, dot)))
+    case False{}:
+      xid.at.of(xid.parse(s, True{}, xn.zero()))
+
+def xid.parse.add.if(long: Bool, +s: String) -> XIdP:
+  match long:
+    case True{}:
+      XIdPBad{}
+    case False{}:
+      +b = String.take(s, String.find(s, Chr{0}, 0n))
+      +n = String.length(b)
+      +dot = String.find(b, Chr{45}, 0n)
+      +lone = Bool.and(Nat.is_eq(n, 1n), Bool.or(U32.is_eq(String.code_at(b, 0n), 45), U32.is_eq(String.code_at(b, 0n), 43)))
+      xid.add.text(Bool.and(Bool.not(lone), Bool.and(Nat.is_lt(dot, n), String.eq(String.drop(b, Nat.add(dot, 1n)), "*"))), b, dot, s)
+
+def xid.parse.add(+s: String) -> XIdP:
+  xid.parse.add.if(Nat.is_lt(127n, String.length(s)), s)
+
+# Entries
+# -------
+
+# an integer's listpack entry, with its backlen, before rest
+def xe.int(+n: Nat, rest: String) -> String:
+  +k = D.lp.icls(False{}, n)
+  D.lp.int(k, False{}, n, D.lp.back(D.lp.isize(k), rest))
+
+# its size
+def xe.isz(+n: Nat) -> Nat:
+  Nat.add(D.lp.isize(D.lp.icls(False{}, n)), 1n)
+
+# the values of fields and values fv, in turn, before rest
+def xe.vals(fv: List<&2, String>, rest: String) -> String:
+  match fv:
+    case Con{f, Con{+v, more}}:
+      D.lp.ent(v, xe.vals(more, rest))
+    case _:
+      rest
+
+def xe.put.body(same: Bool, +nf: Nat, fv: List<&2, String>, rest: String) -> String:
+  match same:
+    case True{}:
+      xe.vals(fv, rest)
+    case False{}:
+      xe.int(nf, D.lp.ents(fv, rest))
+
+# an entry's count of elements before its last (lp-count)
+def xe.lpc(+same: Bool, +nf: Nat) -> Nat:
+  Bool.pick(Nat, same, Nat.add(nf, 3n), Nat.add(Nat.mul(2n, nf), 4n))
+
+# the bytes of the entry of ID id, of the nf pairs of fields and values
+# fv, in a node of master ID mid: its flags (SAMEFIELDS, 2, when same),
+# its ID's differences from mid (id - mid, each a long long), its fields
+# and values after their count, or with same its values alone, then its
+# lp-count
+def xe.make(+same: Bool, +id: KV.XId, +mid: KV.XId, +nf: Nat, fv: List<&2, String>) -> String:
+  match id mid:
+    case KV.XId{+ms, +sq} KV.XId{+mms, +msq}:
+      xe.int(Bool.pick(Nat, same, 2n, 0n), D.lp.ent(xn.show.ll(xn.sub(ms, mms)), D.lp.ent(xn.show.ll(xn.sub(sq, msq)), xe.put.body(same, nf, fv, xe.int(xe.lpc(same, nf), "")))))
+
+# the fields of fields and values fv
+def xe.fields(fv: List<&2, String>) -> List<&2, String>:
+  match fv:
+    case Con{+f, Con{v, more}}:
+      f <> xe.fields(more)
+    case _:
+      Nil{}
+
+# whether the fields of fv are the master's, mfs, in order, byte for byte
+def xe.same(mfs: List<&2, String>, fv: List<&2, String>) -> Bool:
+  match mfs fv:
+    case Nil{} Nil{}:
+      True{}
+    case Con{+m, mr} Con{+f, Con{v, fr}}:
+      Bool.and(String.eq(m, f), xe.same(mr, fr))
+    case _ _:
+      False{}
+
+# the bytes of fields and values fv, as streamAppendItem counts them
+def xe.tot(fv: List<&2, String>, +acc: Nat) -> Nat:
+  match fv:
+    case Con{+s, rest}:
+      xe.tot(rest, Nat.add(acc, String.length(s)))
+    case Nil{}:
+      acc
+
+def xe.fsz(fs: List<&2, String>, +acc: Nat) -> Nat:
+  match fs:
+    case Con{+f, rest}:
+      xe.fsz(rest, Nat.add(acc, D.lp.esize(f)))
+    case Nil{}:
+      acc
+
+# the size of a node's master entry: its counts of live and deleted
+# entries, its fields after their count, and its 0
+def xm.size(+live: Nat, +dead: Nat, +nf: Nat, mfs: List<&2, String>) -> Nat:
+  Nat.add(Nat.add(xe.isz(live), xe.isz(dead)), Nat.add(Nat.add(xe.isz(nf), xe.fsz(mfs, 0n)), 2n))
+
+# a node's listpack once its counts of live and deleted entries go from
+# live and dead to l2 and d2, each written again in its own size
+def xnd.resize(+bytes: Nat, +live: Nat, +dead: Nat, +l2: Nat, +d2: Nat) -> Nat:
+  Nat.sub(Nat.add(Nat.add(bytes, xe.isz(l2)), xe.isz(d2)), Nat.add(xe.isz(live), xe.isz(dead)))
+
+# an entry marked deleted: its flags (one byte below 128, not deleted)
+# with bit 1 set
+def xe.mark(+e: String) -> String:
+  D.b1(U32.add(String.code_at(e, 0n), 1)) ++ String.drop(e, 1n)
+
+# Nodes written
+# -------------
+
+def xnode.live(+x: KV.XNode) -> Nat:
+  match x:
+    case KV.XNd{mid, mfs, +live, dead, bytes, nel, es}:
+      live
+    case KV.XNdOf{+y}:
+      xnode.live(y)
+
+def xh.id.or(h: XEh, +d: KV.XId) -> KV.XId:
+  match h:
+    case XEh{fl, +id, t}:
+      id
+    case XEhBad{}:
+      d
+
+def xnode.last.of(es: List<&2, String>, +mid: KV.XId) -> KV.XId:
+  match es:
+    case Con{+e, rest}:
+      xh.id.or(xh.read(e, mid), mid)
+    case Nil{}:
+      mid
+
+# a node's last entry's ID, a deleted one too (lpGetEdgeStreamID)
+def xnode.last(+x: KV.XNode) -> KV.XId:
+  match x:
+    case KV.XNd{+mid, mfs, live, dead, bytes, nel, es}:
+      xnode.last.of(es, mid)
+    case KV.XNdOf{+y}:
+      xnode.last(y)
+
+def xnode.oldest.of(es: List<&2, String>, +mid: KV.XId) -> KV.XId:
+  match es:
+    case Con{+e, Nil{}}:
+      xh.id.or(xh.read(e, mid), mid)
+    case Con{e, rest}:
+      xnode.oldest.of(rest, mid)
+    case Nil{}:
+      mid
+
+# a node's first entry's ID, a deleted one too
+def xnode.oldest(+x: KV.XNode) -> KV.XId:
+  match x:
+    case KV.XNd{+mid, mfs, live, dead, bytes, nel, es}:
+      xnode.oldest.of(es, mid)
+    case KV.XNdOf{+y}:
+      xnode.oldest(y)
+
+# a new node for the entry of ID id (its master ID), of the nf pairs fv:
+# its master entry of fv's fields, the entry with SAMEFIELDS
+def xnode.new(+id: KV.XId, +fv: List<&2, String>, +nf: Nat) -> KV.XNode:
+  +mfs = xe.fields(fv)
+  +e = xe.make(True{}, id, id, nf, fv)
+  KV.XNd{id, mfs, 1n, 0n, Nat.add(Nat.add(xm.size(1n, 0n, nf, mfs), String.length(e)), 7n), Nat.mul(2n, Nat.add(nf, 4n)), [e]}
+
+# the node x with the entry of ID id after its others
+def xnode.add(+x: KV.XNode, +id: KV.XId, +fv: List<&2, String>, +nf: Nat) -> KV.XNode:
+  match x:
+    case KV.XNd{+mid, +mfs, +live, dead, bytes, nel, es}:
+      +same = xe.same(mfs, fv)
+      +e = xe.make(same, id, mid, nf, fv)
+      +l2 = Nat.add(live, 1n)
+      KV.XNd{mid, mfs, l2, dead, Nat.add(Nat.sub(Nat.add(bytes, xe.isz(l2)), xe.isz(live)), String.length(e)), Nat.add(nel, Nat.add(xe.lpc(same, nf), 1n)), e <> es}
+    case KV.XNdOf{+y}:
+      xnode.add(y, id, fv, nf)
+
+# whether XADD puts its entry in a new node after the last one x: x's
+# listpack and the entry's fields and values reach 4096 bytes, or x
+# holds 100 entries, live and deleted
+def xnode.full(+x: KV.XNode, +tot: Nat) -> Bool:
+  match x:
+    case KV.XNd{mid, mfs, +live, +dead, +bytes, nel, es}:
+      Bool.or(Nat.is_le(4096n, Nat.add(bytes, tot)), Nat.is_le(100n, Nat.add(live, dead)))
+    case KV.XNdOf{+y}:
+      xnode.full(y, tot)
+
+# a new node put in the tree, in the place of one of its master ID if the
+# tree has one (raxInsert replaces it)
+def xns.add.new.of(m: Maybe<&2, KV.XNode>, +x: KV.XNode, +t: KV.XNodes) -> KV.XNodes:
+  match m:
+    case Some{y}:
+      KV.xns.set(x, t)
+    case None{}:
+      KV.xns.put(x, t)
+
+def xns.add.new(+t: KV.XNodes, +id: KV.XId, +fv: List<&2, String>, +nf: Nat) -> KV.XNodes:
+  xns.add.new.of(KV.xns.find(t, KV.xns.at(t, id), id), xnode.new(id, fv, nf), t)
+
+def xns.add.to(full: Bool, +last: KV.XNode, +t: KV.XNodes, +id: KV.XId, +fv: List<&2, String>, +nf: Nat) -> KV.XNodes:
+  match full:
+    case True{}:
+      xns.add.new(t, id, fv, nf)
+    case False{}:
+      KV.xns.set(xnode.add(last, id, fv, nf), t)
+
+def xns.add.at(none: Bool, +t: KV.XNodes, +n: Nat, +id: KV.XId, +fv: List<&2, String>, +nf: Nat, +tot: Nat) -> KV.XNodes:
+  match none:
+    case True{}:
+      xns.add.new(t, id, fv, nf)
+    case False{}:
+      +last = xns.nth(t, Nat.sub(n, 1n))
+      xns.add.to(xnode.full(last, tot), last, t, id, fv, nf)
+
+# the nodes with the entry of ID id added to the last (the one of the
+# greatest master ID), or to a new one after it
+def xns.add(+t: KV.XNodes, +id: KV.XId, +fv: List<&2, String>, +nf: Nat, +tot: Nat) -> KV.XNodes:
+  +n = KV.xns.size(t)
+  xns.add.at(Nat.is_eq(n, 0n), t, n, id, fv, nf, tot)
+
+# the stream with the entry of ID id (past its last) of the nf pairs fv
+# (tot bytes) added (streamAppendItem, its checks made)
+def xs.add(+x: KV.XStream, +id: KV.XId, +fv: List<&2, String>, +nf: Nat, +tot: Nat) -> KV.XStream:
+  match x:
+    case KV.XStr{+n, last, +first, maxdel, +added, +nodes, groups}:
+      KV.XStr{Nat.add(n, 1n), id, Bool.pick(KV.XId, Nat.is_eq(n, 0n), id, first), maxdel, KV.xn.add(added, xn.one()), xns.add(nodes, id, fv, nf, tot), groups}
+    case KV.XStrOf{+y}:
+      xs.add(y, id, fv, nf, tot)
+
+def xs.with.first(+x: KV.XStream, +f: KV.XId) -> KV.XStream:
+  match x:
+    case KV.XStr{n, last, first, maxdel, added, nodes, groups}:
+      KV.XStr{n, last, f, maxdel, added, nodes, groups}
+    case KV.XStrOf{+y}:
+      xs.with.first(y, f)
+
+def xs.head.of(es: List<&2, XE>) -> KV.XId:
+  match es:
+    case Con{XE{id, fv}, rest}:
+      id
+    case Nil{}:
+      xid.zero()
+
+# the first live entry's ID (streamGetEdgeID, its tombstones passed), 0-0
+# for none (x matched first, as in xn.is_max)
+def xs.head(+x: KV.XStream) -> KV.XId:
+  match x:
+    case KV.XStr{+n, +last, +first, +maxdel, +added, +nodes, +groups}:
+      xs.head.of(xs.range(KV.XStr{n, last, first, maxdel, added, nodes, groups}, xid.zero(), xid.max(), 1n, False{}))
+    case KV.XStrOf{+y}:
+      xs.head(y)
+
+# a stream's first ID after a write that deleted (changed) entries: 0-0
+# when none is left (empty), the first live entry's
+def xs.first.fix(empty: Bool, changed: Bool, +x: KV.XStream) -> KV.XStream:
+  match empty changed:
+    case True{} _:
+      xs.with.first(x, xid.zero())
+    case False{} True{}:
+      xs.with.first(x, xs.head(x))
+    case False{} False{}:
+      x
+
+# Trims
+# -----
+# streamTrim: from the first node, a node is taken out whole while the
+# stream keeps maxlen entries without its live ones (MAXLEN), or while
+# its last entry, a deleted one too, is below minid (MINID); MAXLEN stops
+# once the stream is at maxlen. ~ stops at the first node it cannot take
+# out whole, and also once a node's live entries would take it past its
+# limit; else the first node left has its entries from its oldest marked
+# deleted while the stream is past maxlen, or up to the first at or past
+# minid. The first ID is then the first live entry's, 0-0 for none.
+
+# a trim's strategy: MAXLEN of n, or MINID of id
+type XTs is Data:
+  XTMax{n: Nat}
+  XTMin{id: KV.XId}
+
+# a trim's walk: the nodes left, the stream's length, the entries deleted
+type XTw is Data:
+  XTw{t: KV.XNodes, len: Nat, del: Nat}
+
+# a step of it: the walk goes on, or is done
+type XTn is Data:
+  XTMore{w: XTw}
+  XTDone{w: XTw}
+
+def xt.done(+s: XTs, +len: Nat) -> Bool:
+  match s:
+    case XTMax{+n}:
+      Nat.is_le(len, n)
+    case XTMin{id}:
+      False{}
+
+def xt.whole(+s: XTs, +x: KV.XNode, +len: Nat, +e: Nat) -> Bool:
+  match s:
+    case XTMax{+n}:
+      Nat.is_le(n, Nat.sub(len, e))
+    case XTMin{+id}:
+      Cmp.is_lt(KV.xid.cmp(xnode.last(x), id))
+
+# what the trim does with the node x (e live entries): stop (0), take it
+# out (1), or mark its entries (2)
+def xt.what(+s: XTs, +ap: Bool, +lim: Nat, +x: KV.XNode, +len: Nat, +del: Nat, +e: Nat) -> Nat:
+  Bool.pick(Nat, Bool.or(xt.done(s, len), Bool.and(Nat.is_lt(0n, lim), Nat.is_lt(lim, Nat.add(del, e)))), 0n, Bool.pick(Nat, xt.whole(s, x, len, e), 1n, Bool.pick(Nat, ap, 0n, 2n)))
+
+# the partial trim's walk of a node's entries from its oldest: those
+# walked (the newest first), the stream's length, how many it marked,
+# whether it stopped
+type XMk is Data:
+  XMk{acc: List<&2, String>, len: Nat, n: Nat, stop: Bool}
+
+# whether the partial trim stops at the entry of ID id
+def xt.stop(+s: XTs, +len: Nat, +id: KV.XId) -> Bool:
+  match s:
+    case XTMax{+n}:
+      Nat.is_le(len, n)
+    case XTMin{+m}:
+      Bool.not(Cmp.is_lt(KV.xid.cmp(id, m)))
+
+def xt.mark.if(del: Bool, +e: String, +len: Nat, +n: Nat, acc: List<&2, String>) -> XMk:
+  match del:
+    case True{}:
+      XMk{e <> acc, len, n, False{}}
+    case False{}:
+      XMk{xe.mark(e) <> acc, Nat.sub(len, 1n), Nat.add(n, 1n), False{}}
+
+def xt.part.at(stop: Bool, +e: String, +fl: Nat, +len: Nat, +n: Nat, acc: List<&2, String>) -> XMk:
+  match stop:
+    case True{}:
+      XMk{e <> acc, len, n, True{}}
+    case False{}:
+      xt.mark.if(xh.deleted(fl), e, len, n, acc)
+
+def xt.part.one(h: XEh, +e: String, +s: XTs, +len: Nat, +n: Nat, acc: List<&2, String>) -> XMk:
+  match h:
+    case XEh{+fl, +id, t}:
+      xt.part.at(xt.stop(s, len, id), e, fl, len, n, acc)
+    case XEhBad{}:
+      XMk{e <> acc, len, n, True{}}
+
+# the walk through es (the oldest first); once stopped, the rest as it is
+def xt.part.go(es: List<&2, String>, +s: XTs, +mid: KV.XId, w: XMk) -> XMk:
+  match es w:
+    case Con{+e, rest} XMk{acc, +len, +n, False{}}:
+      xt.part.go(rest, s, mid, xt.part.one(xh.read(e, mid), e, s, len, n, acc))
+    case more XMk{acc, len, n, True{}}:
+      XMk{List.reverse.go(&2, String, more, acc), len, n, True{}}
+    case Nil{} w0:
+      w0
+
+def xt.part.fin(m: XMk, +mid: KV.XId, mfs: List<&2, String>, +live: Nat, +dead: Nat, +bytes: Nat, +nel: Nat, +t: KV.XNodes, +del: Nat) -> XTw:
+  match m:
+    case XMk{acc, +len, +n, stop}:
+      +l2 = Nat.sub(live, n)
+      +d2 = Nat.add(dead, n)
+      XTw{KV.xns.set(KV.XNd{mid, mfs, l2, d2, xnd.resize(bytes, live, dead, l2, d2), nel, acc}, t), len, Nat.add(del, n)}
+
+# the first node x left, its entries marked from its oldest
+def xt.part(+s: XTs, +x: KV.XNode, +t: KV.XNodes, +len: Nat, +del: Nat) -> XTw:
+  match x:
+    case KV.XNd{+mid, mfs, +live, +dead, +bytes, +nel, es}:
+      xt.part.fin(xt.part.go(List.reverse(&2, String, es), s, mid, XMk{Nil{}, len, 0n, False{}}), mid, mfs, live, dead, bytes, nel, t, del)
+    case KV.XNdOf{+y}:
+      xt.part(s, y, t, len, del)
+
+def xt.step.of(c: Nat, +s: XTs, +x: KV.XNode, +t: KV.XNodes, +len: Nat, +del: Nat, +e: Nat) -> XTn:
+  match c:
+    case 1n:
+      XTMore{XTw{KV.xns.del(KV.xnode.mid(x), t), Nat.sub(len, e), Nat.add(del, e)}}
+    case 2n:
+      XTDone{xt.part(s, x, t, len, del)}
+    case _:
+      XTDone{XTw{t, len, del}}
+
+def xt.step(+s: XTs, +ap: Bool, +lim: Nat, +x: KV.XNode, +t: KV.XNodes, +len: Nat, +del: Nat) -> XTn:
+  +e = xnode.live(x)
+  xt.step.of(xt.what(s, ap, lim, x, len, del, e), s, x, t, len, del, e)
+
+# k more nodes at most
+def xt.go(k: Nat, w: XTn, +s: XTs, +ap: Bool, +lim: Nat) -> XTw:
+  match k w:
+    case 1n+j XTMore{XTw{+t, +len, +del}}:
+      xt.go(j, xt.step(s, ap, lim, xns.nth(t, 0n), t, len, del), s, ap, lim)
+    case _ XTMore{w0}:
+      w0
+    case _ XTDone{w0}:
+      w0
+
+# a stream trimmed, and how many entries it deleted
+type XTrd is Data:
+  XTrd{x: KV.XStream, del: Nat}
+
+def xs.trim.fin(w: XTw, +last: KV.XId, +first: KV.XId, +maxdel: KV.XId, +added: KV.XN, +groups: KV.XGroups) -> XTrd:
+  match w:
+    case XTw{t, +len, +del}:
+      XTrd{xs.first.fix(Nat.is_eq(len, 0n), Nat.is_lt(0n, del), KV.XStr{len, last, first, maxdel, added, t, groups}), del}
+
+# the stream x trimmed (ap: by whole nodes, at most lim entries, 0 for
+# no limit)
+def xs.trim(+x: KV.XStream, +s: XTs, +ap: Bool, +lim: Nat) -> XTrd:
+  match x:
+    case KV.XStr{+n, +last, +first, +maxdel, +added, +nodes, +groups}:
+      xs.trim.fin(xt.go(KV.xns.size(nodes), XTMore{XTw{nodes, n, 0n}}, s, ap, lim), last, first, maxdel, added, groups)
+    case KV.XStrOf{+y}:
+      xs.trim(y, s, ap, lim)
+
+# An approximate trim (~) as an exact one. Redis propagates it as the
+# exact trim at the threshold it reached (MAXLEN: the stream's length
+# after it; MINID: the first entry of the first node it kept, a deleted
+# one too, or the last ID there is when it kept none), which a replica
+# runs. BendKV runs it as that exact trim, which takes out the same
+# nodes but in two cases: a stream whose entries are out of order across
+# its nodes (after XSETID below them) for MINID, and one whose last node
+# taken out holds no live entry for MAXLEN. There the other kind's
+# threshold is taken when it takes out the same nodes, else Redis's.
+
+# the approximate trim's walk: the nodes it takes out (the first i), the
+# stream's length after them, the entries they held
+type XAp is Data:
+  XAp{i: Nat, len: Nat, del: Nat}
+
+def xa.next(ok: Bool, +i: Nat, +len: Nat, +del: Nat, +e: Nat) -> XAp:
+  match ok:
+    case True{}:
+      XAp{Nat.add(i, 1n), Nat.sub(len, e), Nat.add(del, e)}
+    case False{}:
+      XAp{i, len, del}
+
+def xa.ok(+s: XTs, +lim: Nat, +x: KV.XNode, +len: Nat, +del: Nat, +e: Nat) -> Bool:
+  Bool.and(Bool.not(Bool.or(xt.done(s, len), Bool.and(Nat.is_lt(0n, lim), Nat.is_lt(lim, Nat.add(del, e))))), xt.whole(s, x, len, e))
+
+def xa.go(k: Nat, go: Bool, +t: KV.XNodes, +s: XTs, +lim: Nat, w: XAp) -> XAp:
+  match k go w:
+    case 1n+j True{} XAp{+i, +len, +del}:
+      +x = xns.nth(t, i)
+      +e = xnode.live(x)
+      +ok = xa.ok(s, lim, x, len, del, e)
+      xa.go(j, ok, t, s, lim, xa.next(ok, i, len, del, e))
+    case _ _ other:
+      other
+
+# whether the first k nodes from place i each end below f
+def xa.below(k: Nat, +t: KV.XNodes, +i: Nat, +f: KV.XId) -> Bool:
+  match k:
+    case 0n:
+      True{}
+    case 1n+j:
+      Bool.and(Cmp.is_lt(KV.xid.cmp(xnode.last(xns.nth(t, i)), f)), xa.below(j, t, Nat.add(i, 1n), f))
+
+def xs.approx.pick(s: XTs, +mx: Bool, +mn: Bool, +len: Nat, +f: KV.XId) -> XTs:
+  match s:
+    case XTMax{n}:
+      Bool.pick(XTs, Bool.or(mx, Bool.not(mn)), XTMax{len}, XTMin{f})
+    case XTMin{m}:
+      Bool.pick(XTs, Bool.or(mn, Bool.not(mx)), XTMin{f}, XTMax{len})
+
+def xs.approx.of(a: XAp, +s: XTs, +t: KV.XNodes, +c: Nat) -> XTs:
+  match a:
+    case XAp{+k, +len, del}:
+      +f = Bool.pick(KV.XId, Nat.is_lt(k, c), xnode.oldest(xns.nth(t, k)), xid.max())
+      +mx = Bool.or(Nat.is_eq(k, 0n), Nat.is_lt(0n, xnode.live(xns.nth(t, Nat.sub(k, 1n)))))
+      +mn = Bool.and(xa.below(k, t, 0n, f), Bool.or(Nat.is_eq(k, c), Bool.not(Cmp.is_lt(KV.xid.cmp(xnode.last(xns.nth(t, k)), f)))))
+      xs.approx.pick(s, mx, mn, len, f)
+
+# the exact trim that runs the approximate one of strategy s and limit
+# lim on x
+def xs.approx(+x: KV.XStream, +s: XTs, +lim: Nat) -> XTs:
+  +t = xstream.nodes(x)
+  +c = KV.xns.size(t)
+  xs.approx.of(xa.go(c, True{}, t, s, lim, XAp{0n, KV.xstream.len(x), 0n}), s, t, c)
+
+# Deletes
+# -------
+# XDEL of an ID: the live entry of that ID, as streamIteratorGetID's walk
+# from it to it finds it (from the last node whose master ID is at most
+# it, else the first, through the nodes after it: entries deleted or
+# below it passed, the walk over at one past it), marked deleted; its
+# node taken out instead when it was the node's last live entry (with
+# its deleted ones). XDEL then raises the greatest ID deleted, and the
+# first ID is the first live entry's when the first went.
+
+# a node's walk: the entry found and marked (its node's entries, the
+# newest first), passed (none in the node), or stopped (none there)
+type XDn is Data:
+  XDnHit{es: List<&2, String>}
+  XDnPass{}
+  XDnStop{}
+
+def xd.what.h(h: XEh, +id: KV.XId) -> Nat:
+  match h:
+    case XEh{+fl, +eid, t}:
+      +c = KV.xid.cmp(eid, id)
+      Bool.pick(Nat, Bool.or(xh.deleted(fl), Cmp.is_lt(c)), 0n, Bool.pick(Nat, Cmp.is_eq(c), 1n, 2n))
+    case XEhBad{}:
+      2n
+
+# what the walk does with the first of es (the oldest first): pass it
+# (0), mark it (1), or stop (2)
+def xd.what(+es: List<&2, String>, +mid: KV.XId, +id: KV.XId) -> Nat:
+  match es:
+    case Con{+e, rest}:
+      xd.what.h(xh.read(e, mid), id)
+    case Nil{}:
+      0n
+
+def xd.go(es: List<&2, String>, c: Nat, +mid: KV.XId, +id: KV.XId, acc: List<&2, String>) -> XDn:
+  match es c:
+    case Con{+e, +rest} 0n:
+      xd.go(rest, xd.what(rest, mid, id), mid, id, e <> acc)
+    case Con{+e, rest} 1n:
+      XDnHit{List.reverse.go(&2, String, rest, xe.mark(e) <> acc)}
+    case Con{e, rest} _:
+      XDnStop{}
+    case Nil{} _:
+      XDnPass{}
+
+def xd.node(+x: KV.XNode, +id: KV.XId) -> XDn:
+  match x:
+    case KV.XNd{+mid, mfs, live, dead, bytes, nel, es}:
+      +old = List.reverse(&2, String, es)
+      xd.go(old, xd.what(old, mid, id), mid, id, Nil{})
+    case KV.XNdOf{+y}:
+      xd.node(y, id)
+
+# where XDEL finds an ID: the node's place and its entries after the
+# mark, or none
+type XDf is Data:
+  XDfHit{i: Nat, es: List<&2, String>}
+  XDfMiss{}
+
+def xd.find(k: Nat, r: XDn, +t: KV.XNodes, +i: Nat, +id: KV.XId) -> XDf:
+  match k r:
+    case 1n+j XDnPass{}:
+      xd.find(j, xd.node(xns.nth(t, i), id), t, Nat.add(i, 1n), id)
+    case _ XDnHit{es}:
+      XDfHit{Nat.sub(i, 1n), es}
+    case _ _:
+      XDfMiss{}
+
+# the nodes with the entry marked in the node x, or x taken out when the
+# entry was its last live one
+def xd.mark.of(one: Bool, +x: KV.XNode, es: List<&2, String>, +t: KV.XNodes) -> KV.XNodes:
+  match one x:
+    case True{} y:
+      KV.xns.del(KV.xnode.mid(y), t)
+    case False{} KV.XNd{+mid, mfs, +live, +dead, +bytes, nel, old}:
+      +l2 = Nat.sub(live, 1n)
+      +d2 = Nat.add(dead, 1n)
+      KV.xns.set(KV.XNd{mid, mfs, l2, d2, xnd.resize(bytes, live, dead, l2, d2), nel, es}, t)
+    case False{} KV.XNdOf{y}:
+      t
+
+# XDEL's walk of its IDs: the stream, how many it deleted, whether the
+# stream's first entry went
+type XDs is Data:
+  XDs{x: KV.XStream, n: Nat, first: Bool}
+
+def xd.hit(f: XDf, +id: KV.XId, +x: KV.XStream, +n: Nat, +first: Bool) -> XDs:
+  match f x:
+    case XDfHit{+i, es} KV.XStr{+len, last, +fid, +maxdel, added, +nodes, groups}:
+      +y = xns.nth(nodes, i)
+      XDs{KV.XStr{Nat.sub(len, 1n), last, fid, Bool.pick(KV.XId, Cmp.is_gt(KV.xid.cmp(id, maxdel)), id, maxdel), added, xd.mark.of(Nat.is_eq(xnode.live(y), 1n), y, es, nodes), groups}, Nat.add(n, 1n), Bool.or(first, xid.is_eq(id, fid))}
+    case _ y:
+      XDs{y, n, first}
+
+# the live entry of ID id in x, where XDEL finds it
+def xd.one(+x: KV.XStream, +id: KV.XId) -> XDf:
+  +t = xstream.nodes(x)
+  +i = xw.at(t, False{}, id, id)
+  xd.find(Nat.sub(KV.xns.size(t), i), XDnPass{}, t, i, id)
+
+def xd.all(ids: List<&2, KV.XId>, s: XDs) -> XDs:
+  match ids s:
+    case Con{+id, rest} XDs{+x, +n, +first}:
+      xd.all(rest, xd.hit(xd.one(x, id), id, x, n, first))
+    case Nil{} s0:
+      s0
+
+# XDEL's stream after it, and how many entries it deleted
+type XDr is Data:
+  XDr{x: KV.XStream, n: Nat}
+
+def xs.del.fin(s: XDs) -> XDr:
+  match s:
+    case XDs{+x, +n, first}:
+      +some = Nat.is_lt(0n, n)
+      XDr{xs.first.fix(Bool.and(some, Nat.is_eq(KV.xstream.len(x), 0n)), Bool.and(some, first), x), n}
+
+# XDEL of the IDs ids, in turn
+def xs.del(+x: KV.XStream, ids: List<&2, KV.XId>) -> XDr:
+  xs.del.fin(xd.all(ids, XDs{x, 0n, False{}}))
+
+# the IDs ws name, each read as a strict ID, or none when one is not one
+def xids.head(+ws: List<&2, String>) -> Maybe<&2, KV.XId>:
+  match ws:
+    case Con{+w, rest}:
+      xid.parse(w, True{}, xn.zero())
+    case Nil{}:
+      Some{xid.zero()}
+
+def xids.go(ws: List<&2, String>, m: Maybe<&2, KV.XId>, acc: List<&2, KV.XId>) -> Maybe<&2, List<&2, KV.XId>>:
+  match ws m:
+    case Nil{} _:
+      Some{List.reverse(&2, KV.XId, acc)}
+    case Con{w, +rest} Some{+id}:
+      xids.go(rest, xids.head(rest), id <> acc)
+    case Con{w, rest} None{}:
+      None{}
+
+def xids.parse(+ws: List<&2, String>) -> Maybe<&2, List<&2, KV.XId>>:
+  xids.go(ws, xids.head(ws), Nil{})

@@ -18,7 +18,11 @@ PORT=${PORT:-6697}
 W=$(mktemp -d)
 trap 'rm -rf "$W"' EXIT
 cc -O2 -shared -fPIC "$here/pgo_exit.c" -o "$W/pgo_exit.so"
-$CC -std=c11 -O3 -w -fprofile-instr-generate "$C" -lpthread -lm -o "$W/gen"
+# the Lua engine's sources and flags beside the emitted C (the Makefile's
+# DEPS_SRC and DEPS_FLAGS; empty for a C without the engine)
+DEPS_SRC=${DEPS_SRC:-}
+DEPS_FLAGS=${DEPS_FLAGS:-}
+$CC -std=c11 -O3 -w -fprofile-instr-generate "$C" $DEPS_SRC $DEPS_FLAGS -lpthread -lm -o "$W/gen"
 
 bench() {
   redis-benchmark -p "$PORT" -q "$@" > /dev/null 2>&1
@@ -44,4 +48,4 @@ train() {
 train post
 train send
 "$PROFDATA" merge -o "$W/pgo.profdata" "$W"/run-*.profraw
-$CC -std=c11 -O3 -w -fprofile-instr-use="$W/pgo.profdata" "$C" -lpthread -lm -o "$OUT"
+$CC -std=c11 -O3 -w -fprofile-instr-use="$W/pgo.profdata" "$C" $DEPS_SRC $DEPS_FLAGS -lpthread -lm -o "$OUT"
