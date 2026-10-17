@@ -383,9 +383,10 @@ subscribers of its channel (`message`, `smessage` for a shard channel), then to 
 subscribers of each matching pattern (`pmessage`), and PUBLISH answers how many clients
 got it. A subscribed client of RESP2 runs only (P|S)SUBSCRIBE, (P|S)UNSUBSCRIBE, PING,
 QUIT and RESET, as in Redis, and any other command is refused with Redis's error; one of
-RESP3 runs any command, and its messages are pushes among its replies (its own messages
-and keyspace events before the reply of the command that made them, as Redis writes
-them); the replies of SUBSCRIBE and its kin go out even with replies turned off; in a
+RESP3 runs any command, and its messages are pushes among its replies (its own messages,
+keyspace events and invalidations after the reply of the command that made them, after
+EXEC's or a script's for the commands they ran, as Redis 7.2 sends them); the replies of
+SUBSCRIBE and its kin go out even with replies turned off; in a
 transaction SUBSCRIBE and PSUBSCRIBE run, and SSUBSCRIBE is refused; RESET, QUIT and a
 closed connection remove the client's subscriptions. Keyspace notifications: when
 `notify-keyspace-events` is set, each change a command makes is published to
@@ -1157,13 +1158,14 @@ The translation the kernel reads can be dumped with
   pipelined, before AUTH and after, a failed AUTH, HELLO, RESET with a password and
   without, a password removed and set again, a transaction, a subscribed client, INFO's
   statistics (section 46 of docs/PERFORMANCE.md).
-- **RESP3** (`tests/resp3_test.py`): 11 scenarios on BendKV and on Redis compared byte
+- **RESP3** (`tests/resp3_test.py`): 13 scenarios on BendKV and on Redis compared byte
   for byte — HELLO and its errors; the protocol switched in the middle of a pipeline
   (with CLIENT REPLY OFF too); nulls and doubles; maps, sets and pairs; the server's
   replies (CONFIG GET, CLIENT TRACKINGINFO, INFO, COMMAND INFO and DOCS); EXEC's replies
   and an EXEC that WATCH aborts; blocking commands that time out and that are served;
   Pub/Sub's pushes to a RESP3 and a RESP2 subscriber; a subscriber that switches its
-  protocol; keyspace events of a client's own commands; pipelines of the fast way. And
+  protocol; keyspace events of a client's own commands; a client's own pushes in a
+  transaction and a script, and those of pops served; pipelines of the fast way. And
   the differential tests of times to live, numbers, BITFIELD, hashes, lists, sets,
   sorted sets and the random stream again, with every connection in RESP3 (`RESP=3`).
   Of the 16 constructors of a reply, RESP2 writes the 8 new ones as it wrote what they

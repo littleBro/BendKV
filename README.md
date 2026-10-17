@@ -372,8 +372,9 @@ translation stays in the trusted base.
   those of each pattern it matches (`pmessage`), and PUBLISH answers how many got it. A
   subscribed client of RESP2 runs (P|S)SUBSCRIBE, (P|S)UNSUBSCRIBE, PING, QUIT and RESET
   alone, as in Redis, any other command refused with Redis's error; one of RESP3 runs any
-  command, its messages pushes among its replies (its own messages and keyspace events
-  before the reply of the command that made them, as Redis writes them); the replies of
+  command, its messages pushes among its replies (its own messages, keyspace events and
+  invalidations after the reply of the command that made them, after EXEC's or a
+  script's for the commands they ran, as Redis 7.2 sends them); the replies of
   SUBSCRIBE and its kin go out even with replies off; in a transaction
   SUBSCRIBE and PSUBSCRIBE run and SSUBSCRIBE is refused; RESET, QUIT and a closed
   connection drop the client's subscriptions. Keyspace notifications: with
@@ -527,10 +528,12 @@ translation stays in the trusted base.
   slow log when it ends, so a SLOWLOG GET in the same pipeline does not see them; there
   are no events of the append-only file, of eviction or of fork (FINDINGS.md, section
   3zzz).
-- **CLIENT TRACKING**, as Redis 7.0.15 runs it (server-assisted client-side caching):
+- **CLIENT TRACKING**, as Redis 7.2.16 runs it (server-assisted client-side caching):
   after a call that only reads, its keys (by the command's key specs) are kept for its
-  client, and a command that changes one, as WATCH counts a change, sends each client
-  that read it an invalidation, and the key is forgotten; FLUSHDB and FLUSHALL send
+  client, a script's calls' keys for its caller, and a command that changes one, as
+  WATCH counts a change, sends each client that read it an invalidation, and the key is
+  forgotten (a blocked pop that is served changes the key it pops from, as Redis 7.2
+  runs the command again); FLUSHDB and FLUSHALL send
   every tracking client a null, and keys the sweep deletes or eviction takes are
   invalidated too. REDIRECT sends the invalidations to another client (a push in RESP3,
   a message of `__redis__:invalidate` to a client of RESP2 subscribed to it), BCAST
@@ -928,10 +931,11 @@ the append-only file and the pid file after it, and a SHUTDOWN while a rewrite r
 authenticate and what it is answered before it does), ACL (`tests/acl_test.py`:
 scenarios on BendKV and on Redis of a user's calls allowed and refused, alone and
 pipelined behind AUTH, ACL LOG, MULTI and EXEC, the clients ACL SETUSER and DELUSER
-close, CLIENT LIST and CLIENT KILL USER, SORT's BY and GET, and the slow log), RESP3 (`tests/resp3_test.py`: 11
+close, CLIENT LIST and CLIENT KILL USER, SORT's BY and GET, and the slow log), RESP3 (`tests/resp3_test.py`: 13
 scenarios on BendKV and on Redis compared byte for byte, of HELLO and the switch of
 protocol in a pipeline, the replies RESP3 types, EXEC, blocking commands and Pub/Sub's
-pushes; and the differential tests of keys, numbers, BITFIELD and the types again with
+pushes, a client's own after the reply of the command, EXEC or script that made them;
+and the differential tests of keys, numbers, BITFIELD and the types again with
 every connection in RESP3, `RESP=3`),
 connections that end every way one can, many times
 (the client closing or resetting, QUIT, a protocol error), on a BendKV of their own whose
@@ -1043,7 +1047,7 @@ away.
 | `src/acl.bend` | 2,200 | 670 | no |
 | `src/aofdir.bend` | 360 |  | no |
 | `src/command.bend` | 2,800 | 2,100 | no |
-| `src/float.bend` | 1,200 |  | no |
+| `src/float.bend` | 1,600 |  | no |
 | `src/geo.bend` | 870 |  | no |
 | `src/hll.bend` | 1,400 |  | no |
 | `src/info.bend` | 2,900 |  | no |

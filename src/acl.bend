@@ -2882,7 +2882,7 @@ def ent.reply(e: Ent, +now: Nat) -> R.Reply:
       +age = Bool.pick(Nat, Nat.is_le(at, now), Nat.sub(now, at), 0n)
       R.RMap{[R.RBulk{"count"}, R.RInt{R.IPos{count}}, R.RBulk{"reason"}, R.RBulk{why}, R.RBulk{"context"}, R.RBulk{ctx},
         R.RBulk{"object"}, R.RBulk{obj}, R.RBulk{"username"}, R.RBulk{user},
-        R.RBulk{"age-seconds"}, R.RDbl{F.fl.show_g(F.fl.div(F.fmt.d(), acl.dbl(age), acl.dbl(1000n)))},
+        R.RBulk{"age-seconds"}, R.RDbl{F.f64.show(F.f64.of(F.fl.div(F.fmt.d(), acl.dbl(age), acl.dbl(1000n))))},
         R.RBulk{"client-info"}, R.RBulk{info}, R.RBulk{"entry-id"}, R.RInt{R.IPos{id}},
         R.RBulk{"timestamp-created"}, R.RInt{R.IPos{made}}, R.RBulk{"timestamp-last-updated"}, R.RInt{R.IPos{at}}]}
 

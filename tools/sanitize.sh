@@ -148,8 +148,8 @@ FLAGS="-std=c11 -O1 -gline-tables-only -fno-omit-frame-pointer"
 # the Lua engine's sources and flags beside the emitted C (as the
 # Makefile builds it); the engine's stack switches carry the sanitizers'
 # fiber annotations (src/lua/engine.c)
-DEPS_SRC="deps/redis/deps/lua/src/*.c deps/redis/src/*.c"
-DEPS_FLAGS="-I deps/redis/deps/lua/src -I deps/redis/src -DENABLE_CJSON_GLOBAL -DREDIS_STATIC= -DLUA_USE_MKSTEMP -D_GNU_SOURCE"
+DEPS_SRC="deps/redis/deps/lua/src/*.c deps/redis/src/*.c deps/redis/deps/fpconv/*.c"
+DEPS_FLAGS="-I deps/redis/deps/lua/src -I deps/redis/src -I deps/redis/deps/fpconv -DENABLE_CJSON_GLOBAL -DREDIS_STATIC= -DLUA_USE_MKSTEMP -D_GNU_SOURCE"
 for san in $SANS; do
   echo "== $san: the build"
   if [ "$san" = asan ]; then

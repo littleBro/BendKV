@@ -708,6 +708,11 @@ def xcon.ids(+c: KV.XCon) -> KV.XIds:
     case KV.XCon{name, seen, active, +ids}:
       ids
 
+def xcon.active(+c: KV.XCon) -> KV.XAct:
+  match c:
+    case KV.XCon{name, seen, +active, ids}:
+      active
+
 def xnack.owner(+x: KV.XNack) -> String:
   match x:
     case KV.XNk{id, +owner, time, count}:

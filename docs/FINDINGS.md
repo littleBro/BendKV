@@ -9181,8 +9181,7 @@ the move's other kinds (below).
     (`addReplyErrorSdsExSafe`), as an error it returns did already.
   - FUNCTION RESTORE refuses a library in the format of 7.0's release candidates (type
     246): "Pre-GA function format not supported" (`lib.kind`). An RDB file's library in
-    that format is still read: Redis 7.2.16 stops its start at one, and the RDB file is
-    the move's kind E.
+    that format stops the start, as Redis 7.2.16's does (kind E: section 3zzzzc).
   - SCRIPT KILL's line in the log is a notice (`*`), not a warning (`#`).
 - **What was so already.**
   - Time stands still while a script runs, as 7.2's `commandTimeSnapshot` holds it:
@@ -9199,13 +9198,16 @@ the move's other kinds (below).
   - `redis.REDIS_VERSION` and `REDIS_VERSION_NUM`, and HELP's last line, "Print this
     help." (kind A).
   - Lua's numbers in `redis.call`, and a script's double, in `fpconv_dtoa`'s form (kind C).
-  - The order of pushes, and the keys that a script's reads track (kind F).
+  - The order of pushes, and the keys that a script's reads track (kind F, done in
+    section 3zzzzg).
 
 **Tests.** `script_test` and `function_test`, against 7.2.16. Each line that differs
 belongs to another kind: the version and HELP's last line (A), Lua's doubles (C), the
 pushes and tracking (F), NOPERM's texts (G), ACL LOG's new fields and CLIENT LIST's
 `lib-name` and `lib-ver` (B and H), FUNCTION DUMP's version and the RESTORE of a payload
-of version 11 (E).
+of version 11 (E). Once A, E, F, G and H were in, function_test passed against 7.2.16,
+and script_test differed in Lua's doubles alone (C); a blocking command in a script ran
+as in MULTI with A's table, nothing more.
 
 **What it costs.** Nothing on a request's path: the metatables are protected when a state
 is made, and the texts are made only for an error or a refusal.
@@ -9752,6 +9754,7 @@ sets (C); in `stream_write_test`, XSETID below the greatest ID deleted (G).
 **What it costs.** Nothing on a request's path. A save writes a packed set as one string,
 the listpack, where 7.0's format took a string for each member; a consumer takes 8 more
 bytes in the file and a word in the value.
+
 ## 3zzzzd. Texts, checks and ACL LOG's fields of Redis 7.2.16
 
 **What changed** (#128, kinds G and H: `src/session.bend`, `src/acl.bend`, `src/server.bend`,
@@ -9859,6 +9862,135 @@ from Redis's code (`redisSupervisedSystemd` and `main`), which 7.2.16 has as 7.0
 it.
 
 **What it costs.** Nothing.
+
+## 3zzzzg. Pushes after the reply, as Redis 7.2.16 sends them
+
+**What changed** (#128, kind F: `src/server.bend`, Own pushes). Redis 7.0 wrote a push
+to the client whose command ran as the command ran: before the command's reply, among
+EXEC's replies, before a script's reply. Redis 7.2 keeps such pushes for the end of the
+call (`afterCommand`, from `pending_push_messages`), and BendKV now does too.
+- **What waits.** The current client's messages on a channel it subscribed to (RESP3),
+  its keyspace events and the invalidations it gets as a redirect wait in Pub/Sub's
+  `own`; its own invalidations wait in the tracking's `pend`, as they already did.
+  After the command's reply the first go out, then the second (`bg.own.after`, then
+  `bg.trk.after`). For the commands of a transaction they come after EXEC's array, and
+  for a script's calls after the script's reply (`sc.pend`).
+- **The current client** is the batch's client; while a script runs, its caller
+  (`trk.cur` gives the caller for the script client's id 0); while a blocked pop runs
+  again, the client served, whose invalidations, its own and those it gets as a
+  redirect, wait for its reply (`iv.route.me`), and what the client whose command
+  served it gets waits for that client. The pushes kept wait aside while the clients a
+  command served are served (`pd.aside`), and while a busy script's group runs other
+  clients' requests (`sc.busy.group`), so that no other command takes them.
+- **Found on the way.**
+  - PUBLISH to its own channel inside EXEC put its pushes in EXEC's array and counted
+    them there (`*5` for three replies).
+  - The keyspace events of EXEC's commands never reached their own client.
+  - A served pop's keyspace events reached the client whose command served it before
+    that command's reply.
+  - Left as it was: CONFIG SET notify-keyspace-events takes effect from the next batch,
+    not from the next command of the same pipeline, since Pub/Sub's classes of events are
+    set again at a batch's end. A pipeline that sets them, subscribes and writes at once
+    hears nothing of that write, from Redis 7.0.15 as from 7.2.16.
+- **Tracking.**
+  - A blocked pop that is served runs its command again in Redis 7.2. So BLPOP and BRPOP
+    signal the key they popped from, as BLMPOP and the sorted sets' pops did, and BLMOVE
+    and BRPOPLPUSH signal their source after their destination (`ps.trk.served.go`). In
+    BCAST mode the change is the served client's, which NOLOOP leaves out for it.
+  - A script's call that only reads remembers its own keys for the caller, as Redis
+    7.2's `call()` remembers them for the current client (`trackingRememberKeys`). The
+    script's KEYS are no longer used: a key the script reads undeclared is tracked, a
+    declared one it does not read is not. Scr's `ks` is gone.
+
+**Tests.** Against 7.2.16:
+- resp3_test: two new scenarios, a transaction and a script that publish and write to
+  their own client, and pops served to a pusher and to a served client that both
+  subscribe. Its five scenarios of a client's own pushes pass; in 7.0's order they fail.
+- tracking_test: a redirect's own write in a transaction, a served BLMOVE in BCAST
+  mode, and a redirect to the client served; "redirects" and "served pops" pass.
+- script_test: "10 pipelines" and "12 tracking" pass.
+- The other differential tests that pushes and tracking touch (blocking, multi, pubsub,
+  client, monitor, pause, function, acl, keyspace, list, info, stats, the streams'), and
+  the file tests, differ from 7.2.16 in the same lines as before kind F: none of them
+  is kind F's.
+
+**What it costs.** After each command of the general way, a look at Pub/Sub's `own`
+(`bg.own.has`); nothing on the fast way, which makes no such push. perfcheck's GET, SET
+and INCR count 3,508, 4,299 and 4,621 instructions, against 3,507, 4,302 and 4,616 for
+kind I's build (5d523c6), counted alike; with 100 clients in BLPOP, 3,611 and 4,455
+against 3,618 and 4,460.
+
+## 3zzzzh. Doubles as Redis 7.2.16 writes them
+
+**What changed** (#128, kind C: `src/float.bend`, and the places that write a double in
+`src/redis.bend`, `src/rdb.bend`, `src/aof.bend`, `src/acl.bend` and `src/info.bend`).
+- **Where Redis 7.2 writes a double, and how.**
+  - A reply (`addReplyDouble`) and a sorted set's listpack (`zzlInsertAt`) take `d2string`:
+    `nan`, `inf`, `-inf`, `0` or `-0`; an integral double of magnitude 2^62 at most
+    (`double2ll`) as its integer; any other as `fpconv_dtoa` writes it. In 7.0, a reply was
+    `%.17g`, and `d2string` ended in `%.17g` too. So ZSCORE, WITHSCORES, ZINCRBY, ZADD INCR
+    and the rest now answer `0.1` where 7.0 answered `0.10000000000000001`, and
+    `123456789012345680` where it answered `1.2345678901234568e+17`. MEMORY STATS's ratios
+    and ACL LOG's `age-seconds` are replies too.
+  - The AOF rewrite (`rioWriteBulkDouble`) takes `fpconv_dtoa` alone, with no integer of its
+    own: a score of 100000000 is `1e+8` in a rewritten file and `100000000` in a reply.
+  - As in 7.0: ZSCAN of a sorted set kept as a table (`ld2string`: `%.17Lg`), GEO's
+    distances (`fixedpoint_d2string`), its coordinates and INCRBYFLOAT (`%.17Lf`).
+- **`fpconv_dtoa`** is Florian Loitsch's Grisu2, in night-shift's C, which Redis 7.2 vendors
+  in `deps/fpconv`. BendKV vendors the same files (`deps/redis/deps/fpconv`, Boost Software
+  License 1.0: NOTICE); the Makefile builds them into the server, for the Lua engine's
+  numbers, which are the scripting kinds'. Grisu2 finds digits that read back as the double:
+  few, though not always the fewest. It lays out n digits whose last is at 10^K:
+  - as an integer, with K '0's after them, when K ≥ 0 and the first digit's exponent is
+    below n + 7 (`10000000`, but `1e+8`);
+  - as a fraction when K < 0, and K > -7 or that exponent is below 4 in magnitude
+    (`0.000001`, but `1e-7`);
+  - else as `d.ddde±X`, with no leading '0' in X (`1e+22`, `5e-324`), and 18 digits at most
+    (17 for a negative number).
+- **In Bend** (`src/float.bend`, section Grisu2) the C is ported step for step.
+  - None of Grisu2's sums, products and shifts passes 2^64 (of a product it keeps the high
+    half), so none wraps in C, and exact arithmetic gives C's results.
+  - A 64-bit integer is a `U64`: its high and low 32 bits, two Nats. A product goes by
+    16-bit pieces, so that no Nat passes 2^48. The first port used the file's big integers
+    (lists of 24-bit limbs), and wrote a double 2 to 4 times slower than the `%.17g` it
+    replaces; the halves make it faster than `%.17g` (below).
+  - A Python model of the same steps matched the C on 3 million random doubles and on the
+    edges of every exponent first. The bounds it saw (two steps to find the cached power,
+    six for `round_digit`, 16 digits in the second loop) set the Bend loops' fuel, with room.
+  - `F.f64.show` is `d2string` now, for replies and listpacks alike (it was `%.17g`, with
+    `f64.show_lp` for listpacks). `F.f64.dtoa` is `fpconv_dtoa`; `F.f64.show_g` is `%.17g`,
+    for ZSCAN.
+- **XINFO** shows a consumer's active time, which kind E keeps (section 3zzzzc):
+  `active-time` in STREAM FULL, and `inactive` in CONSUMERS (now less it; −1 for none).
+
+**Tests.** `float_test` also writes doubles given by their bits: random ones, integers and
+their neighbours, short decimals, subnormals, every exponent's edges, NaNs, infinities and
+zeros. Each is written as `d2string` and as `fpconv_dtoa` write it. Its reference
+(`tests/float_ref.c`) is built with the vendored `fpconv_dtoa.c` and has 7.2.16's `d2string`.
+Six seeds of it pass, about 9,400 doubles by their bits.
+- Against 7.2.16, `zset_test`, `geo_test`, `numbers_test`, `diff_test` (1,000 rounds),
+  `sort_test`, `keyspace_test`, `stream_read_test`, `stream_dump_test`, `acl_test` and
+  `admin_test` pass, and so does `rewrite_test`, whose rewritten file has each score as
+  `fpconv_dtoa` writes it. What still differs there is other kinds': the encodings of sets
+  (`zset_test`'s OBJECT ENCODING, `dump_test`, `aof_redis_test`: kind D) and the order of
+  RESP3's pushes (`resp3_test`: kind F).
+- `stream_read_test` reads `inactive` as it reads `idle`: now less a time, each server at its
+  own now, within 2 s (and -1 only as -1).
+
+**What it costs.** A double is written faster than before, most of all one far from 1
+(redis-benchmark, pipelines of 16, 20 clients, requests a second):
+
+| | `%.17g` (before) | Grisu2 |
+|---|---:|---:|
+| ZSCORE of 0.1 | 257 thousand | 560 thousand |
+| ZSCORE of 3.141592653589793 (17 digits) | 239 thousand | 271 thousand |
+| ZSCORE of 1e-300 | 6 thousand | 725 thousand |
+| ZRANGE 0 -1 WITHSCORES, 100 random scores | 2,233 | 2,599 |
+
+`%.17g` made the exact decimal value of the double, whose digits grow with its exponent;
+Grisu2 makes 17 digits at most from 64-bit integers. An integral score (ZSCORE of 1) takes
+the integer's path, as before. DUMP writes a small sorted set's scores with `d2string`
+too.
 
 ## 4. Where a request's time goes, and hiding the memory waits
 
