@@ -143,6 +143,16 @@ parts of it are written from 7.2.16's sources:
   7.0's and 4.0's release candidates refused); src/server.bend, from
   rdb.c and server.c (the lines of a file that does not load or open, of
   a save's write error and of a directory's sync).
+- Texts and checks: HELLO's order (networking.c's helloCommand: every
+  option read before any is done, then the last AUTH, NOAUTH's text, the
+  name and the protocol), NOPERM's texts and ACL DRYRUN's (acl.c's
+  getAclErrorMessage), XREAD's text for unbalanced streams and XSETID's
+  check against the greatest ID deleted (t_stream.c), and LPOS's range
+  for RANK (t_list.c), in src/session.bend, src/acl.bend,
+  src/server.bend and src/redis.bend.
+- ACL LOG's entry-id, timestamp-created and timestamp-last-updated, and
+  the count of entries made, which ACL LOG RESET keeps (acl.c), in
+  src/acl.bend.
 
 Bend (bend-patches/): patches to the Bend compiler and its runtime
 (github.com/bendlang/bend at 1cce499, Bend 2.0.35), Copyright 2026

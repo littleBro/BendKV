@@ -9752,8 +9752,53 @@ sets (C); in `stream_write_test`, XSETID below the greatest ID deleted (G).
 **What it costs.** Nothing on a request's path. A save writes a packed set as one string,
 the listpack, where 7.0's format took a string for each member; a consumer takes 8 more
 bytes in the file and a word in the value.
+## 3zzzzd. Texts, checks and ACL LOG's fields of Redis 7.2.16
 
-## 3zzzzd. CONFIG's parameters, as Redis 7.2.16 has them
+**What changed** (#128, kinds G and H: `src/session.bend`, `src/acl.bend`, `src/server.bend`,
+`src/redis.bend`).
+- **HELLO** reads all its options before it does any, as 7.2's `helloCommand` does:
+  - An option it does not know, or a name unfit for a client, answers its error, and nothing
+    changes.
+  - Then the last AUTH logs the client in, once. A WRONGPASS stops the HELLO there. The ACL LOG
+    counts that AUTH alone (`hello.who`).
+  - Then a client that is not authenticated gets NOAUTH, whose text now says
+    `HELLO <proto> AUTH <user> <pass>`.
+  - Last, the last SETNAME names the client and the protocol changes.
+  - 7.0 did each option as it read it: an AUTH logged in, and a SETNAME named the client, before
+    a later option failed.
+- **NOPERM** names the user and the command: `User alice has no permissions to run the 'incr'
+  command`. A key or a channel is not named: `No permissions to access a key`, `... a channel`.
+  ACL DRYRUN's texts name the user, and the command, the key or the channel
+  (`getAclErrorMessage`, verbose). EXEC's text for a call that ACL refuses since it was queued
+  is unchanged.
+- **XREAD** names the command in its text for unbalanced streams: `Unbalanced 'xread' list of
+  streams`.
+- **XSETID** refuses an ID below the greatest one deleted from the stream ("smaller than current
+  max_deleted_entry_id"), before its other checks of the stream. The proof of XSETID's change
+  (`xsetid_chk_old`) has one more case, for the new error; no law changed.
+- **LPOS** refuses RANK LLONG_MIN as out of range (-LONG_MAX to LONG_MAX). 7.0 negated it, which
+  wraps in C, and BendKV read every match from the last element then.
+- **ACL LOG** gives `entry-id`, `timestamp-created` and `timestamp-last-updated` with each entry:
+  - `entry-id` is the number of entries made before it. The log keeps that count, and ACL LOG
+    RESET keeps it too (`ACLLogEntryCount`).
+  - `timestamp-created` is the time the entry was made; `timestamp-last-updated` is the last time
+    it counted an event.
+
+**Tests.**
+- `session_test`, `auth_test`, `monitor_test` and `acl_test` pass against 7.2.16. `list_test`'s
+  LPOS lines pass too.
+- `acl_test` and `script_test` (with `function_test`, which uses its helper) read an entry's
+  times as whether they are times in ms, the last update not before the creation. They read its
+  entry-id less the least of its reply's, since a test runs on servers that other tests have
+  used.
+- `numbers_test` and `diff_test` keep LSET's index within 32 bits on the paired side: 7.2.16
+  takes a larger one modulo 2^32 (`docs/UPSTREAM.md`, bug 1). `numbers_test` checks that BendKV
+  answers such an index is out of range.
+
+**What it costs.** Nothing on a request's path: the texts are made for an error alone, and HELLO
+and ACL LOG are not on the fast way.
+
+## 3zzzze. CONFIG's parameters, as Redis 7.2.16 has them
 
 **What changed** (#128, kind D: `tools/gen_config.py`, `src/config.bend`, `src/startup.bend`,
 `src/server.bend`). The table of parameters is 7.2.16's, 184 of them where 7.0.15 had 178,

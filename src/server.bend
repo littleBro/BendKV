@@ -8522,7 +8522,7 @@ def bg.acl.log(+id: Nat, +v: U.Verdict, +inm: Bool, +x: Maybe<&2, Nat>, +inb: Na
     case LRun{rs, es, +conn, srv, +ds, +ws, up, +tx, +pb}:
       +now = R.ds.now(ds)
       +info = acl.info(id, now, acl.me(id, conn, code, inb, a, x), ws, tx, pb)
-      LRun{rs, es, conn, S.srv.acl.log(srv, U.Ent{1n, U.verdict.why(v), acl.ctx(inm), U.verdict.obj(v), ps.user(id, pb), now, info}), ds, ws, up, tx, pb}
+      LRun{rs, es, conn, S.srv.acl.log(srv, U.Ent{1n, U.verdict.why(v), acl.ctx(inm), U.verdict.obj(v), ps.user(id, pb), now, info, 0n, now}), ds, ws, up, tx, pb}
     case LHeld{h}:
       LHeld{h}
 
@@ -8534,7 +8534,7 @@ def bg.auth.log(+id: Nat, +u: String, +x: Maybe<&2, Nat>, +inb: Nat, +code: Nat,
       +now = R.ds.now(ds)
       +argv = av.now(a)
       +info = acl.info(id, now, acl.me(id, conn, code, inb, a, x), ws, tx, pb)
-      LRun{rs, es, conn, S.srv.acl.log(srv, U.Ent{1n, "auth", acl.ctx(maybe.is(x)), S.arg.first(argv), u, now, info}), ds, ws, up, tx, pb}
+      LRun{rs, es, conn, S.srv.acl.log(srv, U.Ent{1n, "auth", acl.ctx(maybe.is(x)), S.arg.first(argv), u, now, info, 0n, now}), ds, ws, up, tx, pb}
     case LHeld{h}:
       LHeld{h}
 
@@ -8549,8 +8549,16 @@ def bg.noperm.say(exec: Bool, +id: Nat, +m: String, +inm: Bool, +code: Nat, g: L
     case False{}:
       bg.one(R.Own{R.SBad{R.RError{m}}}, R.code.refused(code), bg.oom.tx(inm, g))
 
+def bg.noperm.as(+u: String, +id: Nat, +v: U.Verdict, +inm: Bool, +inb: Nat, +code: Nat, +a: Av, g: LRun) -> LRun:
+  bg.noperm.say(Nat.is_eq(R.code.key(code), R.stat.top(162n)), id, U.verdict.err(v, u), inm, code, bg.acl.log(id, v, inm, None{}, inb, code, a, g))
+
+# (NOPERM names the client's user: ps.user)
 def bg.noperm(+id: Nat, +v: U.Verdict, +inm: Bool, +inb: Nat, +code: Nat, +a: Av, g: LRun) -> LRun:
-  bg.noperm.say(Nat.is_eq(R.code.key(code), R.stat.top(162n)), id, U.verdict.err(v), inm, code, bg.acl.log(id, v, inm, None{}, inb, code, a, g))
+  match g:
+    case LRun{rs, es, conn, srv, ds, ws, up, tx, +pb}:
+      bg.noperm.as(ps.user(id, pb), id, v, inm, inb, code, a, LRun{rs, es, conn, srv, ds, ws, up, tx, pb})
+    case LHeld{h}:
+      bg.noperm.as("", id, v, inm, inb, code, a, LHeld{h})
 
 # the client of id logged in as the user of name n (AUTH, HELLO's AUTH;
 # RESET: default): in the registry, among the restricted clients or not,
@@ -14232,7 +14240,7 @@ def sc.acl.log.no(+v: U.Verdict, +me: Who, g: Grp) -> Grp:
     case Grp{outs, es, srv, +ds, +ws, up, +tx, +pb}:
       +id = ps.scr.who(pb)
       +now = R.ds.now(ds)
-      Grp{outs, es, S.srv.acl.log(srv, U.Ent{1n, U.verdict.why(v), "lua", U.verdict.obj(v), ps.user(id, pb), now, acl.info(id, now, me, ws, tx, pb)}), ds, ws, up, tx, pb}
+      Grp{outs, es, S.srv.acl.log(srv, U.Ent{1n, U.verdict.why(v), "lua", U.verdict.obj(v), ps.user(id, pb), now, acl.info(id, now, me, ws, tx, pb), 0n, now}), ds, ws, up, tx, pb}
 
 def sc.acl.log(v: U.Verdict, +sc: Sc, g: Grp) -> Grp:
   match v:
