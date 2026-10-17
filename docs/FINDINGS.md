@@ -9199,7 +9199,7 @@ the move's other kinds (below).
     help." (kind A).
   - Lua's numbers in `redis.call`, and a script's double, in `fpconv_dtoa`'s form (kind C).
   - The order of pushes, and the keys that a script's reads track (kind F, done in
-    section 3zzzze).
+    section 3zzzzf).
 
 **Tests.** `script_test` and `function_test`, against 7.2.16. Each line that differs
 belongs to another kind: the version and HELP's last line (A), Lua's doubles (C), the
@@ -9801,7 +9801,48 @@ bytes in the file and a word in the value.
 **What it costs.** Nothing on a request's path: the texts are made for an error alone, and HELLO
 and ACL LOG are not on the fast way.
 
-## 3zzzze. Pushes after the reply, as Redis 7.2.16 sends them
+## 3zzzze. CONFIG's parameters, as Redis 7.2.16 has them
+
+**What changed** (#128, kind D: `tools/gen_config.py`, `src/config.bend`, `src/startup.bend`,
+`src/server.bend`). The table of parameters is 7.2.16's, 184 of them where 7.0.15 had 178,
+read from its `config.c` by the generator. The generator leaves out the parameters of a build
+with `LOG_REQ_RES` (the log of requests and replies of Redis's own tests), which a release
+build does not have.
+- **New:** `set-max-listpack-entries` (128) and `set-max-listpack-value` (64);
+  `locale-collate`; `cluster-announce-human-nodename`; and two hidden ones,
+  `cluster-ping-interval` and `lua-enable-deprecated-api` (immutable, `no`: section 3zzzv).
+- **Changed:**
+  - `aof-disable-auto-gc` is hidden: CONFIG GET of a pattern skips it, its name finds it.
+  - `loglevel` takes `nothing`, at which the log takes no line, the logo neither.
+  - `cluster-announce-ip` is checked: empty, or an address as `inet_pton` reads one.
+    IPv4 is four numbers of 0 to 255, none with a zero before its digits. IPv6 is RFC 4291's
+    text form: eight groups of hex digits, or fewer with one `::` for one group of zeros or
+    more, the last two groups possibly an IPv4 address. Anything else is "Cluster announce
+    IP must be a valid IPv4 or IPv6 address" (`text.ip`).
+  - `cluster-announce-human-nodename` takes no control byte and none of
+    `!#$%&()*+:;<>?@[]^{|}~,= "'\`, the bytes the cluster's file of nodes uses as
+    delimiters: "Announced human node name contained invalid character" (`text.aux`).
+- **locale-collate** names the locale in which SORT's ALPHA compares. BendKV compares
+  bytes, as the C locales do, so it takes those alone: empty, `C`, `POSIX`, `C.UTF-8`
+  (`AppLocale`). A CONFIG SET of another fails once the values are checked, as Redis's
+  `updateLocaleCollate` fails for a locale its system lacks ("Invalid locale name"); a
+  start with one stops ("Failed to configure LOCALE for invalid locale name."). The law of
+  CONFIG SET, that one that succeeds stores the value its check gave, holds as before: its
+  proof takes the new case (`sg.loc`).
+- **appendfsync**: 7.2's apply drains the thread that syncs the file when it becomes
+  `always` (`updateAppendFsync`); BendKV's writer has nothing to drain.
+
+**Tests.** `config_test` against 7.2.16, with cases for each new check: addresses right and
+wrong, names, locales, `loglevel nothing`, the hidden parameter by name and by pattern.
+`CONFIG SET tls-port` crashes 7.2.16 built without TLS (bug 3 of
+[UPSTREAM.md](UPSTREAM.md)), so the test sends it to BendKV alone and holds it to 7.0.15's
+refusal. `activedefrag yes` too goes to BendKV alone: the reference, built from its tarball
+with Redis's own jemalloc, turns it on, where the Redis 7.0.15 of Ubuntu (with the system's
+jemalloc) refused it, and BendKV, which has no defragmentation, refuses it as that one did.
+
+**What it costs.** Nothing on a request's path: the checks run on CONFIG SET.
+
+## 3zzzzf. Pushes after the reply, as Redis 7.2.16 sends them
 
 **What changed** (#128, kind F: `src/server.bend`, Own pushes). Redis 7.0 wrote a push
 to the client whose command ran as the command ran: before the command's reply, among

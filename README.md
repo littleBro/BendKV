@@ -232,8 +232,9 @@ translation stays in the trusted base.
   hashtable comes in BendKV's order where Redis's is its hashtable's (BY a constant
   without STORE, and elements whose weights tie under ALPHA by a pattern); a sort BY a
   pattern under a LIMIT that does not take all leaves elements whose weights tie in a
-  stable sort's order, where Redis's pqsort may not; Redis compares ALPHA in the locale it
-  started in; Redis reads a range error from errno without clearing it, so that a SORT
+  stable sort's order, where Redis's pqsort may not; Redis compares ALPHA in the locale
+  `locale-collate` names (by default, the one it started in), BendKV in C's (Configuration,
+  below); Redis reads a range error from errno without clearing it, so that a SORT
   after one that met a weight too large or too small fails on weights that are not
   integers, until a command clears errno; and SORT of a small sorted set leaves it a
   listpack, where Redis makes it a skiplist for good.
@@ -575,16 +576,22 @@ translation stays in the trusted base.
   3zzl, 3zzzc and 3zzzf).
 - **Configuration:** CONFIG GET (names, aliases and glob patterns), SET (several
   parameters at once, all or none), RESETSTAT, REWRITE, HELP, over every parameter of
-  Redis 7.0.15 (counted in [In numbers](#in-numbers)), taken from Redis's own table by
+  Redis 7.2.16 (counted in [In numbers](#in-numbers)), taken from Redis's own table by
   `tools/gen_config.py`: every value is
-  checked as Redis checks it and read back as Redis prints it. requirepass is the
+  checked as Redis checks it and read back as Redis prints it (`cluster-announce-ip` an
+  IPv4 or IPv6 address as `inet_pton` reads one, `cluster-announce-human-nodename` without
+  the bytes a cluster's file of nodes cannot hold). requirepass is the
   default user's password, hz is capped as in Redis and notify-keyspace-events picks the events
-  published (above); the port, the addresses, TLS and the append-only
+  published (above); `loglevel nothing` logs nothing; the port, the addresses, TLS and the append-only
   file cannot change while BendKV runs (a new value fails as it does when Redis cannot
   apply it); maxmemory and its policy, samples, tenacity and LFU parameters limit the
   memory and choose what is evicted (below); `save`, `dbfilename` and `rdbchecksum`
   act on the RDB file (Persistence, below); the other parameters are kept and read
   back but tune nothing, since BendKV has no replication or encodings for them to tune.
+  Where BendKV differs: `locale-collate` takes only the C locales (empty, `C`, `POSIX`,
+  `C.UTF-8`), since BendKV compares bytes, as they do: CONFIG SET of another fails with
+  "Invalid locale name", as Redis's fails for a locale its system lacks, and a start with
+  one stops.
 - **Introspection:** INFO with Redis 7.2.16's sections and fields, in Redis's order,
   picked as Redis picks them (none, `default`, `all`, `everything`, any names in any
   case): server, clients, memory, persistence, stats, replication, CPU, modules,
@@ -640,8 +647,10 @@ translation stays in the trusted base.
   and INFO's `used_memory` with it (FINDINGS.md, section 3zzzk); the uses
   are kept in a table of 2^20 words by the key's hash, which keys whose hashes share
   their low 20 bits share, and a request marks its first key alone, before it runs
-  (MGET's others are not marked); and evicting many keys at once is about ten times
-  slower than in Redis.
+  (MGET's others are not marked); evicting many keys at once is about ten times
+  slower than in Redis; and BendKV has no defragmentation: `activedefrag yes` fails as
+  in a Redis built without its own jemalloc, where Redis built from its tarball turns
+  it on.
 - **Start:** as `redis-server` starts: a configuration file, `--name value` options and
   `-` for the standard input, read line by line as Redis reads them (includes, `dir`
   changing the directory at once, save points that add up, the same errors at the same
@@ -1024,7 +1033,7 @@ away.
 | laws | 68 | `proof/LAWS.bend` (by group: [What is proved](#what-is-proved)) |
 | patches to the Bend compiler | 37 | `bend-patches/apply.sh` |
 | constructors of `Cmd`, a parsed command | 30 | `src/redis.bend` |
-| Redis 7.0.15's parameters, all of which CONFIG serves | 178 | `tools/data/redis-configs.json` |
+| Redis 7.2.16's parameters, all of which CONFIG serves | 184 | `tools/data/redis-configs.json` |
 
 | file | lines of code | of them written by a generator | the laws import it |
 |---|---:|---:|---|
@@ -1033,7 +1042,7 @@ away.
 | `src/batch.bend` | 84 |  | yes |
 | `src/aof.bend` | 1,300 |  | yes |
 | `src/session.bend` | 3,000 |  | yes |
-| `src/config.bend` | 1,200 | 180 | yes |
+| `src/config.bend` | 1,400 | 190 | yes |
 | `src/acl.bend` | 2,200 | 670 | no |
 | `src/aofdir.bend` | 360 |  | no |
 | `src/command.bend` | 2,800 | 2,100 | no |

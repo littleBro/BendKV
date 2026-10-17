@@ -215,7 +215,6 @@ REFUSED = [
     ("percentiles not numbers", ["--latency-tracking-info-percentiles", "x"], {}, None),
     ("a title template", ["--proc-title-template", "{nope}"], {}, None),
     ("a hostname", ["--cluster-announce-hostname", "a_b"], {}, None),
-    ("activedefrag", ["--activedefrag", "yes"], {}, None),
     ("a directory not there", ["--dir", "/nonexistent/x"], {}, None),
     ("a directory that is a file", ["--dir", "f"], {"f": "x"}, None),
     ("a log file that cannot open", ["--logfile", "/nonexistent/x.log"], {}, None),
@@ -294,6 +293,10 @@ BENDKV_REFUSES = [
     ("a cluster", ["--port", "{port}", "--cluster-enabled", "yes"], {}, {}, "BendKV has no cluster mode: set cluster-enabled no"),
     ("a replica", ["--port", "{port}", "--replicaof", "127.0.0.1", "1"], {}, {}, "BendKV cannot be a replica: replicaof must be no one"),
     ("TLS", ["--port", "{port}", "--tls-port", "1"], {}, {}, "BendKV has no TLS: set tls-port 0"),
+    # Redis built from its tarball, with its own jemalloc, starts with it;
+    # BendKV, which has no defragmentation, refuses it as a Redis built
+    # without that jemalloc does
+    ("activedefrag", ["--port", "{port}", "--activedefrag", "yes"], {}, {}, "Active defragmentation cannot be enabled: it requires a Redis server compiled with a modified Jemalloc like the one shipped by default with the Redis source distribution"),
     ("upstart", ["--port", "{port}", "--supervised", "auto"], {}, {"UPSTART_JOB": "x"}, "supervised by upstart, which BendKV cannot signal (it cannot stop itself): run it unsupervised"),
     ("a cut file, with aof-load-truncated no", ["--port", "{port}", "--appendonly", "yes", "--aof-load-truncated", "no"], {"appendonly.aof": "*3\r\n$3\r\nSET\r\n$1\r\na\r\n$1"}, {}, "Unexpected end of file reading the append only file appendonly.aof. You can: 1) Make a backup of your AOF file, then use ./redis-check-aof --fix <filename>. 2) Alternatively you can set the 'aof-load-truncated' configuration option to yes and restart the server."),
     ("a transaction left open, with aof-load-truncated no", ["--port", "{port}", "--appendonly", "yes", "--aof-load-truncated", "no"], {"appendonly.aof": "*1\r\n$5\r\nMULTI\r\n*3\r\n$3\r\nSET\r\n$1\r\na\r\n$1\r\n1\r\n"}, {}, "Unexpected end of file reading the append only file appendonly.aof. You can: 1) Make a backup of your AOF file, then use ./redis-check-aof --fix <filename>. 2) Alternatively you can set the 'aof-load-truncated' configuration option to yes and restart the server."),

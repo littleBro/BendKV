@@ -435,7 +435,9 @@
  {
   "name": "aof-disable-auto-gc",
   "alias": "",
-  "flags": [],
+  "flags": [
+   "hidden"
+  ],
   "type": "bool",
   "default": "no",
   "check": "NULL",
@@ -445,6 +447,18 @@
   "name": "replica-ignore-disk-write-errors",
   "alias": "",
   "flags": [],
+  "type": "bool",
+  "default": "no",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "lua-enable-deprecated-api",
+  "alias": "",
+  "flags": [
+   "hidden",
+   "immutable"
+  ],
   "type": "bool",
   "default": "no",
   "check": "NULL",
@@ -515,7 +529,7 @@
   "type": "string",
   "null": true,
   "default": "",
-  "check": "NULL",
+  "check": "isValidClusterAnnounceIp",
   "apply": "updateClusterIp"
  },
  {
@@ -539,6 +553,16 @@
   "default": "",
   "check": "isValidAnnouncedHostname",
   "apply": "updateClusterHostname"
+ },
+ {
+  "name": "cluster-announce-human-nodename",
+  "alias": "",
+  "flags": [],
+  "type": "string",
+  "null": true,
+  "default": "",
+  "check": "isValidAnnouncedNodename",
+  "apply": "updateClusterHumanNodename"
  },
  {
   "name": "syslog-ident",
@@ -679,6 +703,16 @@
   "apply": "NULL"
  },
  {
+  "name": "locale-collate",
+  "alias": "",
+  "flags": [],
+  "type": "string",
+  "null": false,
+  "default": "",
+  "check": "NULL",
+  "apply": "updateLocaleCollate"
+ },
+ {
   "name": "masterauth",
   "alias": "",
   "flags": [
@@ -792,13 +826,15 @@
    "debug",
    "verbose",
    "notice",
-   "warning"
+   "warning",
+   "nothing"
   ],
   "values": [
    0,
    1,
    2,
-   3
+   3,
+   4
   ],
   "bits": false,
   "default": "notice",
@@ -853,7 +889,7 @@
   "bits": false,
   "default": "everysec",
   "check": "NULL",
-  "apply": "NULL"
+  "apply": "updateAppendFsync"
  },
  {
   "name": "oom-score-adj",
@@ -1684,6 +1720,21 @@
   "apply": "NULL"
  },
  {
+  "name": "cluster-ping-interval",
+  "alias": "",
+  "flags": [
+   "hidden"
+  ],
+  "type": "num",
+  "signed": true,
+  "lo": "0",
+  "hi": "9223372036854775807",
+  "fmt": [],
+  "default": "0",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
   "name": "slowlog-log-slower-than",
   "alias": "",
   "flags": [],
@@ -1807,6 +1858,32 @@
   "hi": "9223372036854775807",
   "fmt": [],
   "default": "512",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "set-max-listpack-entries",
+  "alias": "",
+  "flags": [],
+  "type": "num",
+  "signed": false,
+  "lo": "0",
+  "hi": "9223372036854775807",
+  "fmt": [],
+  "default": "128",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "set-max-listpack-value",
+  "alias": "",
+  "flags": [],
+  "type": "num",
+  "signed": false,
+  "lo": "0",
+  "hi": "9223372036854775807",
+  "fmt": [],
+  "default": "64",
   "check": "NULL",
   "apply": "NULL"
  },

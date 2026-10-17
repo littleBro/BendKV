@@ -115,7 +115,7 @@ def same(cmd, a, b):
 SKIP = {"port", "bind", "appendonly", "requirepass", "save", "client-output-buffer-limit",
         "maxmemory-clients", "timeout", "maxclients", "dir", "dbfilename", "maxmemory",
         "replicaof", "slaveof", "tls-port", "tls-replication", "tls-cluster", "oom-score-adj",
-        "oom-score-adj-values"}
+        "oom-score-adj-values", "activedefrag"}
 
 CASES = [
     ["CONFIG", "GET", "maxmemory"],
@@ -204,7 +204,6 @@ CASES = [
     ["CONFIG", "SET", "hz", "100000"],
     ["CONFIG", "GET", "hz"],
     ["CONFIG", "SET", "hz", "10"],
-    ["CONFIG", "SET", "tls-port", "6390"],
     ["CONFIG", "SET", "maxclients", "0"],
     ["CONFIG", "SET", "unixsocketperm", "777"],
     ["CONFIG", "SET", "list-max-ziplist-size", "-3"],
@@ -212,6 +211,46 @@ CASES = [
     ["CONFIG", "SET", "cluster-announce-hostname", "a" * 256],
     ["CONFIG", "SET", "cluster-announce-hostname", "a_b"],
     ["CONFIG", "SET", "cluster-announce-hostname", "a-b.c"],
+    ["CONFIG", "SET", "cluster-announce-ip", "10.0.0.1"],
+    ["CONFIG", "GET", "cluster-announce-ip"],
+    ["CONFIG", "SET", "cluster-announce-ip", "10.0.0.256"],
+    ["CONFIG", "SET", "cluster-announce-ip", "10.0.0.01"],
+    ["CONFIG", "SET", "cluster-announce-ip", "10.0.0"],
+    ["CONFIG", "SET", "cluster-announce-ip", "10.0.0.1."],
+    ["CONFIG", "SET", "cluster-announce-ip", "::"],
+    ["CONFIG", "SET", "cluster-announce-ip", "::1"],
+    ["CONFIG", "SET", "cluster-announce-ip", "fe80::1:2"],
+    ["CONFIG", "SET", "cluster-announce-ip", "1:2:3:4:5:6:7:8"],
+    ["CONFIG", "SET", "cluster-announce-ip", "1:2:3:4:5:6:7::"],
+    ["CONFIG", "SET", "cluster-announce-ip", "1:2:3:4:5:6:7:8:9"],
+    ["CONFIG", "SET", "cluster-announce-ip", "1::2::3"],
+    ["CONFIG", "SET", "cluster-announce-ip", ":1::2"],
+    ["CONFIG", "SET", "cluster-announce-ip", "1::2:"],
+    ["CONFIG", "SET", "cluster-announce-ip", "12345::"],
+    ["CONFIG", "SET", "cluster-announce-ip", "::ffff:1.2.3.4"],
+    ["CONFIG", "SET", "cluster-announce-ip", "1:2:3:4:5:6:1.2.3.4"],
+    ["CONFIG", "SET", "cluster-announce-ip", "1:2:3:4:5:6:7:1.2.3.4"],
+    ["CONFIG", "SET", "cluster-announce-ip", "::1.2.3"],
+    ["CONFIG", "SET", "cluster-announce-ip", "ABCD:ef01::"],
+    ["CONFIG", "GET", "cluster-announce-ip"],
+    ["CONFIG", "SET", "cluster-announce-ip", ""],
+    ["CONFIG", "SET", "cluster-announce-human-nodename", "node-1.a_b/c"],
+    ["CONFIG", "GET", "cluster-announce-human-nodename"],
+    ["CONFIG", "SET", "cluster-announce-human-nodename", "a b"],
+    ["CONFIG", "SET", "cluster-announce-human-nodename", "a,b"],
+    ["CONFIG", "SET", "cluster-announce-human-nodename", "a\tb"],
+    ["CONFIG", "SET", "cluster-announce-human-nodename", "caf\xc3\xa9"],
+    ["CONFIG", "SET", "cluster-announce-human-nodename", ""],
+    ["CONFIG", "SET", "locale-collate", "C"],
+    ["CONFIG", "GET", "locale-collate"],
+    ["CONFIG", "SET", "locale-collate", "nope"],
+    ["CONFIG", "SET", "locale-collate", "C", "cluster-announce-ip", "x"],
+    ["CONFIG", "SET", "locale-collate", ""],
+    ["CONFIG", "SET", "loglevel", "nothing"],
+    ["CONFIG", "GET", "loglevel"],
+    ["CONFIG", "SET", "loglevel", "notice"],
+    ["CONFIG", "GET", "aof-disable-auto-gc"],
+    ["CONFIG", "GET", "aof-*"],
     ["CONFIG", "SET", "proc-title-template", "{title}"],
     ["CONFIG", "SET", "proc-title-template", "{nope} x"],
     ["CONFIG", "SET", "proc-title-template", "{{ {port}"],
@@ -363,6 +402,33 @@ def main():
     good = sum(both([w.replace("BUSY_PORT", str(busy.getsockname()[1])) for w in c]) for c in CASES)
     busy.close()
     print("%s %d of %d cases" % ("ok  " if good == len(CASES) else "FAIL", good, len(CASES)))
+
+    # CONFIG SET tls-port crashes Redis 7.2.16 built without TLS (bug 3 of
+    # docs/UPSTREAM.md): BendKV alone, held to 7.0.15's refusal
+    want = (b"-ERR CONFIG SET failed (possibly related to argument 'tls-port') - "
+            b"Unable to update TLS configuration. Check server logs.\r\n")
+    got = mine.send("CONFIG", "SET", "tls-port", "6390")
+    if got == want:
+        print("ok   CONFIG SET tls-port: 7.0.15's refusal")
+    else:
+        ok = False
+        print("FAIL CONFIG SET tls-port: %r" % (got[:300],))
+
+    # activedefrag: a Redis built with its own jemalloc, as the reference is
+    # from its tarball, turns it on; BendKV has no defragmentation and
+    # refuses it as a Redis built without that jemalloc does (README's
+    # Memory): BendKV alone, held to that refusal, then both turn it off
+    why = (b"-ERR CONFIG SET failed (possibly related to argument 'activedefrag') - Active defragmentation "
+           b"cannot be enabled: it requires a Redis server compiled with a modified Jemalloc like the one "
+           b"shipped by default with the Redis source distribution\r\n")
+    for v in ("yes", "YES"):
+        got = mine.send("CONFIG", "SET", "activedefrag", v)
+        if got == why:
+            print("ok   CONFIG SET activedefrag %s: refused" % v)
+        else:
+            ok = False
+            print("FAIL CONFIG SET activedefrag %s: %r" % (v, got[:300]))
+    ok &= both(["CONFIG", "SET", "activedefrag", "no"]) and both(["CONFIG", "GET", "activedefrag"])
 
     # random values for the parameters that change
     facts = json.loads((HERE / "tools" / "data" / "redis-configs.json").read_text())
