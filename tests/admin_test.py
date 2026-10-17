@@ -111,7 +111,7 @@ def shape5(text):
     """a drawing of VERSION 5: its lines' widths, its characters other
     than braille's, its last line"""
     lines = text.split("\n")
-    odd = sorted({c for c in text if not ("⠀" <= c <= "⣿") and c != "\n"} - set("Georg Nees - schotter, plotter on paper, 1968. Redis ver. 7.0.15"))
+    odd = sorted({c for c in text if not ("⠀" <= c <= "⣿") and c != "\n"} - set("Georg Nees - schotter, plotter on paper, 1968. Redis ver. 7.2.16"))
     return [len(lines), sorted({len(l) for l in lines[:-3]}), odd, lines[-2:]]
 
 

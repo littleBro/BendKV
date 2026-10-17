@@ -1146,6 +1146,27 @@ def waits.put(p: Nat & Nat, srv: S.Srv) -> S.Srv:
 def waits.count(+ws: Waits, srv: S.Srv) -> S.Srv:
   waits.put(waits.len(ws, 0n, 0n), srv)
 
+# the keys the clients of ws wait on, each with its database once (the
+# database's number and a ':' before the key), for INFO's
+# total_blocking_keys: counted only for a batch that asks for INFO
+# (Facts), not each time a client starts or stops to wait
+def bkeys.put(+d: String, +ks: List<&2, String>, h: KV.Trie<Nat>) -> KV.Trie<Nat>:
+  match ks:
+    case Nil{}:
+      h
+    case Con{+k, +rest}:
+      bkeys.put(d, rest, KV.set(Nat, h, d ++ k, 0n))
+
+def bkeys.waits(+ws: Waits, h: KV.Trie<Nat>) -> KV.Trie<Nat>:
+  match ws:
+    case WaitNone{}:
+      h
+    case WaitOn{id, back, c0, c1, +b, argv, code, +db, until, cmds, codes, av, +rest}:
+      bkeys.waits(rest, bkeys.put(Nat.show(db) ++ ":", S.blk.keys(b), h))
+
+def waits.bkeys(+ws: Waits, srv: S.Srv) -> S.Srv:
+  S.srv.bkeys(srv, KV.size(Nat, bkeys.waits(ws, KV.empty(Nat))))
+
 def waits.length(ws: Waits, +n: Nat) -> Nat:
   match ws:
     case WaitNone{}:
@@ -7702,6 +7723,14 @@ def bg.noev(+id: Nat, on: Bool, +code: Nat, g: LRun) -> LRun:
     case LHeld{h}:
       LHeld{h}
 
+# NO-EVICT off, as RESET turns it off in Redis 7.2 (clearClientConnectionState)
+def bg.noev.off(+id: Nat, g: LRun) -> LRun:
+  match g:
+    case LRun{rs, es, conn, srv, ds, ws, up, tx, pb}:
+      LRun{rs, es, conn, srv, ds, ws, up, tx, ps.noev(id, False{}, pb)}
+    case LHeld{h}:
+      LHeld{h}
+
 # the client's name, database and protocol written to the registry,
 # after a command that may set them (CLIENT SETNAME, HELLO, SELECT, RESET)
 def bg.conned(g: LRun) -> LRun:
@@ -10083,7 +10112,7 @@ def bg.cmd(+id: Nat, +back: Chan(Ans), +inb: Nat, sh: Sh, +c: R.Cmd, +code: Nat,
     case ShUnwatch{}:
       bg.one(c, code, bg.unwatch(id, g))
     case ShReset{}:
-      bg.user(id, "default", bg.conned(bg.one(c, code, bg.trk.off(id, bg.unsub.all(id, bg.close(id, g))))))
+      bg.user(id, "default", bg.conned(bg.one(c, code, bg.noev.off(id, bg.trk.off(id, bg.unsub.all(id, bg.close(id, g)))))))
     case ShQueue{}:
       bg.queue(c, code, a, g)
     case ShRefuse{}:
@@ -11620,8 +11649,8 @@ def group_req(+log: Bool, q: Req, g: Grp) -> Grp:
       grp.req(log, cn, job, back, tl, inb, raw, g0)
     case SubReq{+cn, job, back, tl, +inb, raw} g0:
       grp.sub(cn, job, back, inb, raw, g0)
-    case Facts{live} Grp{outs, es, +srv, ds, ws, up, tx, +pb}:
-      Grp{outs, es, srv.facts(facts.held(pb, srv), srv, live), ds, ws, up, tx, pb}
+    case Facts{live} Grp{outs, es, +srv, ds, +ws, up, tx, +pb}:
+      Grp{outs, es, waits.bkeys(ws, srv.facts(facts.held(pb, srv), srv, live)), ds, ws, up, tx, pb}
     case Tick{+ms} Grp{outs, es, srv, +ds, ws, up, tx, +pb}:
       +p = ps.pz(pb)
       grp.heed(grp.limit(ms, group.tick.if(Nat.is_le(2n, ps.down(pb)), pz.on(p), pz.over(p, R.ds.now(ds)), outs, es, srv, ms, ds, ws, up, tx, pb)))
@@ -14105,13 +14134,22 @@ def grp.acl.call(on: Bool, +code: Nat, +raw: String, +g: Grp) -> U.Verdict:
     case Grp{outs, es, +srv, ds, ws, up, tx, +pb}:
       grp.acl.call.on(Bool.and(on, ps.acl.on(pb)), code, raw, srv, pb)
 
-def sc.acl.why(+v: U.Verdict) -> String:
+# the user a script's calls run as: its caller's (scriptCall's)
+def grp.scr.user(g: Grp) -> String:
+  match g:
+    case Grp{outs, es, srv, ds, ws, up, tx, +pb}:
+      ps.user(ps.scr.who(pb), pb)
+
+# a call's ACL refusal (scriptVerifyACL): "ACL failure in script: " and
+# the refusal's text, not verbose (getAclErrorMessage): for a command,
+# the user's name and the command's full name (the verdict's object)
+def sc.acl.why(+v: U.Verdict, g: Grp) -> String:
   match v:
     case U.VOk{}:
       ""
-    case U.VNo{+why, at, obj}:
-      "ERR The user executing the script " ++ Bool.pick(String, Nat.is_eq(why, 1n), "can't run this command or subcommand",
-        Bool.pick(String, Nat.is_eq(why, 2n), "can't access at least one of the keys mentioned in the command arguments", "can't publish to the channel mentioned in the command"))
+    case U.VNo{+why, at, +obj}:
+      "ERR ACL failure in script: " ++ Bool.pick(String, Nat.is_eq(why, 1n), "User " ++ grp.scr.user(g) ++ " has no permissions to run the '" ++ obj ++ "' command",
+        Bool.pick(String, Nat.is_eq(why, 2n), "No permissions to access a key", "No permissions to access a channel"))
 
 # the caller's line in the entry (addACLLogEntry's server.script_caller):
 # the client of the script command's wait, in its batch's connection,
@@ -14304,12 +14342,14 @@ def sc.busy.group(qs: List<&1, Req>, t: U32 & U32, +aof: Bool, g: Grp) -> Bz:
     case Grp{outs, es, srv, ds, ws, up, tx, pb}:
       Bz{outs, ws, up, group_at(aof, sc.noticks(qs), s0, u0, Grp{Nil{}, es, srv, ds, WaitNone{}, Nil{}, tx, pb})}
 
-# whether the command of an ACL check is known (redis.acl_check_cmd)
+# whether the command of an ACL check is known (redis.acl_check_cmd),
+# and then whether its number of words passes its arity ("!" when not:
+# Redis 7.2 checks it, commandCheckArity, before the user's rules)
 def sc.acl.ans(known: Bool, +k: Nat, +raw: String, +g: Grp) -> String:
   match known g:
     case True{} Grp{outs, es, +srv, ds, ws, up, tx, +pb}:
       +id = ps.scr.who(pb)
-      Bool.pick(String, U.verdict.ok(bg.acl.check(S.srv.restricted(srv, id), id, srv, pb, k, AvRaw{raw, 0n})), ":1\r\n", ":0\r\n")
+      Bool.pick(String, R.stat.arity.ok(R.code.key(k), List.length(&2, String, av.first(P.argvs(raw)))), Bool.pick(String, U.verdict.ok(bg.acl.check(S.srv.restricted(srv, id), id, srv, pb, k, AvRaw{raw, 0n})), ":1\r\n", ":0\r\n"), "!")
     case _ g0:
       "-"
 
@@ -14335,7 +14375,7 @@ def sc.next(+word: U32, sc: Sc, +aof: Bool, +pid: U32, g: Grp, +reqs: Chan(Req))
     sc.loop(st, sc, aof, pid, g, reqs)
 
 # the engine goes on, or is told to end the script once SCRIPT KILL asked
-# (logged as Redis logs it)
+# (logged as Redis logs it, a notice)
 @unsafe
 def sc.go.if(kill: Bool, +sc: Sc, +aof: Bool, +pid: U32, g: Grp, +reqs: Chan(Req)) -> IO(Grp):
   match kill:
@@ -14343,7 +14383,7 @@ def sc.go.if(kill: Bool, +sc: Sc, +aof: Bool, +pid: U32, g: Grp, +reqs: Chan(Req
       sc.next(1, sc, aof, pid, g, reqs)
     case True{}:
       do IO<Grp>:
-        Unit <- log(sc.lg(sc), 3, "Lua script killed by user with SCRIPT KILL.")
+        Unit <- log(sc.lg(sc), 2, "Lua script killed by user with SCRIPT KILL.")
         sc.next(2, sc, aof, pid, g, reqs)
 
 @unsafe
@@ -14580,7 +14620,8 @@ def sc.log(+level: U32, +msg: String, sc: Sc, +aof: Bool, +pid: U32, g: Grp, +re
 # redis.acl_check_cmd's check (luaRedisAclCheckCmdPermissionsCommand):
 # ":1" when its caller's user may run the command with its arguments,
 # ":0" when it may not (ACLCheckAllUserCommandPerm: no entry in the log),
-# "-" when the command is not known
+# "-" when the command is not known, "!" when its arity does not allow
+# its number of words
 @unsafe
 def sc.acl(+raw: String, sc: Sc, +aof: Bool, +pid: U32, g: Grp, +reqs: Chan(Req)) -> IO(Grp):
   +x = g
@@ -14678,7 +14719,7 @@ def sc.call.run(+c: R.Cmd, +code: Nat, +r3: Bool, +raw: String, +sc: Sc, +aof: B
   +v = grp.acl.call(Bool.not(Bool.or(unknown, Bool.or(arity, noscript))), code, raw, x)
   +clean = U32.is_eq(U32.and(grp.sc.st(x), 2), 0)
   +xb = sc.xblock.is(Nat.is_eq(key, R.stat.top(214n)), raw)
-  sc.call.at(sc.call.why(unknown, arity, noscript, sc.acl.why(v), Bool.and(sc.ro(sc), R.stat.pausable(key)), Bool.and(grp.misconf(x), Bool.and(clean, R.stat.write(key))), Bool.and(Bool.not(sc.aoom(sc)), Bool.and(grp.oom(x), Bool.and(clean, R.stat.denyoom(key))))), sc.xblock.cmd(xb, raw, c), Bool.pick(Nat, xb, R.stat.code(key, 2n), code), r3, raw, sc, aof, pid, sc.acl.log(v, sc, x), reqs)
+  sc.call.at(sc.call.why(unknown, arity, noscript, sc.acl.why(v, x), Bool.and(sc.ro(sc), R.stat.pausable(key)), Bool.and(grp.misconf(x), Bool.and(clean, R.stat.write(key))), Bool.and(Bool.not(sc.aoom(sc)), Bool.and(grp.oom(x), Bool.and(clean, R.stat.denyoom(key))))), sc.xblock.cmd(xb, raw, c), Bool.pick(Nat, xb, R.stat.code(key, 2n), code), r3, raw, sc, aof, pid, sc.acl.log(v, sc, x), reqs)
 
 @unsafe
 def sc.call.of(b: P.Batch, +r3: Bool, +raw: String, sc: Sc, +aof: Bool, +pid: U32, g: Grp, +reqs: Chan(Req)) -> IO(Grp):
@@ -19902,7 +19943,7 @@ def run(+items: List<&2, C.CItem>, +post: Bool, +aof: Maybe<&2, String>, +sync: 
     +sup : Bool <- start.sup.env(items, lg)
     Unit <- start.refused(String.is_empty(T.refusal(items, sup)), T.refusal(items, sup), lg)
     Unit <- log(lg, 3, "oO0OoO0OoO0Oo BendKV is starting oO0OoO0OoO0Oo")
-    Unit <- log(lg, 3, "BendKV version=" ++ T.version() ++ ", Redis 7.0.15 commands, bits=64, pid=" ++ U32.show(pid) ++ ", just started")
+    Unit <- log(lg, 3, "BendKV version=" ++ T.version() ++ ", Redis 7.2.16 commands, bits=64, pid=" ++ U32.show(pid) ++ ", just started")
     Unit <- log(lg, 3, Bool.pick(String, bare, "Warning: no config file specified, using the default config. In order to specify a config file use " ++ prog ++ " /path/to/redis.conf", "Configuration loaded"))
     Unit <- log.lines(lm, 3, T.warnings(items))
     tcp : List<&1, Listener> <- listen.start(U32.is_eq(port, 0), T.addrs(items), port, lm)

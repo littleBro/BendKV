@@ -9149,6 +9149,67 @@ its weight is 2^48, past a Nat, and the server stops. Nothing read six; the firs
 version of a stream's times did, and stopped at the first payload with a pending entry.
 The times are read as two words of four bytes, and the comment says five.
 
+## 3zzzv. Scripts as Redis 7.2.16 runs them
+
+**What changed** (#128, kind I: `deps/redis`, `src/lua/engine.c`, `src/server.bend`,
+`src/rdb.bend`). Scripts and functions answer as Redis 7.2.16's do, but for what waits on
+the move's other kinds (below).
+- **The Lua.** `deps/redis` is 7.2.16's Lua and helpers, as Redis ships them but for the
+  casts of numbers to integers (section 3zzzd). What 7.2 brings: `unpack`'s count of
+  results checked without an overflow (`lbaselib.c`, CVE-2025-46817); the lexer's long
+  brackets (`llex.c`, CVE-2025-46819); sizes as `size_t` in cjson's and strbuf's appends.
+  `lua_bit.c`, `lparser.c` and `ltable.c` were 7.2's already (section 3zzzd).
+- **The sandbox.**
+  - `newproxy`, `setfenv` and `getfenv` leave the globals. Redis lets them back with
+    `lua-enable-deprecated-api yes`, a hidden parameter that only the start sets, `no` by
+    default; BendKV keeps it at `no`.
+  - The metatables of the basic types are read-only, as the globals are (CVE-2025-46818).
+    A string's is the one Lua sets, and `getmetatable('').__index.upper = f` now fails
+    with "Attempt to modify a readonly table", in EVAL's state and in the functions'.
+- **Texts and checks.**
+  - `redis.set_repl()` called with another count than one: "redis.set_repl() requires
+    one argument." (7.0 said two).
+  - `redis.acl_check_cmd` checks the command's arity: "Wrong number of args for
+    redis.acl_check_cmd()". The engine asks the server, which answers `!` when the arity
+    does not allow the call's words (kind 4 of `src/script.bend`).
+  - A call that ACL refuses fails with "ACL failure in script: " and Redis's text for the
+    refusal, not verbose (`getAclErrorMessage`): "User <user> has no permissions to run
+    the '<command>' command", "No permissions to access a key" or "No permissions to
+    access a channel" (`sc.acl.why`). The user is the caller's, the command its full
+    name (`config|get`).
+  - An error a script raises goes out on one line, `\r` and `\n` as spaces
+    (`addReplyErrorSdsExSafe`), as an error it returns did already.
+  - FUNCTION RESTORE refuses a library in the format of 7.0's release candidates (type
+    246): "Pre-GA function format not supported" (`lib.kind`). An RDB file's library in
+    that format is still read: Redis 7.2.16 stops its start at one, and the RDB file is
+    the move's kind E.
+  - SCRIPT KILL's line in the log is a notice (`*`), not a warning (`#`).
+- **What was so already.**
+  - Time stands still while a script runs, as 7.2's `commandTimeSnapshot` holds it:
+    TIME, SET's EX and PX, EXPIRE, TTL and the keys' expiry all read the group's time.
+  - FUNCTION LIST's unknown argument was on one line. The lines of SCRIPT HELP and
+    FUNCTION HELP are 7.2.16's, and the memory of scripts and functions is counted as
+    7.2.16's `dictMemUsage` counts it.
+  - 7.2 no longer checks that `math.random` and `math.randomseed` run in a script, and
+    no script reaches them outside one: a library's load has no `math`.
+- **What waits on the other kinds.**
+  - A blocking command in a script. 7.2.16's table drops `noscript` from BLPOP and the
+    other blocking commands (kind A). A script's call already runs as EXEC runs what it
+    queued, without waiting (`sc.run.call`), so it needs only the table.
+  - `redis.REDIS_VERSION` and `REDIS_VERSION_NUM`, and HELP's last line, "Print this
+    help." (kind A).
+  - Lua's numbers in `redis.call`, and a script's double, in `fpconv_dtoa`'s form (kind C).
+  - The order of pushes, and the keys that a script's reads track (kind F).
+
+**Tests.** `script_test` and `function_test`, against 7.2.16. Each line that differs
+belongs to another kind: the version and HELP's last line (A), Lua's doubles (C), the
+pushes and tracking (F), NOPERM's texts (G), ACL LOG's new fields and CLIENT LIST's
+`lib-name` and `lib-ver` (B and H), FUNCTION DUMP's version and the RESTORE of a payload
+of version 11 (E).
+
+**What it costs.** Nothing on a request's path: the metatables are protected when a state
+is made, and the texts are made only for an error or a refusal.
+
 ## 3zzzw. Lists in pieces, as a quicklist of listpacks
 
 **What was left** (section 3zh). A list was a deque of two stacks of its elements: a cell

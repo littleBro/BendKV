@@ -64,9 +64,8 @@ verdict:
 build: build/bendkv
 
 # The emitted C is compiled here rather than by Bend, with the Lua engine
-# beside it: Redis 7.0.15's Lua and three of its helpers (deps/redis,
-# vendored as Redis ships them but for their casts of numbers, two
-# fixes of CVEs and Redis 7.2's test of a table's index: NOTICE,
+# beside it: Redis 7.2.16's Lua and three of its helpers (deps/redis,
+# vendored as Redis ships them but for their casts of numbers: NOTICE,
 # built once into build/deps with Redis's flags),
 # whose headers src/lua/engine.c includes (tools/sanitize.sh and
 # tools/pgo_build.sh build the same sources with their own flags)

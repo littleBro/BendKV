@@ -3569,7 +3569,9 @@ def lib.one(s: String) -> LibR:
 
 # FUNCTION RESTORE's read of a payload that verify takes
 # (functionRestoreCommand): while more than its last ten bytes (the
-# version and the CRC64) are left, a type, FUNCTION2, and a library. Lib is a read under way (the bytes left, the codes read, the
+# version and the CRC64) are left, a type, FUNCTION2, and a library;
+# FUNCTION is refused ("Pre-GA function format not supported", as
+# 7.2.16's). Lib is a read under way (the bytes left, the codes read, the
 # newest first) or its end: the codes, and the error's text that stopped
 # the read ("" for none). Redis makes each library as it reads it, so a
 # read that fails after some answers a failure to make one of them first:

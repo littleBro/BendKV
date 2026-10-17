@@ -5,11 +5,12 @@ BendKV is licensed under the Apache License, Version 2.0 (LICENSE). It
 includes the following third-party software, as its authors ship it, and
 code ported from it, under the licenses that come with it.
 
-deps/redis: the Lua engine of Redis 7.0.15 and three of Redis's helpers,
-built into the server for EVAL and its kin (src/lua/engine.c, which is
-ported from Redis's script_lua.c, eval.c and script.c).
+deps/redis: the Lua engine of Redis 7.2.16 and three of Redis's helpers,
+built into the server for EVAL, FUNCTION and their kin (src/lua/engine.c,
+which is ported from Redis's script_lua.c, eval.c, script.c,
+function_lua.c and functions.c).
 
-- Redis 7.0.15 (deps/redis/src: resp_parser.c, rand.c and their
+- Redis 7.2.16 (deps/redis/src: resp_parser.c, rand.c and their
   headers; server.h, a stand-in with what resp_parser.c takes from
   Redis's server.h and util.c), and Redis's changes to Lua: Copyright
   (c) 2006-2020, Salvatore Sanfilippo, and Copyright (c) 2009-2021, Redis
@@ -28,19 +29,15 @@ ported from Redis's script_lua.c, eval.c and script.c).
 - SHA-1 in C (deps/redis/src/sha1.c), by Steve Reid: public domain.
 
 deps/redis/src/config.h and solarisfixes.h are BendKV's: stand-ins for
-Redis's, which give sha1.c the byte order and nothing. Three changes to
-Lua and its libraries. Every conversion of a number to a C integer
+Redis's, which give sha1.c the byte order and nothing. One change to Lua
+and its libraries: every conversion of a number to a C integer
 (luaconf.h's lua_number2int and lua_number2integer, and casts in
 lstrlib.c, lua_struct.c, lua_cmsgpack.c and lua_cjson.c) goes through
 three functions added to luaconf.h, which give the results of Redis's
-x86-64 builds (gcc) where C leaves a plain cast undefined. Two fixes
-of Redis's, which Ubuntu 24.04's Redis 7.0.15 carries as it applies
-them: CVE-2024-31449 (lua_bit.c, Redis's commit 1f7c148) and
-CVE-2025-49844 (lparser.c, Redis's commit d5728cb). And luaH_getnum's
-test of an integer key against a table's array (ltable.c), which
-subtracted 1 from the key, as Redis 7.2's ltable.c writes it: the same
-answers, without the overflow that C leaves undefined for the smallest
-int.
+x86-64 builds (gcc) where C leaves a plain cast undefined. The rest is
+Redis 7.2.16's as it ships it, with its fixes of CVE-2024-31449
+(lua_bit.c), CVE-2025-49844 (lparser.c), CVE-2025-46817 (lbaselib.c) and
+CVE-2025-46819 (llex.c).
 
 Ported from Redis 7.0.15: BSD 3-Clause License (deps/redis/COPYING),
 Copyright (c) 2006-2020, Salvatore Sanfilippo, Copyright (c) 2009-2021,
@@ -111,6 +108,22 @@ parts of it are written from 7.2.16's sources:
 
 - Tools: tools/redis_ref.sh, which builds Redis 7.2.16 from its tarball
   for the tests to compare with (nothing of Redis is kept here).
+- Tables: tools/data/redis-commands.json, COMMAND INFO and COMMAND DOCS of
+  Redis 7.2.16's commands (from src/commands/*.json, as a running server
+  answers them), and the tables tools/gen_commands.py writes from it into
+  src/command.bend, src/acl.bend and src/redis.bend.
+- Texts and fields: the HELP replies, CLIENT LIST's fields (networking.c),
+  INFO's fields and their order, its listeners and its debug section
+  (server.c, connection.c), LOLWUT's line, and the version HELLO, INFO and
+  Lua's redis.REDIS_VERSION give (src/redis.bend, src/info.bend,
+  src/session.bend, src/lua/engine.c).
+- Scripts: src/lua/engine.c, from script_lua.c, eval.c and function_lua.c
+  (the deprecated builtins and lua-enable-deprecated-api, the protection
+  of the basic types' metatables of CVE-2025-46818, redis.set_repl()'s
+  and redis.acl_check_cmd()'s checks, math.random outside a run, an
+  error's text on one line); src/server.bend, from script.c (a call's
+  ACL failure) and script_lua.c (SCRIPT KILL's line in the log); and
+  src/rdb.bend, from functions.c (FUNCTION RESTORE of the pre-GA format).
 
 Bend (bend-patches/): patches to the Bend compiler and its runtime
 (github.com/bendlang/bend at 1cce499, Bend 2.0.35), Copyright 2026

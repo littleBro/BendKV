@@ -78,11 +78,12 @@ in about a minute.
 `src/command.bend`), the doubles in software (`src/float.bend`, tested against glibc as
 well), what HyperLogLogs, GEO and LOLWUT compute (`src/hll.bend`, `src/geo.bend`,
 `src/lolwut.bend`) and DUMP's payloads (`src/rdb.bend`), all tested against
-`redis-server`; the Lua engine of scripts: Redis 7.0.15's own Lua 5.1.5 and its libraries
+`redis-server`; the Lua engine of scripts: Redis 7.2.16's own Lua 5.1.5 and its libraries
 (`deps/redis`, C, as Redis ships them but for their casts of numbers to integers, which
-give Redis's results defined in C, two fixes of CVEs that the reference carries, and Redis 7.2's test of a table's index, defined in C: NOTICE) and the glue that drives it (`src/lua/engine.c`,
-ported from Redis's `script_lua.c`, `eval.c` and `script.c`, behind the effects of
-`src/script.bend`); clang, libc and the OS. This is not
+give Redis's results defined in C: NOTICE) and the glue that drives it
+(`src/lua/engine.c`, ported from Redis's `script_lua.c`, `eval.c`, `script.c`,
+`function_lua.c` and `functions.c`, behind the effects of `src/script.bend`); clang, libc
+and the OS. This is not
 end-to-end verification in the sense of CompCert or seL4; see
 [docs/FINDINGS.md](docs/FINDINGS.md), section 1.
 
@@ -453,8 +454,9 @@ translation stays in the trusted base.
     its caller's user), BUSY past `busy-reply-threshold`, FUNCTION KILL, and FUNCTION
     STATS while it runs. FCALL_RO refuses a function that may write.
   - **DUMP and RESTORE.** FUNCTION DUMP writes the libraries in Redis's payload, without
-    LZF, as DUMP does. FUNCTION RESTORE reads Redis's payloads, with LZF and the records
-    of 7.0's release candidates, with APPEND, REPLACE and FLUSH.
+    LZF, as DUMP does. FUNCTION RESTORE reads Redis's payloads, with LZF, with APPEND,
+    REPLACE and FLUSH; it refuses the records of 7.0's release candidates, as Redis 7.2.16
+    does.
   - **Persistence.** The libraries go to the append-only file as the FUNCTION commands
     that made them. A rewrite starts with the FUNCTION LOAD of each, SAVE writes them
     into the RDB file, and the start makes them from either file, as Redis does. INFO's
@@ -580,16 +582,20 @@ translation stays in the trusted base.
   memory and choose what is evicted (below); `save`, `dbfilename` and `rdbchecksum`
   act on the RDB file (Persistence, below); the other parameters are kept and read
   back but tune nothing, since BendKV has no replication or encodings for them to tune.
-- **Introspection:** INFO with Redis 7.0.15's sections and fields, in Redis's order,
+- **Introspection:** INFO with Redis 7.2.16's sections and fields, in Redis's order,
   picked as Redis picks them (none, `default`, `all`, `everything`, any names in any
   case): server, clients, memory, persistence, stats, replication, CPU, modules,
-  errorstats, cluster, keyspace. The values are BendKV's own where it has them: its
-  process, its parameters, its connections, commands and bytes (with the instantaneous
-  rates sampled every 100 ms, as Redis's cron samples them), its memory (`used_memory` is
-  what its heap's live values hold, as Redis's is what its allocator handed out; Memory,
-  below), its keys, its evictions, its append-only file, its scripts and functions (the
-  engine's memory, the scripts cached, the functions and libraries); for what BendKV does
-  not have (replication, forks) they are what Redis shows when it has none. The
+  errorstats, cluster, keyspace, and debug when it is named. The values are BendKV's own
+  where it has them: its process, its listeners, its parameters, its connections,
+  commands and bytes (with the instantaneous rates sampled every 100 ms, as Redis's cron
+  samples them), its memory (`used_memory` is what its heap's live values hold, as Redis's
+  is what its allocator handed out; Memory, below), its keys and those clients wait on,
+  its evictions, the calls ACL refused, its append-only file, its scripts and functions
+  (the engine's memory, the scripts cached, the functions and libraries); for what BendKV
+  does not have (replication, forks) they are what Redis shows when it has none. Where
+  BendKV differs: its event loop is not timed yet, so the `eventloop_*` fields read 0;
+  `listener0` lists all of bind's addresses, where Redis lists only as many as it listens
+  on. The
   statistics per command count as Redis counts them: each command's and subcommand's
   calls, the calls refused before they run (a wrong number of arguments by Redis's arity,
   a client that must authenticate first, a command refused for memory) and the calls
@@ -989,7 +995,7 @@ src/        the server
   script.bend   the effects of the Lua engine (src/lua/engine.c)   tested
   server.bend   TCP, connections, the database actor, the log      tested
   lua/          the engine's C: Redis's Lua driven in steps         tested
-deps/redis/ Redis 7.0.15's Lua 5.1.5 with its libraries, and three of its helpers, as Redis ships them (NOTICE: their licenses, and the two changes)
+deps/redis/ Redis 7.2.16's Lua 5.1.5 with its libraries, and three of its helpers, as Redis ships them (NOTICE: their licenses, and the one change)
 proof/      LAWS.bend (the laws), PROOF.bend (their proofs), SPEC.bend (the commands on the trie alone)
 tests/      smoke (the pure checks), float, start, differential, expiry, protocol, session, the end of a connection, CONFIG, INFO, statistics per command, COMMAND, SCAN, numbers at their edges, BITFIELD, hash, list, set, sorted set, SORT, HyperLogLog, GEO, DUMP and RESTORE, blocking, transaction, Pub/Sub, CLIENT, MONITOR, timing of calls, CLIENT PAUSE, Lua scripts, administrative commands, AUTH, ACL, RESP3, maxmemory, robustness, stalled reader, concurrency, AOF, AOF crash, AOF rewrite and RDB file tests
 bench/      in-process benchmarks of the map, the core and channels, and `make bench` against Redis
@@ -1030,7 +1036,7 @@ away.
 | `src/float.bend` | 1,200 |  | no |
 | `src/geo.bend` | 870 |  | no |
 | `src/hll.bend` | 1,400 |  | no |
-| `src/info.bend` | 2,600 |  | no |
+| `src/info.bend` | 2,900 |  | no |
 | `src/lolwut.bend` | 470 |  | no |
 | `src/rdb.bend` | 3,100 |  | no |
 | `src/resp.bend` | 980 |  | no |
