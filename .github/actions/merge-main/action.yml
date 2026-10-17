@@ -1,0 +1,25 @@
+# On a run started by hand: main's commit, as the run's first job found it
+# (its changes job's output), merged into the branch checked out, so that
+# every job of the run tests the same tree, the branch as it would merge.
+# The checkout needs main's history (fetch-depth: 0). A conflict fails the
+# job: merge main into the branch first.
+name: The branch merged with main
+description: Merges main's commit into the branch checked out
+inputs:
+  main:
+    description: main's commit
+    required: true
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        MAIN: ${{ inputs.main }}
+      run: |
+        git fetch -q origin "$MAIN"
+        if ! git -c user.name=CI -c user.email=ci@invalid merge -q --no-edit "$MAIN"; then
+          git merge --abort || true
+          echo "::error::the branch does not merge with main ($MAIN) without a conflict: merge main into it first"
+          exit 1
+        fi
+        echo "testing $(git rev-parse --short HEAD), the branch merged with main $(git rev-parse --short "$MAIN")"

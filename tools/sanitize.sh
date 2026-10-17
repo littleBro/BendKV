@@ -43,6 +43,9 @@
 #
 #   BEND="bun ../bend-patched/bend2/main.ts" PORT=6380 REDIS_PORT=6390 sh tools/sanitize.sh
 #
+# SANS picks the builds, both by default (asan, tsan): CI runs each in a
+# job of its own (SANS=asan, SANS=tsan).
+#
 # Needs clang 19 with its sanitizers' runtimes (libclang-rt-19-dev on
 # Ubuntu), llvm-symbolizer for the reports' stacks, redis-server, redis-cli
 # and redis-benchmark 7.0.15, and python3. CC is split into words, so it
@@ -53,6 +56,13 @@ CC=${CC:-clang-19}
 PORT=${PORT:-6380}
 REDIS_PORT=${REDIS_PORT:-6390}
 ROUNDS=${ROUNDS:-1000}
+SANS=${SANS:-asan tsan}
+for san in $SANS; do
+  case $san in
+    asan|tsan) ;;
+    *) echo "no build $san: asan, tsan" >&2; exit 2 ;;
+  esac
+done
 OUT=build/sanitize
 REP=$PWD/$OUT/reports
 rm -rf "$OUT"
@@ -140,7 +150,7 @@ FLAGS="-std=c11 -O1 -gline-tables-only -fno-omit-frame-pointer"
 # fiber annotations (src/lua/engine.c)
 DEPS_SRC="deps/redis/deps/lua/src/*.c deps/redis/src/*.c"
 DEPS_FLAGS="-I deps/redis/deps/lua/src -I deps/redis/src -DENABLE_CJSON_GLOBAL -DREDIS_STATIC= -DLUA_USE_MKSTEMP -D_GNU_SOURCE"
-for san in asan tsan; do
+for san in $SANS; do
   echo "== $san: the build"
   if [ "$san" = asan ]; then
     $CC $FLAGS -fsanitize=address,undefined -fsanitize-address-use-after-return=never \
