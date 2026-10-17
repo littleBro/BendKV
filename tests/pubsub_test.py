@@ -17,9 +17,11 @@ QUIT of a subscribed client, a client that closes its connection, CLIENT
 REPLY OFF and SKIP (the replies of SUBSCRIBE and its kin sent all the
 same), SUBSCRIBE inside a transaction (and SSUBSCRIBE refused there),
 batches that subscribe and unsubscribe at once, PUBSUB's subcommands and
-their errors, a large message, and the statistics of INFO. Replies Redis
-sends in the order of a hash table (UNSUBSCRIBE of all, PUBSUB CHANNELS)
-are compared sorted.
+their errors, a large message, and the statistics of INFO; then keyspace
+events, each class and mask, and a CONFIG SET of the classes that counts
+for the commands after it in its pipeline and in its transaction. Replies
+Redis sends in the order of a hash table (UNSUBSCRIBE of all, PUBSUB
+CHANNELS) are compared sorted.
 
 The checks under load: 20 subscribers of a channel and a pattern each get
 1000 messages in order from 4 publishers; 50 subscribers close their
@@ -33,7 +35,7 @@ import sys
 import threading
 import time
 
-from blocking_test import Client
+from blocking_test import Client, enc
 
 
 def stats(r, *names):
@@ -449,6 +451,15 @@ def keyspace(port, log):
     r.cmd("CONFIG", "SET", "notify-keyspace-events", "")
     ev("off", "SET", "off", "1")
     log("19 get", r.cmd("CONFIG", "GET", "notify-keyspace-events"))
+    # a CONFIG SET of the classes counts for the commands after it in its
+    # pipeline and in its transaction: pl's first SET is heard, and tx's
+    # second
+    r.raw(enc(["CONFIG", "SET", "notify-keyspace-events", "KEA"]) + enc(["SET", "pl", "1"])
+          + enc(["CONFIG", "SET", "notify-keyspace-events", ""]) + enc(["SET", "pl", "2"]))
+    log("19 pipeline", reads(r, 4), *events(r, sub, "PING"))
+    r.raw(enc(["MULTI"]) + enc(["SET", "tx", "1"]) + enc(["CONFIG", "SET", "notify-keyspace-events", "KEA"])
+          + enc(["SET", "tx", "2"]) + enc(["CONFIG", "SET", "notify-keyspace-events", ""]) + enc(["EXEC"]))
+    log("19 transaction", reads(r, 6), *events(r, sub, "PING"))
     sub.close()
     r.cmd("FLUSHALL")
     r.close()

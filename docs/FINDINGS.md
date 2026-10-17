@@ -9162,7 +9162,9 @@ the move's other kinds (below).
 - **The sandbox.**
   - `newproxy`, `setfenv` and `getfenv` leave the globals. Redis lets them back with
     `lua-enable-deprecated-api yes`, a hidden parameter that only the start sets, `no` by
-    default; BendKV keeps it at `no`.
+    default. BendKV reads it as the start does, before any Lua state is made
+    (`Engine.deprecated`): EVAL's state and the functions' both keep them or both leave
+    them out, a library loaded from the files at the start too (`tests/start_test.py`).
   - The metatables of the basic types are read-only, as the globals are (CVE-2025-46818).
     A string's is the one Lua sets, and `getmetatable('').__index.upper = f` now fails
     with "Attempt to modify a readonly table", in EVAL's state and in the functions'.
@@ -9183,6 +9185,16 @@ the move's other kinds (below).
     246): "Pre-GA function format not supported" (`lib.kind`). An RDB file's library in
     that format stops the start, as Redis 7.2.16's does (kind E: section 3zzzzc).
   - SCRIPT KILL's line in the log is a notice (`*`), not a warning (`#`).
+- **Lua's numbers** (with kind C's `fpconv_dtoa`, section 3zzzzh).
+  - A number passed to `redis.call` is written as `luaArgsToRedisArgv` writes it. An
+    integer that a long long holds within 2^62 is written as one (`double2ll`); any other
+    as `fpconv_dtoa` writes it. So `3.14` and `0.1`, where 7.0's `%.17g` gave
+    `3.1400000000000001`; `-0` is `0`, and a NaN is `fpconv_dtoa`'s `-nan` (0/0 on x86-64).
+  - A script's `{double=...}` reply is `d2string`'s, as `addReplyDouble` writes it, in RESP2
+    and RESP3: `0.1`, `nan`, `-0`.
+  - The engine calls the vendored `fpconv_dtoa.c` (`sc_double2ll` and `sc_d2string` in
+    `src/lua/engine.c`). One change from 7.2.16: its `double2ll` casts a NaN to a long long
+    before it compares, which C leaves undefined. The port tests the range first.
 - **What was so already.**
   - Time stands still while a script runs, as 7.2's `commandTimeSnapshot` holds it:
     TIME, SET's EX and PX, EXPIRE, TTL and the keys' expiry all read the group's time.
@@ -9197,7 +9209,8 @@ the move's other kinds (below).
     queued, without waiting (`sc.run.call`), so it needs only the table.
   - `redis.REDIS_VERSION` and `REDIS_VERSION_NUM`, and HELP's last line, "Print this
     help." (kind A).
-  - Lua's numbers in `redis.call`, and a script's double, in `fpconv_dtoa`'s form (kind C).
+  - Lua's numbers in `redis.call`, and a script's double, in `fpconv_dtoa`'s form (kind C,
+    done: above).
   - The order of pushes, and the keys that a script's reads track (kind F, done in
     section 3zzzzg).
 
@@ -9207,7 +9220,7 @@ pushes and tracking (F), NOPERM's texts (G), ACL LOG's new fields and CLIENT LIS
 `lib-name` and `lib-ver` (B and H), FUNCTION DUMP's version and the RESTORE of a payload
 of version 11 (E). Once A, E, F, G and H were in, function_test passed against 7.2.16,
 and script_test differed in Lua's doubles alone (C); a blocking command in a script ran
-as in MULTI with A's table, nothing more.
+as in MULTI with A's table, nothing more. With C's `fpconv_dtoa`, script_test passes too.
 
 **What it costs.** Nothing on a request's path: the metatables are protected when a state
 is made, and the texts are made only for an error or a refusal.
@@ -9888,10 +9901,13 @@ call (`afterCommand`, from `pending_push_messages`), and BendKV now does too.
   - The keyspace events of EXEC's commands never reached their own client.
   - A served pop's keyspace events reached the client whose command served it before
     that command's reply.
-  - Left as it was: CONFIG SET notify-keyspace-events takes effect from the next batch,
-    not from the next command of the same pipeline, since Pub/Sub's classes of events are
-    set again at a batch's end. A pipeline that sets them, subscribes and writes at once
-    hears nothing of that write, from Redis 7.0.15 as from 7.2.16.
+  - CONFIG SET notify-keyspace-events, and a client's first subscription, counted from
+    the next batch: Pub/Sub's classes of events were set again only at a batch's end
+    (`ps.tune`), where Redis reads the parameter and the channels at each event. So a
+    pipeline that set the classes, or subscribed, and then wrote heard nothing of that
+    write; so did one in a transaction. That differed from Redis 7.0.15 as from 7.2.16.
+    Now a CONFIG SET, a SUBSCRIBE and a PSUBSCRIBE set the classes again at once, in a
+    batch and in EXEC (`ps.classes`; The classes of events within a batch).
 - **Tracking.**
   - A blocked pop that is served runs its command again in Redis 7.2. So BLPOP and BRPOP
     signal the key they popped from, as BLMPOP and the sorted sets' pops did, and BLMOVE
@@ -9909,6 +9925,9 @@ call (`afterCommand`, from `pending_push_messages`), and BendKV now does too.
 - tracking_test: a redirect's own write in a transaction, a served BLMOVE in BCAST
   mode, and a redirect to the client served; "redirects" and "served pops" pass.
 - script_test: "10 pipelines" and "12 tracking" pass.
+- resp3_test's "the classes of events set within a pipeline" and pubsub_test's "19
+  pipeline" and "19 transaction": the classes and the subscriptions counted from the next
+  command of their pipeline and their transaction. They pass; before, they failed.
 - The other differential tests that pushes and tracking touch (blocking, multi, pubsub,
   client, monitor, pause, function, acl, keyspace, list, info, stats, the streams'), and
   the file tests, differ from 7.2.16 in the same lines as before kind F: none of them
@@ -9918,7 +9937,9 @@ call (`afterCommand`, from `pending_push_messages`), and BendKV now does too.
 (`bg.own.has`); nothing on the fast way, which makes no such push. perfcheck's GET, SET
 and INCR count 3,508, 4,299 and 4,621 instructions, against 3,507, 4,302 and 4,616 for
 kind I's build (5d523c6), counted alike; with 100 clients in BLPOP, 3,611 and 4,455
-against 3,618 and 4,460.
+against 3,618 and 4,460. The classes of events set again within a batch add a test of
+each command's key to the general way (`ev.key`), and nothing to the fast way: GET and SET
+count 3,504 and 4,299 with kind C in, 3,610 and 4,456 with 100 clients in BLPOP.
 
 ## 3zzzzh. Doubles as Redis 7.2.16 writes them
 

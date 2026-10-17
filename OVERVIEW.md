@@ -1162,14 +1162,15 @@ The translation the kernel reads can be dumped with
   pipelined, before AUTH and after, a failed AUTH, HELLO, RESET with a password and
   without, a password removed and set again, a transaction, a subscribed client, INFO's
   statistics (section 46 of docs/PERFORMANCE.md).
-- **RESP3** (`tests/resp3_test.py`): 13 scenarios on BendKV and on Redis compared byte
+- **RESP3** (`tests/resp3_test.py`): 14 scenarios on BendKV and on Redis compared byte
   for byte — HELLO and its errors; the protocol switched in the middle of a pipeline
   (with CLIENT REPLY OFF too); nulls and doubles; maps, sets and pairs; the server's
   replies (CONFIG GET, CLIENT TRACKINGINFO, INFO, COMMAND INFO and DOCS); EXEC's replies
   and an EXEC that WATCH aborts; blocking commands that time out and that are served;
   Pub/Sub's pushes to a RESP3 and a RESP2 subscriber; a subscriber that switches its
   protocol; keyspace events of a client's own commands; a client's own pushes in a
-  transaction and a script, and those of pops served; pipelines of the fast way. And
+  transaction and a script, and those of pops served; the classes of events set within a
+  pipeline and a transaction; pipelines of the fast way. And
   the differential tests of times to live, numbers, BITFIELD, hashes, lists, sets,
   sorted sets and the random stream again, with every connection in RESP3 (`RESP=3`).
   Of the 16 constructors of a reply, RESP2 writes the 8 new ones as it wrote what they
@@ -1723,7 +1724,7 @@ make clients BEND="$B" # redis-py's and go-redis's test suites on Redis and on B
    pushed at once but to a client of RESP3 that others redirect to and that sends
    nothing, which gets them with its next reply (section 3zzzb of FINDINGS.md); checked
    by tests against Redis byte for byte. Lua scripts: EVAL, EVALSHA, EVAL_RO, EVALSHA_RO
-   and SCRIPT on Redis 7.0.15's own Lua, driven a step at a time from the actor, a
+   and SCRIPT on Redis 7.2.16's own Lua, driven a step at a time from the actor, a
    script's calls run as EXEC runs its commands (section 3zzzd of FINDINGS.md); Lua's
    functions, FUNCTION and FCALL, on the same engine, their libraries in both files
    (section 3zzzp); checked by tests against Redis byte for byte. ACL users: Redis's
