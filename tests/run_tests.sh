@@ -99,12 +99,33 @@ ROUNDS=${ROUNDS:-1000}
 SEED=${SEED:-$((4 * ${GITHUB_RUN_ID:-0} + 1))}
 DIFF_ROUNDS=${DIFF_ROUNDS:-$ROUNDS}
 echo "== seeds $SEED to $((SEED + 3)), $DIFF_ROUNDS rounds: SEED=$SEED DIFF_ROUNDS=$DIFF_ROUNDS make test repeats them"
-echo "== the float library against glibc"
-python3 tests/float_test.py --bend "${BEND:-bend}" --cc "${CC:-cc}" --seed 1 --n 1500
-echo "== the start"
-python3 tests/start_test.py --bin build/bendkv
-echo "== connections that end"
-python3 tests/conn_test.py --bin build/bendkv --port "$PORT"
+# PARTS picks the parts to run, all of them by default, as CI's test jobs
+# share them out: start (the float library, the start, connections that
+# end), defaults, post, send and aof (the four servers below, aof the one
+# with an append-only file), and files (the append-only file and what
+# comes after it)
+PARTS=${PARTS:-start defaults post send aof files}
+part() {
+  case " $PARTS " in
+    *" $1 "*) return 0 ;;
+  esac
+  return 1
+}
+for p in $PARTS; do
+  case $p in
+    start|defaults|post|send|aof|files) ;;
+    *) echo "no part $p: start, defaults, post, send, aof, files" >&2; exit 2 ;;
+  esac
+done
+echo "== parts: $PARTS"
+if part start; then
+  echo "== the float library against glibc"
+  python3 tests/float_test.py --bend "${BEND:-bend}" --cc "${CC:-cc}" --seed 1 --n 1500
+  echo "== the start"
+  python3 tests/start_test.py --bin build/bendkv
+  echo "== connections that end"
+  python3 tests/conn_test.py --bin build/bendkv --port "$PORT"
+fi
 # up PID PORT: waits until the server started as PID answers on PORT (its
 # INFO names PID), so that no test starts before it listens, nor runs
 # against another server that holds the port; fails when PID exits first
@@ -124,15 +145,28 @@ up() {
     sleep 0.1
   done
 }
-# Redis collates SORT's ALPHA by the locale it starts in (strcoll),
-# BendKV as the C locale does
-LC_ALL=C redis-server --port "$REDIS_PORT" --save '' --appendonly no --bind 127.0.0.1 > build/redis.log 2>&1 &
-RDS=$!
+# the reference, for the parts of the four servers. Redis collates SORT's
+# ALPHA by the locale it starts in (strcoll), BendKV as the C locale does
+RDS=
 BKV=
 trap 'kill $BKV $RDS 2>/dev/null || true' EXIT
-up "$RDS" "$REDIS_PORT"
+for p in defaults post send aof; do
+  if [ -z "$RDS" ] && part $p; then
+    LC_ALL=C redis-server --port "$REDIS_PORT" --save '' --appendonly no --bind 127.0.0.1 > build/redis.log 2>&1 &
+    RDS=$!
+    up "$RDS" "$REDIS_PORT"
+  fi
+done
 rm -f build/test.aof build/aof_dump.txt
 for n in "" post send "post build/test.aof everysec"; do
+  case $n in
+    "") p=defaults ;;
+    post|send) p=$n ;;
+    *) p=aof ;;
+  esac
+  if ! part $p; then
+    continue
+  fi
   ./build/bendkv "$PORT" $n > build/server.log 2>&1 &
   BKV=$!
   up "$BKV" "$PORT"
@@ -235,6 +269,9 @@ restart() {
     redis-check-aof "$f" | tail -1
   fi
 }
+if ! part files; then
+  exit 0
+fi
 echo "== append-only file"
 restart build/test.aof
 python3 tests/crash_test.py --bin build/bendkv --port "$PORT" --dir build/crash --rounds 20

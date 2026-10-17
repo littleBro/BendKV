@@ -47,7 +47,9 @@ arguments; it prints what it found.
 
 ## Checks
 
-Every pull request passes all of these; CI runs the same.
+Every pull request passes all of these before it merges. CI runs the light ones on
+every push, and `make test` with the client suites and the sanitizers when it is run
+by hand (Merging).
 
     make check     # the proofs, about 15 s
     make verdict   # the proofs in the BendTT kernel, about 2 min
@@ -105,11 +107,22 @@ Every pull request passes all of these; CI runs the same.
 
 While BendKV is pre-release, several sessions work on it at once.
 
-- **Who merges.** A pull request merges into `main` once CI is green on its head
+- **Who merges.** A pull request merges into `main` once CI has passed on its head
   and nothing in it waits for the owner (below). Its author merges it. For now,
   at the owner's word, the sessions do not wait for each other's reviews; a
   session may still ask another for one. All sessions post from the owner's
   account, so GitHub's own approval is not available.
+- **CI's two tiers.** The light tier (the generated blocks, the proofs, the pure
+  checks, the build and `make perfcheck`) runs on every push; "CI ok" sums it up.
+  The heavy tier (`make test`, the client suites and the sanitizers) runs only by
+  hand: start the CI workflow on the pull request's branch (GitHub's "Run
+  workflow", or the GitHub tools' `run_workflow` with `ci.yml` and the branch as
+  its ref). It tests the branch merged with `main` as `main` is then, and sets the
+  commit status "CI heavy" on the branch's head. A pull request merges once "CI ok"
+  is green and "CI heavy" is success on its head; a push sets "CI heavy" back to
+  pending, and a pull request of documents alone needs no heavy run. Run it when
+  the branch is ready, not on every push. There is no need to merge `main` into a
+  branch to test it: merge `main` when the branch conflicts with it.
 - **When the owner decides.** Some pull requests merge only once the owner has
   approved them. That is a pull request that does any of these:
   - adds, removes or changes the statement of a law, or changes what

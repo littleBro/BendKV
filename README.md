@@ -912,12 +912,12 @@ client's requests in the same group; files that do not load).
 Redis and on BendKV, and counts the tests Redis passes that BendKV passes
 ([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)). `make clients` runs the test suites of
 two client libraries the same way, redis-py's in RESP2 and in RESP3 and go-redis's
-(`tools/client_suite.py`); CI runs them on every pull request, and fails on a test Redis
-passes that BendKV fails and that is not among the known failures of
+(`tools/client_suite.py`); CI's heavy tier runs them before a pull request merges, and
+fails on a test Redis passes that BendKV fails and that is not among the known failures of
 `tools/data/clients.json`. `tools/sanitize.sh` builds the server with AddressSanitizer
 and UndefinedBehaviorSanitizer (the Bend heap's free nodes poisoned, patch 34) and with
 ThreadSanitizer, and runs under each the tests that stress its memory and its writer
-thread most; CI runs it on every pull request too, and fails on any report
+thread most; CI's heavy tier runs it too, and fails on any report
 ([docs/FINDINGS.md](docs/FINDINGS.md), section 3zzp).
 
 ## Layout
