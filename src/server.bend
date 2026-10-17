@@ -3511,12 +3511,21 @@ def cl.mon.or(m: Maybe<&2, Cl>) -> String:
     case None{}:
       "?:0"
 
-def ps.mon.addr(+id: Nat, +pb: Ps) -> String:
+def ps.mon.addr.of(+id: Nat, +pb: Ps) -> String:
   match pb:
     case Ps{reg, ev, px, Cls{+tab, kd, ks, ms, pz, dn, hd, scr}, own}:
       cl.mon.or(KV.get(Cl, tab, Nat.show(id)))
     case PsOf{+p}:
-      ps.mon.addr(id, p)
+      ps.mon.addr.of(id, p)
+
+# (the script client's, id 0, is "lua", as ps.addr gives it: MONITOR's
+# [0 lua], Scripts)
+def ps.mon.addr(+id: Nat, +pb: Ps) -> String:
+  match id:
+    case 0n:
+      "lua"
+    case _:
+      ps.mon.addr.of(id, pb)
 
 # the name of the client of id (CLIENT SETNAME's), "" for none
 def cl.name.or(m: Maybe<&2, Cl>) -> String:
