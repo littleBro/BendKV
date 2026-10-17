@@ -403,6 +403,15 @@ Configuration). No test of the suite sets it. And BendKV has no defragmentation:
 `activedefrag yes` fails as it does in a Redis built without its own jemalloc, where a
 Redis built from its tarball, as the reference is, turns it on (README's Memory).
 
+Encodings. BendKV holds lists and sets as Redis 7.2.16 holds them at the parameters'
+defaults: a small list or set as a listpack, a larger list as a quicklist of the nodes
+Redis's would have (README's Lists and Sets). A test that sets `list-max-listpack-size`,
+`list-compress-depth` or `set-max-listpack-*` and then checks an encoding sees what the
+defaults give. Redis also turns a listpack into a quicklist on an LSET of an index the
+list does not have and on an LINSERT whose pivot is not there, and a set into a hashtable
+on an SADD that adds nothing, none of which its append-only file holds; BendKV leaves
+those as they were, and checks LMOVE's lists where README says.
+
 ## What this mode does not test
 
 Tests that need a server of their own do not run in this mode: the units above with no

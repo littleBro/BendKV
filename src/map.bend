@@ -134,17 +134,27 @@ type DQ is Data:
 type QN is Data:
   QN{c: Nat, sz: Nat}
 
-# How Redis 7.2 holds a list: as a listpack of lb bytes, or as a quicklist
-# of nodes, nf of them (of cf elements) in order (f), then nb (of cb
-# elements) the last first (b)
+# The nodes between a quicklist's first and its last, in two stacks: nf of
+# them (of cf elements) in order (f), then nb (of cb) the last first (b).
+# QMOf is never made: it makes them a node of their own.
+type QM is Data:
+  QM{nf: Nat, cf: Nat, f: List<&2, QN>, nb: Nat, cb: Nat, b: List<&2, QN>}
+  QMOf{m: QM}
+
+# How Redis 7.2 holds a list: as a listpack of lb bytes; as a quicklist of
+# one node, of c elements in sz bytes (an empty one for c 0); or of more:
+# its first node, the nodes between (m) and its last
 type QNs is Data:
   QLp{lb: Nat}
-  QQl{nf: Nat, cf: Nat, f: List<&2, QN>, nb: Nat, cb: Nat, b: List<&2, QN>}
+  QQ1{c: Nat, sz: Nat}
+  QQ{hc: Nat, hsz: Nat, m: QM, tc: Nat, tsz: Nat}
 
 # A list as Redis 7.2 holds it: its elements (q), and its listpack or its
-# quicklist's nodes (ns)
+# quicklist's nodes (ns). DeqOf is never made: it makes a list a node of
+# its own, one word in a value, as XStrOf makes a stream
 type Deq is Data:
   Deq{q: DQ, ns: QNs}
+  DeqOf{d: Deq}
 
 # An integer of an intset (Sets, below): its sign, and its magnitude's
 # high and low 32 bits; and a key, an integer's bits in some width with
@@ -3094,6 +3104,18 @@ def dq.dropr(+k: Nat, d: DQ) -> DQ:
     case DQ{+nf, +pf, f, +nb, +pb, b}:
       dq.dropr.of(Nat.is_le(k, nb), k, nf, pf, f, nb, pb, b)
 
+# the list with the first piece of its front stack (left) or of its back
+# stack turned to start at the list's end, when it does not: what LTRIM
+# takes from that end then lies at its string's start, for the cut and
+# for the bytes it takes, where a piece that starts at the other end is
+# read through to them each time
+def dq.face(+left: Bool, d: DQ) -> DQ:
+  match left d:
+    case True{} DQ{nf, pf, f, nb, pb, b}:
+      DQ{nf, pf, lp.head(False{}, f), nb, pb, b}
+    case False{} DQ{nf, pf, f, nb, pb, b}:
+      DQ{nf, pf, f, nb, pb, lp.head(True{}, b)}
+
 # Searches and writes along the list
 # ----------------------------------
 # LPOS, LINSERT and LREM compare elements with a string where they lie, a
@@ -3349,15 +3371,18 @@ def lp.runs.len(+rs: List<&2, LKept>, +c: Nat) -> Nat:
 
 # A removal of x (LREM) through a stack: w more matches to take, gone
 # taken so far, and the stack's pieces kept or written anew, k elements in
-# c pieces (in the order the walk put them)
+# c pieces (in the order the walk put them); t elements passed in the
+# walk's order (both stacks), and the walk's positions of those taken
+# (os, the last first)
 type LRm is Data:
-  LRm{w: Nat, gone: Nat, k: Nat, c: Nat, ps: List<&2, LPiece>}
+  LRm{w: Nat, gone: Nat, k: Nat, c: Nat, ps: List<&2, LPiece>, t: Nat, os: List<&2, Nat>}
 
 # a piece kept as it is
 def lp.rm.keep(+p: LPiece, st: LRm) -> LRm:
   match st:
-    case LRm{w, gone, +k, +c, ps}:
-      LRm{w, gone, Nat.add(k, lp.k(p)), 1n+c, p <> ps}
+    case LRm{w, gone, +k, +c, ps, +t, os}:
+      +kp = lp.k(p)
+      LRm{w, gone, Nat.add(k, kp), 1n+c, p <> ps, Nat.add(t, kp), os}
 
 # a piece kept unless it holds none (none)
 def lp.rm.put(none: Bool, p: LPiece, st: LRm) -> LRm:
@@ -3367,28 +3392,63 @@ def lp.rm.put(none: Bool, p: LPiece, st: LRm) -> LRm:
     case False{}:
       lp.rm.keep(p, st)
 
-# the piece of k elements, of which r are taken, written anew from the
-# runs rs of s: none when it keeps none
-def lp.rm.new(+k: Nat, +r: Nat, fw: Bool, +s: String, +rs: List<&2, LKept>, st: LRm) -> LRm:
+# the walk's position o put before acc when its element is taken (drop)
+def lp.os.at(drop: Bool, +o: Nat, acc: List<&2, Nat>) -> List<&2, Nat>:
+  match drop:
+    case True{}:
+      o <> acc
+    case False{}:
+      acc
+
+# the walk's positions (t its first's) of the matches of x numbered lo to
+# hi - 1 (h met before) among the k codes of s from index i on, j of the
+# piece's kk read: each put before acc as it comes, its offset j when the
+# string goes the walk's way (same), else kk - 1 - j
+def lp.hit.at(k: Nat, +s: String, +i: Nat, +j: Nat, +h: Nat, +lo: Nat, +hi: Nat, +x: String, +lx: Nat, +lb: U32, +same: Bool, +kk: Nat, +t: Nat, acc: List<&2, Nat>) -> List<&2, Nat>:
+  match k:
+    case 0n:
+      acc
+    case 1n+r:
+      +m = pk.len(s, i)
+      +hit = pk.hit(1n, x, lx, lb, s, i, m)
+      +drop = Bool.and(hit, Bool.and(Nat.is_le(lo, h), Nat.is_lt(h, hi)))
+      lp.hit.at(r, s, Nat.add(i, Nat.add(pk.hdr(m), m)), 1n+j, Bool.pick(Nat, hit, 1n+h, h), lo, hi, x, lx, lb, same, kk, t, lp.os.at(drop, Nat.add(t, Bool.pick(Nat, same, j, Nat.sub(Nat.sub(kk, 1n), j))), acc))
+
+# a piece's positions ls put before the walk's os, the last first: they
+# came the last first when the string goes the walk's way (same), else
+# the first first
+def lp.os.put(same: Bool, ls: List<&2, Nat>, os: List<&2, Nat>) -> List<&2, Nat>:
+  match same:
+    case True{}:
+      List.append(&2, Nat, ls, os)
+    case False{}:
+      List.reverse.go(&2, Nat, ls, os)
+
+# the piece of k elements, of which r are taken (at the walk's positions
+# ls, as lp.hit.at puts them), written anew from the runs rs of s: none
+# when it keeps none (the walk passes the r here, the others as the piece
+# is kept)
+def lp.rm.new(+k: Nat, +r: Nat, fw: Bool, +s: String, +rs: List<&2, LKept>, same: Bool, ls: List<&2, Nat>, st: LRm) -> LRm:
   match st:
-    case LRm{+w, +gone, +kk, +c, ps}:
+    case LRm{+w, +gone, +kk, +c, ps, +t, os}:
       +left = Nat.sub(k, r)
       +n = lp.runs.len(rs, 0n)
-      lp.rm.put(Nat.is_eq(left, 0n), LPc{left, n, fw, pk.flat(lp.runs.str(rs, s, ""), n)}, LRm{Nat.sub(w, r), Nat.add(gone, r), kk, c, ps})
+      lp.rm.put(Nat.is_eq(left, 0n), LPc{left, n, fw, pk.flat(lp.runs.str(rs, s, ""), n)}, LRm{Nat.sub(w, r), Nat.add(gone, r), kk, c, ps, Nat.add(t, r), lp.os.put(same, ls, os)})
 
 # piece LPc{k, n, fw, s} with r of its h matches taken, those the walk
-# meets first: the first r of its string when the string goes the walk's
-# way (same), else the last r
-def lp.rm.take(+r: Nat, +h: Nat, same: Bool, +x: String, +lx: Nat, +lb: U32, +k: Nat, +n: Nat, fw: Bool, +s: String, st: LRm) -> LRm:
+# meets first (t elements passed before it): the first r of its string
+# when the string goes the walk's way (same), else the last r
+def lp.rm.take(+r: Nat, +h: Nat, +same: Bool, +x: String, +lx: Nat, +lb: U32, +k: Nat, +n: Nat, fw: Bool, +s: String, +t: Nat, st: LRm) -> LRm:
   +lo = Bool.pick(Nat, same, 0n, Nat.sub(h, r))
-  lp.rm.new(k, r, fw, s, lp.runs(k, s, 0n, 0n, 0n, lo, Nat.add(lo, r), x, lx, lb, Nil{}), st)
+  +hi = Nat.add(lo, r)
+  lp.rm.new(k, r, fw, s, lp.runs(k, s, 0n, 0n, 0n, lo, hi, x, lx, lb, Nil{}), same, lp.hit.at(k, s, 0n, 0n, 0n, lo, hi, x, lx, lb, same, k, t, Nil{}), st)
 
 def lp.rm.of(none: Bool, +h: Nat, same: Bool, +x: String, +lx: Nat, +lb: U32, +k: Nat, +n: Nat, fw: Bool, +s: String, st: LRm) -> LRm:
   match none st:
     case True{} st0:
       lp.rm.keep(LPc{k, n, fw, s}, st0)
-    case False{} LRm{+w, gone, kk, c, ps}:
-      lp.rm.take(Nat.min(h, w), h, same, x, lx, lb, k, n, fw, s, LRm{w, gone, kk, c, ps})
+    case False{} LRm{+w, gone, kk, c, ps, +t, os}:
+      lp.rm.take(Nat.min(h, w), h, same, x, lx, lb, k, n, fw, s, t, LRm{w, gone, kk, c, ps, t, os})
 
 # how many of the k elements of s are x, when matches are still to take
 # (w), else none: a match, not Bool.pick, which would read them all
@@ -3403,9 +3463,9 @@ def lp.rm.hits(w: Nat, +k: Nat, +s: String, +x: String, +lx: Nat, +lb: U32) -> N
 # matches are still to take, and written anew when it holds any
 def lp.rm.p(+back: Bool, +x: String, +lx: Nat, +lb: U32, p: LPiece, st: LRm) -> LRm:
   match p st:
-    case LPc{+k, +n, +fw, +s} LRm{+w, gone, kk, c, ps}:
+    case LPc{+k, +n, +fw, +s} LRm{+w, gone, kk, c, ps, t, os}:
       +h = lp.rm.hits(w, k, s, x, lx, lb)
-      lp.rm.of(Nat.is_eq(h, 0n), h, Bool.xor(fw, back), x, lx, lb, k, n, fw, s, LRm{w, gone, kk, c, ps})
+      lp.rm.of(Nat.is_eq(h, 0n), h, Bool.xor(fw, back), x, lx, lb, k, n, fw, s, LRm{w, gone, kk, c, ps, t, os})
 
 # the removal through the pieces ps, in their order (the pieces kept put
 # the last first)
@@ -3425,38 +3485,40 @@ def lp.rm.rb(ps: List<&2, LPiece>, +back: Bool, +x: String, +lx: Nat, +lb: U32, 
     case Con{p, rest}:
       lp.rm.p(back, x, lx, lb, p, lp.rm.rb(rest, back, x, lx, lb, st))
 
-# a list after LREM, and how many elements it took
+# a list after LREM, how many elements it took, and where: their
+# positions in the walk's order (from the last element when it went from
+# there), the last first
 type DRem is Data:
-  DRem{d: DQ, gone: Nat}
+  DRem{d: DQ, gone: Nat, os: List<&2, Nat>}
 
 # the list from the stacks the removal kept: the first stack's (k1
 # elements in c1 pieces ps1), then the second's (s2)
 def dq.rm.fin(back: Bool, +k1: Nat, +c1: Nat, ps1: List<&2, LPiece>, s2: LRm) -> DRem:
   match back s2:
-    case False{} LRm{w, +gone, +k2, +c2, ps2}:
-      DRem{dq.fix(DQ{k1, c1, ps1, k2, c2, ps2}), gone}
-    case True{} LRm{w, +gone, +k2, +c2, ps2}:
-      DRem{dq.fix(DQ{k2, c2, ps2, k1, c1, ps1}), gone}
+    case False{} LRm{w, +gone, +k2, +c2, ps2, t, os}:
+      DRem{dq.fix(DQ{k1, c1, ps1, k2, c2, ps2}), gone, os}
+    case True{} LRm{w, +gone, +k2, +c2, ps2, t, os}:
+      DRem{dq.fix(DQ{k2, c2, ps2, k1, c1, ps1}), gone, os}
 
 # the second stack's removal, after the first's (s1, whose pieces came
 # the last first)
 def dq.rm.two(back: Bool, s1: LRm, +x: String, +lx: Nat, +lb: U32, two: List<&2, LPiece>) -> DRem:
   match back s1:
-    case False{} LRm{w, gone, +k1, +c1, ps1}:
-      dq.rm.fin(False{}, k1, c1, List.reverse(&2, LPiece, ps1), lp.rm.rb(two, False{}, x, lx, lb, LRm{w, gone, 0n, 0n, Nil{}}))
-    case True{} LRm{w, gone, +k1, +c1, ps1}:
-      dq.rm.fin(True{}, k1, c1, List.reverse(&2, LPiece, ps1), lp.rm.rb(two, True{}, x, lx, lb, LRm{w, gone, 0n, 0n, Nil{}}))
+    case False{} LRm{w, gone, +k1, +c1, ps1, t, os}:
+      dq.rm.fin(False{}, k1, c1, List.reverse(&2, LPiece, ps1), lp.rm.rb(two, False{}, x, lx, lb, LRm{w, gone, 0n, 0n, Nil{}, t, os}))
+    case True{} LRm{w, gone, +k1, +c1, ps1, t, os}:
+      dq.rm.fin(True{}, k1, c1, List.reverse(&2, LPiece, ps1), lp.rm.rb(two, True{}, x, lx, lb, LRm{w, gone, 0n, 0n, Nil{}, t, os}))
 
 def dq.rm.of(back: Bool, +x: String, +lx: Nat, +lb: U32, +w: Nat, f: List<&2, LPiece>, b: List<&2, LPiece>) -> DRem:
   match back:
     case False{}:
-      dq.rm.two(False{}, lp.rm.ps(f, False{}, x, lx, lb, LRm{w, 0n, 0n, 0n, Nil{}}), x, lx, lb, b)
+      dq.rm.two(False{}, lp.rm.ps(f, False{}, x, lx, lb, LRm{w, 0n, 0n, 0n, Nil{}, 0n, Nil{}}), x, lx, lb, b)
     case True{}:
-      dq.rm.two(True{}, lp.rm.ps(b, True{}, x, lx, lb, LRm{w, 0n, 0n, 0n, Nil{}}), x, lx, lb, f)
+      dq.rm.two(True{}, lp.rm.ps(b, True{}, x, lx, lb, LRm{w, 0n, 0n, 0n, Nil{}, 0n, Nil{}}), x, lx, lb, f)
 
 # LREM: the list without its first w elements that are x (all of them
-# for w 0), in its order or from its last element (back), and how many
-# it took
+# for w 0), in its order or from its last element (back), how many it
+# took, and where
 def dq.rem(+x: String, +w: Nat, +back: Bool, d: DQ) -> DRem:
   match d:
     case DQ{+nf, pf, f, +nb, pb, b}:
@@ -4574,10 +4636,13 @@ def mems.all(+s: Mems) -> List<&2, String>:
 # node of its pivot when that has room, else at the node's end into the
 # next node or the one before when that has room, or into a node of its
 # own, else splits the node and merges the nodes around it that fit in
-# 8 KB together (_quicklistInsert). Deq keeps the elements (DQ) and the
-# listpack's bytes or the quicklist's nodes, each its count of elements
-# and its bytes (QNs), in two stacks that are dealt again as a list's
-# pieces are (dq.fix). An entry's bytes are its encoding's and its
+# 8 KB together (_quicklistInsert). Deq, a node of its own, keeps the
+# elements (DQ) and the listpack's bytes or the quicklist's nodes, each its
+# count of elements and its bytes (QNs): the first node and the last as
+# numbers, which the pushes and the pops at the ends change, and the nodes
+# between in a node of their own (QM), two stacks dealt again as a list's
+# pieces are (dq.fix), which a write at an end takes apart only when it
+# fills a node or empties one. An entry's bytes are its encoding's and its
 # backlen's (lpk.esize). Where BendKV differs: an LINSERT whose pivot is
 # not there and an LSET of an index the list does not have leave the list
 # as it was, where Redis has already made a listpack a quicklist when the
@@ -4715,246 +4780,114 @@ def qn.cut(h: Nat, ns: List<&2, QN>, acc: List<&2, QN>) -> List<&2, QN> & List<&
     case 1n+j Nil{}:
       (acc, Nil{})
 
+# The nodes between a quicklist's first and its last (QM)
+
+def qm.empty() -> QM:
+  QM{0n, 0n, Nil{}, 0n, 0n, Nil{}}
+
+# the nodes of m in order, before acc
+def qm.list(m: QM, acc: List<&2, QN>) -> List<&2, QN>:
+  match m:
+    case QM{nf, cf, f, nb, cb, b}:
+      List.append(&2, QN, f, List.reverse.go(&2, QN, b, acc))
+    case QMOf{x}:
+      qm.list(x, acc)
+
 # n nodes of c elements: the first h (q's first, reversed) in the front
 # stack, the others in the back stack
-def qn.dealt(+h: Nat, +n: Nat, +c: Nat, q: List<&2, QN> & List<&2, QN>) -> QNs:
+def qm.dealt(+h: Nat, +n: Nat, +c: Nat, q: List<&2, QN> & List<&2, QN>) -> QM:
   (rf, +rest) = q
   +cb = qn.count(rest, 0n)
-  QQl{h, Nat.sub(c, cb), List.reverse(&2, QN, rf), Nat.sub(n, h), cb, List.reverse(&2, QN, rest)}
+  QM{h, Nat.sub(c, cb), List.reverse(&2, QN, rf), Nat.sub(n, h), cb, List.reverse(&2, QN, rest)}
 
 # the n nodes ns of c elements, in order, dealt half to each stack
-def qn.deal(+n: Nat, +c: Nat, ns: List<&2, QN>) -> QNs:
+def qm.deal(+n: Nat, +c: Nat, ns: List<&2, QN>) -> QM:
   +h = Nat.div(n, 2n)
-  qn.dealt(h, n, c, qn.cut(h, ns, Nil{}))
+  qm.dealt(h, n, c, qn.cut(h, ns, Nil{}))
 
-# the nodes ns, in order, as a quicklist's
-def qn.of(+ns: List<&2, QN>) -> QNs:
-  qn.deal(List.length(&2, QN, ns), qn.count(ns, 0n), ns)
+# the nodes ns, in order
+def qm.of(+ns: List<&2, QN>) -> QM:
+  qm.deal(List.length(&2, QN, ns), qn.count(ns, 0n), ns)
 
-# a quicklist's nodes in order
-def qn.list(f: List<&2, QN>, b: List<&2, QN>) -> List<&2, QN>:
-  List.append(&2, QN, f, List.reverse(&2, QN, b))
-
-def qn.fix.if(tilted: Bool, +nf: Nat, +cf: Nat, f: List<&2, QN>, +nb: Nat, +cb: Nat, b: List<&2, QN>) -> QNs:
+def qm.fix.if(tilted: Bool, +nf: Nat, +cf: Nat, f: List<&2, QN>, +nb: Nat, +cb: Nat, b: List<&2, QN>) -> QM:
   match tilted:
     case True{}:
-      qn.deal(Nat.add(nf, nb), Nat.add(cf, cb), qn.list(f, b))
+      qm.deal(Nat.add(nf, nb), Nat.add(cf, cb), List.append(&2, QN, f, List.reverse(&2, QN, b)))
     case False{}:
-      QQl{nf, cf, f, nb, cb, b}
+      QM{nf, cf, f, nb, cb, b}
 
-# the nodes dealt again, half to each stack, when one stack holds more
-# than three times the other's and one more (as a list's pieces, dq.fix):
-# when a stack is empty, the other holds one node at most
-def qn.fix(+nf: Nat, +cf: Nat, f: List<&2, QN>, +nb: Nat, +cb: Nat, b: List<&2, QN>) -> QNs:
-  qn.fix.if(dq.tilted(nf, nb), nf, cf, f, nb, cb, b)
+# the stacks dealt again, half to each, when one holds more than three
+# times the other's nodes and one more (as a list's pieces, dq.fix): when
+# a stack is empty, the other holds one node at most
+def qm.fix(+nf: Nat, +cf: Nat, f: List<&2, QN>, +nb: Nat, +cb: Nat, b: List<&2, QN>) -> QM:
+  qm.fix.if(dq.tilted(nf, nb), nf, cf, f, nb, cb, b)
 
-# a listpack of n elements in lb bytes made a quicklist: one node, itself,
-# or none when it is empty
-def qn.one(n: Nat, +lb: Nat) -> QNs:
-  match n:
-    case 0n:
-      QQl{0n, 0n, Nil{}, 0n, 0n, Nil{}}
-    case 1n++k:
-      QQl{1n, 1n+k, [QN{1n+k, lb}], 0n, 0n, Nil{}}
+# the node of c elements in sz bytes put first
+def qm.pushf(+c: Nat, +sz: Nat, m: QM) -> QM:
+  match m:
+    case QM{+nf, +cf, f, +nb, +cb, b}:
+      qm.fix(1n+nf, Nat.add(cf, c), QN{c, sz} <> f, nb, cb, b)
+    case QMOf{x}:
+      qm.pushf(c, sz, x)
 
-def qn.grown(past: Bool, +n: Nat, +lb: Nat) -> QNs:
-  match past:
-    case True{}:
-      qn.one(n, lb)
-    case False{}:
-      QLp{lb}
+# ... or last
+def qm.pushb(+c: Nat, +sz: Nat, m: QM) -> QM:
+  match m:
+    case QM{+nf, +cf, f, +nb, +cb, b}:
+      qm.fix(nf, cf, f, 1n+nb, Nat.add(cb, c), QN{c, sz} <> b)
+    case QMOf{x}:
+      qm.pushb(c, sz, x)
 
-# a list of n elements, held as ns, before a write adds elements of add
-# bytes: a listpack that they would take past 8 KB made a quicklist
-def qn.grow(+n: Nat, +add: Nat, ns: QNs) -> QNs:
-  match ns:
-    case QLp{+lb}:
-      qn.grown(Nat.is_lt(lpk.lim(), Nat.add(lb, add)), n, lb)
-    case ms:
-      ms
+# a node taken from an end of the nodes between (c elements in sz bytes)
+# and those left; none when there are none
+type QPop is Data:
+  QPop{c: Nat, sz: Nat, m: QM}
+  QPopNone{}
 
-def qn.head.sz(ns: List<&2, QN>) -> Nat:
-  match ns:
-    case Nil{}:
-      0n
-    case Con{QN{c, +sz}, rest}:
-      sz
-
-def qn.fit.if(one: Bool, +lim: Nat, +sz: Nat, ns: QNs) -> QNs:
-  match one:
-    case True{}:
-      Bool.pick(QNs, Nat.is_le(sz, lim), QLp{sz}, ns)
-    case False{}:
-      ns
-
-# a list after a write or a read: a quicklist of one node of lim bytes at
-# most made a listpack, the node itself (lim: 4 KB after a write that took
-# elements out, 8 KB for a list read)
-def qn.fit(+lim: Nat, ns: QNs) -> QNs:
-  match ns:
-    case QLp{+lb}:
-      QLp{lb}
-    case QQl{+nf, +cf, +f, +nb, +cb, +b}:
-      qn.fit.if(Nat.is_eq(Nat.add(nf, nb), 1n), lim, Nat.add(qn.head.sz(f), qn.head.sz(b)), QQl{nf, cf, f, nb, cb, b})
-
-# whether a list is a quicklist
-def qn.ql(+ns: QNs) -> Bool:
-  match ns:
-    case QLp{lb}:
-      False{}
-    case QQl{nf, cf, f, nb, cb, b}:
-      True{}
-
-# Pushes and pops at the ends: x (l bytes, an entry of e bytes) put first
-# into the first node when it has room, else into a node of its own
-# (quicklistPushHead); the front stack empty, the first node is the back
-# stack's one
-def qn.pushl.in(room: Bool, +e: Nat, +c: Nat, +sz: Nat, rest: List<&2, QN>, +nf: Nat, +cf: Nat, +nb: Nat, +cb: Nat, b: List<&2, QN>) -> QNs:
-  match room:
-    case True{}:
-      QQl{nf, 1n+cf, QN{1n+c, Nat.add(sz, e)} <> rest, nb, cb, b}
-    case False{}:
-      qn.fix(1n+nf, 1n+cf, qn.new(e) <> (QN{c, sz} <> rest), nb, cb, b)
-
-def qn.pushl.one(room: Bool, +e: Nat, +c: Nat, +sz: Nat, +nb: Nat, +cb: Nat, rest: List<&2, QN>) -> QNs:
-  match room:
-    case True{}:
-      QQl{0n, 0n, Nil{}, nb, 1n+cb, QN{1n+c, Nat.add(sz, e)} <> rest}
-    case False{}:
-      qn.fix(1n, 1n, [qn.new(e)], nb, cb, QN{c, sz} <> rest)
-
-def qn.pushl.b(+l: Nat, +e: Nat, +nb: Nat, +cb: Nat, b: List<&2, QN>) -> QNs:
+def qm.popf.b(b: List<&2, QN>, +nb: Nat, +cb: Nat) -> QPop:
   match b:
     case Con{QN{+c, +sz}, rest}:
-      qn.pushl.one(qn.room(sz, l), e, c, sz, nb, cb, rest)
+      QPop{c, sz, QM{0n, 0n, Nil{}, Nat.sub(nb, 1n), Nat.sub(cb, c), rest}}
     case Nil{}:
-      QQl{1n, 1n, [qn.new(e)], 0n, 0n, Nil{}}
+      QPopNone{}
 
-def qn.pushl(+l: Nat, +e: Nat, +nf: Nat, +cf: Nat, f: List<&2, QN>, +nb: Nat, +cb: Nat, b: List<&2, QN>) -> QNs:
+def qm.popf.f(f: List<&2, QN>, +nf: Nat, +cf: Nat, +nb: Nat, +cb: Nat, b: List<&2, QN>) -> QPop:
   match f:
     case Con{QN{+c, +sz}, rest}:
-      qn.pushl.in(qn.room(sz, l), e, c, sz, rest, nf, cf, nb, cb, b)
+      QPop{c, sz, qm.fix(Nat.sub(nf, 1n), Nat.sub(cf, c), rest, nb, cb, b)}
     case Nil{}:
-      qn.pushl.b(l, e, nb, cb, b)
+      qm.popf.b(b, nb, cb)
 
-# x put last, as qn.pushl puts it first (quicklistPushTail)
-def qn.pushr.in(room: Bool, +e: Nat, +c: Nat, +sz: Nat, rest: List<&2, QN>, +nf: Nat, +cf: Nat, f: List<&2, QN>, +nb: Nat, +cb: Nat) -> QNs:
-  match room:
-    case True{}:
-      QQl{nf, cf, f, nb, 1n+cb, QN{1n+c, Nat.add(sz, e)} <> rest}
-    case False{}:
-      qn.fix(nf, cf, f, 1n+nb, 1n+cb, qn.new(e) <> (QN{c, sz} <> rest))
+# the first node: the front stack's first, or the back stack's one when
+# the front stack is empty
+def qm.popf(m: QM) -> QPop:
+  match m:
+    case QM{+nf, +cf, f, +nb, +cb, b}:
+      qm.popf.f(f, nf, cf, nb, cb, b)
+    case QMOf{x}:
+      qm.popf(x)
 
-def qn.pushr.one(room: Bool, +e: Nat, +c: Nat, +sz: Nat, +nf: Nat, +cf: Nat, rest: List<&2, QN>) -> QNs:
-  match room:
-    case True{}:
-      QQl{nf, 1n+cf, QN{1n+c, Nat.add(sz, e)} <> rest, 0n, 0n, Nil{}}
-    case False{}:
-      qn.fix(nf, cf, QN{c, sz} <> rest, 1n, 1n, [qn.new(e)])
-
-def qn.pushr.f(+l: Nat, +e: Nat, +nf: Nat, +cf: Nat, f: List<&2, QN>) -> QNs:
+def qm.popb.f(f: List<&2, QN>, +nf: Nat, +cf: Nat) -> QPop:
   match f:
     case Con{QN{+c, +sz}, rest}:
-      qn.pushr.one(qn.room(sz, l), e, c, sz, nf, cf, rest)
+      QPop{c, sz, QM{Nat.sub(nf, 1n), Nat.sub(cf, c), rest, 0n, 0n, Nil{}}}
     case Nil{}:
-      QQl{0n, 0n, Nil{}, 1n, 1n, [qn.new(e)]}
+      QPopNone{}
 
-def qn.pushr(+l: Nat, +e: Nat, +nf: Nat, +cf: Nat, f: List<&2, QN>, +nb: Nat, +cb: Nat, b: List<&2, QN>) -> QNs:
+def qm.popb.b(b: List<&2, QN>, +nf: Nat, +cf: Nat, f: List<&2, QN>, +nb: Nat, +cb: Nat) -> QPop:
   match b:
     case Con{QN{+c, +sz}, rest}:
-      qn.pushr.in(qn.room(sz, l), e, c, sz, rest, nf, cf, f, nb, cb)
+      QPop{c, sz, qm.fix(nf, cf, f, Nat.sub(nb, 1n), Nat.sub(cb, c), rest)}
     case Nil{}:
-      qn.pushr.f(l, e, nf, cf, f)
+      qm.popb.f(f, nf, cf)
 
-def qn.push.of(+left: Bool, +l: Nat, +e: Nat, +nf: Nat, +cf: Nat, f: List<&2, QN>, +nb: Nat, +cb: Nat, b: List<&2, QN>) -> QNs:
-  match left:
-    case True{}:
-      qn.pushl(l, e, nf, cf, f, nb, cb, b)
-    case False{}:
-      qn.pushr(l, e, nf, cf, f, nb, cb, b)
-
-# a list after x (l bytes, an entry of e bytes) is pushed first (left) or
-# last: a listpack e bytes longer, or a quicklist's nodes with x
-def qn.push(+left: Bool, +l: Nat, +e: Nat, ns: QNs) -> QNs:
-  match ns:
-    case QLp{+lb}:
-      QLp{Nat.add(lb, e)}
-    case QQl{nf, cf, f, nb, cb, b}:
-      qn.push.of(left, l, e, nf, cf, f, nb, cb, b)
-
-# the elements xs pushed in turn
-def qn.pushes(+left: Bool, xs: List<&2, String>, ns: QNs) -> QNs:
-  match xs:
-    case Nil{}:
-      ns
-    case Con{+x, rest}:
-      qn.pushes(left, rest, qn.push(left, String.length(x), lpk.esize(x), ns))
-
-# the first element (an entry of e bytes) popped: its node holds one
-# fewer, or is gone with it (quicklistDelIndex)
-def qn.popl.in(last: Bool, +e: Nat, +c: Nat, +sz: Nat, rest: List<&2, QN>, +nf: Nat, +cf: Nat, +nb: Nat, +cb: Nat, b: List<&2, QN>) -> QNs:
-  match last:
-    case True{}:
-      qn.fix(Nat.sub(nf, 1n), Nat.sub(cf, 1n), rest, nb, cb, b)
-    case False{}:
-      QQl{nf, Nat.sub(cf, 1n), QN{Nat.sub(c, 1n), Nat.sub(sz, e)} <> rest, nb, cb, b}
-
-def qn.popl.one(last: Bool, +e: Nat, +c: Nat, +sz: Nat, +nb: Nat, +cb: Nat, rest: List<&2, QN>) -> QNs:
-  match last:
-    case True{}:
-      QQl{0n, 0n, Nil{}, Nat.sub(nb, 1n), Nat.sub(cb, 1n), rest}
-    case False{}:
-      QQl{0n, 0n, Nil{}, nb, Nat.sub(cb, 1n), QN{Nat.sub(c, 1n), Nat.sub(sz, e)} <> rest}
-
-def qn.popl.b(+e: Nat, +nb: Nat, +cb: Nat, b: List<&2, QN>) -> QNs:
-  match b:
-    case Con{QN{+c, +sz}, rest}:
-      qn.popl.one(Nat.is_eq(c, 1n), e, c, sz, nb, cb, rest)
-    case Nil{}:
-      QQl{0n, 0n, Nil{}, 0n, 0n, Nil{}}
-
-def qn.popl(+e: Nat, +nf: Nat, +cf: Nat, f: List<&2, QN>, +nb: Nat, +cb: Nat, b: List<&2, QN>) -> QNs:
-  match f:
-    case Con{QN{+c, +sz}, rest}:
-      qn.popl.in(Nat.is_eq(c, 1n), e, c, sz, rest, nf, cf, nb, cb, b)
-    case Nil{}:
-      qn.popl.b(e, nb, cb, b)
-
-# the last element popped, as qn.popl pops the first
-def qn.popr.in(last: Bool, +e: Nat, +c: Nat, +sz: Nat, rest: List<&2, QN>, +nf: Nat, +cf: Nat, f: List<&2, QN>, +nb: Nat, +cb: Nat) -> QNs:
-  match last:
-    case True{}:
-      qn.fix(nf, cf, f, Nat.sub(nb, 1n), Nat.sub(cb, 1n), rest)
-    case False{}:
-      QQl{nf, cf, f, nb, Nat.sub(cb, 1n), QN{Nat.sub(c, 1n), Nat.sub(sz, e)} <> rest}
-
-def qn.popr.one(last: Bool, +e: Nat, +c: Nat, +sz: Nat, +nf: Nat, +cf: Nat, rest: List<&2, QN>) -> QNs:
-  match last:
-    case True{}:
-      QQl{Nat.sub(nf, 1n), Nat.sub(cf, 1n), rest, 0n, 0n, Nil{}}
-    case False{}:
-      QQl{nf, Nat.sub(cf, 1n), QN{Nat.sub(c, 1n), Nat.sub(sz, e)} <> rest, 0n, 0n, Nil{}}
-
-def qn.popr.f(+e: Nat, +nf: Nat, +cf: Nat, f: List<&2, QN>) -> QNs:
-  match f:
-    case Con{QN{+c, +sz}, rest}:
-      qn.popr.one(Nat.is_eq(c, 1n), e, c, sz, nf, cf, rest)
-    case Nil{}:
-      QQl{0n, 0n, Nil{}, 0n, 0n, Nil{}}
-
-def qn.popr(+e: Nat, +nf: Nat, +cf: Nat, f: List<&2, QN>, +nb: Nat, +cb: Nat, b: List<&2, QN>) -> QNs:
-  match b:
-    case Con{QN{+c, +sz}, rest}:
-      qn.popr.in(Nat.is_eq(c, 1n), e, c, sz, rest, nf, cf, f, nb, cb)
-    case Nil{}:
-      qn.popr.f(e, nf, cf, f)
-
-def qn.pop.of(+left: Bool, +e: Nat, +nf: Nat, +cf: Nat, f: List<&2, QN>, +nb: Nat, +cb: Nat, b: List<&2, QN>) -> QNs:
-  match left:
-    case True{}:
-      qn.popl(e, nf, cf, f, nb, cb, b)
-    case False{}:
-      qn.popr(e, nf, cf, f, nb, cb, b)
+# the last node, as qm.popf takes the first
+def qm.popb(m: QM) -> QPop:
+  match m:
+    case QM{+nf, +cf, f, +nb, +cb, b}:
+      qm.popb.b(b, nf, cf, f, nb, cb)
+    case QMOf{x}:
+      qm.popb(x)
 
 # LSET: the node of the element at index j of the nodes ns (from the
 # first: on) with its bytes eo fewer and ev more
@@ -4966,21 +4899,208 @@ def qn.set.go(ns: List<&2, QN>, on: Bool, +j: Nat, +eo: Nat, +ev: Nat) -> List<&
     case ms _:
       ms
 
-def qn.set.of(front: Bool, +i: Nat, +eo: Nat, +ev: Nat, +nf: Nat, +cf: Nat, f: List<&2, QN>, +nb: Nat, +cb: Nat, b: List<&2, QN>) -> QNs:
+def qm.set.of(front: Bool, +j: Nat, +eo: Nat, +ev: Nat, +nf: Nat, +cf: Nat, f: List<&2, QN>, +nb: Nat, +cb: Nat, b: List<&2, QN>) -> QM:
   match front:
     case True{}:
-      QQl{nf, cf, qn.set.go(f, True{}, i, eo, ev), nb, cb, b}
+      QM{nf, cf, qn.set.go(f, True{}, j, eo, ev), nb, cb, b}
     case False{}:
-      QQl{nf, cf, f, nb, cb, qn.set.go(b, True{}, Nat.sub(Nat.sub(Nat.add(cf, cb), 1n), i), eo, ev)}
+      QM{nf, cf, f, nb, cb, qn.set.go(b, True{}, Nat.sub(Nat.sub(Nat.add(cf, cb), 1n), j), eo, ev)}
 
-# a list after LSET writes an element of an entry of ev bytes for one of
-# eo at index i (quicklistReplaceEntry), from the nearer stack
-def qn.set(+i: Nat, +eo: Nat, +ev: Nat, ns: QNs) -> QNs:
+# the node of the element at index j of the nodes between, from the nearer
+# stack, its bytes eo fewer and ev more
+def qm.set(+j: Nat, +eo: Nat, +ev: Nat, m: QM) -> QM:
+  match m:
+    case QM{+nf, +cf, f, +nb, +cb, b}:
+      qm.set.of(Nat.is_lt(j, cf), j, eo, ev, nf, cf, f, nb, cb, b)
+    case QMOf{x}:
+      qm.set(j, eo, ev, x)
+
+# How Redis holds a list (QNs)
+
+# a quicklist of the nodes ns, in order: none (an empty one), one, or the
+# first, those between and the last
+def qn.last(ns: List<&2, QN>, +x: QN, acc: List<&2, QN>) -> List<&2, QN> & QN:
+  match ns:
+    case Nil{}:
+      (acc, x)
+    case Con{y, rest}:
+      qn.last(rest, y, x <> acc)
+
+def qn.of.tail(+hc: Nat, +hsz: Nat, m: QM, t: QN) -> QNs:
+  match t:
+    case QN{+tc, +tsz}:
+      QQ{hc, hsz, m, tc, tsz}
+
+def qn.of.ends(+hc: Nat, +hsz: Nat, p: List<&2, QN> & QN) -> QNs:
+  (mid, t) = p
+  qn.of.tail(hc, hsz, qm.of(List.reverse(&2, QN, mid)), t)
+
+def qn.of.more(+c: Nat, +sz: Nat, rest: List<&2, QN>) -> QNs:
+  match rest:
+    case Nil{}:
+      QQ1{c, sz}
+    case Con{y, more}:
+      qn.of.ends(c, sz, qn.last(more, y, Nil{}))
+
+def qn.of(ns: List<&2, QN>) -> QNs:
+  match ns:
+    case Nil{}:
+      QQ1{0n, lpk.empty()}
+    case Con{QN{+c, +sz}, rest}:
+      qn.of.more(c, sz, rest)
+
+def qn.one.of(+c: Nat, +sz: Nat) -> List<&2, QN>:
+  Bool.pick(List<&2, QN>, Nat.is_eq(c, 0n), Nil{}, [QN{c, sz}])
+
+# a quicklist's nodes in order (a listpack's none)
+def qn.nodes(ns: QNs) -> List<&2, QN>:
+  match ns:
+    case QLp{lb}:
+      Nil{}
+    case QQ1{+c, +sz}:
+      qn.one.of(c, sz)
+    case QQ{+hc, +hsz, m, +tc, +tsz}:
+      QN{hc, hsz} <> qm.list(m, [QN{tc, tsz}])
+
+def qn.grown(past: Bool, +n: Nat, +lb: Nat) -> QNs:
+  match past:
+    case True{}:
+      QQ1{n, lb}
+    case False{}:
+      QLp{lb}
+
+# a list of n elements, held as ns, before a write adds elements of add
+# bytes: a listpack that they would take past 8 KB made a quicklist of one
+# node, itself (none when it is empty)
+def qn.grow(+n: Nat, +add: Nat, ns: QNs) -> QNs:
+  match ns:
+    case QLp{+lb}:
+      qn.grown(Nat.is_lt(lpk.lim(), Nat.add(lb, add)), n, lb)
+    case other:
+      other
+
+# a list after a write or a read: a quicklist of one node of lim bytes at
+# most made a listpack, the node itself (lim: 4 KB after a write that took
+# elements out, 8 KB for a list read)
+def qn.fit(+lim: Nat, ns: QNs) -> QNs:
+  match ns:
+    case QQ1{+c, +sz}:
+      Bool.pick(QNs, Nat.is_le(sz, lim), QLp{sz}, QQ1{c, sz})
+    case other:
+      other
+
+# whether a list is a quicklist
+def qn.ql(ns: QNs) -> Bool:
+  match ns:
+    case QLp{lb}:
+      False{}
+    case other:
+      True{}
+
+# Pushes and pops at the ends: x (l bytes, an entry of e bytes) put first
+# into the first node when it has room (one of none has), else into a node
+# of its own (quicklistPushHead), the first node then among those between;
+# put last, as quicklistPushTail puts it
+def qn.push.one(room: Bool, +left: Bool, +e: Nat, +c: Nat, +sz: Nat) -> QNs:
+  match room left:
+    case True{} _:
+      QQ1{1n+c, Nat.add(sz, e)}
+    case False{} True{}:
+      QQ{1n, Nat.add(lpk.empty(), e), qm.empty(), c, sz}
+    case False{} False{}:
+      QQ{c, sz, qm.empty(), 1n, Nat.add(lpk.empty(), e)}
+
+def qn.push.more(room: Bool, +left: Bool, +e: Nat, +hc: Nat, +hsz: Nat, m: QM, +tc: Nat, +tsz: Nat) -> QNs:
+  match room left:
+    case True{} True{}:
+      QQ{1n+hc, Nat.add(hsz, e), m, tc, tsz}
+    case True{} False{}:
+      QQ{hc, hsz, m, 1n+tc, Nat.add(tsz, e)}
+    case False{} True{}:
+      QQ{1n, Nat.add(lpk.empty(), e), qm.pushf(hc, hsz, m), tc, tsz}
+    case False{} False{}:
+      QQ{hc, hsz, qm.pushb(tc, tsz, m), 1n, Nat.add(lpk.empty(), e)}
+
+# a list after x is pushed first (left) or last: a listpack e bytes longer,
+# or a quicklist's nodes with x
+def qn.push(+left: Bool, +l: Nat, +e: Nat, ns: QNs) -> QNs:
+  match ns:
+    case QLp{+lb}:
+      QLp{Nat.add(lb, e)}
+    case QQ1{+c, +sz}:
+      qn.push.one(Bool.or(Nat.is_eq(c, 0n), qn.room(sz, l)), left, e, c, sz)
+    case QQ{+hc, +hsz, m, +tc, +tsz}:
+      qn.push.more(qn.room(Bool.pick(Nat, left, hsz, tsz), l), left, e, hc, hsz, m, tc, tsz)
+
+# the elements xs pushed in turn
+def qn.pushes(+left: Bool, xs: List<&2, String>, ns: QNs) -> QNs:
+  match xs:
+    case Nil{}:
+      ns
+    case Con{+x, rest}:
+      qn.pushes(left, rest, qn.push(left, String.length(x), lpk.esize(x), ns))
+
+# the first node gone with its last element: the next one from those
+# between, or the last alone
+def qn.next.h(p: QPop, +tc: Nat, +tsz: Nat) -> QNs:
+  match p:
+    case QPop{+c, +sz, m}:
+      QQ{c, sz, m, tc, tsz}
+    case QPopNone{}:
+      QQ1{tc, tsz}
+
+def qn.next.t(p: QPop, +hc: Nat, +hsz: Nat) -> QNs:
+  match p:
+    case QPop{+c, +sz, m}:
+      QQ{hc, hsz, m, c, sz}
+    case QPopNone{}:
+      QQ1{hc, hsz}
+
+def qn.pop.more(gone: Bool, +left: Bool, +e: Nat, +hc: Nat, +hsz: Nat, m: QM, +tc: Nat, +tsz: Nat) -> QNs:
+  match gone left:
+    case False{} True{}:
+      QQ{Nat.sub(hc, 1n), Nat.sub(hsz, e), m, tc, tsz}
+    case False{} False{}:
+      QQ{hc, hsz, m, Nat.sub(tc, 1n), Nat.sub(tsz, e)}
+    case True{} True{}:
+      qn.next.h(qm.popf(m), tc, tsz)
+    case True{} False{}:
+      qn.next.t(qm.popb(m), hc, hsz)
+
+# a list after its first element (left) or its last, an entry of e bytes,
+# is popped: its node holds one fewer, or is gone with it
+# (quicklistDelIndex)
+def qn.pop(+left: Bool, +e: Nat, ns: QNs) -> QNs:
+  match ns:
+    case QLp{+lb}:
+      QLp{Nat.sub(lb, e)}
+    case QQ1{+c, +sz}:
+      QQ1{Nat.sub(c, 1n), Nat.sub(sz, e)}
+    case QQ{+hc, +hsz, m, +tc, +tsz}:
+      qn.pop.more(Nat.is_eq(Bool.pick(Nat, left, hc, tc), 1n), left, e, hc, hsz, m, tc, tsz)
+
+def qn.set.at(head: Bool, tail: Bool, +i: Nat, +eo: Nat, +ev: Nat, +hc: Nat, +hsz: Nat, m: QM, +tc: Nat, +tsz: Nat) -> QNs:
+  match head tail:
+    case True{} _:
+      QQ{hc, Nat.sub(Nat.add(hsz, ev), eo), m, tc, tsz}
+    case False{} True{}:
+      QQ{hc, hsz, m, tc, Nat.sub(Nat.add(tsz, ev), eo)}
+    case False{} False{}:
+      QQ{hc, hsz, qm.set(Nat.sub(i, hc), eo, ev, m), tc, tsz}
+
+def qn.set.more(+i: Nat, +n: Nat, +eo: Nat, +ev: Nat, +hc: Nat, +hsz: Nat, m: QM, +tc: Nat, +tsz: Nat) -> QNs:
+  qn.set.at(Nat.is_lt(i, hc), Nat.is_le(Nat.sub(n, tc), i), i, eo, ev, hc, hsz, m, tc, tsz)
+
+# a list of n elements after LSET writes an element of an entry of ev
+# bytes for one of eo at index i, in its node (quicklistReplaceEntry)
+def qn.set(+i: Nat, +n: Nat, +eo: Nat, +ev: Nat, ns: QNs) -> QNs:
   match ns:
     case QLp{+lb}:
       QLp{Nat.sub(Nat.add(lb, ev), eo)}
-    case QQl{+nf, +cf, f, +nb, +cb, b}:
-      qn.set.of(Nat.is_lt(i, cf), i, eo, ev, nf, cf, f, nb, cb, b)
+    case QQ1{+c, +sz}:
+      QQ1{c, Nat.sub(Nat.add(sz, ev), eo)}
+    case QQ{+hc, +hsz, m, +tc, +tsz}:
+      qn.set.more(i, n, eo, ev, hc, hsz, m, tc, tsz)
 
 # the node m, when there is one, before ns
 def qn.cons(m: Maybe<&2, QN>, ns: List<&2, QN>) -> List<&2, QN>:
@@ -4990,51 +5110,81 @@ def qn.cons(m: Maybe<&2, QN>, ns: List<&2, QN>) -> List<&2, QN>:
     case None{}:
       ns
 
-# LTRIM: the nodes ns (from the first: on) without the whole ones among
-# their first k elements: how many elements those held (after a), and the
-# nodes left, the first of them m when the walk stopped at it
-def qn.skip(ns: List<&2, QN>, on: Bool, +k: Nat, +a: Nat, m: Maybe<&2, QN>) -> Nat & List<&2, QN>:
-  match ns on:
-    case Con{QN{+c, +sz}, rest} True{}:
-      +whole = Nat.is_le(c, k)
-      qn.skip(rest, whole, Nat.sub(k, Bool.pick(Nat, whole, c, 0n)), Bool.pick(Nat, whole, Nat.add(a, c), a), Bool.pick(Maybe<&2, QN>, whole, None{}, Some{QN{c, sz}}))
-    case ms _:
-      (a, qn.cons(m, ms))
-
-# the first node of ns without r of its elements, of w bytes
-def qn.less(ns: List<&2, QN>, +r: Nat, +w: Nat) -> List<&2, QN>:
+# how many elements a quicklist's first node holds, or its last (none for
+# a listpack)
+def qn.hc(+ns: QNs) -> Nat:
   match ns:
-    case Con{QN{+c, +sz}, rest}:
-      QN{Nat.sub(c, r), Nat.sub(sz, w)} <> rest
-    case Nil{}:
-      Nil{}
+    case QQ{+hc, hsz, m, tc, tsz}:
+      hc
+    case QQ1{+c, sz}:
+      c
+    case QLp{lb}:
+      0n
 
-def qn.dropl.of(+k: Nat, +q: DQ, p: Nat & List<&2, QN>) -> QNs:
-  (+s, ms) = p
-  +r = Nat.sub(k, s)
-  qn.of(qn.less(ms, r, lpk.span(r, s, q)))
+def qn.tc(+ns: QNs) -> Nat:
+  match ns:
+    case QQ{hc, hsz, m, +tc, tsz}:
+      tc
+    case QQ1{+c, sz}:
+      c
+    case QLp{lb}:
+      0n
 
-# a list without its first k elements, of q (quicklistDelRange): the
-# nodes they fill gone, and the next without those it holds
+# LTRIM: a quicklist without its first k elements, s of q's gone so far
+# with whole nodes (whole: k holds its first node; fuel: the nodes it may
+# take yet): the first node taken while k holds it, the next from the
+# nodes between or the last; then the first node left without the rest
+# of k (quicklistDelRange)
+def qn.dropf(fuel: Nat, whole: Bool, ns: QNs, +k: Nat, +s: Nat, +q: DQ) -> QNs:
+  match fuel whole ns:
+    case 1n+j True{} QQ{+hc, hsz, m, +tc, +tsz}:
+      +next = qn.next.h(qm.popf(m), tc, tsz)
+      +k2 = Nat.sub(k, hc)
+      qn.dropf(j, Nat.is_le(qn.hc(next), k2), next, k2, Nat.add(s, hc), q)
+    case _ True{} QQ1{c, sz}:
+      QQ1{0n, lpk.empty()}
+    case _ False{} QQ{+hc, +hsz, m, +tc, +tsz}:
+      QQ{Nat.sub(hc, k), Nat.sub(hsz, lpk.span(k, s, q)), m, tc, tsz}
+    case _ False{} QQ1{+c, +sz}:
+      QQ1{Nat.sub(c, k), Nat.sub(sz, lpk.span(k, s, q))}
+    case _ _ other:
+      other
+
+# ... its last k elements, as qn.dropf takes the first (s: q's gone so far
+# from its end, of n)
+def qn.dropb(fuel: Nat, whole: Bool, ns: QNs, +k: Nat, +s: Nat, +n: Nat, +q: DQ) -> QNs:
+  match fuel whole ns:
+    case 1n+j True{} QQ{+hc, +hsz, m, +tc, tsz}:
+      +next = qn.next.t(qm.popb(m), hc, hsz)
+      +k2 = Nat.sub(k, tc)
+      qn.dropb(j, Nat.is_le(qn.tc(next), k2), next, k2, Nat.add(s, tc), n, q)
+    case _ True{} QQ1{c, sz}:
+      QQ1{0n, lpk.empty()}
+    case _ False{} QQ{+hc, +hsz, m, +tc, +tsz}:
+      QQ{hc, hsz, m, Nat.sub(tc, k), Nat.sub(tsz, lpk.span(k, Nat.sub(Nat.sub(n, s), k), q))}
+    case _ False{} QQ1{+c, +sz}:
+      QQ1{Nat.sub(c, k), Nat.sub(sz, lpk.span(k, Nat.sub(Nat.sub(n, s), k), q))}
+    case _ _ other:
+      other
+
+# a list without its first k elements, of q: a listpack's bytes fewer, or
+# a quicklist's nodes as qn.dropf leaves them
 def qn.dropl(+k: Nat, +q: DQ, ns: QNs) -> QNs:
   match ns:
     case QLp{+lb}:
       QLp{Nat.sub(lb, lpk.ends(False{}, k, q))}
-    case QQl{nf, cf, f, nb, cb, b}:
-      qn.dropl.of(k, q, qn.skip(qn.list(f, b), True{}, k, 0n, None{}))
+    case other:
+      +o = other
+      qn.dropf(k, Nat.is_le(qn.hc(o), k), o, k, 0n, q)
 
-def qn.dropr.of(+k: Nat, +q: DQ, p: Nat & List<&2, QN>) -> QNs:
-  (+s, ms) = p
-  +r = Nat.sub(k, s)
-  qn.of(List.reverse(&2, QN, qn.less(ms, r, lpk.span(r, Nat.sub(dq.len(q), k), q))))
-
-# a list without its last k elements, as qn.dropl takes the first
+# ... without its last k elements
 def qn.dropr(+k: Nat, +q: DQ, ns: QNs) -> QNs:
   match ns:
     case QLp{+lb}:
       QLp{Nat.sub(lb, lpk.ends(True{}, k, q))}
-    case QQl{nf, cf, f, nb, cb, b}:
-      qn.dropr.of(k, q, qn.skip(List.append(&2, QN, b, List.reverse(&2, QN, f)), True{}, k, 0n, None{}))
+    case other:
+      +o = other
+      qn.dropb(k, Nat.is_le(qn.tc(o), k), o, k, 0n, dq.len(q), q)
 
 # LREM: how many of the positions ps (in increasing order, from the first:
 # on) are below e, after a
@@ -5065,30 +5215,21 @@ def qn.rem.go(ns: List<&2, QN>, +a: Nat, +ps: List<&2, Nat>, +e: Nat) -> List<&2
       +k = qn.below(ps, True{}, end, 0n)
       qn.rem.put(Nat.is_eq(k, c), QN{Nat.sub(c, k), Nat.sub(sz, Nat.mul(k, e))}, qn.rem.go(rest, end, List.drop(&2, Nat, ps, k), e))
 
-def qn.inc(back: Bool, ps: List<&2, Nat>) -> List<&2, Nat>:
+# LREM's positions ws, the walk's (the last first), as the list's in
+# increasing order: n - 1 - w each, of a walk from the last element
+def qn.rem.flip(ws: List<&2, Nat>, +n: Nat, acc: List<&2, Nat>) -> List<&2, Nat>:
+  match ws:
+    case Nil{}:
+      acc
+    case Con{+w, rest}:
+      qn.rem.flip(rest, n, Nat.sub(Nat.sub(n, 1n), w) <> acc)
+
+def qn.rem.ps(back: Bool, +n: Nat, os: List<&2, Nat>) -> List<&2, Nat>:
   match back:
-    case True{}:
-      ps
     case False{}:
-      List.reverse(&2, Nat, ps)
-
-# the positions in q of the gone elements that are x, from its first
-# element or its last (back), in increasing order
-def qn.rem.ps(gone: Nat, +x: String, +back: Bool, +q: DQ) -> List<&2, Nat>:
-  match gone:
-    case 0n:
-      Nil{}
-    case 1n+j:
-      qn.inc(back, dq.find(x, back, 1n+j, dq.len(q), q))
-
-# a list of q after LREM takes gone elements that are x, from the first
-# element or the last (back)
-def qn.rem(+x: String, +gone: Nat, +back: Bool, +q: DQ, ns: QNs) -> QNs:
-  match ns:
-    case QLp{+lb}:
-      QLp{Nat.sub(lb, Nat.mul(gone, lpk.esize(x)))}
-    case QQl{nf, cf, f, nb, cb, b}:
-      qn.of(qn.rem.go(qn.list(f, b), 0n, qn.rem.ps(gone, x, back, q), lpk.esize(x)))
+      List.reverse(&2, Nat, os)
+    case True{}:
+      qn.rem.flip(List.reverse(&2, Nat, os), n, Nil{})
 
 # LINSERT: a node and where it is: the nodes before it, the nearest first
 # (pre), the offset in it of the element sought (o), and the nodes from it
@@ -5241,15 +5382,6 @@ def qn.ins.at(+after: Bool, +l: Nat, +e: Nat, +i: Nat, +q: DQ, at: QAt) -> List<
     case QAt{pre, +o, ns}:
       qn.ins.in(after, l, e, o, Nat.sub(i, o), q, pre, ns)
 
-# a list of q after LINSERT puts an element of l bytes (an entry of e
-# bytes) after (or before) its element at index i
-def qn.ins(+i: Nat, +after: Bool, +l: Nat, +e: Nat, +q: DQ, ns: QNs) -> QNs:
-  match ns:
-    case QLp{+lb}:
-      QLp{Nat.add(lb, e)}
-    case QQl{nf, cf, f, nb, cb, b}:
-      qn.of(qn.ins.at(after, l, e, i, q, qn.at(qn.list(f, b), True{}, i, Nil{}, None{})))
-
 # A list read: the nodes RPUSH makes of the elements xs, the last first,
 # after the node of c elements in sz bytes that it fills and the nodes acc
 # before it
@@ -5278,6 +5410,15 @@ def qn.parts(ns: List<&2, QN>, +xs: List<&2, String>, acc: List<&2, List<&2, Str
     case Con{QN{+c, sz}, rest}:
       qn.parts(rest, List.drop(&2, String, xs, c), List.take(&2, String, xs, c) <> acc)
 
+# a list of q after LINSERT puts an element of l bytes (an entry of e
+# bytes) after (or before) its element at index i
+def qn.ins(+i: Nat, +after: Bool, +l: Nat, +e: Nat, +q: DQ, ns: QNs) -> QNs:
+  match ns:
+    case QLp{+lb}:
+      QLp{Nat.add(lb, e)}
+    case other:
+      qn.of(qn.ins.at(after, l, e, i, q, qn.at(qn.nodes(other), True{}, i, Nil{}, None{})))
+
 # Lists
 def deq.empty() -> Deq:
   Deq{dq.empty(), QLp{lpk.empty()}}
@@ -5286,26 +5427,67 @@ def deq.len(+d: Deq) -> Nat:
   match d:
     case Deq{+q, ns}:
       dq.len(q)
+    case DeqOf{+e}:
+      deq.len(e)
 
 # whether Redis 7.2 holds the list as a quicklist (OBJECT ENCODING)
 def deq.qk(+d: Deq) -> Bool:
   match d:
     case Deq{q, +ns}:
       qn.ql(ns)
+    case DeqOf{+e}:
+      deq.qk(e)
+
+def deq.push.lp(past: Bool, +left: Bool, +x: String, +e: Nat, +lb: Nat, +q: DQ) -> Deq:
+  match past:
+    case False{}:
+      Deq{dq.push(left, x, q), QLp{Nat.add(lb, e)}}
+    case True{}:
+      +ns = qn.push(left, String.length(x), e, QQ1{dq.len(q), lb})
+      Deq{dq.push(left, x, q), ns}
+
+def deq.push.on(ns: QNs, +left: Bool, +x: String, q: DQ) -> Deq:
+  match ns:
+    case QLp{+lb}:
+      deq.push.lp(Nat.is_lt(lpk.lim(), Nat.add(lb, String.length(x))), left, x, lpk.esize(x), lb, q)
+    case other:
+      +ns2 = qn.push(left, String.length(x), lpk.esize(x), other)
+      Deq{dq.push(left, x, q), ns2}
 
 # x put first (left) or last, a listpack that x would take past 8 KB
 # first made a quicklist
 def deq.push(+left: Bool, +x: String, d: Deq) -> Deq:
   match d:
-    case Deq{+q, ns}:
-      Deq{dq.push(left, x, q), qn.push(left, String.length(x), lpk.esize(x), qn.grow(dq.len(q), String.length(x), ns))}
+    case Deq{q, ns}:
+      deq.push.on(ns, left, x, q)
+    case DeqOf{e}:
+      deq.push(left, x, e)
+
+def deq.pushes.lp(past: Bool, +left: Bool, +xs: List<&2, String>, +lb: Nat, +q: DQ) -> Deq:
+  match past:
+    case False{}:
+      +lb2 = lpk.sum(xs, lb)
+      Deq{dq.pushes.n(left, xs, q), QLp{lb2}}
+    case True{}:
+      +ns = qn.pushes(left, xs, QQ1{dq.len(q), lb})
+      Deq{dq.pushes.n(left, xs, q), ns}
+
+def deq.pushes.on(ns: QNs, +left: Bool, +xs: List<&2, String>, q: DQ) -> Deq:
+  match ns:
+    case QLp{+lb}:
+      deq.pushes.lp(Nat.is_lt(lpk.lim(), lpk.raw(xs, lb)), left, xs, lb, q)
+    case other:
+      +ns2 = qn.pushes(left, xs, other)
+      Deq{dq.pushes.n(left, xs, q), ns2}
 
 # the elements xs pushed in turn, each first (left) or last, a listpack
 # that they would take past 8 KB first made a quicklist
 def deq.pushes.n(+left: Bool, +xs: List<&2, String>, d: Deq) -> Deq:
   match d:
-    case Deq{+q, ns}:
-      Deq{dq.pushes.n(left, xs, q), qn.pushes(left, xs, qn.grow(dq.len(q), lpk.raw(xs, 0n), ns))}
+    case Deq{q, ns}:
+      deq.pushes.on(ns, left, xs, q)
+    case DeqOf{e}:
+      deq.pushes.n(left, xs, e)
 
 # the elements xs pushed in turn: one alone as deq.push puts it, more
 # together
@@ -5323,17 +5505,11 @@ type Pop is Data:
   Pop{x: String, d: Deq}
   PopNone{}
 
-def deq.popped.of(+left: Bool, +x: String, q: DQ, ns: QNs) -> Pop:
-  match ns:
-    case QLp{+lb}:
-      Pop{x, Deq{q, QLp{Nat.sub(lb, lpk.esize(x))}}}
-    case QQl{nf, cf, f, nb, cb, b}:
-      Pop{x, Deq{q, qn.fit(lpk.half(), qn.pop.of(left, lpk.esize(x), nf, cf, f, nb, cb, b))}}
-
 def deq.popped(p: DPop, +left: Bool, ns: QNs) -> Pop:
   match p:
     case DPop{+x, q}:
-      deq.popped.of(left, x, q, ns)
+      +ns2 = qn.fit(lpk.half(), qn.pop(left, lpk.esize(x), ns))
+      Pop{x, Deq{q, ns2}}
     case DPopNone{}:
       PopNone{}
 
@@ -5341,6 +5517,8 @@ def deq.pop(+left: Bool, d: Deq) -> Pop:
   match d:
     case Deq{q, ns}:
       deq.popped(dq.pop(left, q), left, ns)
+    case DeqOf{e}:
+      deq.pop(left, e)
 
 # elements popped so far, in reverse of the order they came off, and the
 # list left
@@ -5374,21 +5552,29 @@ def deq.all(+d: Deq) -> List<&2, String>:
   match d:
     case Deq{+q, ns}:
       dq.all(q)
+    case DeqOf{+e}:
+      deq.all(e)
 
 def deq.get(+i: Nat, +d: Deq) -> Maybe<&2, String>:
   match d:
     case Deq{+q, ns}:
       dq.get(i, q)
+    case DeqOf{+e}:
+      deq.get(i, e)
 
 def deq.range(+s: Nat, +e: Nat, +d: Deq) -> List<&2, String>:
   match d:
     case Deq{+q, ns}:
       dq.range(s, e, q)
+    case DeqOf{+x}:
+      deq.range(s, e, x)
 
 def deq.find(+x: String, +back: Bool, +w: Nat, +l: Nat, +d: Deq) -> List<&2, Nat>:
   match d:
     case Deq{+q, ns}:
       dq.find(x, back, w, l, q)
+    case DeqOf{+e}:
+      deq.find(x, back, w, l, e)
 
 # LSET of index i (one the list has) to v: a listpack made a quicklist
 # first when v's length would take it past 8 KB (lsetCommand), v written
@@ -5397,26 +5583,44 @@ def deq.find(+x: String, +back: Bool, +w: Nat, +l: Nat, +d: Deq) -> List<&2, Nat
 def deq.set(+i: Nat, +v: String, d: Deq) -> Deq:
   match d:
     case Deq{+q, ns}:
-      Deq{dq.set(i, v, q), qn.fit(lpk.half(), qn.set(i, lpk.esize(Maybe.default(&2, String, dq.get(i, q), "")), lpk.esize(v), qn.grow(dq.len(q), String.length(v), ns)))}
+      +n = dq.len(q)
+      +ns2 = qn.fit(lpk.half(), qn.set(i, n, lpk.esize(Maybe.default(&2, String, dq.get(i, q), "")), lpk.esize(v), qn.grow(n, String.length(v), ns)))
+      Deq{dq.set(i, v, q), ns2}
+    case DeqOf{e}:
+      deq.set(i, v, e)
 
-# LTRIM's drops: the first k elements, or the last, a quicklist of one
-# node of 4 KB at most then made a listpack (as after the pops, once is as
-# Redis's once after both)
+# LTRIM's drops: the first k elements, or the last (none: the list as it
+# is), the piece at that end turned to start there first (dq.face), a
+# quicklist of one node of 4 KB at most then made a listpack (as after
+# the pops, once is as Redis's once after both)
 def deq.dropl(+k: Nat, d: Deq) -> Deq:
-  match d:
-    case Deq{+q, ns}:
-      Deq{dq.dropl(k, q), qn.fit(lpk.half(), qn.dropl(k, q, ns))}
+  match k d:
+    case 0n e:
+      e
+    case _ Deq{q, ns}:
+      +q1 = dq.face(True{}, q)
+      +ns2 = qn.fit(lpk.half(), qn.dropl(k, q1, ns))
+      Deq{dq.dropl(k, q1), ns2}
+    case _ DeqOf{e}:
+      deq.dropl(k, e)
 
 def deq.dropr(+k: Nat, d: Deq) -> Deq:
-  match d:
-    case Deq{+q, ns}:
-      Deq{dq.dropr(k, q), qn.fit(lpk.half(), qn.dropr(k, q, ns))}
+  match k d:
+    case 0n e:
+      e
+    case _ Deq{q, ns}:
+      +q1 = dq.face(False{}, q)
+      +ns2 = qn.fit(lpk.half(), qn.dropr(k, q1, ns))
+      Deq{dq.dropr(k, q1), ns2}
+    case _ DeqOf{e}:
+      deq.dropr(k, e)
 
 def deq.ins.of(ps: List<&2, Nat>, +after: Bool, +v: String, +q: DQ, ns: QNs) -> Maybe<&2, Deq>:
   match ps:
     case Con{+i, rest}:
       +l = String.length(v)
-      Some{Deq{dq.ins.at(i, after, v, q), qn.ins(i, after, l, lpk.esize(v), q, qn.grow(dq.len(q), l, ns))}}
+      +ns2 = qn.ins(i, after, l, lpk.esize(v), q, qn.grow(dq.len(q), l, ns))
+      Some{Deq{dq.ins.at(i, after, v, q), ns2}}
     case Nil{}:
       None{}
 
@@ -5427,33 +5631,56 @@ def deq.ins(+p: String, +after: Bool, +v: String, d: Deq) -> Maybe<&2, Deq>:
   match d:
     case Deq{+q, ns}:
       deq.ins.of(dq.find(p, False{}, 1n, 1n+dq.len(q), q), after, v, q, ns)
+    case DeqOf{e}:
+      deq.ins(p, after, v, e)
 
 # a list after LREM, and how many elements it took
 type Rem is Data:
   Rem{d: Deq, gone: Nat}
 
-def deq.removed(r: DRem, +x: String, +back: Bool, +q: DQ, ns: QNs) -> Rem:
+def deq.rem.lp(r: DRem, +x: String, +lb: Nat) -> Rem:
   match r:
-    case DRem{q2, +gone}:
-      Rem{Deq{q2, qn.fit(lpk.half(), qn.rem(x, gone, back, q, ns))}, gone}
+    case DRem{q, +gone, os}:
+      Rem{Deq{q, QLp{Nat.sub(lb, Nat.mul(gone, lpk.esize(x)))}}, gone}
+
+# a quicklist's nodes lose the matches LREM took, at the positions its
+# walk gives (of a list of n), then a quicklist of one node of 4 KB at
+# most made a listpack
+def deq.rem.ql(r: DRem, +x: String, +back: Bool, +n: Nat, ns: QNs) -> Rem:
+  match r:
+    case DRem{q, +gone, os}:
+      +ns2 = qn.fit(lpk.half(), qn.of(qn.rem.go(qn.nodes(ns), 0n, qn.rem.ps(back, n, os), lpk.esize(x))))
+      Rem{Deq{q, ns2}, gone}
+
+def deq.rem.on(ns: QNs, +x: String, +w: Nat, +back: Bool, +q: DQ) -> Rem:
+  match ns:
+    case QLp{+lb}:
+      deq.rem.lp(dq.rem(x, w, back, q), x, lb)
+    case other:
+      deq.rem.ql(dq.rem(x, w, back, q), x, back, dq.len(q), other)
 
 # LREM: the list without its first w elements that are x (all of them
-# for w 0), from its first element or its last (back), then shrunk
+# for w 0), from its first element or its last (back)
 def deq.rem(+x: String, +w: Nat, +back: Bool, d: Deq) -> Rem:
   match d:
-    case Deq{+q, ns}:
-      deq.removed(dq.rem(x, w, back, q), x, back, q, ns)
+    case Deq{q, ns}:
+      deq.rem.on(ns, x, w, back, q)
+    case DeqOf{e}:
+      deq.rem(x, w, back, e)
 
 def deq.auto(d: Deq) -> Deq:
   match d:
     case Deq{q, ns}:
       Deq{q, qn.fit(lpk.lim(), ns)}
+    case DeqOf{e}:
+      deq.auto(e)
 
 # the list of the n elements xs as RPUSH makes a quicklist of them (a
 # ziplist's, ZIPLIST, as rdbLoadObject reads one: a quicklist whatever
 # its size)
 def deq.zl(+n: Nat, +xs: List<&2, String>) -> Deq:
-  Deq{dq.of(n, xs), qn.of(List.reverse(&2, QN, qn.part(xs, 0n, lpk.empty(), Nil{})))}
+  +ns = qn.of(List.reverse(&2, QN, qn.part(xs, 0n, lpk.empty(), Nil{})))
+  Deq{dq.of(n, xs), ns}
 
 # the list of the n elements xs pushed into a quicklist, then made a
 # listpack when it is one node of 8 KB at most (LIST, as rdbLoadObject
@@ -5471,20 +5698,24 @@ def deq.parts.of(ns: QNs, xs: List<&2, String>) -> List<&2, List<&2, String>>:
   match ns:
     case QLp{lb}:
       [xs]
-    case QQl{nf, cf, f, nb, cb, b}:
-      qn.parts(qn.list(f, b), xs, Nil{})
+    case other:
+      qn.parts(qn.nodes(other), xs, Nil{})
 
 # the elements of each node, in order: a listpack's all in one, as
 # rdbSaveObject writes a listpack (a quicklist of one node)
 def deq.parts(+d: Deq) -> List<&2, List<&2, String>>:
   match d:
-    case Deq{+q, ns}:
+    case Deq{+q, +ns}:
       deq.parts.of(ns, dq.all(q))
+    case DeqOf{+e}:
+      deq.parts(e)
 
 def deq.bytes(+d: Deq) -> Nat:
   match d:
     case Deq{+q, ns}:
       dq.bytes(q)
+    case DeqOf{+e}:
+      deq.bytes(e)
 
 # Sorted sets
 # -----------

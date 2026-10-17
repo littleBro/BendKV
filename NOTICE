@@ -173,6 +173,16 @@ parts of it are written from 7.2.16's sources:
   double2ll in tests/float_ref.c.
 - XINFO STREAM FULL's active-time and XINFO CONSUMERS' inactive
   (t_stream.c), in src/redis.bend and src/stream.bend.
+- Encodings: lists as listpacks and quicklists, each node's count and
+  bytes moved as quicklist.c moves its nodes (_quicklistNodeAllowInsert,
+  _quicklistNodeAllowMerge, _quicklistInsert with its splits and merges,
+  quicklistReplaceEntry, quicklistDelRange) and turned as t_list.c's
+  listTypeTryConversion turns them, read and written as rdb.c's
+  rdbLoadObject and rdbSaveObject do (src/map.bend, src/rdb.bend); sets
+  as listpacks, sized by SADD's count of members as t_set.c's
+  setTypeCreate and setTypeMaybeConvert size them, and scanned whole
+  (src/map.bend, src/redis.bend); and OBJECT ENCODING of both
+  (src/session.bend).
 
 Bend (bend-patches/): patches to the Bend compiler and its runtime
 (github.com/bendlang/bend at 1cce499, Bend 2.0.35), Copyright 2026
