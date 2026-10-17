@@ -22,17 +22,19 @@ The scenarios:
    nested arrays, HGETALL), the errors of commands (WRONGTYPE, an
    unknown command, a wrong number of arguments, no arguments at all, an
    argument that is a table, a boolean or nil), numbers as arguments
-   (%.17g), pcall's error table and pcall(redis.call, ...)'s plain
-   message, the commands a script may not call (EVAL, MULTI, SUBSCRIBE,
-   BLPOP, which Redis 7.0.15 refuses rather than run without blocking),
-   the blocking ones it may (BLMPOP and BZMPOP, which do not wait),
-   XREAD's BLOCK, which Redis refuses a script,
+   (an integer as one, any other in fpconv_dtoa's shortest form, -0 as
+   0, inf and NaN), pcall's error table and pcall(redis.call, ...)'s plain
+   message, the commands a script may not call (EVAL, MULTI, SUBSCRIBE),
+   the blocking ones, which run as in MULTI, without waiting (BLPOP,
+   BRPOPLPUSH, BZPOPMIN, BLMPOP, BZMPOP, WAIT), XREAD's BLOCK, which
+   Redis refuses a script,
    SELECT in a script, which leaves the caller's database as it was, and
    SORT of a set by a constant, which Redis sorts with ALPHA for a script.
 3. Error texts: runtime errors, compile errors, a global not there, a
    write to a global (the globals are read only), error() with a table,
-   with a number, a boolean or nothing, and the suffix "script: <sha>,
-   on @user_script:N." with the line it names.
+   with a number, a boolean or nothing, the suffix "script: <sha>,
+   on @user_script:N." with the line it names, and a CR or an LF in an
+   error's text, sent as a space.
 4. The script cache: SCRIPT LOAD, EVALSHA (with the sha in upper case
    too), SCRIPT EXISTS of several shas, NOSCRIPT, SCRIPT FLUSH (SYNC,
    ASYNC, a bad option), SCRIPT HELP, SCRIPT KILL with no script
@@ -81,17 +83,18 @@ The scenarios:
    EXEC of scripts that declare no-writes run at once; EVAL without a
    shebang, EVALSHA, EVAL_RO whose shebang does not declare no-writes
    and an EXEC that queued one are held back, then run.
-12. Scripts and CLIENT TRACKING (RESP3), as Redis 7.0.15 runs them, a
+12. Scripts and CLIENT TRACKING (RESP3), as Redis 7.2.16 runs them, a
    script's calls its caller's (current_client): the caller's own
    invalidation after its script's reply, after its replies before the
    script in a pipeline, and none in NOLOOP mode; in BCAST mode after the
    reply, NOLOOP or not (Redis keeps the script's own client as the key's
    changer); a client that a tracking client redirects to, which runs the
-   script, told before the script's reply; the keys a script that reads
-   remembers for its caller (its KEYS, not a key it reads without
-   declaring it; under OPTIN only with CLIENT CACHING yes; EVAL_RO's own
-   call none); a FLUSHALL in a script, its null after the reply.
-13. Scripts and ACL, as Redis 7.0.15 runs them, a script's calls checked
+   script, told before the script's reply; the keys a script's read-only
+   calls read, remembered for its caller (a key read without declaring it
+   too, a key declared and not read not; under OPTIN only with CLIENT
+   CACHING yes; EVAL_RO's own keys none); a FLUSHALL in a script, its
+   null after the reply.
+13. Scripts and ACL, as Redis 7.2.16 runs them, a script's calls checked
    with its caller's user (scriptVerifyACL): redis.acl_check_cmd of a
    command allowed, of one not allowed, of a key not allowed and of a
    command not known; calls of a command, a key and a channel not
@@ -103,9 +106,7 @@ The scenarios:
    INFO's statistics before and after the transactions.
 
 Not tested: error() with a table that has no 'err' field (error({}))
-makes Redis 7.0.15 crash (sdscatfmt reads the message it does not have),
-and an error message with a CR LF in it, which Redis sends as it is,
-breaking its own protocol.
+makes Redis 7.2.16 crash (sdscatfmt reads the message it does not have).
 
     python3 tests/script_test.py --bendkv 6380 --redis 6390 [--no-busy]
 """
@@ -275,6 +276,11 @@ RETURNS = [
     "return redis.status_reply({})", "return redis.status_reply()",
     # RESP3's types as tables, each in the caller's protocol
     "return {double=1.5}", "return {double=0.1}", "return {double=-1/0}", "return {double='x'}",
+    # a double as d2string writes it: nan, -0, an integer as one (within
+    # 2^62 either way), any other as fpconv_dtoa
+    "local z = 0 return {double=z/z}", "return {double=-0}", "return {double=100}", "return {double=1e17}",
+    "return {double=2^62}", "return {double=-2^62}", "return {double=2^62 + 2048}", "return {double=2^63}",
+    "return {double=1e300}", "return {double=5e-324}", "return {double=1/3}",
     "return {map={a=1, b='two', c={1, 2}}}", "return {map={}}", "return {set={x=true, y=true}}",
     "return {big_number='123456789012345678901234567890'}", "return {big_number='1\\r\\n2'}",
     "return {verbatim_string={format='txt', string='hello'}}", "return {verbatim_string={format='txt'}}",
@@ -379,8 +385,11 @@ CALLS = [
     ("return redis.call({})", [], []),
     ("return redis.call('SET', KEYS[1], 'v', 'EX', 0)", ["str"], []),
     ("return redis.call('SET', KEYS[1], 'v', 'XX', 'NX')", ["str"], []),
-    # numbers as arguments: %.17g (and -0, inf, nan made at run time)
+    # numbers as arguments: an integer as one within 2^62 either way, any
+    # other as fpconv_dtoa (and -0, inf, nan made at run time)
     ("local out = {} for i, v in ipairs({3.14, 0.1, 1/3, 100, -7, 2^63, 1e100, 1e-300, 5e-324, 2^53 + 1}) do "
+     "redis.call('SET', KEYS[1], v) out[i] = redis.call('GET', KEYS[1]) end return out", ["n"], []),
+    ("local out = {} for i, v in ipairs({2^62, -2^62, 2^62 + 2048, -2^62 - 2048, 1e17, 123456789.5, 1e21}) do "
      "redis.call('SET', KEYS[1], v) out[i] = redis.call('GET', KEYS[1]) end return out", ["n"], []),
     ("local z = tonumber(ARGV[1]) local out = {} for i, v in ipairs({-z, 1/z, -1/z, z/z}) do "
      "redis.call('SET', KEYS[1], v) out[i] = redis.call('GET', KEYS[1]) end return out", ["n"], ["0"]),
@@ -399,7 +408,8 @@ CALLS = [
     ("local ok, err = pcall(function() error({err='CODE inside'}) end) return {tostring(ok), type(err)}", [], []),
     ("return {xpcall(function() return redis.call('NOSUCH') end, function(e) return type(e) end)}", [], []),
     ("return {xpcall(function() return redis.call('NOSUCH') end, function(e) return e.err end)}", [], []),
-    # the commands a script may not call
+    # the commands a script may not call, and the blocking ones, which run
+    # as in MULTI, without waiting
     ("return redis.call('EVAL', 'return 1', 0)", [], []),
     ("return redis.pcall('EVAL', 'return 1', 0)", [], []),
     ("return redis.call('EVALSHA', ARGV[1], 0)", [], [sha("return 1")]),
@@ -477,6 +487,9 @@ ERRORS = [
     "error({err='MYERR custom message'})", "error({err='ERR plain'})", "error({err='nocode'})", "error({err=42})",
     "error({err='X', source='mine', line=99})", "error(redis.error_reply('MY err'))",
     "error(redis.error_reply('no code'))",
+    # a CR or an LF in an error's text: a space each, the last ones cut
+    "error('a\\r\\nb')", "return redis.error_reply('x\\r\\ny')", "return {err='p\\nq'}",
+    "error({err='t\\r\\nu'})", "return {err='ERR z\\r\\n'}",
     # error() with a string, at levels, and with what is not a string
     "error('boom')", "error('boom', 0)", "error('boom', 2)", "local function f() error('deep', 2) end\nf()",
     "error(42)", "error(1.5)", "error(true)", "error()", "error(nil)", "local ok, e = pcall(error, 'x') error(e)",
@@ -1120,9 +1133,9 @@ def tracking(port, log):
     log("12 redirected", b.read(), b.read(), b.read(), *drain(b))
     a.close()
     b.close()
-    # the keys a script's read remembers for its caller: its KEYS, not a
-    # key it reads undeclared, EVAL_RO's own call none; OPTIN with and
-    # without CLIENT CACHING yes
+    # the keys a script's read-only calls read, remembered for its caller:
+    # a key read undeclared too, a key declared and not read not, EVAL_RO's
+    # own keys none; OPTIN with and without CLIENT CACHING yes
     c = Client(port, resp3=True)
     log("12 on", c.cmd("CLIENT", "TRACKING", "ON"))
     log("12 reads", ev(c, "return redis.call('GET', KEYS[1])", [k("d")]), ev(c, "return redis.call('GET', ARGV[1])", [], [k("x")]),

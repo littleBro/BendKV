@@ -43,8 +43,10 @@ LIST's lines cut to their ids, flags and redirects).
 - BCAST with many keys under a prefix in one batch (a group's keys sent
   in the order of their bytes, each once).
 
-Then a check of BendKV alone: an MGET of 50,000 keys by a client that
-tracks them answers within 1.5 s.
+Then checks of BendKV alone: an MGET of 50,000 keys by a client that
+tracks them answers within 1.5 s; an overlap of BCAST's prefixes past the
+first gets the error alone and leaves the tracking off, where Redis 7.0.15
+and 7.2.16 answer the error, then OK (docs/UPSTREAM.md, bug 8).
 
     python3 tests/tracking_test.py --bendkv 6380 --redis 6390
 """
@@ -667,6 +669,31 @@ def mget_time(port, n):
     return dt, buf.count(b"_\r\n")
 
 
+def overlap_once(port):
+    """What a client got for prefixes that overlap past the first, within
+    0.3 s, and its tracking's flags after it"""
+    s = socket.create_connection(("127.0.0.1", port))
+    s.settimeout(5)
+    s.sendall(enc(["CLIENT", "TRACKING", "on", "BCAST", "PREFIX", "x", "PREFIX", "a", "PREFIX", "ab"]))
+    buf = b""
+    while not buf.endswith(b"\r\n"):
+        buf += s.recv(1 << 16)
+    s.settimeout(0.3)
+    try:
+        while True:
+            d = s.recv(1 << 16)
+            if not d:
+                break
+            buf += d
+    except socket.timeout:
+        pass
+    s.settimeout(5)
+    s.sendall(enc(["CLIENT", "TRACKINGINFO"]))
+    info = s.recv(1 << 16)
+    s.close()
+    return buf, info
+
+
 def run(port, scenario):
     r = Run(port)
     try:
@@ -705,6 +732,14 @@ def main():
             print("FAIL MGET of 50,000 keys by a client that tracks them: %.3f s (at most 1.5 s), %d nulls" % (dt, got))
         else:
             print("ok   MGET of 50,000 keys by a client that tracks them: %.3f s" % dt)
+        got, info = overlap_once(a.bendkv)
+        want = (b"-ERR Prefix 'a' overlaps with another provided prefix 'ab'. "
+                b"Prefixes for a single client must not overlap.\r\n")
+        if got != want or b"off" not in info:
+            fails += 1
+            print("FAIL an overlap of prefixes past the first: %r, then %r" % (got, info[:120]))
+        else:
+            print("ok   an overlap of prefixes past the first: the error alone, tracking off")
     if fails:
         sys.exit(1)
     print("TRACKING TESTS PASSED")

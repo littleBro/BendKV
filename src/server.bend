@@ -2261,6 +2261,73 @@ def trk.off(+id: Nat, +cur: Tk, t: Trk) -> Trk:
 
 # Clients
 # -------
+# what a client set of itself that only the registry keeps: CLIENT
+# NO-EVICT and CLIENT NO-TOUCH on or off (NO-TOUCH, below), and the
+# library CLIENT SETINFO names (lname, lver: "" for none), which RESET
+# keeps, as Redis 7.2.16 keeps lib_name and lib_ver
+# (clearClientConnectionState). ClfOf, never built, makes Clf a node of
+# its own: one word of Cl, which the tracking's invalidations (Iv) and
+# CLIENT LIST's lines carry taken apart, in segments as wide as the work
+# loop's register bank (WL_BANK: FINDINGS 3zzzd), where Clf's own four
+# words widened them
+type Clf is Data:
+  Clf{noev: Bool, nt: Bool, lname: String, lver: String}
+  ClfOf{f: Clf}
+
+# a change of it: NO-EVICT, NO-TOUCH, SETINFO of the version (ver) or the
+# name, and RESET's (NO-EVICT and NO-TOUCH off)
+type ClfOp is Data:
+  FNoEv{on: Bool}
+  FNoTouch{on: Bool}
+  FLib{ver: Bool, v: String}
+  FReset{}
+
+def clf.new() -> Clf:
+  Clf{False{}, False{}, "", ""}
+
+def clf.set(op: ClfOp, f: Clf) -> Clf:
+  match op f:
+    case FNoEv{on} Clf{e, nt, n, v}:
+      Clf{on, nt, n, v}
+    case FNoTouch{on} Clf{e, nt, n, v}:
+      Clf{e, on, n, v}
+    case FLib{True{}, x} Clf{e, nt, n, v}:
+      Clf{e, nt, n, x}
+    case FLib{False{}, x} Clf{e, nt, n, v}:
+      Clf{e, nt, x, v}
+    case FReset{} Clf{e, nt, n, v}:
+      Clf{False{}, False{}, n, v}
+    case o ClfOf{x}:
+      clf.set(o, x)
+
+def clf.noev(+f: Clf) -> Bool:
+  match f:
+    case Clf{+e, nt, n, v}:
+      e
+    case ClfOf{+x}:
+      clf.noev(x)
+
+def clf.nt(+f: Clf) -> Bool:
+  match f:
+    case Clf{e, +nt, n, v}:
+      nt
+    case ClfOf{+x}:
+      clf.nt(x)
+
+def clf.lname(+f: Clf) -> String:
+  match f:
+    case Clf{e, nt, +n, v}:
+      n
+    case ClfOf{+x}:
+      clf.lname(x)
+
+def clf.lver(+f: Clf) -> String:
+  match f:
+    case Clf{e, nt, n, +v}:
+      v
+    case ClfOf{+x}:
+      clf.lver(x)
+
 # Every client the server holds, by id, from its connection's start
 # (Join, which the actor answers with the client's state as it comes:
 # authenticated when there is no password then, as Redis's createClient
@@ -2268,8 +2335,9 @@ def trk.off(+id: Nat, +cur: Tk, t: Trk) -> Trk:
 # back on, its socket's fd, its peer's address and its own (TCP.name),
 # when it came (ms), its name and database as the last command that set
 # them left them (CLIENT SETNAME, HELLO, SELECT, RESET: the actor writes
-# them as such a command runs), whether CLIENT NO-EVICT is on, and its
-# tracking (CLIENT TRACKING: Tracking, above). Its
+# them as such a command runs), what it set of itself (Clf: CLIENT
+# NO-EVICT, NO-TOUCH and SETINFO), and its tracking (CLIENT TRACKING:
+# Tracking, above). Its
 # last command and the time of its last batch are its channel's mark
 # (Chan.mark), which the actor sets with each batch: a store, where a
 # write to the registry would cost every request a walk of a trie.
@@ -2285,7 +2353,7 @@ def trk.off(+id: Nat, +cur: Tk, t: Trk) -> Trk:
 # CLIENT PAUSE (The pause, below), and a SHUTDOWN asked for in the group
 # (down: SHUTDOWN, below).
 type Cl is Data:
-  Cl{id: Nat, back: Chan(Ans), fd: U32, addr: String, laddr: String, since: Nat, name: String, db: Nat, noev: Bool, r3: Bool, tk: Tk, user: String}
+  Cl{id: Nat, back: Chan(Ans), fd: U32, addr: String, laddr: String, since: Nat, name: String, db: Nat, fl: Clf, r3: Bool, tk: Tk, user: String}
 
 # CLIENT PAUSE's pause (The pause, below): none, or one of the commands
 # that write (all: of every command) until a time (ms since 1970)
@@ -2471,13 +2539,13 @@ def cls.killed(+id: Nat, +cs: Cls) -> Bool:
 # a client's tracking (Tracking), read and set
 def cl.tk(+c: Cl) -> Tk:
   match c:
-    case Cl{id, back, fd, addr, laddr, since, name, db, noev, r3, +kt, user}:
+    case Cl{id, back, fd, addr, laddr, since, name, db, fl, r3, +kt, user}:
       kt
 
 def cl.tk.set(kt: Tk, c: Cl) -> Cl:
   match c:
-    case Cl{id, back, fd, addr, laddr, since, name, db, noev, r3, t0, user}:
-      Cl{id, back, fd, addr, laddr, since, name, db, noev, r3, kt, user}
+    case Cl{id, back, fd, addr, laddr, since, name, db, fl, r3, t0, user}:
+      Cl{id, back, fd, addr, laddr, since, name, db, fl, r3, kt, user}
 
 def cl.tk.of(+m: Maybe<&2, Cl>) -> Tk:
   match m:
@@ -2505,13 +2573,13 @@ def cls.tk.set(+id: Nat, kt: Tk, cs: Cls) -> Cls:
 # a client's user (ACL), read and set
 def cl.user(+c: Cl) -> String:
   match c:
-    case Cl{id, back, fd, addr, laddr, since, name, db, noev, r3, kt, +user}:
+    case Cl{id, back, fd, addr, laddr, since, name, db, fl, r3, kt, +user}:
       user
 
 def cl.user.set(+u: String, c: Cl) -> Cl:
   match c:
-    case Cl{id, back, fd, addr, laddr, since, name, db, noev, r3, kt, user}:
-      Cl{id, back, fd, addr, laddr, since, name, db, noev, r3, kt, u}
+    case Cl{id, back, fd, addr, laddr, since, name, db, fl, r3, kt, user}:
+      Cl{id, back, fd, addr, laddr, since, name, db, fl, r3, kt, u}
 
 def cl.user.of(+m: Maybe<&2, Cl>) -> String:
   match m:
@@ -2556,13 +2624,13 @@ def cls.kills(cs: Cls) -> List<&2, U32> & Cls:
 # a client's name, database and protocol set from its connection
 def cl.conn(+cn: S.Conn, c: Cl) -> Cl:
   match c:
-    case Cl{id, back, fd, addr, laddr, since, name, db, noev, r3, kt, user}:
-      Cl{id, back, fd, addr, laddr, since, S.conn.name(cn), S.conn.db(cn), noev, S.conn.r3(cn), kt, user}
+    case Cl{id, back, fd, addr, laddr, since, name, db, fl, r3, kt, user}:
+      Cl{id, back, fd, addr, laddr, since, S.conn.name(cn), S.conn.db(cn), fl, S.conn.r3(cn), kt, user}
 
-def cl.noev(on: Bool, c: Cl) -> Cl:
+def cl.fl(op: ClfOp, c: Cl) -> Cl:
   match c:
-    case Cl{id, back, fd, addr, laddr, since, name, db, noev, r3, kt, user}:
-      Cl{id, back, fd, addr, laddr, since, name, db, on, r3, kt, user}
+    case Cl{id, back, fd, addr, laddr, since, name, db, fl, r3, kt, user}:
+      Cl{id, back, fd, addr, laddr, since, name, db, clf.set(op, fl), r3, kt, user}
 
 def cls.with.if(+id: Nat, m: Maybe<&2, Cl>, +cn: S.Conn, cs: Cls) -> Cls:
   match m:
@@ -2578,16 +2646,64 @@ def cls.with(+cn: S.Conn, cs: Cls) -> Cls:
   +c = cs
   cls.with.if(id, cls.get(id, c), cn, c)
 
-def cls.noev.if(+id: Nat, on: Bool, m: Maybe<&2, Cl>, cs: Cls) -> Cls:
+def cls.fl.if(+id: Nat, op: ClfOp, m: Maybe<&2, Cl>, cs: Cls) -> Cls:
   match m:
     case Some{c}:
-      cls.put(id, cl.noev(on, c), cs)
+      cls.put(id, cl.fl(op, c), cs)
     case None{}:
       cs
 
-def cls.noev(+id: Nat, on: Bool, cs: Cls) -> Cls:
+def cls.fl(+id: Nat, op: ClfOp, cs: Cls) -> Cls:
   +c = cs
-  cls.noev.if(id, on, cls.get(id, c), c)
+  cls.fl.if(id, op, cls.get(id, c), c)
+
+# whether the client of a registry's entry has NO-TOUCH on
+def cl.nt.of(+m: Maybe<&2, Cl>) -> Bool:
+  match m:
+    case Some{Cl{id, back, fd, addr, laddr, since, name, db, +fl, r3, kt, user}}:
+      clf.nt(fl)
+    case None{}:
+      False{}
+
+# whether the client of id has NO-TOUCH on, looked up only while some
+# client may have it (on: Ps's bit 18, NO-TOUCH)
+def cls.nt.if(on: Bool, +id: Nat, +cs: Cls) -> Bool:
+  match on:
+    case True{}:
+      cl.nt.of(cls.get(id, cs))
+    case False{}:
+      False{}
+
+# whether some client of the registry has NO-TOUCH on (ks: the keys of
+# its table)
+def cls.nt.in(+ks: List<&2, String>, +tab: KV.Trie<Cl>) -> Bool:
+  match ks:
+    case Nil{}:
+      False{}
+    case Con{+k, rest}:
+      Bool.or(cl.nt.of(KV.get(Cl, tab, k)), cls.nt.in(rest, tab))
+
+def cls.nt.any(+cs: Cls) -> Bool:
+  match cs:
+    case Cls{+tab, kd, ks, ms, pz, dn, hd, scr}:
+      cls.nt.in(KV.keys(Cl, tab, 0n), tab)
+
+# whether some client still has NO-TOUCH on, looked for only while one
+# had (on)
+def cls.nt.again(on: Bool, +cs: Cls) -> Bool:
+  match on:
+    case True{}:
+      cls.nt.any(cs)
+    case False{}:
+      False{}
+
+# Ps's bit 18 (NO-TOUCH)
+def nt.bit(on: Bool) -> U32:
+  match on:
+    case True{}:
+      262144
+    case False{}:
+      0
 
 # whether the client of id monitors
 def mons.has(+id: Nat, +ms: List<&2, Mon>) -> Bool:
@@ -2709,13 +2825,36 @@ def ps.calm(+pb: Ps) -> Bool:
     case PsOf{+p}:
       ps.calm(p)
 
+# NO-TOUCH
+# --------
+# While some client has CLIENT NO-TOUCH on (Ps's bit 18: set as one turns
+# it on, and looked for again in the registry as one turns it off,
+# resets or ends), every batch runs the general way (the bit keeps the
+# fast way off: ps.gate), where the calls of a client that has it mark
+# the keys of TOUCH's calls alone (bg.marks, bg.mark.call), as Redis
+# 7.2.16's lookupKey leaves the access time and counter of a key as they
+# were for such a client's commands but TOUCH. A batch that holds a
+# CLIENT NO-TOUCH marks its keys as its calls run too, so that the calls
+# after one that turns it on leave theirs. The fast way pays nothing for
+# it: a look in the registry for a client that would let its batches run
+# so cost every GET 39 instructions (1.1%).
+
+# whether the client of id has NO-TOUCH on
+def ps.nt(+id: Nat, +pb: Ps) -> Bool:
+  match pb:
+    case Ps{reg, +ev, px, +cs, own}:
+      cls.nt.if(U32.is_ne(U32.and(ev, 262144), 0), id, cs)
+    case PsOf{+p}:
+      ps.nt(id, p)
+
 # how a batch of a client with no subscription may run (group_job), while
 # nothing else keeps the fast way off: 0 as ps.calm lets it; 1 the fast
 # way only when it writes no heeded key (heed.ok.of), while the tracking has
 # work but no client is in BCAST mode (Ps's bit 22: the keys of the
 # tracking table are heeded keys, Tracking); 3 as 0 and 4 as 1, but only
 # for a client that is not restricted, while some client is (bit 20:
-# ACL; bit 22 adds 1, bit 20 adds 3); 2 the general way
+# ACL; bit 22 adds 1, bit 20 adds 3); 2 the general way, and while some
+# client has NO-TOUCH on (bit 18: NO-TOUCH)
 def ps.gate(+pb: Ps) -> Nat:
   match pb:
     case Ps{reg, +ev, px, cs, own}:
@@ -3378,8 +3517,8 @@ def ps.drop(+id: Nat, pb: Ps) -> Ps:
       ps.drop(id, p)
 
 # The registry of clients in Pub/Sub's state (Clients, above): a client
-# joins, its connection ends, its name and database or NO-EVICT change,
-# it is killed; the fds to shut down are taken at the end of the group.
+# joins, its connection ends, its name and database or what it set of
+# itself (Clf) change, it is killed; the fds to shut down are taken at the end of the group.
 def ps.join(+id: Nat, c: Cl, pb: Ps) -> Ps:
   match pb:
     case Ps{reg, ev, px, cs, own}:
@@ -3389,9 +3528,9 @@ def ps.join(+id: Nat, c: Cl, pb: Ps) -> Ps:
 
 def ps.left(+id: Nat, pb: Ps) -> Ps:
   match pb:
-    case Ps{reg, ev, px, cs, own}:
+    case Ps{reg, +ev, px, cs, own}:
       +c = cls.left(id, cs)
-      Ps{reg, U32.or(U32.and(ev, 1067450367), cls.bit(c)), px, c, own}
+      Ps{reg, U32.or(U32.and(ev, 1067188223), U32.or(cls.bit(c), nt.bit(cls.nt.again(U32.is_ne(U32.and(ev, 262144), 0), c)))), px, c, own}
     case PsOf{p}:
       ps.left(id, p)
 
@@ -3424,7 +3563,7 @@ def reg.reproto.if(ch: Bool, +id: Nat, +back: Chan(Ans), +r3: Bool, r: Reg) -> R
 
 def ps.reproto(+cn: S.Conn, m: Maybe<&2, Cl>, r: Reg) -> Reg:
   match m:
-    case Some{Cl{id, +back, fd, addr, laddr, since, name, db, noev, +r3, kt, user}}:
+    case Some{Cl{id, +back, fd, addr, laddr, since, name, db, fl, +r3, kt, user}}:
       +now = S.conn.r3(cn)
       reg.reproto.if(Bool.xor(r3, now), S.conn.id(cn), back, now, r)
     case None{}:
@@ -3437,12 +3576,27 @@ def ps.conn(+cn: S.Conn, pb: Ps) -> Ps:
     case PsOf{p}:
       ps.conn(cn, p)
 
-def ps.noev(+id: Nat, on: Bool, pb: Ps) -> Ps:
+# Ps's bit 18 after op, on before it (NO-TOUCH): on once a client turns
+# NO-TOUCH on; as one turns it off or resets, on while some client still
+# has it
+def ps.fl.bit(op: ClfOp, +on: Bool, +cs: Cls) -> Bool:
+  match op:
+    case FNoTouch{True{}}:
+      True{}
+    case FNoTouch{False{}}:
+      cls.nt.again(on, cs)
+    case FReset{}:
+      cls.nt.again(on, cs)
+    case _:
+      on
+
+def ps.fl(+id: Nat, +op: ClfOp, pb: Ps) -> Ps:
   match pb:
-    case Ps{reg, ev, px, cs, own}:
-      Ps{reg, ev, px, cls.noev(id, on, cs), own}
+    case Ps{reg, +ev, px, cs, own}:
+      +c = cls.fl(id, op, cs)
+      Ps{reg, U32.or(U32.and(ev, 4294705151), nt.bit(ps.fl.bit(op, U32.is_ne(U32.and(ev, 262144), 0), c))), px, c, own}
     case PsOf{p}:
-      ps.noev(id, on, p)
+      ps.fl(id, op, p)
 
 def ps.cls(+pb: Ps) -> Cls:
   match pb:
@@ -3521,7 +3675,7 @@ def ps.mon.push(+id: Nat, +out: String, pb: Ps) -> Ps:
 # the address of the client of id, as a line shows it
 def cl.addr.or(m: Maybe<&2, Cl>) -> String:
   match m:
-    case Some{Cl{id, back, fd, addr, laddr, since, name, db, noev, r3, kt, user}}:
+    case Some{Cl{id, back, fd, addr, laddr, since, name, db, fl, r3, kt, user}}:
       addr
     case None{}:
       "?:0"
@@ -3553,7 +3707,7 @@ def cl.mon.unix(unix: Bool, +addr: String) -> String:
 
 def cl.mon.or(m: Maybe<&2, Cl>) -> String:
   match m:
-    case Some{Cl{id, back, fd, +addr, +laddr, since, name, db, noev, r3, kt, user}}:
+    case Some{Cl{id, back, fd, +addr, +laddr, since, name, db, fl, r3, kt, user}}:
       cl.mon.unix(String.eq(addr, laddr), addr)
     case None{}:
       "?:0"
@@ -3577,7 +3731,7 @@ def ps.mon.addr(+id: Nat, +pb: Ps) -> String:
 # the name of the client of id (CLIENT SETNAME's), "" for none
 def cl.name.or(m: Maybe<&2, Cl>) -> String:
   match m:
-    case Some{Cl{id, back, fd, addr, laddr, since, name, db, noev, r3, kt, user}}:
+    case Some{Cl{id, back, fd, addr, laddr, since, name, db, fl, r3, kt, user}}:
       name
     case None{}:
       ""
@@ -3779,15 +3933,16 @@ def ev.of(+srv: S.Srv) -> U32:
 # to go on with (26: one ran out of time, or a CONFIG SET changed
 # maxmemory) and a pause (25, The pause), each keeping the fast way off
 # but 28, 27 and 26; 29 to 26 follow the server and the actor. With them,
-# restricted clients (20, ACL: the gate's classes 3 and 4, ps.gate) and
-# writes refused (19, MISCONF: misconf.bit). t is what the server says of
+# restricted clients (20, ACL: the gate's classes 3 and 4, ps.gate),
+# writes refused (19, MISCONF: misconf.bit) and a client with NO-TOUCH on
+# (18, which the actor keeps: NO-TOUCH). t is what the server says of
 # them (S.srv.tune: 1 maxmemory set, 2 an LFU policy, 4 kick, 8
 # restricted clients, 16 MISCONF), its bit b as ev's bit to
 def tune.bit(+t: U32, +b: U32, +to: U32) -> U32:
   Bool.pick(U32, U32.is_ne(U32.and(t, b), 0), to, 0)
 
 def mem.bits(+t: U32, +ev: U32) -> U32:
-  U32.or(U32.or(U32.and(ev, 603979776), U32.or(tune.bit(t, 1, 268435456), tune.bit(t, 2, 134217728))), U32.or(U32.or(tune.bit(t, 4, 67108864), tune.bit(t, 8, 1048576)), tune.bit(t, 16, 524288)))
+  U32.or(U32.or(U32.and(ev, 604241920), U32.or(tune.bit(t, 1, 268435456), tune.bit(t, 2, 134217728))), U32.or(U32.or(tune.bit(t, 4, 67108864), tune.bit(t, 8, 1048576)), tune.bit(t, 16, 524288)))
 
 # whether the writes are refused (MISCONF: Background saves): a
 # background save failed (rdb_last_bgsave_status err) while save points
@@ -3823,6 +3978,18 @@ def ps.tune(pb: Ps, +srv: S.Srv) -> Ps:
       Ps{RegOn{c, p, sh, cl, n}, U32.or(U32.or(ev.of(srv), cls.bit(cs)), mem.bits(S.srv.tune(srv), ev)), px, cs, own}
     case PsOf{p}:
       ps.tune(p, srv)
+
+# the classes of events alone (ev's bits 0 to 14) as ps.tune sets them,
+# from the parameters and the subscribers as they are now: after a CONFIG
+# SET or a subscription (ev.key), for the commands after it in its batch
+def ps.classes(pb: Ps, +srv: S.Srv) -> Ps:
+  match pb:
+    case Ps{RegNone{}, ev, px, cs, own}:
+      Ps{RegNone{}, U32.and(ev, 4294934528), px, cs, own}
+    case Ps{RegOn{c, p, sh, cl, n}, ev, px, cs, own}:
+      Ps{RegOn{c, p, sh, cl, n}, U32.or(U32.and(ev, 4294934528), ev.of(srv)), px, cs, own}
+    case PsOf{p}:
+      ps.classes(p, srv)
 
 # bit 19 as the server's state has it now (after a save that ended)
 def ps.misconf.set(pb: Ps, +srv: S.Srv) -> Ps:
@@ -4407,7 +4574,7 @@ def iv.broken(+id: Nat, +back: Chan(Ans), +r3: Bool, +rd: Nat, +cur: Nat, +out: 
 
 def iv.redir.of(m: Maybe<&2, Cl>, +rd: Nat, +id: Nat, +back: Chan(Ans), +r3: Bool, +p: Pl, +cur: Nat, +out: Maybe<&2, Nat>, v: Iv) -> Iv:
   match m:
-    case Some{Cl{+rid, +rback, fd, addr, laddr, since, name, db, noev, +rr3, kt, user}}:
+    case Some{Cl{+rid, +rback, fd, addr, laddr, since, name, db, fl, +rr3, kt, user}}:
       iv.put(True{}, rid, rback, rr3, p, id, cur, out, v)
     case None{}:
       iv.broken(id, back, r3, rd, cur, out, v)
@@ -4423,7 +4590,7 @@ def iv.to(+rd: Nat, +id: Nat, +back: Chan(Ans), +r3: Bool, +p: Pl, +cur: Nat, +o
 # command runs (0: none), out as iv.route reads it
 def iv.send(+c: Cl, +p: Pl, +cur: Nat, +out: Maybe<&2, Nat>, v: Iv) -> Iv:
   match c:
-    case Cl{+id, +back, fd, addr, laddr, since, name, db, noev, +r3, +kt, user}:
+    case Cl{+id, +back, fd, addr, laddr, since, name, db, fl, +r3, +kt, user}:
       iv.to(tk.redir(kt), id, back, r3, p, cur, out, v)
 
 # a key of the table that changed: each of its clients that hears of it
@@ -4515,7 +4682,7 @@ def iv.key(+k: String, +cur: Nat, +bc: Bool, v: Iv) -> Iv:
 # emptied (trackingInvalidateKeysOnFlush)
 def iv.null.of(m: Maybe<&2, Cl>, +cur: Nat, v: Iv) -> Iv:
   match m:
-    case Some{Cl{+id, +back, fd, addr, laddr, since, name, db, noev, +r3, +kt, user}}:
+    case Some{Cl{+id, +back, fd, addr, laddr, since, name, db, fl, +r3, +kt, user}}:
       iv.to(tk.redir(kt), id, back, r3, PlNull{r3}, cur, None{}, v)
     case None{}:
       v
@@ -5812,6 +5979,25 @@ def bg.own.if(on: Bool, g: LRun) -> LRun:
 def bg.own.after(g: LRun) -> LRun:
   +h = g
   bg.own.if(bg.own.has(h), h)
+
+# The classes of events within a batch
+# ------------------------------------
+# Pub/Sub's classes of keyspace events (ev's bits 0 to 14) are set again
+# at a batch's end (ps.tune), and Redis reads notify-keyspace-events and
+# the channels at each event. So a CONFIG SET, a SUBSCRIBE and a
+# PSUBSCRIBE set them again at once, for the commands after it in its
+# batch and in its transaction (bg.x.go): a pipeline of CONFIG SET
+# notify-keyspace-events and a write, or a client's first subscription
+# and a write, notifies the write.
+def ev.key(+key: Nat) -> Bool:
+  Bool.or(Nat.is_eq(key, R.stat.sub.config(2n)), Bool.or(Nat.is_eq(key, R.stat.top(166n)), Nat.is_eq(key, R.stat.top(168n))))
+
+def bg.ev.after(on: Bool, g: LRun) -> LRun:
+  match on g:
+    case True{} LRun{rs, es, conn, +srv, ds, ws, up, tx, pb}:
+      LRun{rs, es, conn, srv, ds, ws, up, tx, ps.classes(pb, srv)}
+    case _ g0:
+      g0
 
 # a command's replies, after it changed its client's protocol (HELLO,
 # RESET) or not: a change is a switch (R.RSw) of its replies, the
@@ -7467,11 +7653,12 @@ def cl.flags.of(+s: String) -> String:
   Bool.pick(String, String.eq(s, ""), "N", s)
 
 # the flags of a client, in Redis's order (catClientInfoString): a unix
-# socket's client (u: its two ends named alike, cl.at) is U
-def cl.flags(+mo: Bool, +sub: Bool, +x: TxIs, +b: Bool, +kt: Tk, +u: Bool, +e: Bool) -> String:
+# socket's client (u: its two ends named alike, cl.at) is U, then NO-EVICT
+# e and NO-TOUCH T (f)
+def cl.flags(+mo: Bool, +sub: Bool, +x: TxIs, +b: Bool, +kt: Tk, +u: Bool, +f: Clf) -> String:
   match x:
     case TxIs{+mu, n, +cas}:
-      cl.flags.of(cl.flag(mo, "O") ++ cl.flag(sub, "P") ++ cl.flag(mu, "x") ++ cl.flag(b, "b") ++ tk.line.flags(kt) ++ cl.flag(cas, "d") ++ cl.flag(u, "U") ++ cl.flag(e, "e"))
+      cl.flags.of(cl.flag(mo, "O") ++ cl.flag(sub, "P") ++ cl.flag(mu, "x") ++ cl.flag(b, "b") ++ tk.line.flags(kt) ++ cl.flag(cas, "d") ++ cl.flag(u, "U") ++ cl.flag(clf.noev(f), "e") ++ cl.flag(clf.nt(f), "T"))
 
 def cl.multi(+x: TxIs) -> Maybe<&2, Nat>:
   match x:
@@ -7513,12 +7700,12 @@ def cl.line.of(m: Mine, +mo: Bool, +sub: Bool, +x: TxIs, +b: Bool, +wa: Nat, c: 
   match m:
     case Mine{+ch, +pa, +sh}:
       match c:
-        case Cl{id, back, fd, +addr, +laddr, +since, name, db, +noev, r3, +kt, user}:
+        case Cl{id, back, fd, +addr, +laddr, +since, name, db, +fl, r3, +kt, user}:
           match w:
             case Them{}:
-              R.client.line(R.ClLine{id, addr, laddr, U32.to_nat(fd), name, cl.secs(now, since), cl.secs(now, at), cl.flags(mo, sub, x, b, kt, String.eq(addr, laddr), noev), db, List.length(&2, String, ch), List.length(&2, String, pa), List.length(&2, String, sh), cl.multi(x), 0n, wa, cl.cmd.of(word), user, tk.line.redir(kt), r3})
+              R.client.line(R.ClLine{id, addr, laddr, U32.to_nat(fd), name, cl.secs(now, since), cl.secs(now, at), cl.flags(mo, sub, x, b, kt, String.eq(addr, laddr), fl), db, List.length(&2, String, ch), List.length(&2, String, pa), List.length(&2, String, sh), cl.multi(x), 0n, wa, cl.cmd.of(word), user, tk.line.redir(kt), r3, clf.lname(fl), clf.lver(fl)})
             case Me{i, +cn, cmd, qbuf, argv, ex}:
-              R.client.line(R.ClLine{id, addr, laddr, U32.to_nat(fd), S.conn.name(cn), cl.secs(now, since), 0n, cl.flags(mo, sub, x, b, kt, String.eq(addr, laddr), noev), S.conn.db(cn), List.length(&2, String, ch), List.length(&2, String, pa), List.length(&2, String, sh), cl.multi(x), qbuf, argv, cmd, user, tk.line.redir(kt), S.conn.r3(cn)})
+              R.client.line(R.ClLine{id, addr, laddr, U32.to_nat(fd), S.conn.name(cn), cl.secs(now, since), 0n, cl.flags(mo, sub, x, b, kt, String.eq(addr, laddr), fl), S.conn.db(cn), List.length(&2, String, ch), List.length(&2, String, pa), List.length(&2, String, sh), cl.multi(x), qbuf, argv, cmd, user, tk.line.redir(kt), S.conn.r3(cn), clf.lname(fl), clf.lver(fl)})
 
 def cl.line.mk(m: Mine, +mo: Bool, +sub: Bool, +x: TxIs, +b: Bool, +wa: Nat, c: Cl, +now: Nat, mk: U32 & Nat, w: Who) -> String:
   (word, at) = mk
@@ -7544,12 +7731,12 @@ def cl.tx(+w: Who, +id: Nat, +tx: Tx) -> TxIs:
 # client c's line, ended by a newline
 def cl.line(c: Cl, +now: Nat, +w: Who, +ws: Waits, +tx: Tx, +pb: Ps) -> String:
   match c:
-    case Cl{+id, +back, fd, addr, laddr, since, name, db, noev, r3, kt, user}:
-      cl.line.mk(mine.or(ps.mine(id, pb)), ps.mon.is(id, pb), ps.has(id, pb), cl.tx(w, id, tx), waits.has(id, ws), waits.argv(id, ws), Cl{id, back, fd, addr, laddr, since, name, db, noev, r3, kt, user}, now, Chan.marked(Ans, back), w) ++ "\n"
+    case Cl{+id, +back, fd, addr, laddr, since, name, db, fl, r3, kt, user}:
+      cl.line.mk(mine.or(ps.mine(id, pb)), ps.mon.is(id, pb), ps.has(id, pb), cl.tx(w, id, tx), waits.has(id, ws), waits.argv(id, ws), Cl{id, back, fd, addr, laddr, since, name, db, fl, r3, kt, user}, now, Chan.marked(Ans, back), w) ++ "\n"
 
 def cl.id(+c: Cl) -> Nat:
   match c:
-    case Cl{+id, back, fd, addr, laddr, since, name, db, noev, r3, kt, user}:
+    case Cl{+id, back, fd, addr, laddr, since, name, db, fl, r3, kt, user}:
       id
 
 # the registry's clients, in the order of their ids (as Redis lists them
@@ -7689,12 +7876,12 @@ def id.is(m: Maybe<&2, Nat>, +n: Nat) -> Bool:
 # that kills)
 def cl.picked(f: R.Kill, c: Cl, +me: Nat, +pb: Ps) -> Bool:
   match f c:
-    case R.Kill{a, l, i, +ty, +skip, u} Cl{+id, back, fd, +addr, +laddr, since, name, db, noev, r3, kt, +user}:
+    case R.Kill{a, l, i, +ty, +skip, u} Cl{+id, back, fd, +addr, +laddr, since, name, db, fl, r3, kt, +user}:
       Bool.and(Bool.and(Bool.and(Bool.and(opt.is(a, addr), opt.is(l, laddr)), Bool.and(id.is(i, id), cl.typed(ty, id, pb))), opt.is(u, user)), Bool.not(Bool.and(skip, Nat.is_eq(id, me))))
 
 def cl.fd(+c: Cl) -> U32:
   match c:
-    case Cl{id, back, +fd, addr, laddr, since, name, db, noev, r3, kt, user}:
+    case Cl{id, back, +fd, addr, laddr, since, name, db, fl, r3, kt, user}:
       fd
 
 # the clients a filter picks
@@ -7769,18 +7956,21 @@ def bg.kill(+old: Bool, f: R.Kill, +me: Nat, +code: Nat, g: LRun) -> LRun:
     case LHeld{h}:
       LHeld{h}
 
-def bg.noev(+id: Nat, on: Bool, +code: Nat, g: LRun) -> LRun:
+# what the client of id set of itself changed (CLIENT NO-EVICT, NO-TOUCH
+# and SETINFO: Clf), answered OK
+def bg.fl(+id: Nat, op: ClfOp, +code: Nat, g: LRun) -> LRun:
   match g:
     case LRun{rs, es, conn, srv, ds, ws, up, tx, pb}:
-      bg.say(R.r_ok(), code, LRun{rs, es, conn, srv, ds, ws, up, tx, ps.noev(id, on, pb)})
+      bg.say(R.r_ok(), code, LRun{rs, es, conn, srv, ds, ws, up, tx, ps.fl(id, op, pb)})
     case LHeld{h}:
       LHeld{h}
 
-# NO-EVICT off, as RESET turns it off in Redis 7.2 (clearClientConnectionState)
-def bg.noev.off(+id: Nat, g: LRun) -> LRun:
+# NO-EVICT and NO-TOUCH off, the library kept, as RESET leaves them in
+# Redis 7.2 (clearClientConnectionState)
+def bg.fl.reset(+id: Nat, g: LRun) -> LRun:
   match g:
     case LRun{rs, es, conn, srv, ds, ws, up, tx, pb}:
-      LRun{rs, es, conn, srv, ds, ws, up, tx, ps.noev(id, False{}, pb)}
+      LRun{rs, es, conn, srv, ds, ws, up, tx, ps.fl(id, FReset{}, pb)}
     case LHeld{h}:
       LHeld{h}
 
@@ -8458,7 +8648,7 @@ def bg.client(+id: Nat, op: R.ClOp, +argv: Nat, +inb: Nat, +ex: Maybe<&2, Nat>, 
         case LHeld{h}:
           LHeld{h}
     case R.CoNoEvict{on}:
-      bg.noev(id, on, code, g)
+      bg.fl(id, FNoEv{on}, code, g)
     case R.CoPause{+hi, +lo, +all}:
       bg.pause(hi, lo, all, code, g)
     case R.CoUnpause{}:
@@ -8471,6 +8661,10 @@ def bg.client(+id: Nat, op: R.ClOp, +argv: Nat, +inb: Nat, +ex: Maybe<&2, Nat>, 
       bg.trk.say(id, False{}, code, g)
     case R.CoTrackInfo{}:
       bg.trk.say(id, True{}, code, g)
+    case R.CoSetInfo{ver, v}:
+      bg.fl(id, FLib{ver, v}, code, g)
+    case R.CoNoTouch{on}:
+      bg.fl(id, FNoTouch{on}, code, g)
     case R.CoBad{+r}:
       bg.say(r, code, g)
 
@@ -8938,6 +9132,16 @@ def bg.x.acl(v: U.Verdict, +id: Nat, +back: Chan(Ans), +inb: Nat, +n: Nat, +c: R
     case U.VNo{w, at, o}:
       bg.x.denied(U.VNo{w, at, o}, id, inb, n, k, a, x)
 
+# after a command of EXEC's, the classes of events set again when it is a
+# CONFIG SET or a subscription, as after one of the batch's (The classes
+# of events within a batch)
+def bg.x.ev(on: Bool, x: Xr) -> Xr:
+  match on x:
+    case True{} Xr{g, mine, e}:
+      Xr{bg.ev.after(True{}, g), mine, e}
+    case _ x0:
+      x0
+
 # EXEC's commands in turn, each checked again (ACL), as execCommand
 # checks each, in case the rules changed since it was queued: while some
 # client is restricted (Ps's bit 20) and its client is (ck), its user's
@@ -8952,7 +9156,7 @@ def bg.x.go(+id: Nat, +back: Chan(Ans), +inb: Nat, +n: Nat, cmds: List<&2, R.Cmd
       +a1 = a0
       +m1 = xm.if(need, m, b, a1)
       +a = xm.av.if(need, m1, a1)
-      bg.x.go(id, back, inb, n, rest, more, ar, m1, bg.x.acl(bg.acl.check(ck, id, srv, pb, k, a), id, back, inb, n, bg.acl.sort(ck, id, srv, pb, k, a, c), k, a, Xr{LRun{rs, es, conn, srv, ds, ws, up, tx, pb}, mine, e}))
+      bg.x.go(id, back, inb, n, rest, more, ar, m1, bg.x.ev(ev.key(R.code.key(k)), bg.x.acl(bg.acl.check(ck, id, srv, pb, k, a), id, back, inb, n, bg.acl.sort(ck, id, srv, pb, k, a, c), k, a, Xr{LRun{rs, es, conn, srv, ds, ws, up, tx, pb}, mine, e})))
     case _ _ _ x0:
       x0
 
@@ -10174,7 +10378,7 @@ def bg.cmd(+id: Nat, +back: Chan(Ans), +inb: Nat, sh: Sh, +c: R.Cmd, +code: Nat,
     case ShUnwatch{}:
       bg.one(c, code, bg.unwatch(id, g))
     case ShReset{}:
-      bg.user(id, "default", bg.conned(bg.one(c, code, bg.noev.off(id, bg.trk.off(id, bg.unsub.all(id, bg.close(id, g)))))))
+      bg.user(id, "default", bg.conned(bg.one(c, code, bg.fl.reset(id, bg.trk.off(id, bg.unsub.all(id, bg.close(id, g)))))))
     case ShQueue{}:
       bg.queue(c, code, a, g)
     case ShRefuse{}:
@@ -10243,9 +10447,20 @@ def use.lfu.word(+h: U32, +w: U32, +min: U32, +r: U32, +lf: Nat, +dt: Nat) -> U3
 # whether a batch's keys are marked as its calls run, each once its
 # check lets it through, rather than before the batch runs (bg.used):
 # its client is restricted (ACL), as Redis marks a key only as the
-# command, which its user may run, looks it up
+# command, which its user may run, looks it up, or has NO-TOUCH on
+# (NO-TOUCH: its calls mark TOUCH's keys alone, bg.mark.call)
 def bg.marks(+cn: S.Conn, +srv: S.Srv, +pb: Ps) -> Bool:
-  Bool.and(ps.acl.on(pb), S.srv.restricted(srv, S.conn.id(cn)))
+  Bool.or(Bool.and(ps.acl.on(pb), S.srv.restricted(srv, S.conn.id(cn))), ps.nt(S.conn.id(cn), pb))
+
+# whether a batch holds a CLIENT NO-TOUCH, by its requests' hashes (hs)
+# and the key of CLIENT NO-TOUCH (k): its calls then mark their keys as
+# they run (NO-TOUCH)
+def hs.nt(+hs: List<&2, U32>, +k: Nat) -> Bool:
+  match hs:
+    case Nil{}:
+      False{}
+    case Con{+h, rest}:
+      Bool.or(Nat.is_eq(R.code.key(R.code.of(h)), k), hs.nt(rest, k))
 
 # the hint of a call as the parser writes it (resp.bend, req.hash): the
 # hash of its first argument after its name (its arguments as sent come
@@ -10274,12 +10489,20 @@ def mark.again(+back: Chan(Ans), +h: U32, +v: U32) -> Chan(Ans):
   mark.again.of(back, Chan.marked(Ans, back), h, v)
 
 # a call's key marked used as it runs (mk: its batch's keys are marked so,
-# and its check let it through), before it runs
-def bg.mark.call(mk: Bool, +back: Chan(Ans), +k: Nat, +a: Av, +srv: S.Srv, +ds: R.Ds, +pb: Ps) -> Chan(Ans):
-  match mk:
+# and its check let it through), before it runs; of a client of id with
+# NO-TOUCH on, TOUCH's alone (NO-TOUCH)
+def bg.mark.key(on: Bool, +back: Chan(Ans), +k: Nat, +a: Av, +srv: S.Srv, +ds: R.Ds, +pb: Ps) -> Chan(Ans):
+  match on:
     case True{}:
       +h = bg.hint(k, a)
       mark.again(back, h, bg.mark.word(ps.lfu(pb), h, R.ds.now(ds), srv))
+    case False{}:
+      back
+
+def bg.mark.call(mk: Bool, +id: Nat, +back: Chan(Ans), +k: Nat, +a: Av, +srv: S.Srv, +ds: R.Ds, +pb: Ps) -> Chan(Ans):
+  match mk:
+    case True{}:
+      bg.mark.key(Bool.or(Nat.is_eq(R.code.key(k), R.stat.top(44n)), Bool.not(ps.nt(id, pb))), back, k, a, srv, ds, pb)
     case False{}:
       back
 
@@ -10303,13 +10526,13 @@ def bg.go(+um: Bool, +id: Nat, +back: Chan(Ans), +inb: Nat, cmds: List<&2, R.Cmd
       +av1 = av.if(Bool.or(ck, um), av)
       +c1 = bg.acl.sort(ck, id, srv, pb, k, av1, c)
       +v = bg.acl.check(ck, id, srv, pb, k, av1)
-      +bk = bg.mark.call(Bool.and(um, Bool.and(may, U.verdict.ok(v))), back, k, av1, srv, ds, pb)
+      +bk = bg.mark.call(Bool.and(um, Bool.and(may, U.verdict.ok(v))), id, back, k, av1, srv, ds, pb)
       +sh = sh.lua(sh.of(q, may, tx.multi(id, tx), Bool.and(ps.has(id, pb), Bool.not(S.conn.r3(conn))), mo, Bool.and(ps.oom.is(pb), Bool.not(lua)), Bool.and(srv.misconf(srv), Bool.not(lua)), Bool.or(pause.holds(ps.pz(pb), mo, c, k, id, tx, sf, pb), Bool.and(down.holds(srv, pb, mo, k), Bool.not(lua))), Bool.and(ps.busy(pb), Bool.not(lua)), sf, v, c1, k, ds), id, tx)
       +pre = bg.trk.pre(id, k, sh, q, may, pb)
       +a = trk.pre.av(pre, av1)
       +ar = av.rest(a)
       +g1 = bg.cmd(id, bk, inb, sh, c1, k, rest, more, a, ar, LRun{rs, es, conn, S.srv.call(srv, id, av.arg(a)), ds, ws, up, tx, pb})
-      bg.go(um, id, back, inb, rest, more, bg.feed(mon.seen(q, may, sh, k), id, k, S.conn.mode(conn), a, ar, bg.trk.after(pre, id, k, a, bg.own.after(g1))))
+      bg.go(um, id, back, inb, rest, more, bg.feed(mon.seen(q, may, sh, k), id, k, S.conn.mode(conn), a, ar, bg.trk.after(pre, id, k, a, bg.own.after(bg.ev.after(ev.key(R.code.key(k)), g1)))))
     case _ _ Fed{g0, av}:
       g0
 
@@ -11428,18 +11651,19 @@ def use.lfu.if(um: Bool, +hs: List<&2, U32>, +now: Nat, +min: U32, +lf: Nat, +dt
       use.lfu(hs, now, min, lf, dt, 0, 0)
 
 # a batch the general way, its keys marked used first (lfu: under an LFU
-# policy), but those of a restricted client's batch, which its calls mark
-# (bg.marks), and its client's channel marked with its last command
-# (mark.hs)
+# policy), but those of a restricted client's batch, of a client with
+# NO-TOUCH on and of a batch that holds a CLIENT NO-TOUCH, which its calls
+# mark (bg.marks, hs.nt), and its client's channel marked with its last
+# command (mark.hs)
 def bg.used(lfu: Bool, +cn: S.Conn, +back: Chan(Ans), +inb: Nat, raw: String, cmds: List<&2, R.Cmd>, +hs: List<&2, U32>, g: Grp) -> Grp:
   match lfu g:
     case False{} Grp{outs, es, +srv, +ds, ws, up, tx, +pb}:
       +now = R.ds.now(ds)
-      +um = bg.marks(cn, srv, pb)
+      +um = Bool.or(bg.marks(cn, srv, pb), hs.nt(hs, R.stat.sub.client(18n)))
       bg.batch(um, cn, mark.hs(back, hs, now, use.lru.if(um, hs, S.acc.lru(now))), inb, raw, cmds, R.codes.of(hs), Grp{outs, es, srv, ds, ws, up, tx, pb})
     case True{} Grp{outs, es, S.Srv{pass, cfg, info, +mm}, +ds, ws, up, tx, +pb}:
       +now = R.ds.now(ds)
-      +um = Bool.and(ps.acl.on(pb), S.mm.restricted(mm, S.conn.id(cn)))
+      +um = Bool.or(Bool.or(Bool.and(ps.acl.on(pb), S.mm.restricted(mm, S.conn.id(cn))), ps.nt(S.conn.id(cn), pb)), hs.nt(hs, R.stat.sub.client(18n)))
       bg.batch(um, cn, mark.hs(back, hs, now, use.lfu.if(um, hs, now, S.acc.min(now), S.mm.lfl(mm), S.mm.lfd(mm))), inb, raw, cmds, R.codes.of(hs), Grp{outs, es, S.Srv{pass, cfg, info, mm}, ds, ws, up, tx, pb})
 
 # (after a SHUTDOWN that stops the server, every client's: SHUTDOWN)
@@ -11754,7 +11978,7 @@ def group_req(+log: Bool, q: Req, g: Grp) -> Grp:
     case Join{+id, +back, fd, addr, laddr} Grp{outs, es, +srv, +ds, ws, up, tx, pb}:
       +now = R.ds.now(ds)
       +sv = S.srv.acl.client(srv, id, "default")
-      Grp{(back, Ans{None{}, S.conn_join(id, srv)}) <> outs, es, sv, ds, ws, up, tx, ps.acl.at(ps.join(id, Cl{id, Chan.mark(Ans, back, 0, now), fd, cl.at(srv, addr), cl.at(srv, laddr), now, "", 0n, False{}, False{}, TkOff{}, "default"}, pb), acl.on(sv))}
+      Grp{(back, Ans{None{}, S.conn_join(id, srv)}) <> outs, es, sv, ds, ws, up, tx, ps.acl.at(ps.join(id, Cl{id, Chan.mark(Ans, back, 0, now), fd, cl.at(srv, addr), cl.at(srv, laddr), now, "", 0n, clf.new(), False{}, TkOff{}, "default"}, pb), acl.on(sv))}
 
 # the clock (IO.clock: s and us since 1970) in ms
 def clock.ms(t: U32 & U32) -> Nat:
@@ -14404,12 +14628,21 @@ def sc.trk.read(+code: Nat, +raw: String, l: LRun) -> LRun:
     case LHeld{h}:
       LHeld{h}
 
+# a call of the script that runs marks its key used (Access), as Redis's
+# lookupKey marks a key a script's call looks up; none while the script's
+# caller has NO-TOUCH on, as Redis 7.2.16 asks lookupKey whether the
+# caller's command (EVAL or FCALL) is TOUCH: so the script's TOUCH leaves
+# its key as it was too (NO-TOUCH)
+def sc.call.mark(+code: Nat, +raw: String, +back: Chan(Ans), +srv: S.Srv, +ds: R.Ds, +pb: Ps) -> Chan(Ans):
+  bg.mark.key(Bool.and(Bool.and(Nat.is_eq(R.code.class(code), 0n), R.stat.touch(R.code.key(code))), Bool.not(ps.nt(ps.scr.who(pb), pb))), back, code, AvRaw{raw, 0n}, srv, ds, pb)
+
 def sc.batch(+c: R.Cmd, +code: Nat, +r3: Bool, +raw: String, sc: Sc, g: Grp) -> Sc & (Grp & String):
   match sc g:
-    case Sc{w, +back, cn, es0, t0, cf, ro, aoom, sha, ex} Grp{outs, es, srv, ds, ws, up, tx, pb}:
+    case Sc{w, +back, cn, es0, t0, cf, ro, aoom, sha, ex} Grp{outs, es, +srv, ds, ws, up, tx, +pb}:
       +c0 = sc.conn.r3(r3, cn)
       +fd = R.ds.focus(S.conn.db(c0), ds)
-      sc.batch.of(sc.trk.read(code, raw, sc.run.call(sc.sort(c, fd), code, back, raw, LRun{Nil{}, es, c0, srv, fd, ws, up, tx.front(0n, tx), pb})), outs, w, back, es0, t0, cf, ro, aoom, sha, ex)
+      +bk = sc.call.mark(code, raw, back, srv, fd, pb)
+      sc.batch.of(sc.trk.read(code, raw, sc.run.call(sc.sort(c, fd), code, bk, raw, LRun{Nil{}, es, c0, srv, fd, ws, up, tx.front(0n, tx), pb})), outs, w, bk, es0, t0, cf, ro, aoom, sha, ex)
     case ScOf{x} g0:
       sc.batch(c, code, r3, raw, x, g0)
 
@@ -20063,6 +20296,7 @@ def run(+items: List<&2, C.CItem>, +post: Bool, +aof: Maybe<&2, String>, +sync: 
     Unit <- log.raw.at(Bool.and(String.eq(T.cfg(items, "always-show-logo"), "yes"), U32.is_le(log.level(lg), 2)), lm, T.logo(T.cfg(items, "port"), pid))
     Unit <- log.if(Bool.not(String.eq(T.cfg(items, "always-show-logo"), "yes")), lm, 2, "Running mode=standalone, port=" ++ T.cfg(items, "port") ++ ".")
     Unit <- log(lm, 2, "Server initialized")
+    Unit <- L.Engine.deprecated(Bool.pick(U32, String.eq(T.cfg(items, "lua-enable-deprecated-api"), "yes"), 1, 0))
     Unit <- modules(Bool.not(String.is_empty(mod)), mcfg, mod, lm)
     +tl : Chan(Tally) <- Chan.new(Tally, 1)
     ok : Bool <- Chan.send(Tally, tl, Tally{0n, 0n})

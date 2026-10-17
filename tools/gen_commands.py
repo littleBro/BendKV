@@ -14,7 +14,7 @@
 # step needs no Redis. The table holds them typed (R.RMap, R.RSet), as
 # BendKV answers them in RESP3; RESP2 writes them as the arrays Redis
 # writes in RESP2. Only the subcommands BendKV has are kept (BendKV's
-# CLIENT has sixteen of Redis's eighteen), in the order of their names: Redis
+# SCRIPT has five of Redis's six, no DEBUG), in the order of their names: Redis
 # lists commands in the order of a hash table with a random seed, so no
 # order is Redis's own. The second step writes the block between
 # "# BEGIN gen_commands: table" and "# END gen_commands: table" in
@@ -51,8 +51,8 @@ VERSION = "7.2.16"
 # BendKV's commands, and of a command with subcommands the ones BendKV has
 COMMANDS = {
     "append": [], "auth": [], "client": ["caching", "getname", "getredir", "help", "id",
-    "info", "kill", "list", "no-evict", "pause", "reply", "setname", "tracking", "trackinginfo",
-    "unblock", "unpause"], "command": ["count", "docs",
+    "info", "kill", "list", "no-evict", "no-touch", "pause", "reply", "setinfo", "setname",
+    "tracking", "trackinginfo", "unblock", "unpause"], "command": ["count", "docs",
     "getkeys", "getkeysandflags", "help", "info", "list"], "config": ["get", "help",
     "resetstat", "rewrite", "set"], "dbsize": [], "decr": [], "decrby": [], "del": [],
     "echo": [], "exists": [], "flushall": [], "flushdb": [], "function": ["delete", "dump",
@@ -99,7 +99,12 @@ COMMANDS = {
     "acl": ["cat", "deluser", "dryrun", "genpass", "getuser", "help", "list", "load", "log",
             "save", "setuser", "users", "whoami"], "bgsave": [], "xlen": [], "xrange": [],
     "xrevrange": [], "xread": [], "xinfo": ["consumers", "groups", "help", "stream"],
-    "xpending": [], "xadd": [], "xtrim": [], "xdel": [], "xsetid": []}
+    "xpending": [], "xadd": [], "xtrim": [], "xdel": [], "xsetid": [],
+    "cluster": ["addslots", "addslotsrange", "bumpepoch", "count-failure-reports",
+                "countkeysinslot", "delslots", "delslotsrange", "failover", "flushslots",
+                "forget", "getkeysinslot", "help", "info", "keyslot", "links", "meet", "myid",
+                "myshardid", "nodes", "replicas", "replicate", "reset", "saveconfig",
+                "set-config-epoch", "setslot", "shards", "slaves", "slots"]}
 
 # Step 1: redis-server -> facts
 # -----------------------------
@@ -574,7 +579,8 @@ DIRTY = {
 CONTAINERS = {"client": "client_id", "function": "function_id", "config": "config_id",
               "command": "command_id", "object": "object_id", "memory": "memory_id",
               "pubsub": "pubsub_id", "slowlog": "slowlog_id", "latency": "latency_id",
-              "script": "script_id", "acl": "acl_id", "xinfo": "xinfo_id"}
+              "script": "script_id", "acl": "acl_id", "xinfo": "xinfo_id",
+              "cluster": "cluster_id"}
 
 # the names a numbering def of redis.bend gives its numbers
 def numbering(src, fn):
@@ -842,7 +848,11 @@ def stats_block(src, facts):
 # dispatch" and "# END gen_commands: dispatch" in src/redis.bend holds
 # cmd_id and a function for each length (cmd_id.lN), and cmd_own, which
 # tells parse_sess's numbers from parse_id's: each runs of them a range,
-# so that a new command of either takes the next number free.
+# so that a new command of either takes the next number free. With them
+# goes the arity of each of CLUSTER's subcommands (cluster.arity), which
+# the parser checks itself, as it answers each with an error
+# (redis.bend: cluster.of), before the statistics' block that holds the
+# arities of the others.
 
 DBEGIN, DEND = "# BEGIN gen_commands: dispatch\n", "# END gen_commands: dispatch\n"
 
@@ -931,12 +941,27 @@ def generate_acl():
     a, b = src.index(ABEGIN) + len(ABEGIN), src.index(AEND)
     return src[:a] + acl_block(REDIS.read_text(), load()) + src[b:]
 
+# the arity of each of CLUSTER's subcommands, by its number in the parser
+# (cluster_id), in stat.arity's form
+def cluster_block(src, facts):
+    ar = arities(facts)
+    out = ["", "# the arity of each of CLUSTER's subcommands, by its number (cluster_id),",
+           "# as stat.arity gives a key's: the parser checks it itself (cluster.of)",
+           "def cluster.arity(+n: Nat) -> Nat:", "  match n:"]
+    for name, i in sorted(numbering(src, "cluster_id").items(), key=lambda x: x[1]):
+        a = ar["cluster|" + name]
+        out += ["    case %dn:" % i, "      %dn" % (2 * a if a >= 0 else -2 * a + 1)]
+    out += ["    case _:", "      1n"]
+    return "\n".join(out) + "\n"
+
 def generate_redis():
     src = REDIS.read_text()
+    facts = load()
     a, b = src.index(DBEGIN) + len(DBEGIN), src.index(DEND)
-    src = src[:a] + dispatch_block(parser_numbers(src), own_numbers(src)) + src[b:]
+    src = (src[:a] + dispatch_block(parser_numbers(src), own_numbers(src))
+           + cluster_block(src, facts) + src[b:])
     a, b = src.index(SBEGIN) + len(SBEGIN), src.index(SEND)
-    return src[:a] + stats_block(src, load()) + src[b:]
+    return src[:a] + stats_block(src, facts) + src[b:]
 
 if __name__ == "__main__":
     if sys.argv[1:] == ["--extract"]:

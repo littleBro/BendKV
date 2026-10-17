@@ -15,8 +15,9 @@ Then what BendKV refuses although Redis starts (what it cannot do: modules,
 ACL users from the configuration or a file, renamed commands, the
 background, a cluster, a replica, TLS,
 data it cannot read, a supervisor it cannot signal), each with its line;
-a unix socket and systemd's supervision, and IPv6's addresses, against
-Redis; and what is BendKV's own: --version, --help, the short form, the
+a unix socket and systemd's supervision, IPv6's addresses, and a script's
+sandbox under lua-enable-deprecated-api, against Redis; and what is
+BendKV's own: --version, --help, the short form, the
 log file, the pid file, protected mode and several addresses.
 
     python3 tests/start_test.py [--bin build/bendkv] [--redis redis-server]
@@ -453,8 +454,38 @@ def as_supervised(r):
     return dict(r, systemd=SYSTEMD_TOLD, log=SYSTEMD_LOG)
 
 
+# a script's sandbox under lua-enable-deprecated-api, which only the start
+# sets: EVAL's state and the functions' keep newproxy, setfenv and getfenv
+# (yes) or leave them out (no), a library the start loads from its
+# append-only file as well
+DEPRECATED = "return {type(newproxy), type(setfenv), type(getfenv)}"
+
+
+def deprecated_seen(a, cmd, on):
+    lib = "#!lua name=d\nredis.register_function('d', function() %s end)" % DEPRECATED
+    s = Server(a, cmd, ["--port", "{port}", "--appendonly", "yes", "--lua-enable-deprecated-api", on],
+               {"appendonly.aof": resp("FUNCTION", "LOAD", lib)}, None, {})
+    try:
+        if s.up() is not None:
+            return {"exit": s.report()}
+        c = Client(s.port)
+        seen = {"get": c.ask("CONFIG", "GET", "lua-enable-deprecated-api"),
+                "eval": c.ask("EVAL", DEPRECATED, "0"),
+                "fcall": c.ask("FCALL", "d", "0"),
+                "set": c.ask("CONFIG", "SET", "lua-enable-deprecated-api", "no")}
+        c.close()
+        return seen
+    finally:
+        s.stop()
+
+
 def against_redis(a):
     ok = True
+    for on in ("yes", "no"):
+        r, b = deprecated_seen(a, a.redis, on), deprecated_seen(a, a.bin, on)
+        ok &= check("lua-enable-deprecated-api %s, as Redis" % on,
+                    r == b and (r.get("eval") == [b"function"] * 3) == (on == "yes"),
+                    "redis %r\n      bendkv %r" % (r, b))
     r, b = as_supervised(unix_seen(a, a.redis)), unix_seen(a, a.bin)
     ok &= check("a unix socket under systemd, as Redis", r == b and "mode" in r, "redis %r\n      bendkv %r" % (r, b))
     r, b = as_supervised(unix_seen(a, a.redis, True)), unix_seen(a, a.bin, True)

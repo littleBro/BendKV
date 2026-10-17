@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""CLIENT LIST, CLIENT INFO, CLIENT KILL and CLIENT NO-EVICT against
-Redis: scenarios run on BendKV and on Redis with clients of their own,
+"""CLIENT LIST, CLIENT INFO, CLIENT KILL, CLIENT NO-EVICT, CLIENT NO-TOUCH
+and CLIENT SETINFO against Redis: scenarios run on BendKV and on Redis
+with clients of their own,
 the transcripts compared line by line; then checks of BendKV alone under
 load.
 
@@ -23,7 +24,14 @@ for its arguments, a subcommand, the last of a pipeline) and idle time
 as another client sees them; the flags (P with a subscription, and its
 counts; x in MULTI, with the commands queued, and the client's own line
 while EXEC runs them; b waiting, with its command's arguments; d with a
-watched key touched; e with NO-EVICT on); KILL's errors; KILL of another
+watched key touched; e with NO-EVICT on, T with NO-TOUCH on, and their
+errors); NO-TOUCH's keys: a counter of access (OBJECT FREQ, with
+lfu-log-factor 0, so that each access steps it) and an idle time (OBJECT
+IDLETIME) left as they were by the commands of a client with NO-TOUCH
+on, but TOUCH's, those of a pipeline after the CLIENT NO-TOUCH that turns
+it on too, and by a script's calls, TOUCH's too, while its caller has it
+on (a script's calls mark them otherwise); the library CLIENT SETINFO names (lib-name, lib-ver), its
+errors, and RESET, which keeps it; KILL's errors; KILL of another
 client by id, address, local address, type and user, of the client
 itself (SKIPME no, the old form of its own address), of a client that
 waits (what it waited for stays), of a client in MULTI, in a
@@ -213,6 +221,43 @@ def scenarios(port, log):
     log("5 no-evict", a.cmd("CLIENT", "NO-EVICT", "on"), norm(b.cmd("CLIENT", "LIST", "ID", a.id), cs),
         a.cmd("CLIENT", "NO-EVICT", "maybe"), a.cmd("RESET"), norm(b.cmd("CLIENT", "LIST", "ID", a.id), cs),
         a.cmd("CLIENT", "NO-EVICT", "OFF"), norm(b.cmd("CLIENT", "LIST", "ID", a.id), cs), a.cmd("SELECT", "9"))
+    log("5 no-touch", a.cmd("CLIENT", "NO-TOUCH", "on"), norm(b.cmd("CLIENT", "LIST", "ID", a.id), cs),
+        a.cmd("CLIENT", "NO-TOUCH", "maybe"), a.cmd("CLIENT", "NO-TOUCH"), a.cmd("CLIENT", "NO-TOUCH", "on", "x"),
+        a.cmd("CLIENT", "NO-EVICT", "on"), norm(b.cmd("CLIENT", "LIST", "ID", a.id), cs),
+        a.cmd("RESET"), norm(b.cmd("CLIENT", "LIST", "ID", a.id), cs), a.cmd("CLIENT", "NO-TOUCH", "ON"),
+        a.cmd("CLIENT", "NO-TOUCH", "Off"), norm(b.cmd("CLIENT", "LIST", "ID", a.id), cs), a.cmd("SELECT", "9"))
+    log("5 no-touch freq", r.cmd("CONFIG", "SET", "maxmemory-policy", "allkeys-lfu"), r.cmd("CONFIG", "SET", "lfu-log-factor", "0"),
+        a.cmd("SET", "f", "v"), r.cmd("OBJECT", "FREQ", "f"), a.cmd("CLIENT", "NO-TOUCH", "on"),
+        [a.cmd("GET", "f") for _ in range(5)], a.cmd("STRLEN", "f"), r.cmd("OBJECT", "FREQ", "f"),
+        a.cmd("TOUCH", "f"), r.cmd("OBJECT", "FREQ", "f"), b.cmd("GET", "f"), r.cmd("OBJECT", "FREQ", "f"),
+        a.cmd("MULTI"), a.cmd("GET", "f"), a.cmd("TOUCH", "f"), a.cmd("EXEC"), r.cmd("OBJECT", "FREQ", "f"),
+        a.cmd("CLIENT", "NO-TOUCH", "off"), a.cmd("GET", "f"), r.cmd("OBJECT", "FREQ", "f"))
+    a.raw(enc(["CLIENT", "NO-TOUCH", "on"]) + enc(["GET", "f"]) + enc(["GET", "f"]))
+    log("5 no-touch pipelined", a.read(), a.read(), a.read(), r.cmd("OBJECT", "FREQ", "f"))
+    a.raw(enc(["CLIENT", "NO-TOUCH", "off"]) + enc(["GET", "f"]))
+    log("5 no-touch off pipelined", a.read(), a.read(), r.cmd("OBJECT", "FREQ", "f"))
+    get1, touch1 = "return redis.call('GET', KEYS[1])", "return redis.call('TOUCH', KEYS[1])"
+    log("5 no-touch scripts", a.cmd("EVAL", get1, "1", "f"), r.cmd("OBJECT", "FREQ", "f"),
+        a.cmd("EVAL", touch1, "1", "f"), r.cmd("OBJECT", "FREQ", "f"), a.cmd("CLIENT", "NO-TOUCH", "on"),
+        a.cmd("EVAL", get1, "1", "f"), a.cmd("EVAL_RO", get1, "1", "f"), r.cmd("OBJECT", "FREQ", "f"),
+        a.cmd("EVAL", touch1, "1", "f"), r.cmd("OBJECT", "FREQ", "f"),
+        a.cmd("MULTI"), a.cmd("EVAL", get1, "1", "f"), a.cmd("EXEC"), r.cmd("OBJECT", "FREQ", "f"),
+        b.cmd("EVAL", get1, "1", "f"), r.cmd("OBJECT", "FREQ", "f"), a.cmd("CLIENT", "NO-TOUCH", "off"),
+        a.cmd("EVAL", get1, "1", "f"), r.cmd("OBJECT", "FREQ", "f"),
+        r.cmd("CONFIG", "SET", "maxmemory-policy", "noeviction"), r.cmd("CONFIG", "SET", "lfu-log-factor", "10"))
+    log("5 no-touch idle", a.cmd("SET", "g", "v"), a.cmd("CLIENT", "NO-TOUCH", "on"))
+    time.sleep(2.1)
+    log("5 no-touch idle after", a.cmd("GET", "g"), int(r.cmd("OBJECT", "IDLETIME", "g")[1:]) >= 2, a.cmd("TOUCH", "g"),
+        int(r.cmd("OBJECT", "IDLETIME", "g")[1:]) < 2, a.cmd("CLIENT", "NO-TOUCH", "off"))
+    log("5 setinfo", a.cmd("CLIENT", "SETINFO", "lib-name", "redis-py"), a.cmd("CLIENT", "SETINFO", "LIB-VER", "5.0.1"),
+        norm(b.cmd("CLIENT", "LIST", "ID", a.id), cs), norm(a.cmd("CLIENT", "INFO"), cs),
+        a.cmd("CLIENT", "SETINFO", "lib-name", "bad name"), a.cmd("CLIENT", "SETINFO", "Lib-Ver", "x\ny"),
+        a.cmd("CLIENT", "SETINFO", "lib-x", "v"), a.cmd("CLIENT", "SETINFO", "bad\nopt", "v"),
+        a.cmd("CLIENT", "SETINFO", "lib-name"), a.cmd("CLIENT", "SETINFO", "lib-name", "a", "b"),
+        a.cmd("RESET"), norm(b.cmd("CLIENT", "LIST", "ID", a.id), cs),
+        a.cmd("CLIENT", "SETINFO", "lib-ver", ""), norm(b.cmd("CLIENT", "LIST", "ID", a.id), cs),
+        a.cmd("CLIENT", "SETINFO", "lib-name", "x\x00 y"), norm(b.cmd("CLIENT", "LIST", "ID", a.id), cs),
+        a.cmd("SELECT", "9"))
     # 6. KILL's errors
     log("6 errors", a.cmd("CLIENT", "KILL"), a.cmd("CLIENT", "KILL", "id", "10", "wrong_arg"),
         a.cmd("CLIENT", "KILL", "id", "str"), a.cmd("CLIENT", "KILL", "id", "-1"), a.cmd("CLIENT", "KILL", "id", "0"),
@@ -276,7 +321,8 @@ def scenarios(port, log):
         m.cmd("EXEC"), closed(m), r.cmd("GET", "k"))
     # 11. statistics
     log("11 stats", stats(r, "cmdstat_client|list", "cmdstat_client|info", "cmdstat_client|kill",
-                          "cmdstat_client|no-evict", "errorstat_ERR"))
+                          "cmdstat_client|no-evict", "cmdstat_client|no-touch", "cmdstat_client|setinfo",
+                          "errorstat_ERR"))
     # 12. all of them, and the client itself (SKIPME no)
     x = Named(port, "x")
     y = Named(port, "y")

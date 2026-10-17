@@ -9,6 +9,15 @@ values corrupted at random bytes, then random sequences of the commands
 over a few keys. Every reply is compared, and after each write the
 value itself (GET), byte for byte.
 
+But for a value whose opcodes end within an XZERO (docs/UPSTREAM.md, bug
+6): Redis reads the byte after the value's end as the XZERO's second, and
+what lies there turns on how Redis grew the value's buffer, by the sizes
+of jemalloc's classes. BendKV reads the byte as 0 when a command starts,
+and as the byte a split it made wrote there in the same command. A
+command that reads such a value and is answered otherwise, or leaves
+other values, is counted, not failed, and both servers go on from Redis's
+values; BendKV's reading of one such value is checked alone.
+
     python3 tests/hll_test.py --bendkv 6380 --redis 6390 [--rounds 3000] [--seed 1]
 """
 import argparse
@@ -27,8 +36,17 @@ def run(c, cmd):
     return c.reply()
 
 
+# while a command reads a value cut within an XZERO, its differences
+# (held: bug 6), and the commands that had some
+held = None
+cuts = 0
+
+
 def fail(cmd, x, y):
     global bad
+    if held is not None:
+        held.append(cmd)
+        return
     bad += 1
     if bad <= 20:
         print("FAIL: %r: BendKV %r, Redis %r" % (b" ".join(cmd)[:200], str(x)[:300], str(y)[:300]))
@@ -50,9 +68,48 @@ def ttl_of(rep):
     return v if v < 0 else (v + 500) // 1000
 
 
+# whether v (a GET's reply) is a sparse value whose opcodes end within an
+# XZERO: its second byte past the value's end
+def cut_xzero(rep):
+    v = rep[1] if isinstance(rep, tuple) else None
+    if not isinstance(v, bytes) or len(v) < 17 or v[:4] != b"HYLL" or v[4] != 1:
+        return False
+    i = 16
+    while i < len(v):
+        if v[i] & 0xC0 == 0x40:
+            if i + 1 == len(v):
+                return True
+            i += 2
+        else:
+            i += 1
+    return False
+
+
+# the keys a command of the test reads
+def reads(cmd):
+    if cmd[0] in (b"PFCOUNT", b"PFMERGE"):
+        return list(cmd[1:])
+    return list(cmd[2:3] if cmd[0] == b"PFDEBUG" else cmd[1:2])
+
+
+# both servers set to Redis's value of k, its time to live too
+def resync(b, r, k):
+    v, t = run(r, [b"GET", k]), int(run(r, [b"PTTL", k])[1])
+    if v[0] == b"-":
+        return
+    both(b, r, [b"DEL", k])
+    if v[1] is not None:
+        both(b, r, [b"SET", k, v[1]])
+        if t > 0:
+            both(b, r, [b"PEXPIRE", k, str(t).encode()])
+
+
 # a write, then the values of the keys it may have changed read back
 def write(b, r, cmd, keys):
-    global n
+    global n, held, cuts
+    rs = reads(cmd)
+    if any(cut_xzero(run(r, [b"GET", k])) for k in rs):
+        held = []
     same(b, r, cmd)
     for k in keys:
         same(b, r, [b"GET", k])
@@ -60,6 +117,28 @@ def write(b, r, cmd, keys):
         x, y = run(b, [b"PTTL", k]), run(r, [b"PTTL", k])
         if ttl_of(x) != ttl_of(y):
             fail([b"PTTL", k], x, y)
+    if held:
+        cuts += 1
+        for k in rs + keys:
+            resync(b, r, k)
+    held = None
+
+
+# BendKV alone: a value cut within an XZERO (bug 6), whose first set splits
+# the XZERO and writes its last byte past the value's end, and the second
+# reads it there, in the same PFADD (7.0.15's reading; 7.2.16 writes a NUL
+# there first, as it grows the value's buffer)
+def bug6(b):
+    global n
+    n += 1
+    v = hll(1, ops=b"\x00" * 23 + b"\x7f", card=b"\x00" * 7 + b"\x80")
+    run(b, [b"SET", b"cut6", v])
+    run(b, [b"PFADD", b"cut6", b"a3", b"b3"])
+    got = run(b, [b"GET", b"cut6"])
+    want = v[:16] + b"\x00" * 23 + bytes.fromhex("4827846b4f884b")
+    run(b, [b"DEL", b"cut6"])
+    if got != (b"$", want):
+        fail([b"PFADD", b"cut6", b"a3", b"b3"], got, (b"$", want))
 
 
 def both(b, r, cmd):
@@ -230,7 +309,8 @@ def script(b, r):
     # string's end as its second (the NUL of its sds string, as a command
     # starts); a set that splits it writes the last byte of the opcodes it
     # makes there, which the sets after it in the same PFADD or PFMERGE
-    # read (c0 and c12 split it in turn, the second where that byte counts)
+    # read (c0 and c12 split it in turn, the second where that byte counts),
+    # while the value's buffer has room (docs/UPSTREAM.md, bug 6)
     cut = hll(1, ops=b"\x7f", card=b"\x00" * 7 + b"\x80")
     for els in ([b"c0", b"c12"], [b"c0", b"c14"], [b"c0", b"c26"], [b"c%d" % i for i in range(40)]):
         both(b, r, [b"DEL", b"m"])
@@ -320,12 +400,14 @@ def main():
         b, r = Conn(a.bendkv, resp3), Conn(a.redis, resp3)
         both(b, r, [b"FLUSHALL"])
         script(b, r)
+        bug6(b)
         if not resp3:
             fuzz(b, r, rnd, a.rounds // 10)
             random_ops(b, r, rnd, a.rounds)
         else:
             random_ops(b, r, rnd, a.rounds // 5)
-    print("hll: %d commands, %d differ" % (n, bad))
+    print("hll: %d commands, %d differ; %d on values cut within an XZERO answered otherwise"
+          " (docs/UPSTREAM.md, bug 6)" % (n, bad, cuts))
     sys.exit(1 if bad else 0)
 
 

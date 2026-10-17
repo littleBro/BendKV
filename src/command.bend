@@ -228,11 +228,15 @@ def cmd.client() -> Top:
     [R.RBulk{"client|list"}, R.RInt{R.INeg{1n}}, R.RSet{[R.RStatus{"admin"}, R.RStatus{"noscript"}, R.RStatus{"loading"}, R.RStatus{"stale"}]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RSet{[R.RStatus{"@admin"}, R.RStatus{"@slow"}, R.RStatus{"@dangerous"}, R.RStatus{"@connection"}]}, R.RSet{[R.RBulk{"nondeterministic_output"}]}, R.RSet{[]}],
     [R.RBulk{"summary"}, R.RBulk{"Lists open connections."}, R.RBulk{"since"}, R.RBulk{"2.4.0"}, R.RBulk{"group"}, R.RBulk{"connection"}, R.RBulk{"complexity"}, R.RBulk{"O(N) where N is the number of client connections"}, R.RBulk{"history"}, R.RSet{[R.RArray{[R.RBulk{"2.8.12"}, R.RBulk{"Added unique client `id` field."}]}, R.RArray{[R.RBulk{"5.0.0"}, R.RBulk{"Added optional `TYPE` filter."}]}, R.RArray{[R.RBulk{"6.0.0"}, R.RBulk{"Added `user` field."}]}, R.RArray{[R.RBulk{"6.2.0"}, R.RBulk{"Added `argv-mem`, `tot-mem`, `laddr` and `redir` fields and the optional `ID` filter."}]}, R.RArray{[R.RBulk{"7.0.0"}, R.RBulk{"Added `resp`, `multi-mem`, `rbs` and `rbp` fields."}]}, R.RArray{[R.RBulk{"7.0.3"}, R.RBulk{"Added `ssub` field."}]}]}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"client-type"}, R.RBulk{"type"}, R.RBulk{"oneof"}, R.RBulk{"token"}, R.RBulk{"TYPE"}, R.RBulk{"since"}, R.RBulk{"5.0.0"}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"optional"}]}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"normal"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"display_text"}, R.RBulk{"normal"}, R.RBulk{"token"}, R.RBulk{"NORMAL"}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"master"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"display_text"}, R.RBulk{"master"}, R.RBulk{"token"}, R.RBulk{"MASTER"}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"replica"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"display_text"}, R.RBulk{"replica"}, R.RBulk{"token"}, R.RBulk{"REPLICA"}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"pubsub"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"display_text"}, R.RBulk{"pubsub"}, R.RBulk{"token"}, R.RBulk{"PUBSUB"}]}]}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"client-id"}, R.RBulk{"type"}, R.RBulk{"integer"}, R.RBulk{"display_text"}, R.RBulk{"client-id"}, R.RBulk{"token"}, R.RBulk{"ID"}, R.RBulk{"since"}, R.RBulk{"6.2.0"}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"optional"}, R.RStatus{"multiple"}]}]}]}]}, Desc{"client|no-evict", R.IPos{3n}, ["admin", "slow", "dangerous", "connection"], [], KBySpecs{}, False{},
     [R.RBulk{"client|no-evict"}, R.RInt{R.IPos{3n}}, R.RSet{[R.RStatus{"admin"}, R.RStatus{"noscript"}, R.RStatus{"loading"}, R.RStatus{"stale"}]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RSet{[R.RStatus{"@admin"}, R.RStatus{"@slow"}, R.RStatus{"@dangerous"}, R.RStatus{"@connection"}]}, R.RSet{[]}, R.RSet{[]}],
-    [R.RBulk{"summary"}, R.RBulk{"Sets the client eviction mode of the connection."}, R.RBulk{"since"}, R.RBulk{"7.0.0"}, R.RBulk{"group"}, R.RBulk{"connection"}, R.RBulk{"complexity"}, R.RBulk{"O(1)"}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"enabled"}, R.RBulk{"type"}, R.RBulk{"oneof"}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"on"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"display_text"}, R.RBulk{"on"}, R.RBulk{"token"}, R.RBulk{"ON"}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"off"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"display_text"}, R.RBulk{"off"}, R.RBulk{"token"}, R.RBulk{"OFF"}]}]}]}]}]}, Desc{"client|pause", R.INeg{2n}, ["admin", "slow", "dangerous", "connection"], [], KBySpecs{}, False{},
+    [R.RBulk{"summary"}, R.RBulk{"Sets the client eviction mode of the connection."}, R.RBulk{"since"}, R.RBulk{"7.0.0"}, R.RBulk{"group"}, R.RBulk{"connection"}, R.RBulk{"complexity"}, R.RBulk{"O(1)"}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"enabled"}, R.RBulk{"type"}, R.RBulk{"oneof"}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"on"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"display_text"}, R.RBulk{"on"}, R.RBulk{"token"}, R.RBulk{"ON"}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"off"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"display_text"}, R.RBulk{"off"}, R.RBulk{"token"}, R.RBulk{"OFF"}]}]}]}]}]}, Desc{"client|no-touch", R.IPos{3n}, ["slow", "connection"], [], KBySpecs{}, False{},
+    [R.RBulk{"client|no-touch"}, R.RInt{R.IPos{3n}}, R.RSet{[R.RStatus{"noscript"}, R.RStatus{"loading"}, R.RStatus{"stale"}]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RSet{[R.RStatus{"@slow"}, R.RStatus{"@connection"}]}, R.RSet{[]}, R.RSet{[]}],
+    [R.RBulk{"summary"}, R.RBulk{"Controls whether commands sent by the client affect the LRU/LFU of accessed keys."}, R.RBulk{"since"}, R.RBulk{"7.2.0"}, R.RBulk{"group"}, R.RBulk{"connection"}, R.RBulk{"complexity"}, R.RBulk{"O(1)"}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"enabled"}, R.RBulk{"type"}, R.RBulk{"oneof"}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"on"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"display_text"}, R.RBulk{"on"}, R.RBulk{"token"}, R.RBulk{"ON"}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"off"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"display_text"}, R.RBulk{"off"}, R.RBulk{"token"}, R.RBulk{"OFF"}]}]}]}]}]}, Desc{"client|pause", R.INeg{2n}, ["admin", "slow", "dangerous", "connection"], [], KBySpecs{}, False{},
     [R.RBulk{"client|pause"}, R.RInt{R.INeg{2n}}, R.RSet{[R.RStatus{"admin"}, R.RStatus{"noscript"}, R.RStatus{"loading"}, R.RStatus{"stale"}]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RSet{[R.RStatus{"@admin"}, R.RStatus{"@slow"}, R.RStatus{"@dangerous"}, R.RStatus{"@connection"}]}, R.RSet{[]}, R.RSet{[]}],
     [R.RBulk{"summary"}, R.RBulk{"Suspends commands processing."}, R.RBulk{"since"}, R.RBulk{"3.0.0"}, R.RBulk{"group"}, R.RBulk{"connection"}, R.RBulk{"complexity"}, R.RBulk{"O(1)"}, R.RBulk{"history"}, R.RSet{[R.RArray{[R.RBulk{"6.2.0"}, R.RBulk{"`CLIENT PAUSE WRITE` mode added along with the `mode` option."}]}]}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"timeout"}, R.RBulk{"type"}, R.RBulk{"integer"}, R.RBulk{"display_text"}, R.RBulk{"timeout"}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"mode"}, R.RBulk{"type"}, R.RBulk{"oneof"}, R.RBulk{"since"}, R.RBulk{"6.2.0"}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"optional"}]}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"write"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"display_text"}, R.RBulk{"write"}, R.RBulk{"token"}, R.RBulk{"WRITE"}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"all"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"display_text"}, R.RBulk{"all"}, R.RBulk{"token"}, R.RBulk{"ALL"}]}]}]}]}]}, Desc{"client|reply", R.IPos{3n}, ["slow", "connection"], [], KBySpecs{}, False{},
     [R.RBulk{"client|reply"}, R.RInt{R.IPos{3n}}, R.RSet{[R.RStatus{"noscript"}, R.RStatus{"loading"}, R.RStatus{"stale"}]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RSet{[R.RStatus{"@slow"}, R.RStatus{"@connection"}]}, R.RSet{[]}, R.RSet{[]}],
-    [R.RBulk{"summary"}, R.RBulk{"Instructs the server whether to reply to commands."}, R.RBulk{"since"}, R.RBulk{"3.2.0"}, R.RBulk{"group"}, R.RBulk{"connection"}, R.RBulk{"complexity"}, R.RBulk{"O(1)"}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"action"}, R.RBulk{"type"}, R.RBulk{"oneof"}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"on"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"display_text"}, R.RBulk{"on"}, R.RBulk{"token"}, R.RBulk{"ON"}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"off"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"display_text"}, R.RBulk{"off"}, R.RBulk{"token"}, R.RBulk{"OFF"}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"skip"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"display_text"}, R.RBulk{"skip"}, R.RBulk{"token"}, R.RBulk{"SKIP"}]}]}]}]}]}, Desc{"client|setname", R.IPos{3n}, ["slow", "connection"], [], KBySpecs{}, False{},
+    [R.RBulk{"summary"}, R.RBulk{"Instructs the server whether to reply to commands."}, R.RBulk{"since"}, R.RBulk{"3.2.0"}, R.RBulk{"group"}, R.RBulk{"connection"}, R.RBulk{"complexity"}, R.RBulk{"O(1)"}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"action"}, R.RBulk{"type"}, R.RBulk{"oneof"}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"on"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"display_text"}, R.RBulk{"on"}, R.RBulk{"token"}, R.RBulk{"ON"}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"off"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"display_text"}, R.RBulk{"off"}, R.RBulk{"token"}, R.RBulk{"OFF"}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"skip"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"display_text"}, R.RBulk{"skip"}, R.RBulk{"token"}, R.RBulk{"SKIP"}]}]}]}]}]}, Desc{"client|setinfo", R.IPos{4n}, ["slow", "connection"], [], KBySpecs{}, False{},
+    [R.RBulk{"client|setinfo"}, R.RInt{R.IPos{4n}}, R.RSet{[R.RStatus{"noscript"}, R.RStatus{"loading"}, R.RStatus{"stale"}]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RSet{[R.RStatus{"@slow"}, R.RStatus{"@connection"}]}, R.RSet{[R.RBulk{"request_policy:all_nodes"}, R.RBulk{"response_policy:all_succeeded"}]}, R.RSet{[]}],
+    [R.RBulk{"summary"}, R.RBulk{"Sets information specific to the client or connection."}, R.RBulk{"since"}, R.RBulk{"7.2.0"}, R.RBulk{"group"}, R.RBulk{"connection"}, R.RBulk{"complexity"}, R.RBulk{"O(1)"}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"attr"}, R.RBulk{"type"}, R.RBulk{"oneof"}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"libname"}, R.RBulk{"type"}, R.RBulk{"string"}, R.RBulk{"display_text"}, R.RBulk{"libname"}, R.RBulk{"token"}, R.RBulk{"LIB-NAME"}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"libver"}, R.RBulk{"type"}, R.RBulk{"string"}, R.RBulk{"display_text"}, R.RBulk{"libver"}, R.RBulk{"token"}, R.RBulk{"LIB-VER"}]}]}]}]}]}, Desc{"client|setname", R.IPos{3n}, ["slow", "connection"], [], KBySpecs{}, False{},
     [R.RBulk{"client|setname"}, R.RInt{R.IPos{3n}}, R.RSet{[R.RStatus{"noscript"}, R.RStatus{"loading"}, R.RStatus{"stale"}]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RSet{[R.RStatus{"@slow"}, R.RStatus{"@connection"}]}, R.RSet{[R.RBulk{"request_policy:all_nodes"}, R.RBulk{"response_policy:all_succeeded"}]}, R.RSet{[]}],
     [R.RBulk{"summary"}, R.RBulk{"Sets the connection name."}, R.RBulk{"since"}, R.RBulk{"2.6.9"}, R.RBulk{"group"}, R.RBulk{"connection"}, R.RBulk{"complexity"}, R.RBulk{"O(1)"}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"connection-name"}, R.RBulk{"type"}, R.RBulk{"string"}, R.RBulk{"display_text"}, R.RBulk{"connection-name"}]}]}]}, Desc{"client|tracking", R.INeg{2n}, ["slow", "connection"], [], KBySpecs{}, False{},
     [R.RBulk{"client|tracking"}, R.RInt{R.INeg{2n}}, R.RSet{[R.RStatus{"noscript"}, R.RStatus{"loading"}, R.RStatus{"stale"}]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RSet{[R.RStatus{"@slow"}, R.RStatus{"@connection"}]}, R.RSet{[]}, R.RSet{[]}],
@@ -243,6 +247,68 @@ def cmd.client() -> Top:
     [R.RBulk{"summary"}, R.RBulk{"Unblocks a client blocked by a blocking command from a different connection."}, R.RBulk{"since"}, R.RBulk{"5.0.0"}, R.RBulk{"group"}, R.RBulk{"connection"}, R.RBulk{"complexity"}, R.RBulk{"O(log N) where N is the number of client connections"}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"client-id"}, R.RBulk{"type"}, R.RBulk{"integer"}, R.RBulk{"display_text"}, R.RBulk{"client-id"}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"unblock-type"}, R.RBulk{"type"}, R.RBulk{"oneof"}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"optional"}]}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"timeout"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"display_text"}, R.RBulk{"timeout"}, R.RBulk{"token"}, R.RBulk{"TIMEOUT"}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"error"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"display_text"}, R.RBulk{"error"}, R.RBulk{"token"}, R.RBulk{"ERROR"}]}]}]}]}]}, Desc{"client|unpause", R.IPos{2n}, ["admin", "slow", "dangerous", "connection"], [], KBySpecs{}, False{},
     [R.RBulk{"client|unpause"}, R.RInt{R.IPos{2n}}, R.RSet{[R.RStatus{"admin"}, R.RStatus{"noscript"}, R.RStatus{"loading"}, R.RStatus{"stale"}]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RSet{[R.RStatus{"@admin"}, R.RStatus{"@slow"}, R.RStatus{"@dangerous"}, R.RStatus{"@connection"}]}, R.RSet{[]}, R.RSet{[]}],
     [R.RBulk{"summary"}, R.RBulk{"Resumes processing commands from paused clients."}, R.RBulk{"since"}, R.RBulk{"6.2.0"}, R.RBulk{"group"}, R.RBulk{"connection"}, R.RBulk{"complexity"}, R.RBulk{"O(N) Where N is the number of paused clients"}]}]}
+
+def cmd.cluster() -> Top:
+  Top{Desc{"cluster", R.INeg{1n}, ["slow"], [], KBySpecs{}, False{},
+    [R.RBulk{"cluster"}, R.RInt{R.INeg{1n}}, R.RSet{[]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RSet{[R.RStatus{"@slow"}]}, R.RSet{[]}, R.RSet{[]}],
+    [R.RBulk{"summary"}, R.RBulk{"A container for Redis Cluster commands."}, R.RBulk{"since"}, R.RBulk{"3.0.0"}, R.RBulk{"group"}, R.RBulk{"cluster"}, R.RBulk{"complexity"}, R.RBulk{"Depends on subcommand."}]},
+  [Desc{"cluster|addslots", R.INeg{2n}, ["admin", "slow", "dangerous"], [], KBySpecs{}, False{},
+    [R.RBulk{"cluster|addslots"}, R.RInt{R.INeg{2n}}, R.RSet{[R.RStatus{"admin"}, R.RStatus{"stale"}, R.RStatus{"no_async_loading"}]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RSet{[R.RStatus{"@admin"}, R.RStatus{"@slow"}, R.RStatus{"@dangerous"}]}, R.RSet{[]}, R.RSet{[]}],
+    [R.RBulk{"summary"}, R.RBulk{"Assigns new hash slots to a node."}, R.RBulk{"since"}, R.RBulk{"3.0.0"}, R.RBulk{"group"}, R.RBulk{"cluster"}, R.RBulk{"complexity"}, R.RBulk{"O(N) where N is the total number of hash slot arguments"}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"slot"}, R.RBulk{"type"}, R.RBulk{"integer"}, R.RBulk{"display_text"}, R.RBulk{"slot"}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"multiple"}]}]}]}]}, Desc{"cluster|addslotsrange", R.INeg{3n}, ["admin", "slow", "dangerous"], [], KBySpecs{}, False{},
+    [R.RBulk{"cluster|addslotsrange"}, R.RInt{R.INeg{3n}}, R.RSet{[R.RStatus{"admin"}, R.RStatus{"stale"}, R.RStatus{"no_async_loading"}]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RSet{[R.RStatus{"@admin"}, R.RStatus{"@slow"}, R.RStatus{"@dangerous"}]}, R.RSet{[]}, R.RSet{[]}],
+    [R.RBulk{"summary"}, R.RBulk{"Assigns new hash slot ranges to a node."}, R.RBulk{"since"}, R.RBulk{"7.0.0"}, R.RBulk{"group"}, R.RBulk{"cluster"}, R.RBulk{"complexity"}, R.RBulk{"O(N) where N is the total number of the slots between the start slot and end slot arguments."}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"range"}, R.RBulk{"type"}, R.RBulk{"block"}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"multiple"}]}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"start-slot"}, R.RBulk{"type"}, R.RBulk{"integer"}, R.RBulk{"display_text"}, R.RBulk{"start-slot"}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"end-slot"}, R.RBulk{"type"}, R.RBulk{"integer"}, R.RBulk{"display_text"}, R.RBulk{"end-slot"}]}]}]}]}]}, Desc{"cluster|bumpepoch", R.IPos{2n}, ["admin", "slow", "dangerous"], [], KBySpecs{}, False{},
+    [R.RBulk{"cluster|bumpepoch"}, R.RInt{R.IPos{2n}}, R.RSet{[R.RStatus{"admin"}, R.RStatus{"stale"}, R.RStatus{"no_async_loading"}]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RSet{[R.RStatus{"@admin"}, R.RStatus{"@slow"}, R.RStatus{"@dangerous"}]}, R.RSet{[R.RBulk{"nondeterministic_output"}]}, R.RSet{[]}],
+    [R.RBulk{"summary"}, R.RBulk{"Advances the cluster config epoch."}, R.RBulk{"since"}, R.RBulk{"3.0.0"}, R.RBulk{"group"}, R.RBulk{"cluster"}, R.RBulk{"complexity"}, R.RBulk{"O(1)"}]}, Desc{"cluster|count-failure-reports", R.IPos{3n}, ["admin", "slow", "dangerous"], [], KBySpecs{}, False{},
+    [R.RBulk{"cluster|count-failure-reports"}, R.RInt{R.IPos{3n}}, R.RSet{[R.RStatus{"admin"}, R.RStatus{"stale"}]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RSet{[R.RStatus{"@admin"}, R.RStatus{"@slow"}, R.RStatus{"@dangerous"}]}, R.RSet{[R.RBulk{"nondeterministic_output"}]}, R.RSet{[]}],
+    [R.RBulk{"summary"}, R.RBulk{"Returns the number of active failure reports active for a node."}, R.RBulk{"since"}, R.RBulk{"3.0.0"}, R.RBulk{"group"}, R.RBulk{"cluster"}, R.RBulk{"complexity"}, R.RBulk{"O(N) where N is the number of failure reports"}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"node-id"}, R.RBulk{"type"}, R.RBulk{"string"}, R.RBulk{"display_text"}, R.RBulk{"node-id"}]}]}]}, Desc{"cluster|countkeysinslot", R.IPos{3n}, ["slow"], [], KBySpecs{}, False{},
+    [R.RBulk{"cluster|countkeysinslot"}, R.RInt{R.IPos{3n}}, R.RSet{[R.RStatus{"stale"}]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RSet{[R.RStatus{"@slow"}]}, R.RSet{[]}, R.RSet{[]}],
+    [R.RBulk{"summary"}, R.RBulk{"Returns the number of keys in a hash slot."}, R.RBulk{"since"}, R.RBulk{"3.0.0"}, R.RBulk{"group"}, R.RBulk{"cluster"}, R.RBulk{"complexity"}, R.RBulk{"O(1)"}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"slot"}, R.RBulk{"type"}, R.RBulk{"integer"}, R.RBulk{"display_text"}, R.RBulk{"slot"}]}]}]}, Desc{"cluster|delslots", R.INeg{2n}, ["admin", "slow", "dangerous"], [], KBySpecs{}, False{},
+    [R.RBulk{"cluster|delslots"}, R.RInt{R.INeg{2n}}, R.RSet{[R.RStatus{"admin"}, R.RStatus{"stale"}, R.RStatus{"no_async_loading"}]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RSet{[R.RStatus{"@admin"}, R.RStatus{"@slow"}, R.RStatus{"@dangerous"}]}, R.RSet{[]}, R.RSet{[]}],
+    [R.RBulk{"summary"}, R.RBulk{"Sets hash slots as unbound for a node."}, R.RBulk{"since"}, R.RBulk{"3.0.0"}, R.RBulk{"group"}, R.RBulk{"cluster"}, R.RBulk{"complexity"}, R.RBulk{"O(N) where N is the total number of hash slot arguments"}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"slot"}, R.RBulk{"type"}, R.RBulk{"integer"}, R.RBulk{"display_text"}, R.RBulk{"slot"}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"multiple"}]}]}]}]}, Desc{"cluster|delslotsrange", R.INeg{3n}, ["admin", "slow", "dangerous"], [], KBySpecs{}, False{},
+    [R.RBulk{"cluster|delslotsrange"}, R.RInt{R.INeg{3n}}, R.RSet{[R.RStatus{"admin"}, R.RStatus{"stale"}, R.RStatus{"no_async_loading"}]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RSet{[R.RStatus{"@admin"}, R.RStatus{"@slow"}, R.RStatus{"@dangerous"}]}, R.RSet{[]}, R.RSet{[]}],
+    [R.RBulk{"summary"}, R.RBulk{"Sets hash slot ranges as unbound for a node."}, R.RBulk{"since"}, R.RBulk{"7.0.0"}, R.RBulk{"group"}, R.RBulk{"cluster"}, R.RBulk{"complexity"}, R.RBulk{"O(N) where N is the total number of the slots between the start slot and end slot arguments."}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"range"}, R.RBulk{"type"}, R.RBulk{"block"}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"multiple"}]}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"start-slot"}, R.RBulk{"type"}, R.RBulk{"integer"}, R.RBulk{"display_text"}, R.RBulk{"start-slot"}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"end-slot"}, R.RBulk{"type"}, R.RBulk{"integer"}, R.RBulk{"display_text"}, R.RBulk{"end-slot"}]}]}]}]}]}, Desc{"cluster|failover", R.INeg{1n}, ["admin", "slow", "dangerous"], [], KBySpecs{}, False{},
+    [R.RBulk{"cluster|failover"}, R.RInt{R.INeg{1n}}, R.RSet{[R.RStatus{"admin"}, R.RStatus{"stale"}, R.RStatus{"no_async_loading"}]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RSet{[R.RStatus{"@admin"}, R.RStatus{"@slow"}, R.RStatus{"@dangerous"}]}, R.RSet{[]}, R.RSet{[]}],
+    [R.RBulk{"summary"}, R.RBulk{"Forces a replica to perform a manual failover of its master."}, R.RBulk{"since"}, R.RBulk{"3.0.0"}, R.RBulk{"group"}, R.RBulk{"cluster"}, R.RBulk{"complexity"}, R.RBulk{"O(1)"}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"options"}, R.RBulk{"type"}, R.RBulk{"oneof"}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"optional"}]}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"force"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"display_text"}, R.RBulk{"force"}, R.RBulk{"token"}, R.RBulk{"FORCE"}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"takeover"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"display_text"}, R.RBulk{"takeover"}, R.RBulk{"token"}, R.RBulk{"TAKEOVER"}]}]}]}]}]}, Desc{"cluster|flushslots", R.IPos{2n}, ["admin", "slow", "dangerous"], [], KBySpecs{}, False{},
+    [R.RBulk{"cluster|flushslots"}, R.RInt{R.IPos{2n}}, R.RSet{[R.RStatus{"admin"}, R.RStatus{"stale"}, R.RStatus{"no_async_loading"}]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RSet{[R.RStatus{"@admin"}, R.RStatus{"@slow"}, R.RStatus{"@dangerous"}]}, R.RSet{[]}, R.RSet{[]}],
+    [R.RBulk{"summary"}, R.RBulk{"Deletes all slots information from a node."}, R.RBulk{"since"}, R.RBulk{"3.0.0"}, R.RBulk{"group"}, R.RBulk{"cluster"}, R.RBulk{"complexity"}, R.RBulk{"O(1)"}]}, Desc{"cluster|forget", R.IPos{3n}, ["admin", "slow", "dangerous"], [], KBySpecs{}, False{},
+    [R.RBulk{"cluster|forget"}, R.RInt{R.IPos{3n}}, R.RSet{[R.RStatus{"admin"}, R.RStatus{"stale"}, R.RStatus{"no_async_loading"}]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RSet{[R.RStatus{"@admin"}, R.RStatus{"@slow"}, R.RStatus{"@dangerous"}]}, R.RSet{[]}, R.RSet{[]}],
+    [R.RBulk{"summary"}, R.RBulk{"Removes a node from the nodes table."}, R.RBulk{"since"}, R.RBulk{"3.0.0"}, R.RBulk{"group"}, R.RBulk{"cluster"}, R.RBulk{"complexity"}, R.RBulk{"O(1)"}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"node-id"}, R.RBulk{"type"}, R.RBulk{"string"}, R.RBulk{"display_text"}, R.RBulk{"node-id"}]}]}]}, Desc{"cluster|getkeysinslot", R.IPos{4n}, ["slow"], [], KBySpecs{}, False{},
+    [R.RBulk{"cluster|getkeysinslot"}, R.RInt{R.IPos{4n}}, R.RSet{[R.RStatus{"stale"}]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RSet{[R.RStatus{"@slow"}]}, R.RSet{[R.RBulk{"nondeterministic_output"}]}, R.RSet{[]}],
+    [R.RBulk{"summary"}, R.RBulk{"Returns the key names in a hash slot."}, R.RBulk{"since"}, R.RBulk{"3.0.0"}, R.RBulk{"group"}, R.RBulk{"cluster"}, R.RBulk{"complexity"}, R.RBulk{"O(N) where N is the number of requested keys"}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"slot"}, R.RBulk{"type"}, R.RBulk{"integer"}, R.RBulk{"display_text"}, R.RBulk{"slot"}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"count"}, R.RBulk{"type"}, R.RBulk{"integer"}, R.RBulk{"display_text"}, R.RBulk{"count"}]}]}]}, Desc{"cluster|help", R.IPos{2n}, ["slow"], [], KBySpecs{}, False{},
+    [R.RBulk{"cluster|help"}, R.RInt{R.IPos{2n}}, R.RSet{[R.RStatus{"loading"}, R.RStatus{"stale"}]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RSet{[R.RStatus{"@slow"}]}, R.RSet{[]}, R.RSet{[]}],
+    [R.RBulk{"summary"}, R.RBulk{"Returns helpful text about the different subcommands."}, R.RBulk{"since"}, R.RBulk{"5.0.0"}, R.RBulk{"group"}, R.RBulk{"cluster"}, R.RBulk{"complexity"}, R.RBulk{"O(1)"}]}, Desc{"cluster|info", R.IPos{2n}, ["slow"], [], KBySpecs{}, False{},
+    [R.RBulk{"cluster|info"}, R.RInt{R.IPos{2n}}, R.RSet{[R.RStatus{"stale"}]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RSet{[R.RStatus{"@slow"}]}, R.RSet{[R.RBulk{"nondeterministic_output"}]}, R.RSet{[]}],
+    [R.RBulk{"summary"}, R.RBulk{"Returns information about the state of a node."}, R.RBulk{"since"}, R.RBulk{"3.0.0"}, R.RBulk{"group"}, R.RBulk{"cluster"}, R.RBulk{"complexity"}, R.RBulk{"O(1)"}]}, Desc{"cluster|keyslot", R.IPos{3n}, ["slow"], [], KBySpecs{}, False{},
+    [R.RBulk{"cluster|keyslot"}, R.RInt{R.IPos{3n}}, R.RSet{[R.RStatus{"stale"}]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RSet{[R.RStatus{"@slow"}]}, R.RSet{[]}, R.RSet{[]}],
+    [R.RBulk{"summary"}, R.RBulk{"Returns the hash slot for a key."}, R.RBulk{"since"}, R.RBulk{"3.0.0"}, R.RBulk{"group"}, R.RBulk{"cluster"}, R.RBulk{"complexity"}, R.RBulk{"O(N) where N is the number of bytes in the key"}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"key"}, R.RBulk{"type"}, R.RBulk{"string"}, R.RBulk{"display_text"}, R.RBulk{"key"}]}]}]}, Desc{"cluster|links", R.IPos{2n}, ["slow"], [], KBySpecs{}, False{},
+    [R.RBulk{"cluster|links"}, R.RInt{R.IPos{2n}}, R.RSet{[R.RStatus{"stale"}]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RSet{[R.RStatus{"@slow"}]}, R.RSet{[R.RBulk{"nondeterministic_output"}]}, R.RSet{[]}],
+    [R.RBulk{"summary"}, R.RBulk{"Returns a list of all TCP links to and from peer nodes."}, R.RBulk{"since"}, R.RBulk{"7.0.0"}, R.RBulk{"group"}, R.RBulk{"cluster"}, R.RBulk{"complexity"}, R.RBulk{"O(N) where N is the total number of Cluster nodes"}]}, Desc{"cluster|meet", R.INeg{3n}, ["admin", "slow", "dangerous"], [], KBySpecs{}, False{},
+    [R.RBulk{"cluster|meet"}, R.RInt{R.INeg{3n}}, R.RSet{[R.RStatus{"admin"}, R.RStatus{"stale"}, R.RStatus{"no_async_loading"}]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RSet{[R.RStatus{"@admin"}, R.RStatus{"@slow"}, R.RStatus{"@dangerous"}]}, R.RSet{[]}, R.RSet{[]}],
+    [R.RBulk{"summary"}, R.RBulk{"Forces a node to handshake with another node."}, R.RBulk{"since"}, R.RBulk{"3.0.0"}, R.RBulk{"group"}, R.RBulk{"cluster"}, R.RBulk{"complexity"}, R.RBulk{"O(1)"}, R.RBulk{"history"}, R.RSet{[R.RArray{[R.RBulk{"4.0.0"}, R.RBulk{"Added the optional `cluster_bus_port` argument."}]}]}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"ip"}, R.RBulk{"type"}, R.RBulk{"string"}, R.RBulk{"display_text"}, R.RBulk{"ip"}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"port"}, R.RBulk{"type"}, R.RBulk{"integer"}, R.RBulk{"display_text"}, R.RBulk{"port"}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"cluster-bus-port"}, R.RBulk{"type"}, R.RBulk{"integer"}, R.RBulk{"display_text"}, R.RBulk{"cluster-bus-port"}, R.RBulk{"since"}, R.RBulk{"4.0.0"}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"optional"}]}]}]}]}, Desc{"cluster|myid", R.IPos{2n}, ["slow"], [], KBySpecs{}, False{},
+    [R.RBulk{"cluster|myid"}, R.RInt{R.IPos{2n}}, R.RSet{[R.RStatus{"stale"}]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RSet{[R.RStatus{"@slow"}]}, R.RSet{[]}, R.RSet{[]}],
+    [R.RBulk{"summary"}, R.RBulk{"Returns the ID of a node."}, R.RBulk{"since"}, R.RBulk{"3.0.0"}, R.RBulk{"group"}, R.RBulk{"cluster"}, R.RBulk{"complexity"}, R.RBulk{"O(1)"}]}, Desc{"cluster|myshardid", R.IPos{2n}, ["slow"], [], KBySpecs{}, False{},
+    [R.RBulk{"cluster|myshardid"}, R.RInt{R.IPos{2n}}, R.RSet{[R.RStatus{"stale"}]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RSet{[R.RStatus{"@slow"}]}, R.RSet{[R.RBulk{"nondeterministic_output"}]}, R.RSet{[]}],
+    [R.RBulk{"summary"}, R.RBulk{"Returns the shard ID of a node."}, R.RBulk{"since"}, R.RBulk{"7.2.0"}, R.RBulk{"group"}, R.RBulk{"cluster"}, R.RBulk{"complexity"}, R.RBulk{"O(1)"}]}, Desc{"cluster|nodes", R.IPos{2n}, ["slow"], [], KBySpecs{}, False{},
+    [R.RBulk{"cluster|nodes"}, R.RInt{R.IPos{2n}}, R.RSet{[R.RStatus{"stale"}]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RSet{[R.RStatus{"@slow"}]}, R.RSet{[R.RBulk{"nondeterministic_output"}]}, R.RSet{[]}],
+    [R.RBulk{"summary"}, R.RBulk{"Returns the cluster configuration for a node."}, R.RBulk{"since"}, R.RBulk{"3.0.0"}, R.RBulk{"group"}, R.RBulk{"cluster"}, R.RBulk{"complexity"}, R.RBulk{"O(N) where N is the total number of Cluster nodes"}]}, Desc{"cluster|replicas", R.IPos{3n}, ["admin", "slow", "dangerous"], [], KBySpecs{}, False{},
+    [R.RBulk{"cluster|replicas"}, R.RInt{R.IPos{3n}}, R.RSet{[R.RStatus{"admin"}, R.RStatus{"stale"}]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RSet{[R.RStatus{"@admin"}, R.RStatus{"@slow"}, R.RStatus{"@dangerous"}]}, R.RSet{[R.RBulk{"nondeterministic_output"}]}, R.RSet{[]}],
+    [R.RBulk{"summary"}, R.RBulk{"Lists the replica nodes of a master node."}, R.RBulk{"since"}, R.RBulk{"5.0.0"}, R.RBulk{"group"}, R.RBulk{"cluster"}, R.RBulk{"complexity"}, R.RBulk{"O(N) where N is the number of replicas."}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"node-id"}, R.RBulk{"type"}, R.RBulk{"string"}, R.RBulk{"display_text"}, R.RBulk{"node-id"}]}]}]}, Desc{"cluster|replicate", R.IPos{3n}, ["admin", "slow", "dangerous"], [], KBySpecs{}, False{},
+    [R.RBulk{"cluster|replicate"}, R.RInt{R.IPos{3n}}, R.RSet{[R.RStatus{"admin"}, R.RStatus{"stale"}, R.RStatus{"no_async_loading"}]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RSet{[R.RStatus{"@admin"}, R.RStatus{"@slow"}, R.RStatus{"@dangerous"}]}, R.RSet{[]}, R.RSet{[]}],
+    [R.RBulk{"summary"}, R.RBulk{"Configure a node as replica of a master node."}, R.RBulk{"since"}, R.RBulk{"3.0.0"}, R.RBulk{"group"}, R.RBulk{"cluster"}, R.RBulk{"complexity"}, R.RBulk{"O(1)"}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"node-id"}, R.RBulk{"type"}, R.RBulk{"string"}, R.RBulk{"display_text"}, R.RBulk{"node-id"}]}]}]}, Desc{"cluster|reset", R.INeg{1n}, ["admin", "slow", "dangerous"], [], KBySpecs{}, False{},
+    [R.RBulk{"cluster|reset"}, R.RInt{R.INeg{1n}}, R.RSet{[R.RStatus{"admin"}, R.RStatus{"noscript"}, R.RStatus{"stale"}]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RSet{[R.RStatus{"@admin"}, R.RStatus{"@slow"}, R.RStatus{"@dangerous"}]}, R.RSet{[]}, R.RSet{[]}],
+    [R.RBulk{"summary"}, R.RBulk{"Resets a node."}, R.RBulk{"since"}, R.RBulk{"3.0.0"}, R.RBulk{"group"}, R.RBulk{"cluster"}, R.RBulk{"complexity"}, R.RBulk{"O(N) where N is the number of known nodes. The command may execute a FLUSHALL as a side effect."}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"reset-type"}, R.RBulk{"type"}, R.RBulk{"oneof"}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"optional"}]}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"hard"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"display_text"}, R.RBulk{"hard"}, R.RBulk{"token"}, R.RBulk{"HARD"}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"soft"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"display_text"}, R.RBulk{"soft"}, R.RBulk{"token"}, R.RBulk{"SOFT"}]}]}]}]}]}, Desc{"cluster|saveconfig", R.IPos{2n}, ["admin", "slow", "dangerous"], [], KBySpecs{}, False{},
+    [R.RBulk{"cluster|saveconfig"}, R.RInt{R.IPos{2n}}, R.RSet{[R.RStatus{"admin"}, R.RStatus{"stale"}, R.RStatus{"no_async_loading"}]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RSet{[R.RStatus{"@admin"}, R.RStatus{"@slow"}, R.RStatus{"@dangerous"}]}, R.RSet{[]}, R.RSet{[]}],
+    [R.RBulk{"summary"}, R.RBulk{"Forces a node to save the cluster configuration to disk."}, R.RBulk{"since"}, R.RBulk{"3.0.0"}, R.RBulk{"group"}, R.RBulk{"cluster"}, R.RBulk{"complexity"}, R.RBulk{"O(1)"}]}, Desc{"cluster|set-config-epoch", R.IPos{3n}, ["admin", "slow", "dangerous"], [], KBySpecs{}, False{},
+    [R.RBulk{"cluster|set-config-epoch"}, R.RInt{R.IPos{3n}}, R.RSet{[R.RStatus{"admin"}, R.RStatus{"stale"}, R.RStatus{"no_async_loading"}]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RSet{[R.RStatus{"@admin"}, R.RStatus{"@slow"}, R.RStatus{"@dangerous"}]}, R.RSet{[]}, R.RSet{[]}],
+    [R.RBulk{"summary"}, R.RBulk{"Sets the configuration epoch for a new node."}, R.RBulk{"since"}, R.RBulk{"3.0.0"}, R.RBulk{"group"}, R.RBulk{"cluster"}, R.RBulk{"complexity"}, R.RBulk{"O(1)"}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"config-epoch"}, R.RBulk{"type"}, R.RBulk{"integer"}, R.RBulk{"display_text"}, R.RBulk{"config-epoch"}]}]}]}, Desc{"cluster|setslot", R.INeg{3n}, ["admin", "slow", "dangerous"], [], KBySpecs{}, False{},
+    [R.RBulk{"cluster|setslot"}, R.RInt{R.INeg{3n}}, R.RSet{[R.RStatus{"admin"}, R.RStatus{"stale"}, R.RStatus{"no_async_loading"}]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RSet{[R.RStatus{"@admin"}, R.RStatus{"@slow"}, R.RStatus{"@dangerous"}]}, R.RSet{[]}, R.RSet{[]}],
+    [R.RBulk{"summary"}, R.RBulk{"Binds a hash slot to a node."}, R.RBulk{"since"}, R.RBulk{"3.0.0"}, R.RBulk{"group"}, R.RBulk{"cluster"}, R.RBulk{"complexity"}, R.RBulk{"O(1)"}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"slot"}, R.RBulk{"type"}, R.RBulk{"integer"}, R.RBulk{"display_text"}, R.RBulk{"slot"}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"subcommand"}, R.RBulk{"type"}, R.RBulk{"oneof"}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"importing"}, R.RBulk{"type"}, R.RBulk{"string"}, R.RBulk{"display_text"}, R.RBulk{"node-id"}, R.RBulk{"token"}, R.RBulk{"IMPORTING"}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"migrating"}, R.RBulk{"type"}, R.RBulk{"string"}, R.RBulk{"display_text"}, R.RBulk{"node-id"}, R.RBulk{"token"}, R.RBulk{"MIGRATING"}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"node"}, R.RBulk{"type"}, R.RBulk{"string"}, R.RBulk{"display_text"}, R.RBulk{"node-id"}, R.RBulk{"token"}, R.RBulk{"NODE"}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"stable"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"display_text"}, R.RBulk{"stable"}, R.RBulk{"token"}, R.RBulk{"STABLE"}]}]}]}]}]}, Desc{"cluster|shards", R.IPos{2n}, ["slow"], [], KBySpecs{}, False{},
+    [R.RBulk{"cluster|shards"}, R.RInt{R.IPos{2n}}, R.RSet{[R.RStatus{"loading"}, R.RStatus{"stale"}]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RSet{[R.RStatus{"@slow"}]}, R.RSet{[R.RBulk{"nondeterministic_output"}]}, R.RSet{[]}],
+    [R.RBulk{"summary"}, R.RBulk{"Returns the mapping of cluster slots to shards."}, R.RBulk{"since"}, R.RBulk{"7.0.0"}, R.RBulk{"group"}, R.RBulk{"cluster"}, R.RBulk{"complexity"}, R.RBulk{"O(N) where N is the total number of cluster nodes"}]}, Desc{"cluster|slaves", R.IPos{3n}, ["admin", "slow", "dangerous"], [], KBySpecs{}, False{},
+    [R.RBulk{"cluster|slaves"}, R.RInt{R.IPos{3n}}, R.RSet{[R.RStatus{"admin"}, R.RStatus{"stale"}]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RSet{[R.RStatus{"@admin"}, R.RStatus{"@slow"}, R.RStatus{"@dangerous"}]}, R.RSet{[R.RBulk{"nondeterministic_output"}]}, R.RSet{[]}],
+    [R.RBulk{"summary"}, R.RBulk{"Lists the replica nodes of a master node."}, R.RBulk{"since"}, R.RBulk{"3.0.0"}, R.RBulk{"group"}, R.RBulk{"cluster"}, R.RBulk{"complexity"}, R.RBulk{"O(N) where N is the number of replicas."}, R.RBulk{"doc_flags"}, R.RSet{[R.RStatus{"deprecated"}]}, R.RBulk{"deprecated_since"}, R.RBulk{"5.0.0"}, R.RBulk{"replaced_by"}, R.RBulk{"`CLUSTER REPLICAS`"}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"node-id"}, R.RBulk{"type"}, R.RBulk{"string"}, R.RBulk{"display_text"}, R.RBulk{"node-id"}]}]}]}, Desc{"cluster|slots", R.IPos{2n}, ["slow"], [], KBySpecs{}, False{},
+    [R.RBulk{"cluster|slots"}, R.RInt{R.IPos{2n}}, R.RSet{[R.RStatus{"loading"}, R.RStatus{"stale"}]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RSet{[R.RStatus{"@slow"}]}, R.RSet{[R.RBulk{"nondeterministic_output"}]}, R.RSet{[]}],
+    [R.RBulk{"summary"}, R.RBulk{"Returns the mapping of cluster slots to nodes."}, R.RBulk{"since"}, R.RBulk{"3.0.0"}, R.RBulk{"group"}, R.RBulk{"cluster"}, R.RBulk{"complexity"}, R.RBulk{"O(N) where N is the total number of Cluster nodes"}, R.RBulk{"doc_flags"}, R.RSet{[R.RStatus{"deprecated"}]}, R.RBulk{"deprecated_since"}, R.RBulk{"7.0.0"}, R.RBulk{"replaced_by"}, R.RBulk{"`CLUSTER SHARDS`"}, R.RBulk{"history"}, R.RSet{[R.RArray{[R.RBulk{"4.0.0"}, R.RBulk{"Added node IDs."}]}, R.RArray{[R.RBulk{"7.0.0"}, R.RBulk{"Added additional networking metadata field."}]}]}]}]}
 
 def cmd.command() -> Top:
   Top{Desc{"command", R.INeg{0n}, ["slow", "connection"], [], KBySpecs{}, False{},
@@ -1574,7 +1640,7 @@ def cmd.zunionstore() -> Top:
 
 # the commands, by name
 def table() -> List<&2, Top>:
-  [cmd.acl(), cmd.append(), cmd.auth(), cmd.bgrewriteaof(), cmd.bgsave(), cmd.bitcount(), cmd.bitfield(), cmd.bitfield_ro(), cmd.bitop(), cmd.bitpos(), cmd.blmove(), cmd.blmpop(), cmd.blpop(), cmd.brpop(), cmd.brpoplpush(), cmd.bzmpop(), cmd.bzpopmax(), cmd.bzpopmin(), cmd.client(), cmd.command(), cmd.config(), cmd.copy(), cmd.dbsize(), cmd.decr(), cmd.decrby(), cmd.del(), cmd.discard(), cmd.dump(), cmd.echo(), cmd.eval(), cmd.eval_ro(), cmd.evalsha(), cmd.evalsha_ro(), cmd.exec(), cmd.exists(), cmd.expire(), cmd.expireat(), cmd.expiretime(), cmd.fcall(), cmd.fcall_ro(), cmd.flushall(), cmd.flushdb(), cmd.function(), cmd.geoadd(), cmd.geodist(), cmd.geohash(), cmd.geopos(), cmd.georadius(), cmd.georadius_ro(), cmd.georadiusbymember(), cmd.georadiusbymember_ro(), cmd.geosearch(), cmd.geosearchstore(), cmd.get(), cmd.getbit(), cmd.getdel(), cmd.getex(), cmd.getrange(), cmd.getset(), cmd.hdel(), cmd.hello(), cmd.hexists(), cmd.hget(), cmd.hgetall(), cmd.hincrby(), cmd.hincrbyfloat(), cmd.hkeys(), cmd.hlen(), cmd.hmget(), cmd.hmset(), cmd.hrandfield(), cmd.hscan(), cmd.hset(), cmd.hsetnx(), cmd.hstrlen(), cmd.hvals(), cmd.incr(), cmd.incrby(), cmd.incrbyfloat(), cmd.info(), cmd.keys(), cmd.lastsave(), cmd.latency(), cmd.lcs(), cmd.lindex(), cmd.linsert(), cmd.llen(), cmd.lmove(), cmd.lmpop(), cmd.lolwut(), cmd.lpop(), cmd.lpos(), cmd.lpush(), cmd.lpushx(), cmd.lrange(), cmd.lrem(), cmd.lset(), cmd.ltrim(), cmd.memory(), cmd.mget(), cmd.monitor(), cmd.move(), cmd.mset(), cmd.msetnx(), cmd.multi(), cmd.object(), cmd.persist(), cmd.pexpire(), cmd.pexpireat(), cmd.pexpiretime(), cmd.pfadd(), cmd.pfcount(), cmd.pfdebug(), cmd.pfmerge(), cmd.pfselftest(), cmd.ping(), cmd.psetex(), cmd.psubscribe(), cmd.pttl(), cmd.publish(), cmd.pubsub(), cmd.punsubscribe(), cmd.quit(), cmd.randomkey(), cmd.rename(), cmd.renamenx(), cmd.reset(), cmd.restore(), cmd.role(), cmd.rpop(), cmd.rpoplpush(), cmd.rpush(), cmd.rpushx(), cmd.sadd(), cmd.save(), cmd.scan(), cmd.scard(), cmd.script(), cmd.sdiff(), cmd.sdiffstore(), cmd.select(), cmd.set(), cmd.setbit(), cmd.setex(), cmd.setnx(), cmd.setrange(), cmd.shutdown(), cmd.sinter(), cmd.sintercard(), cmd.sinterstore(), cmd.sismember(), cmd.slowlog(), cmd.smembers(), cmd.smismember(), cmd.smove(), cmd.sort(), cmd.sort_ro(), cmd.spop(), cmd.spublish(), cmd.srandmember(), cmd.srem(), cmd.sscan(), cmd.ssubscribe(), cmd.strlen(), cmd.subscribe(), cmd.substr(), cmd.sunion(), cmd.sunionstore(), cmd.sunsubscribe(), cmd.swapdb(), cmd.time(), cmd.touch(), cmd.ttl(), cmd.type(), cmd.unlink(), cmd.unsubscribe(), cmd.unwatch(), cmd.wait(), cmd.watch(), cmd.xadd(), cmd.xdel(), cmd.xinfo(), cmd.xlen(), cmd.xpending(), cmd.xrange(), cmd.xread(), cmd.xrevrange(), cmd.xsetid(), cmd.xtrim(), cmd.zadd(), cmd.zcard(), cmd.zcount(), cmd.zdiff(), cmd.zdiffstore(), cmd.zincrby(), cmd.zinter(), cmd.zintercard(), cmd.zinterstore(), cmd.zlexcount(), cmd.zmpop(), cmd.zmscore(), cmd.zpopmax(), cmd.zpopmin(), cmd.zrandmember(), cmd.zrange(), cmd.zrangebylex(), cmd.zrangebyscore(), cmd.zrangestore(), cmd.zrank(), cmd.zrem(), cmd.zremrangebylex(), cmd.zremrangebyrank(), cmd.zremrangebyscore(), cmd.zrevrange(), cmd.zrevrangebylex(), cmd.zrevrangebyscore(), cmd.zrevrank(), cmd.zscan(), cmd.zscore(), cmd.zunion(), cmd.zunionstore()]
+  [cmd.acl(), cmd.append(), cmd.auth(), cmd.bgrewriteaof(), cmd.bgsave(), cmd.bitcount(), cmd.bitfield(), cmd.bitfield_ro(), cmd.bitop(), cmd.bitpos(), cmd.blmove(), cmd.blmpop(), cmd.blpop(), cmd.brpop(), cmd.brpoplpush(), cmd.bzmpop(), cmd.bzpopmax(), cmd.bzpopmin(), cmd.client(), cmd.cluster(), cmd.command(), cmd.config(), cmd.copy(), cmd.dbsize(), cmd.decr(), cmd.decrby(), cmd.del(), cmd.discard(), cmd.dump(), cmd.echo(), cmd.eval(), cmd.eval_ro(), cmd.evalsha(), cmd.evalsha_ro(), cmd.exec(), cmd.exists(), cmd.expire(), cmd.expireat(), cmd.expiretime(), cmd.fcall(), cmd.fcall_ro(), cmd.flushall(), cmd.flushdb(), cmd.function(), cmd.geoadd(), cmd.geodist(), cmd.geohash(), cmd.geopos(), cmd.georadius(), cmd.georadius_ro(), cmd.georadiusbymember(), cmd.georadiusbymember_ro(), cmd.geosearch(), cmd.geosearchstore(), cmd.get(), cmd.getbit(), cmd.getdel(), cmd.getex(), cmd.getrange(), cmd.getset(), cmd.hdel(), cmd.hello(), cmd.hexists(), cmd.hget(), cmd.hgetall(), cmd.hincrby(), cmd.hincrbyfloat(), cmd.hkeys(), cmd.hlen(), cmd.hmget(), cmd.hmset(), cmd.hrandfield(), cmd.hscan(), cmd.hset(), cmd.hsetnx(), cmd.hstrlen(), cmd.hvals(), cmd.incr(), cmd.incrby(), cmd.incrbyfloat(), cmd.info(), cmd.keys(), cmd.lastsave(), cmd.latency(), cmd.lcs(), cmd.lindex(), cmd.linsert(), cmd.llen(), cmd.lmove(), cmd.lmpop(), cmd.lolwut(), cmd.lpop(), cmd.lpos(), cmd.lpush(), cmd.lpushx(), cmd.lrange(), cmd.lrem(), cmd.lset(), cmd.ltrim(), cmd.memory(), cmd.mget(), cmd.monitor(), cmd.move(), cmd.mset(), cmd.msetnx(), cmd.multi(), cmd.object(), cmd.persist(), cmd.pexpire(), cmd.pexpireat(), cmd.pexpiretime(), cmd.pfadd(), cmd.pfcount(), cmd.pfdebug(), cmd.pfmerge(), cmd.pfselftest(), cmd.ping(), cmd.psetex(), cmd.psubscribe(), cmd.pttl(), cmd.publish(), cmd.pubsub(), cmd.punsubscribe(), cmd.quit(), cmd.randomkey(), cmd.rename(), cmd.renamenx(), cmd.reset(), cmd.restore(), cmd.role(), cmd.rpop(), cmd.rpoplpush(), cmd.rpush(), cmd.rpushx(), cmd.sadd(), cmd.save(), cmd.scan(), cmd.scard(), cmd.script(), cmd.sdiff(), cmd.sdiffstore(), cmd.select(), cmd.set(), cmd.setbit(), cmd.setex(), cmd.setnx(), cmd.setrange(), cmd.shutdown(), cmd.sinter(), cmd.sintercard(), cmd.sinterstore(), cmd.sismember(), cmd.slowlog(), cmd.smembers(), cmd.smismember(), cmd.smove(), cmd.sort(), cmd.sort_ro(), cmd.spop(), cmd.spublish(), cmd.srandmember(), cmd.srem(), cmd.sscan(), cmd.ssubscribe(), cmd.strlen(), cmd.subscribe(), cmd.substr(), cmd.sunion(), cmd.sunionstore(), cmd.sunsubscribe(), cmd.swapdb(), cmd.time(), cmd.touch(), cmd.ttl(), cmd.type(), cmd.unlink(), cmd.unsubscribe(), cmd.unwatch(), cmd.wait(), cmd.watch(), cmd.xadd(), cmd.xdel(), cmd.xinfo(), cmd.xlen(), cmd.xpending(), cmd.xrange(), cmd.xread(), cmd.xrevrange(), cmd.xsetid(), cmd.xtrim(), cmd.zadd(), cmd.zcard(), cmd.zcount(), cmd.zdiff(), cmd.zdiffstore(), cmd.zincrby(), cmd.zinter(), cmd.zintercard(), cmd.zinterstore(), cmd.zlexcount(), cmd.zmpop(), cmd.zmscore(), cmd.zpopmax(), cmd.zpopmin(), cmd.zrandmember(), cmd.zrange(), cmd.zrangebylex(), cmd.zrangebyscore(), cmd.zrangestore(), cmd.zrank(), cmd.zrem(), cmd.zremrangebylex(), cmd.zremrangebyrank(), cmd.zremrangebyscore(), cmd.zrevrange(), cmd.zrevrangebylex(), cmd.zrevrangebyscore(), cmd.zrevrank(), cmd.zscan(), cmd.zscore(), cmd.zunion(), cmd.zunionstore()]
 
 # Redis's ACL categories (ACL CAT)
 def categories() -> List<&2, String>:
@@ -2576,21 +2642,21 @@ def ro.key(+key: Nat) -> Maybe<&2, Ro>:
       Some{Ro{R.INeg{3n}, [KSpecKw{["RO", "access", "incomplete"], "STREAMS", 1n, R.INeg{0n}, 1n, 2n}], KByXread{}}}
     case 216n:
       Some{Ro{R.INeg{2n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
-    case 260n:
-      Some{Ro{R.IPos{3n}, [KSpec{["RO"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
-    case 261n:
-      Some{Ro{R.IPos{3n}, [KSpec{["RO"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
-    case 262n:
-      Some{Ro{R.IPos{3n}, [KSpec{["RO"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
     case 263n:
       Some{Ro{R.IPos{3n}, [KSpec{["RO"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 264n:
+      Some{Ro{R.IPos{3n}, [KSpec{["RO"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
     case 265n:
+      Some{Ro{R.IPos{3n}, [KSpec{["RO"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 266n:
+      Some{Ro{R.IPos{3n}, [KSpec{["RO"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 268n:
       Some{Ro{R.INeg{2n}, [KSpec{["RO"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
-    case 306n:
+    case 309n:
       Some{Ro{R.INeg{2n}, [KSpec{["RO", "access"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
-    case 307n:
+    case 310n:
       Some{Ro{R.IPos{3n}, [KSpec{["RO", "access"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
-    case 308n:
+    case 311n:
       Some{Ro{R.IPos{4n}, [KSpec{["RO", "access"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
     case _:
       None{}
@@ -3042,103 +3108,103 @@ def spec.key(+key: Nat) -> Maybe<&2, Ro>:
     case 221n:
       Some{Ro{R.INeg{0n}, [], KBySpecs{}}}
     case 222n:
-      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
     case 223n:
       Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
     case 224n:
-      Some{Ro{R.IPos{3n}, [], KBySpecs{}}}
-    case 225n:
       Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
-    case 226n:
+    case 225n:
       Some{Ro{R.IPos{3n}, [], KBySpecs{}}}
+    case 226n:
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
     case 227n:
       Some{Ro{R.IPos{3n}, [], KBySpecs{}}}
     case 228n:
-      Some{Ro{R.INeg{2n}, [], KBySpecs{}}}
-    case 229n:
-      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
-    case 230n:
       Some{Ro{R.IPos{3n}, [], KBySpecs{}}}
-    case 231n:
-      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
-    case 232n:
-      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
-    case 233n:
-      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
-    case 234n:
+    case 229n:
       Some{Ro{R.INeg{2n}, [], KBySpecs{}}}
+    case 230n:
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case 231n:
+      Some{Ro{R.IPos{3n}, [], KBySpecs{}}}
+    case 232n:
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case 233n:
+      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
+    case 234n:
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
     case 235n:
       Some{Ro{R.INeg{2n}, [], KBySpecs{}}}
     case 236n:
-      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+      Some{Ro{R.INeg{2n}, [], KBySpecs{}}}
     case 237n:
-      Some{Ro{R.INeg{2n}, [], KBySpecs{}}}
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
     case 238n:
-      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
+      Some{Ro{R.INeg{2n}, [], KBySpecs{}}}
     case 239n:
-      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+      Some{Ro{R.IPos{4n}, [], KBySpecs{}}}
     case 240n:
-      Some{Ro{R.INeg{2n}, [], KBySpecs{}}}
-    case 241n:
       Some{Ro{R.IPos{3n}, [], KBySpecs{}}}
+    case 241n:
+      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
     case 242n:
-      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
     case 243n:
-      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+      Some{Ro{R.INeg{2n}, [], KBySpecs{}}}
     case 244n:
-      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+      Some{Ro{R.IPos{3n}, [], KBySpecs{}}}
     case 245n:
-      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
     case 246n:
-      Some{Ro{R.INeg{2n}, [], KBySpecs{}}}
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
     case 247n:
-      Some{Ro{R.INeg{2n}, [], KBySpecs{}}}
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
     case 248n:
-      Some{Ro{R.INeg{3n}, [], KBySpecs{}}}
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
     case 249n:
-      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+      Some{Ro{R.INeg{2n}, [], KBySpecs{}}}
     case 250n:
-      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+      Some{Ro{R.INeg{2n}, [], KBySpecs{}}}
     case 251n:
-      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+      Some{Ro{R.INeg{3n}, [], KBySpecs{}}}
     case 252n:
-      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
     case 253n:
-      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
     case 254n:
-      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
     case 255n:
-      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
     case 256n:
-      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
     case 257n:
-      Some{Ro{R.INeg{2n}, [], KBySpecs{}}}
+      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
     case 258n:
-      Some{Ro{R.INeg{2n}, [], KBySpecs{}}}
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
     case 259n:
       Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
     case 260n:
-      Some{Ro{R.IPos{3n}, [KSpec{["RO"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+      Some{Ro{R.INeg{2n}, [], KBySpecs{}}}
     case 261n:
-      Some{Ro{R.IPos{3n}, [KSpec{["RO"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+      Some{Ro{R.INeg{2n}, [], KBySpecs{}}}
     case 262n:
-      Some{Ro{R.IPos{3n}, [KSpec{["RO"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
     case 263n:
       Some{Ro{R.IPos{3n}, [KSpec{["RO"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
     case 264n:
-      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+      Some{Ro{R.IPos{3n}, [KSpec{["RO"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
     case 265n:
-      Some{Ro{R.INeg{2n}, [KSpec{["RO"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+      Some{Ro{R.IPos{3n}, [KSpec{["RO"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
     case 266n:
-      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+      Some{Ro{R.IPos{3n}, [KSpec{["RO"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
     case 267n:
       Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
     case 268n:
-      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+      Some{Ro{R.INeg{2n}, [KSpec{["RO"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
     case 269n:
       Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
     case 270n:
-      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
     case 271n:
       Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
     case 272n:
@@ -3146,25 +3212,25 @@ def spec.key(+key: Nat) -> Maybe<&2, Ro>:
     case 273n:
       Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
     case 274n:
-      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
     case 275n:
-      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
     case 276n:
       Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
     case 277n:
-      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
     case 278n:
-      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
     case 279n:
-      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
     case 280n:
       Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
     case 281n:
-      Some{Ro{R.IPos{3n}, [], KBySpecs{}}}
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
     case 282n:
       Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
     case 283n:
-      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
     case 284n:
       Some{Ro{R.IPos{3n}, [], KBySpecs{}}}
     case 285n:
@@ -3174,47 +3240,109 @@ def spec.key(+key: Nat) -> Maybe<&2, Ro>:
     case 287n:
       Some{Ro{R.IPos{3n}, [], KBySpecs{}}}
     case 288n:
-      Some{Ro{R.INeg{2n}, [], KBySpecs{}}}
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
     case 289n:
       Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
     case 290n:
-      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+      Some{Ro{R.IPos{3n}, [], KBySpecs{}}}
     case 291n:
-      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+      Some{Ro{R.INeg{2n}, [], KBySpecs{}}}
     case 292n:
       Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
     case 293n:
-      Some{Ro{R.INeg{2n}, [], KBySpecs{}}}
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
     case 294n:
-      Some{Ro{R.INeg{3n}, [], KBySpecs{}}}
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
     case 295n:
       Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
     case 296n:
-      Some{Ro{R.IPos{3n}, [], KBySpecs{}}}
+      Some{Ro{R.INeg{2n}, [], KBySpecs{}}}
     case 297n:
-      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+      Some{Ro{R.INeg{3n}, [], KBySpecs{}}}
     case 298n:
-      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
-    case 299n:
-      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
-    case 300n:
       Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
+    case 299n:
+      Some{Ro{R.IPos{3n}, [], KBySpecs{}}}
+    case 300n:
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
     case 301n:
       Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
     case 302n:
-      Some{Ro{R.INeg{2n}, [], KBySpecs{}}}
-    case 303n:
       Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case 303n:
+      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
     case 304n:
       Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
     case 305n:
-      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+      Some{Ro{R.INeg{2n}, [], KBySpecs{}}}
     case 306n:
-      Some{Ro{R.INeg{2n}, [KSpec{["RO", "access"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
     case 307n:
-      Some{Ro{R.IPos{3n}, [KSpec{["RO", "access"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
     case 308n:
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case 309n:
+      Some{Ro{R.INeg{2n}, [KSpec{["RO", "access"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 310n:
+      Some{Ro{R.IPos{3n}, [KSpec{["RO", "access"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 311n:
       Some{Ro{R.IPos{4n}, [KSpec{["RO", "access"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 312n:
+      Some{Ro{R.INeg{2n}, [], KBySpecs{}}}
+    case 313n:
+      Some{Ro{R.INeg{3n}, [], KBySpecs{}}}
+    case 314n:
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case 315n:
+      Some{Ro{R.IPos{3n}, [], KBySpecs{}}}
+    case 316n:
+      Some{Ro{R.IPos{3n}, [], KBySpecs{}}}
+    case 317n:
+      Some{Ro{R.INeg{2n}, [], KBySpecs{}}}
+    case 318n:
+      Some{Ro{R.INeg{3n}, [], KBySpecs{}}}
+    case 319n:
+      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
+    case 320n:
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case 321n:
+      Some{Ro{R.IPos{3n}, [], KBySpecs{}}}
+    case 322n:
+      Some{Ro{R.IPos{4n}, [], KBySpecs{}}}
+    case 323n:
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case 324n:
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case 325n:
+      Some{Ro{R.IPos{3n}, [], KBySpecs{}}}
+    case 326n:
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case 327n:
+      Some{Ro{R.INeg{3n}, [], KBySpecs{}}}
+    case 328n:
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case 329n:
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case 330n:
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case 331n:
+      Some{Ro{R.IPos{3n}, [], KBySpecs{}}}
+    case 332n:
+      Some{Ro{R.IPos{3n}, [], KBySpecs{}}}
+    case 333n:
+      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
+    case 334n:
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case 335n:
+      Some{Ro{R.IPos{3n}, [], KBySpecs{}}}
+    case 336n:
+      Some{Ro{R.INeg{3n}, [], KBySpecs{}}}
+    case 337n:
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case 338n:
+      Some{Ro{R.IPos{3n}, [], KBySpecs{}}}
+    case 339n:
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
     case _:
       None{}
 

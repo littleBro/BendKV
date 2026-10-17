@@ -9162,7 +9162,9 @@ the move's other kinds (below).
 - **The sandbox.**
   - `newproxy`, `setfenv` and `getfenv` leave the globals. Redis lets them back with
     `lua-enable-deprecated-api yes`, a hidden parameter that only the start sets, `no` by
-    default; BendKV keeps it at `no`.
+    default. BendKV reads it as the start does, before any Lua state is made
+    (`Engine.deprecated`): EVAL's state and the functions' both keep them or both leave
+    them out, a library loaded from the files at the start too (`tests/start_test.py`).
   - The metatables of the basic types are read-only, as the globals are (CVE-2025-46818).
     A string's is the one Lua sets, and `getmetatable('').__index.upper = f` now fails
     with "Attempt to modify a readonly table", in EVAL's state and in the functions'.
@@ -9183,6 +9185,16 @@ the move's other kinds (below).
     246): "Pre-GA function format not supported" (`lib.kind`). An RDB file's library in
     that format stops the start, as Redis 7.2.16's does (kind E: section 3zzzzc).
   - SCRIPT KILL's line in the log is a notice (`*`), not a warning (`#`).
+- **Lua's numbers** (with kind C's `fpconv_dtoa`, section 3zzzzh).
+  - A number passed to `redis.call` is written as `luaArgsToRedisArgv` writes it. An
+    integer that a long long holds within 2^62 is written as one (`double2ll`); any other
+    as `fpconv_dtoa` writes it. So `3.14` and `0.1`, where 7.0's `%.17g` gave
+    `3.1400000000000001`; `-0` is `0`, and a NaN is `fpconv_dtoa`'s `-nan` (0/0 on x86-64).
+  - A script's `{double=...}` reply is `d2string`'s, as `addReplyDouble` writes it, in RESP2
+    and RESP3: `0.1`, `nan`, `-0`.
+  - The engine calls the vendored `fpconv_dtoa.c` (`sc_double2ll` and `sc_d2string` in
+    `src/lua/engine.c`). One change from 7.2.16: its `double2ll` casts a NaN to a long long
+    before it compares, which C leaves undefined. The port tests the range first.
 - **What was so already.**
   - Time stands still while a script runs, as 7.2's `commandTimeSnapshot` holds it:
     TIME, SET's EX and PX, EXPIRE, TTL and the keys' expiry all read the group's time.
@@ -9197,7 +9209,8 @@ the move's other kinds (below).
     queued, without waiting (`sc.run.call`), so it needs only the table.
   - `redis.REDIS_VERSION` and `REDIS_VERSION_NUM`, and HELP's last line, "Print this
     help." (kind A).
-  - Lua's numbers in `redis.call`, and a script's double, in `fpconv_dtoa`'s form (kind C).
+  - Lua's numbers in `redis.call`, and a script's double, in `fpconv_dtoa`'s form (kind C,
+    done: above).
   - The order of pushes, and the keys that a script's reads track (kind F, done in
     section 3zzzzg).
 
@@ -9207,7 +9220,7 @@ pushes and tracking (F), NOPERM's texts (G), ACL LOG's new fields and CLIENT LIS
 `lib-name` and `lib-ver` (B and H), FUNCTION DUMP's version and the RESTORE of a payload
 of version 11 (E). Once A, E, F, G and H were in, function_test passed against 7.2.16,
 and script_test differed in Lua's doubles alone (C); a blocking command in a script ran
-as in MULTI with A's table, nothing more.
+as in MULTI with A's table, nothing more. With C's `fpconv_dtoa`, script_test passes too.
 
 **What it costs.** Nothing on a request's path: the metatables are protected when a state
 is made, and the texts are made only for an error or a refusal.
@@ -9888,10 +9901,13 @@ call (`afterCommand`, from `pending_push_messages`), and BendKV now does too.
   - The keyspace events of EXEC's commands never reached their own client.
   - A served pop's keyspace events reached the client whose command served it before
     that command's reply.
-  - Left as it was: CONFIG SET notify-keyspace-events takes effect from the next batch,
-    not from the next command of the same pipeline, since Pub/Sub's classes of events are
-    set again at a batch's end. A pipeline that sets them, subscribes and writes at once
-    hears nothing of that write, from Redis 7.0.15 as from 7.2.16.
+  - CONFIG SET notify-keyspace-events, and a client's first subscription, counted from
+    the next batch: Pub/Sub's classes of events were set again only at a batch's end
+    (`ps.tune`), where Redis reads the parameter and the channels at each event. So a
+    pipeline that set the classes, or subscribed, and then wrote heard nothing of that
+    write; so did one in a transaction. That differed from Redis 7.0.15 as from 7.2.16.
+    Now a CONFIG SET, a SUBSCRIBE and a PSUBSCRIBE set the classes again at once, in a
+    batch and in EXEC (`ps.classes`; The classes of events within a batch).
 - **Tracking.**
   - A blocked pop that is served runs its command again in Redis 7.2. So BLPOP and BRPOP
     signal the key they popped from, as BLMPOP and the sorted sets' pops did, and BLMOVE
@@ -9909,6 +9925,9 @@ call (`afterCommand`, from `pending_push_messages`), and BendKV now does too.
 - tracking_test: a redirect's own write in a transaction, a served BLMOVE in BCAST
   mode, and a redirect to the client served; "redirects" and "served pops" pass.
 - script_test: "10 pipelines" and "12 tracking" pass.
+- resp3_test's "the classes of events set within a pipeline" and pubsub_test's "19
+  pipeline" and "19 transaction": the classes and the subscriptions counted from the next
+  command of their pipeline and their transaction. They pass; before, they failed.
 - The other differential tests that pushes and tracking touch (blocking, multi, pubsub,
   client, monitor, pause, function, acl, keyspace, list, info, stats, the streams'), and
   the file tests, differ from 7.2.16 in the same lines as before kind F: none of them
@@ -9918,7 +9937,9 @@ call (`afterCommand`, from `pending_push_messages`), and BendKV now does too.
 (`bg.own.has`); nothing on the fast way, which makes no such push. perfcheck's GET, SET
 and INCR count 3,508, 4,299 and 4,621 instructions, against 3,507, 4,302 and 4,616 for
 kind I's build (5d523c6), counted alike; with 100 clients in BLPOP, 3,611 and 4,455
-against 3,618 and 4,460.
+against 3,618 and 4,460. The classes of events set again within a batch add a test of
+each command's key to the general way (`ev.key`), and nothing to the fast way: GET and SET
+count 3,504 and 4,299 with kind C in, 3,610 and 4,456 with 100 clients in BLPOP.
 
 ## 3zzzzh. Doubles as Redis 7.2.16 writes them
 
@@ -9992,7 +10013,95 @@ Grisu2 makes 17 digits at most from 64-bit integers. An integral score (ZSCORE o
 the integer's path, as before. DUMP writes a small sorted set's scores with `d2string`
 too.
 
-## 3zzzzi. Lists and sets as Redis 7.2.16 holds them
+## 3zzzzi. Redis 7.2.16's new commands and options, and HyperLogLog's last difference
+
+**What changed** (#128, kinds B and J: `src/redis.bend`, `src/server.bend`,
+`src/session.bend`, `tools/gen_commands.py`).
+- **CLIENT SETINFO LIB-NAME|LIB-VER value** (`clientSetinfoCommand`), the option in any
+  case.
+  - A value is bytes from `!` to `~` up to its first NUL (`validateClientAttr`); any other
+    is `<option> cannot contain spaces, newlines or special characters.`, and another
+    option is `Unrecognized option '<option>'`. An empty value clears the field.
+  - CLIENT LIST and INFO show the library as `lib-name=` and `lib-ver=`, up to the first
+    NUL, as `%s` prints them; RESET keeps it.
+  - The registry keeps it with what else a client set of itself (`Clf`: NO-EVICT,
+    NO-TOUCH and the library), which takes NO-EVICT's place in the client's record, as a
+    node of its own (What it costs, below).
+- **CLIENT NO-TOUCH ON|OFF**: `T` in CLIENT LIST's flags, after `e`; RESET turns it off.
+  - Redis's `lookupKey` leaves a key's access time and LFU counter as they were for such
+    a client's commands, but TOUCH's (in a transaction too: TOUCH is the command then).
+  - BendKV's fast way marks a batch's keys before the batch runs. So while some client
+    has NO-TOUCH on (Ps's bit 18), every batch takes the general way. There a no-touch
+    client's calls mark their keys as they run, TOUCH's alone. The bit is set as a client
+    turns NO-TOUCH on, and looked for again in the registry as one turns it off, resets or
+    goes.
+  - A batch that holds a CLIENT NO-TOUCH marks its keys as its calls run too, so that a
+    pipeline of CLIENT NO-TOUCH ON and GET leaves the GET's key as it was, as in Redis.
+  - A script's calls mark no key while the script's caller has NO-TOUCH on: Redis 7.2.16's
+    `lookupKey` asks whether the caller's command, EVAL or FCALL, is TOUCH, so the
+    script's TOUCH leaves its key as it was too.
+  - Otherwise a script's call now marks its key as it runs, the first key of the call as
+    BendKV marks a request's. Before, a script's calls marked no key, whoever ran it, where
+    7.0.15 and 7.2.16 mark each key they look up.
+  - A first version kept the other clients on the fast way, with a look in the registry
+    for each batch's client. That cost every GET 39 instructions (1.1%), so the bit sends
+    every batch to the general way instead, and the fast way pays nothing for it while no
+    client has it on.
+- **ZRANK and ZREVRANK key member [WITHSCORE]** (`zrankGenericCommand`).
+  - More than four arguments are the command's own error, a failed call: the table's
+    arity, -3, lets them pass.
+  - A fourth that is not WITHSCORE is a syntax error. Both are answered before the key is
+    looked for.
+  - With WITHSCORE: the rank and the score (`addReplyDouble`), or a null array.
+- **CLUSTER.** BendKV runs no cluster.
+  - Redis 7.2.16 with `cluster-enabled no` answers each of CLUSTER's 28 subcommands, HELP
+    and MYSHARDID among them, `This instance has cluster support disabled`, once its arity
+    passes: a failed call, after NOAUTH and ACL's checks.
+  - An unknown subcommand is refused (`unknown subcommand '…'. Try CLUSTER HELP.`), and so
+    is a wrong number of arguments (`'cluster|<subcommand>'`).
+  - The parser needs the subcommands' arities before the statistics' block that holds the
+    others', so `tools/gen_commands.py` writes them into the dispatch block
+    (`cluster.arity`).
+  - COMMAND, ACL and INFO's commandstats know CLUSTER and its subcommands from 7.2.16's
+    table, as they know the rest.
+- **HyperLogLog's last difference** (kind J) is a bug of every version: bug 6 of
+  `docs/UPSTREAM.md`.
+  - A sparse value whose opcodes end within an XZERO makes Redis read the byte after the
+    value's end.
+  - 7.0.15 and 7.2.16 find different bytes there. A split of the XZERO leaves its last
+    byte past the end, and 7.2's greedy growth of the buffer writes a NUL over it, which
+    turns on the sizes of jemalloc's classes.
+  - BendKV keeps its reading: 0 as a command starts, the split's byte within the command.
+    `hll_test` counts the commands answered otherwise on such a value, without failing
+    (one in its 3,000 random rounds), and sets both servers to Redis's values after one.
+    It checks BendKV's reading of one such value alone.
+
+**Tests.** Against 7.2.16 these pass:
+- `client_test`'s new scenarios: NO-TOUCH's flag and errors; its keys' OBJECT FREQ (with
+  `lfu-log-factor` 0, so that each access steps the counter) and OBJECT IDLETIME, in a
+  pipeline, in MULTI and in scripts (EVAL, EVAL_RO, in MULTI too), and TOUCH's;
+  SETINFO's fields, errors and RESET; the statistics of both;
+- `zset_test`'s WITHSCORE cases: the scripted ones, the reads of every size, the random
+  rounds;
+- `admin_test`'s CLUSTER: each subcommand, wrong numbers of arguments, unknown ones, in
+  MULTI, and their statistics;
+- `command_test`, which reads COMMAND INFO and DOCS of the new subcommands and of
+  CLUSTER's;
+- `hll_test`, on three seeds, and on 7.0.15 too.
+
+**What it costs.** Nothing while no client has NO-TOUCH on: under callgrind here GET costs
+3,499 instructions a request, SET 4,292 and INCR 4,608, against 3,500, 4,293 and 4,610
+before.
+- A first version laid `Clf`'s four words out in the client's record. The segments that
+  carry a registry's entry taken apart (the tracking's invalidations, CLIENT LIST's lines)
+  grew by 3 words, and the work loop's register bank with them, from 50 to 53 (section
+  3zzzd).
+- That cost every request 8 to 11 instructions (GET 3,509, SET 4,301, INCR 4,621). All of
+  them were in the entry of the work loop and in its application of closures
+  (`WL_FID_ENTER`, `WL_FID_CLO_APPLY`): 10 and 12 instructions more at each of the loop's
+  steps, which reloaded more registers from the stack.
+- `ClfOf`, never built, makes `Clf` a node of its own, one word, and the bank is 50 again.
+## 3zzzzj. Lists and sets as Redis 7.2.16 holds them
 
 **What changed** (#128, kind D: `src/map.bend`, `src/rdb.bend`, `src/redis.bend`,
 `src/session.bend`). Redis 7.2 holds a small list as a listpack and a small set of

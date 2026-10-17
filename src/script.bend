@@ -60,6 +60,13 @@ def Engine.next(word: U32, data: String) -> IO(Step):
   import "./lua/engine.c"
   import "./lua/engine.js"
 
+# lua-enable-deprecated-api, which only the start sets (immutable): whether
+# the Lua states made from then on keep newproxy, setfenv and getfenv (on:
+# 1) or leave them out (0, as by default)
+def Engine.deprecated(on: U32) -> IO(Unit):
+  import "./lua/engine.c"
+  import "./lua/engine.js"
+
 # SCRIPT FLUSH: the cache emptied and the Lua state made anew
 def Engine.flush() -> IO(Unit):
   import "./lua/engine.c"
