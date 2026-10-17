@@ -341,9 +341,10 @@ Where performance and proof meet: **batched execution under proved laws.**
    sorted set borrow their trees now, and so do the reads of a key's entry (section
    3zzc), so a read of a collection costs a GET and the read. HSET, and SADD of a member
    new to a set, take their collection out of the keyspace and change it in place
-   (sections 3zzd, 3zze, 3zzy); ZADD and ZINCRBY still copy the path they change and drop
-   the old one's, and each needs a proved test that it changes its sorted set before it
-   can take it. An intset is a tree of its members compared as integers (section 3zzy):
+   (sections 3zzd, 3zze, 3zzy), and so do ZADD and ZINCRBY whose first pair changes a
+   large sorted set for sure, its tree too (section 3zzza: 15 to 29% fewer
+   instructions); ZREM, the ZPOPs and the ZREMRANGEBYs still copy their paths. An
+   intset is a tree of its members compared as integers (section 3zzy):
    its SADD, SISMEMBER and SREM take 1.7, 1.3 and 1.1 times a hashtable's instructions,
    where a list of them took twenty times, and a round trip as Redis's do; a member takes
    34 bytes of the heap, where Redis's array of integers takes 2 to 8. SORT of 1,000

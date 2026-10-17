@@ -5924,6 +5924,103 @@ need Lua: one fills a set with a script, and the next resets the events that set
 expiry would have given. unit/slowlog passes 7 of its 9. The other two use ACL and
 MIGRATE.
 
+## 3zzza. ZADD and ZINCRBY in place: the sorted set taken out of the keyspace
+
+**What was left** (sections 3zzd, 3zze). HSET, and SADD of a member new to a set, take
+their collection out of the keyspace and change it in place. ZADD and ZINCRBY still made
+a new version of the sorted set while the keyspace held the old one, so each copied the
+paths it changed in the tree and in the trie, and the keyspace dropped the old ones
+after: on a sorted set of 100,000 elements, ZADD of a new score to a member there took
+73,485 instructions, ZINCRBY 68,182 and ZADD of a new member 55,964 (main of 16 October).
+A ZADD can change
+nothing: a member there with the score it has, XX of a member not there, NX of one there,
+a GT or an LT that keeps the score, or an INCR whose sum is a NaN. Such a write answers
+CKeep and drops the sorted set it was given, which a sorted set taken out of the
+keyspace cannot afford, so the take needs a test that the write changes it, with its proof in
+`proof/PROOF.bend` (`takes_over`).
+
+**The test** (`src/redis.bend`: `upd.takes`, `zadd.takes`).
+
+- A ZADD (or a ZINCRBY: a ZADD with INCR) to a large sorted set (a skiplist, which keeps a
+  trie of its members' scores) takes it when its first pair adds its member (but under
+  XX), or gives it another score: not under NX, no NaN under INCR, not kept by GT or LT,
+  and a score other than the one it has. That is the last case of `zadd.old.of`, and the
+  test reads it as ZADD does: the member's score in the trie, the pair's score parsed,
+  and under INCR their sum.
+- Under INCR that pair is alone. Then, and only then, the options and pairs pass
+  `zadd.check`.
+- The pairs after the first add members, give them other scores or leave them be: none
+  takes one away. So a ZADD whose first pair changes the sorted set changes it.
+- A small sorted set (a listpack) is not taken. Kept in one string (section 3zzzn), its
+  write makes a new string whatever the take; kept as a tree past one buffer (`ZWide`),
+  it holds at most 128 elements, so the paths its write copies are short.
+- ZADD's NaN test runs under INCR alone. Redis's `zsetAdd` refuses a NaN score whatever
+  the options and checks the sum under INCR, but a score ZADD reads is never a NaN:
+  `string2d` refuses one as it parses, and so does `F.f64.parse`. So only the sum can be
+  a NaN, no reply changes, and the proof needs no lemma about the parser
+  (`zadd_at_some` needs the pairs without INCR never to answer a NaN; a comment at
+  `zadd.old` says so).
+
+**The tree** (`src/map.bend`: Sorted sets). The take alone gave less than it should:
+ZADD of a new member took 43,874 instructions with it, of which 6,400 went to dropping
+an old path at the end (main of 15 October). The tree was shared while the insertion
+ran.
+
+- `zt.ins` (and `zt.rm`) compared the element with the side it was about to go down
+  only after giving that side to the insertion. A field read after it is given away is
+  shared first (the twenty-sixth patch's `term_keep`).
+- So the insertion found each node of its path shared, copied it, and the old path lived
+  until the write's end.
+- Now each side is compared before it goes down (`+cl = zt.at(l, d, m)`).
+- `zset.add`, `zset.set`, `zset.del` and `zset.del.at` give a large sorted set's tree
+  and trie, and a wide one's tree, to their writes: `zt.add.own` and `zt.del.own` compare
+  the root where they match it.
+- A tree held once is then changed in place, as the trie is.
+
+**The proofs.** `takes_over` covers the new case (`takes_zset`, then `takes_zadd`).
+
+- The first pair's state adds or changes a member (`zadd_sure_some`, through
+  `zadd_of_sure` and `zadd_new_sure`). ZADD reads the member where `zset.find` finds it:
+  in a large sorted set, its score in the trie (`zset.hit.big`), which the test reads.
+- Without INCR, the pairs after it keep that so (`zadd_go_some`, `zadd_step_some`,
+  `zadd_at_some`: with the NaN test under INCR, they never answer a NaN). Under INCR
+  there are none (`zadd_rest_some`).
+- A state that added or changed a member answers CZset, which writes the sorted set over
+  (`zadd_res_over`, `zadd_fin_over`).
+- Two proofs that unfolded the update (`zset_replay`, `znew_zadd`) rewrite through
+  `db_upd_eq`, as `mems_replay` and `snew_sadd` did in section 3zze.
+
+`make check` and `make verdict` pass.
+
+**What it gives** (`tools/colls.sh`, instructions per command; ZADD of a new score and of
+a new member are new there), on main of 16 October:
+
+| command | before | after | |
+|---|---:|---:|---:|
+| ZADD of a new score to a member there | 73,485 | 55,234 | −24.8% |
+| ZINCRBY | 68,182 | 57,792 | −15.2% |
+| ZADD of a new member | 55,964 | 39,738 | −29.0% |
+| ZADD of the score a member has | 29,445 | 30,682 | +4.2% |
+| the other commands of `colls.sh` | | −1.3% to +0.1% | |
+
+On main of 15 October, before small sorted sets in one string (section 3zzzn), the
+same change gave −35.6%, −26.9% and −29.2% on the first three (from 76,830, 68,728 and
+47,807 to 49,443, 50,220 and 33,854). In the runs of PERFORMANCE 65's first table, the
+take alone gave −20.6%, −15.7% and −8.0%, and a ZADD of three new members fell from
+103,228 instructions to 58,387 (−43%). On the newer main, ZADD of a new score and
+ZINCRBY keep 5,800 and 7,600 instructions more than they did; where those go is not
+measured yet. GET, SET and INCR are as before (PERFORMANCE 65).
+
+**What is left.**
+
+- The test reads the trie and parses the first score, and the write does both again.
+  ZINCRBY adds its increment twice, in software (section 3zk). A ZADD that changes
+  nothing pays the test: +4%.
+- ZREM, ZPOPMIN, ZPOPMAX and the ZREMRANGEBY family still copy their paths: each needs a
+  test of its own (ZREM's: that the members it removes leave the sorted set not empty).
+- A small sorted set finds a member by a walk of its elements.
+- Where the gains lost on the newer main went (above).
+
 ## 3zzzb. CLIENT TRACKING: client-side caching
 
 **What was left.** CLIENT TRACKING was an unknown subcommand. CLIENT CACHING, GETREDIR
