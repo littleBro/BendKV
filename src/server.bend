@@ -3824,6 +3824,18 @@ def ps.tune(pb: Ps, +srv: S.Srv) -> Ps:
     case PsOf{p}:
       ps.tune(p, srv)
 
+# the classes of events alone (ev's bits 0 to 14) as ps.tune sets them,
+# from the parameters and the subscribers as they are now: after a CONFIG
+# SET or a subscription (ev.key), for the commands after it in its batch
+def ps.classes(pb: Ps, +srv: S.Srv) -> Ps:
+  match pb:
+    case Ps{RegNone{}, ev, px, cs, own}:
+      Ps{RegNone{}, U32.and(ev, 4294934528), px, cs, own}
+    case Ps{RegOn{c, p, sh, cl, n}, ev, px, cs, own}:
+      Ps{RegOn{c, p, sh, cl, n}, U32.or(U32.and(ev, 4294934528), ev.of(srv)), px, cs, own}
+    case PsOf{p}:
+      ps.classes(p, srv)
+
 # bit 19 as the server's state has it now (after a save that ended)
 def ps.misconf.set(pb: Ps, +srv: S.Srv) -> Ps:
   match pb:
@@ -5812,6 +5824,25 @@ def bg.own.if(on: Bool, g: LRun) -> LRun:
 def bg.own.after(g: LRun) -> LRun:
   +h = g
   bg.own.if(bg.own.has(h), h)
+
+# The classes of events within a batch
+# ------------------------------------
+# Pub/Sub's classes of keyspace events (ev's bits 0 to 14) are set again
+# at a batch's end (ps.tune), and Redis reads notify-keyspace-events and
+# the channels at each event. So a CONFIG SET, a SUBSCRIBE and a
+# PSUBSCRIBE set them again at once, for the commands after it in its
+# batch and in its transaction (bg.x.go): a pipeline of CONFIG SET
+# notify-keyspace-events and a write, or a client's first subscription
+# and a write, notifies the write.
+def ev.key(+key: Nat) -> Bool:
+  Bool.or(Nat.is_eq(key, R.stat.sub.config(2n)), Bool.or(Nat.is_eq(key, R.stat.top(166n)), Nat.is_eq(key, R.stat.top(168n))))
+
+def bg.ev.after(on: Bool, g: LRun) -> LRun:
+  match on g:
+    case True{} LRun{rs, es, conn, +srv, ds, ws, up, tx, pb}:
+      LRun{rs, es, conn, srv, ds, ws, up, tx, ps.classes(pb, srv)}
+    case _ g0:
+      g0
 
 # a command's replies, after it changed its client's protocol (HELLO,
 # RESET) or not: a change is a switch (R.RSw) of its replies, the
@@ -8938,6 +8969,16 @@ def bg.x.acl(v: U.Verdict, +id: Nat, +back: Chan(Ans), +inb: Nat, +n: Nat, +c: R
     case U.VNo{w, at, o}:
       bg.x.denied(U.VNo{w, at, o}, id, inb, n, k, a, x)
 
+# after a command of EXEC's, the classes of events set again when it is a
+# CONFIG SET or a subscription, as after one of the batch's (The classes
+# of events within a batch)
+def bg.x.ev(on: Bool, x: Xr) -> Xr:
+  match on x:
+    case True{} Xr{g, mine, e}:
+      Xr{bg.ev.after(True{}, g), mine, e}
+    case _ x0:
+      x0
+
 # EXEC's commands in turn, each checked again (ACL), as execCommand
 # checks each, in case the rules changed since it was queued: while some
 # client is restricted (Ps's bit 20) and its client is (ck), its user's
@@ -8952,7 +8993,7 @@ def bg.x.go(+id: Nat, +back: Chan(Ans), +inb: Nat, +n: Nat, cmds: List<&2, R.Cmd
       +a1 = a0
       +m1 = xm.if(need, m, b, a1)
       +a = xm.av.if(need, m1, a1)
-      bg.x.go(id, back, inb, n, rest, more, ar, m1, bg.x.acl(bg.acl.check(ck, id, srv, pb, k, a), id, back, inb, n, bg.acl.sort(ck, id, srv, pb, k, a, c), k, a, Xr{LRun{rs, es, conn, srv, ds, ws, up, tx, pb}, mine, e}))
+      bg.x.go(id, back, inb, n, rest, more, ar, m1, bg.x.ev(ev.key(R.code.key(k)), bg.x.acl(bg.acl.check(ck, id, srv, pb, k, a), id, back, inb, n, bg.acl.sort(ck, id, srv, pb, k, a, c), k, a, Xr{LRun{rs, es, conn, srv, ds, ws, up, tx, pb}, mine, e})))
     case _ _ _ x0:
       x0
 
@@ -10309,7 +10350,7 @@ def bg.go(+um: Bool, +id: Nat, +back: Chan(Ans), +inb: Nat, cmds: List<&2, R.Cmd
       +a = trk.pre.av(pre, av1)
       +ar = av.rest(a)
       +g1 = bg.cmd(id, bk, inb, sh, c1, k, rest, more, a, ar, LRun{rs, es, conn, S.srv.call(srv, id, av.arg(a)), ds, ws, up, tx, pb})
-      bg.go(um, id, back, inb, rest, more, bg.feed(mon.seen(q, may, sh, k), id, k, S.conn.mode(conn), a, ar, bg.trk.after(pre, id, k, a, bg.own.after(g1))))
+      bg.go(um, id, back, inb, rest, more, bg.feed(mon.seen(q, may, sh, k), id, k, S.conn.mode(conn), a, ar, bg.trk.after(pre, id, k, a, bg.own.after(bg.ev.after(ev.key(R.code.key(k)), g1)))))
     case _ _ Fed{g0, av}:
       g0
 

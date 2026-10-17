@@ -9890,10 +9890,13 @@ call (`afterCommand`, from `pending_push_messages`), and BendKV now does too.
   - The keyspace events of EXEC's commands never reached their own client.
   - A served pop's keyspace events reached the client whose command served it before
     that command's reply.
-  - Left as it was: CONFIG SET notify-keyspace-events takes effect from the next batch,
-    not from the next command of the same pipeline, since Pub/Sub's classes of events are
-    set again at a batch's end. A pipeline that sets them, subscribes and writes at once
-    hears nothing of that write, from Redis 7.0.15 as from 7.2.16.
+  - CONFIG SET notify-keyspace-events, and a client's first subscription, counted from
+    the next batch: Pub/Sub's classes of events were set again only at a batch's end
+    (`ps.tune`), where Redis reads the parameter and the channels at each event. So a
+    pipeline that set the classes, or subscribed, and then wrote heard nothing of that
+    write; so did one in a transaction. That differed from Redis 7.0.15 as from 7.2.16.
+    Now a CONFIG SET, a SUBSCRIBE and a PSUBSCRIBE set the classes again at once, in a
+    batch and in EXEC (`ps.classes`; The classes of events within a batch).
 - **Tracking.**
   - A blocked pop that is served runs its command again in Redis 7.2. So BLPOP and BRPOP
     signal the key they popped from, as BLMPOP and the sorted sets' pops did, and BLMOVE
@@ -9911,6 +9914,9 @@ call (`afterCommand`, from `pending_push_messages`), and BendKV now does too.
 - tracking_test: a redirect's own write in a transaction, a served BLMOVE in BCAST
   mode, and a redirect to the client served; "redirects" and "served pops" pass.
 - script_test: "10 pipelines" and "12 tracking" pass.
+- resp3_test's "the classes of events set within a pipeline" and pubsub_test's "19
+  pipeline" and "19 transaction": the classes and the subscriptions counted from the next
+  command of their pipeline and their transaction. They pass; before, they failed.
 - The other differential tests that pushes and tracking touch (blocking, multi, pubsub,
   client, monitor, pause, function, acl, keyspace, list, info, stats, the streams'), and
   the file tests, differ from 7.2.16 in the same lines as before kind F: none of them

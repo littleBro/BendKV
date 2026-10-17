@@ -931,7 +931,7 @@ the append-only file and the pid file after it, and a SHUTDOWN while a rewrite r
 authenticate and what it is answered before it does), ACL (`tests/acl_test.py`:
 scenarios on BendKV and on Redis of a user's calls allowed and refused, alone and
 pipelined behind AUTH, ACL LOG, MULTI and EXEC, the clients ACL SETUSER and DELUSER
-close, CLIENT LIST and CLIENT KILL USER, SORT's BY and GET, and the slow log), RESP3 (`tests/resp3_test.py`: 13
+close, CLIENT LIST and CLIENT KILL USER, SORT's BY and GET, and the slow log), RESP3 (`tests/resp3_test.py`: 14
 scenarios on BendKV and on Redis compared byte for byte, of HELLO and the switch of
 protocol in a pipeline, the replies RESP3 types, EXEC, blocking commands and Pub/Sub's
 pushes, a client's own after the reply of the command, EXEC or script that made them;

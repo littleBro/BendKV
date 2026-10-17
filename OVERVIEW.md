@@ -1158,14 +1158,15 @@ The translation the kernel reads can be dumped with
   pipelined, before AUTH and after, a failed AUTH, HELLO, RESET with a password and
   without, a password removed and set again, a transaction, a subscribed client, INFO's
   statistics (section 46 of docs/PERFORMANCE.md).
-- **RESP3** (`tests/resp3_test.py`): 13 scenarios on BendKV and on Redis compared byte
+- **RESP3** (`tests/resp3_test.py`): 14 scenarios on BendKV and on Redis compared byte
   for byte — HELLO and its errors; the protocol switched in the middle of a pipeline
   (with CLIENT REPLY OFF too); nulls and doubles; maps, sets and pairs; the server's
   replies (CONFIG GET, CLIENT TRACKINGINFO, INFO, COMMAND INFO and DOCS); EXEC's replies
   and an EXEC that WATCH aborts; blocking commands that time out and that are served;
   Pub/Sub's pushes to a RESP3 and a RESP2 subscriber; a subscriber that switches its
   protocol; keyspace events of a client's own commands; a client's own pushes in a
-  transaction and a script, and those of pops served; pipelines of the fast way. And
+  transaction and a script, and those of pops served; the classes of events set within a
+  pipeline and a transaction; pipelines of the fast way. And
   the differential tests of times to live, numbers, BITFIELD, hashes, lists, sets,
   sorted sets and the random stream again, with every connection in RESP3 (`RESP=3`).
   Of the 16 constructors of a reply, RESP2 writes the 8 new ones as it wrote what they
