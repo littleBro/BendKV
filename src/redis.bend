@@ -8834,9 +8834,11 @@ def parse(args: List<&2, String>) -> Cmd:
 # arguments its arity does not allow; 2 when it fails on an error that
 # BendKV's parser finds and Redis's command finds as it runs (a syntax
 # error, a value that is not an integer), which is a call that failed
-# (stat.class). The code rides in the high twelve bits of the request's
-# hash as its word (stat.cw: twelve bits, six of them set), and the hints
-# of batch.bend read only the low twenty.
+# (stat.class). A call that runs carries its key in the high twelve bits
+# of the request's hash as its word (stat.kw: twelve bits, six of them
+# set), and the hints of batch.bend read only the low twenty; one that
+# does not run carries the word of all twelve bits, and its code in the
+# low twenty, which hold no hint for it (stat.hash).
 
 # BEGIN gen_commands: stats
 # a command's key, by its number in the parser (cmd_id); 0 for none
@@ -13125,9 +13127,9 @@ def stat.touch(+key: Nat) -> Bool:
     case _:
       False{}
 
-# a code's word
-def stat.cw(+code: Nat) -> U32:
-  match code:
+# the word of a call of a key that runs
+def stat.kw(+key: Nat) -> U32:
+  match key:
     case 0n:
       63
     case 1n:
@@ -13738,1237 +13740,17 @@ def stat.cw(+code: Nat) -> U32:
       1421
     case 304n:
       1422
-    case 305n:
-      1427
-    case 306n:
-      1429
-    case 307n:
-      1430
-    case 308n:
-      1433
-    case 309n:
-      1434
-    case 310n:
-      1436
-    case 311n:
-      1443
-    case 312n:
-      1445
-    case 313n:
-      1446
-    case 314n:
-      1449
-    case 315n:
-      1450
-    case 316n:
-      1452
-    case 317n:
-      1457
-    case 318n:
-      1458
-    case 319n:
-      1460
-    case 320n:
-      1464
-    case 321n:
-      1475
-    case 322n:
-      1477
-    case 323n:
-      1478
-    case 324n:
-      1481
-    case 325n:
-      1482
-    case 326n:
-      1484
-    case 327n:
-      1489
-    case 328n:
-      1490
-    case 329n:
-      1492
-    case 330n:
-      1496
-    case 331n:
-      1505
-    case 332n:
-      1506
-    case 333n:
-      1508
-    case 334n:
-      1512
-    case 335n:
-      1520
-    case 336n:
-      1551
-    case 337n:
-      1559
-    case 338n:
-      1563
-    case 339n:
-      1565
-    case 340n:
-      1566
-    case 341n:
-      1575
-    case 342n:
-      1579
-    case 343n:
-      1581
-    case 344n:
-      1582
-    case 345n:
-      1587
-    case 346n:
-      1589
-    case 347n:
-      1590
-    case 348n:
-      1593
-    case 349n:
-      1594
-    case 350n:
-      1596
-    case 351n:
-      1607
-    case 352n:
-      1611
-    case 353n:
-      1613
-    case 354n:
-      1614
-    case 355n:
-      1619
-    case 356n:
-      1621
-    case 357n:
-      1622
-    case 358n:
-      1625
-    case 359n:
-      1626
-    case 360n:
-      1628
-    case 361n:
-      1635
-    case 362n:
-      1637
-    case 363n:
-      1638
-    case 364n:
-      1641
-    case 365n:
-      1642
-    case 366n:
-      1644
-    case 367n:
-      1649
-    case 368n:
-      1650
-    case 369n:
-      1652
-    case 370n:
-      1656
-    case 371n:
-      1671
-    case 372n:
-      1675
-    case 373n:
-      1677
-    case 374n:
-      1678
-    case 375n:
-      1683
-    case 376n:
-      1685
-    case 377n:
-      1686
-    case 378n:
-      1689
-    case 379n:
-      1690
-    case 380n:
-      1692
-    case 381n:
-      1699
-    case 382n:
-      1701
-    case 383n:
-      1702
-    case 384n:
-      1705
-    case 385n:
-      1706
-    case 386n:
-      1708
-    case 387n:
-      1713
-    case 388n:
-      1714
-    case 389n:
-      1716
-    case 390n:
-      1720
-    case 391n:
-      1731
-    case 392n:
-      1733
-    case 393n:
-      1734
-    case 394n:
-      1737
-    case 395n:
-      1738
-    case 396n:
-      1740
-    case 397n:
-      1745
-    case 398n:
-      1746
-    case 399n:
-      1748
-    case 400n:
-      1752
-    case 401n:
-      1761
-    case 402n:
-      1762
-    case 403n:
-      1764
-    case 404n:
-      1768
-    case 405n:
-      1776
-    case 406n:
-      1799
-    case 407n:
-      1803
-    case 408n:
-      1805
-    case 409n:
-      1806
-    case 410n:
-      1811
-    case 411n:
-      1813
-    case 412n:
-      1814
-    case 413n:
-      1817
-    case 414n:
-      1818
-    case 415n:
-      1820
-    case 416n:
-      1827
-    case 417n:
-      1829
-    case 418n:
-      1830
-    case 419n:
-      1833
-    case 420n:
-      1834
-    case 421n:
-      1836
-    case 422n:
-      1841
-    case 423n:
-      1842
-    case 424n:
-      1844
-    case 425n:
-      1848
-    case 426n:
-      1859
-    case 427n:
-      1861
-    case 428n:
-      1862
-    case 429n:
-      1865
-    case 430n:
-      1866
-    case 431n:
-      1868
-    case 432n:
-      1873
-    case 433n:
-      1874
-    case 434n:
-      1876
-    case 435n:
-      1880
-    case 436n:
-      1889
-    case 437n:
-      1890
-    case 438n:
-      1892
-    case 439n:
-      1896
-    case 440n:
-      1904
-    case 441n:
-      1923
-    case 442n:
-      1925
-    case 443n:
-      1926
-    case 444n:
-      1929
-    case 445n:
-      1930
-    case 446n:
-      1932
-    case 447n:
-      1937
-    case 448n:
-      1938
-    case 449n:
-      1940
-    case 450n:
-      1944
-    case 451n:
-      1953
-    case 452n:
-      1954
-    case 453n:
-      1956
-    case 454n:
-      1960
-    case 455n:
-      1968
-    case 456n:
-      1985
-    case 457n:
-      1986
-    case 458n:
-      1988
-    case 459n:
-      1992
-    case 460n:
-      2000
-    case 461n:
-      2016
-    case 462n:
-      2079
-    case 463n:
-      2095
-    case 464n:
-      2103
-    case 465n:
-      2107
-    case 466n:
-      2109
-    case 467n:
-      2110
-    case 468n:
-      2127
-    case 469n:
-      2135
-    case 470n:
-      2139
-    case 471n:
-      2141
-    case 472n:
-      2142
-    case 473n:
-      2151
-    case 474n:
-      2155
-    case 475n:
-      2157
-    case 476n:
-      2158
-    case 477n:
-      2163
-    case 478n:
-      2165
-    case 479n:
-      2166
-    case 480n:
-      2169
-    case 481n:
-      2170
-    case 482n:
-      2172
-    case 483n:
-      2191
-    case 484n:
-      2199
-    case 485n:
-      2203
-    case 486n:
-      2205
-    case 487n:
-      2206
-    case 488n:
-      2215
-    case 489n:
-      2219
-    case 490n:
-      2221
-    case 491n:
-      2222
-    case 492n:
-      2227
-    case 493n:
-      2229
-    case 494n:
-      2230
-    case 495n:
-      2233
-    case 496n:
-      2234
-    case 497n:
-      2236
-    case 498n:
-      2247
-    case 499n:
-      2251
-    case 500n:
-      2253
-    case 501n:
-      2254
-    case 502n:
-      2259
-    case 503n:
-      2261
-    case 504n:
-      2262
-    case 505n:
-      2265
-    case 506n:
-      2266
-    case 507n:
-      2268
-    case 508n:
-      2275
-    case 509n:
-      2277
-    case 510n:
-      2278
-    case 511n:
-      2281
-    case 512n:
-      2282
-    case 513n:
-      2284
-    case 514n:
-      2289
-    case 515n:
-      2290
-    case 516n:
-      2292
-    case 517n:
-      2296
-    case 518n:
-      2319
-    case 519n:
-      2327
-    case 520n:
-      2331
-    case 521n:
-      2333
-    case 522n:
-      2334
-    case 523n:
-      2343
-    case 524n:
-      2347
-    case 525n:
-      2349
-    case 526n:
-      2350
-    case 527n:
-      2355
-    case 528n:
-      2357
-    case 529n:
-      2358
-    case 530n:
-      2361
-    case 531n:
-      2362
-    case 532n:
-      2364
-    case 533n:
-      2375
-    case 534n:
-      2379
-    case 535n:
-      2381
-    case 536n:
-      2382
-    case 537n:
-      2387
-    case 538n:
-      2389
-    case 539n:
-      2390
-    case 540n:
-      2393
-    case 541n:
-      2394
-    case 542n:
-      2396
-    case 543n:
-      2403
-    case 544n:
-      2405
-    case 545n:
-      2406
-    case 546n:
-      2409
-    case 547n:
-      2410
-    case 548n:
-      2412
-    case 549n:
-      2417
-    case 550n:
-      2418
-    case 551n:
-      2420
-    case 552n:
-      2424
-    case 553n:
-      2439
-    case 554n:
-      2443
-    case 555n:
-      2445
-    case 556n:
-      2446
-    case 557n:
-      2451
-    case 558n:
-      2453
-    case 559n:
-      2454
-    case 560n:
-      2457
-    case 561n:
-      2458
-    case 562n:
-      2460
-    case 563n:
-      2467
-    case 564n:
-      2469
-    case 565n:
-      2470
-    case 566n:
-      2473
-    case 567n:
-      2474
-    case 568n:
-      2476
-    case 569n:
-      2481
-    case 570n:
-      2482
-    case 571n:
-      2484
-    case 572n:
-      2488
-    case 573n:
-      2499
-    case 574n:
-      2501
-    case 575n:
-      2502
-    case 576n:
-      2505
-    case 577n:
-      2506
-    case 578n:
-      2508
-    case 579n:
-      2513
-    case 580n:
-      2514
-    case 581n:
-      2516
-    case 582n:
-      2520
-    case 583n:
-      2529
-    case 584n:
-      2530
-    case 585n:
-      2532
-    case 586n:
-      2536
-    case 587n:
-      2544
-    case 588n:
-      2575
-    case 589n:
-      2583
-    case 590n:
-      2587
-    case 591n:
-      2589
-    case 592n:
-      2590
-    case 593n:
-      2599
-    case 594n:
-      2603
-    case 595n:
-      2605
-    case 596n:
-      2606
-    case 597n:
-      2611
-    case 598n:
-      2613
-    case 599n:
-      2614
-    case 600n:
-      2617
-    case 601n:
-      2618
-    case 602n:
-      2620
-    case 603n:
-      2631
-    case 604n:
-      2635
-    case 605n:
-      2637
-    case 606n:
-      2638
-    case 607n:
-      2643
-    case 608n:
-      2645
-    case 609n:
-      2646
-    case 610n:
-      2649
-    case 611n:
-      2650
-    case 612n:
-      2652
-    case 613n:
-      2659
-    case 614n:
-      2661
-    case 615n:
-      2662
-    case 616n:
-      2665
-    case 617n:
-      2666
-    case 618n:
-      2668
-    case 619n:
-      2673
-    case 620n:
-      2674
-    case 621n:
-      2676
-    case 622n:
-      2680
-    case 623n:
-      2695
-    case 624n:
-      2699
-    case 625n:
-      2701
-    case 626n:
-      2702
-    case 627n:
-      2707
-    case 628n:
-      2709
-    case 629n:
-      2710
-    case 630n:
-      2713
-    case 631n:
-      2714
-    case 632n:
-      2716
-    case 633n:
-      2723
-    case 634n:
-      2725
-    case 635n:
-      2726
-    case 636n:
-      2729
-    case 637n:
-      2730
-    case 638n:
-      2732
-    case 639n:
-      2737
-    case 640n:
-      2738
-    case 641n:
-      2740
-    case 642n:
-      2744
-    case 643n:
-      2755
-    case 644n:
-      2757
-    case 645n:
-      2758
-    case 646n:
-      2761
-    case 647n:
-      2762
-    case 648n:
-      2764
-    case 649n:
-      2769
-    case 650n:
-      2770
-    case 651n:
-      2772
-    case 652n:
-      2776
-    case 653n:
-      2785
-    case 654n:
-      2786
-    case 655n:
-      2788
-    case 656n:
-      2792
-    case 657n:
-      2800
-    case 658n:
-      2823
-    case 659n:
-      2827
-    case 660n:
-      2829
-    case 661n:
-      2830
-    case 662n:
-      2835
-    case 663n:
-      2837
-    case 664n:
-      2838
-    case 665n:
-      2841
-    case 666n:
-      2842
-    case 667n:
-      2844
-    case 668n:
-      2851
-    case 669n:
-      2853
-    case 670n:
-      2854
-    case 671n:
-      2857
-    case 672n:
-      2858
-    case 673n:
-      2860
-    case 674n:
-      2865
-    case 675n:
-      2866
-    case 676n:
-      2868
-    case 677n:
-      2872
-    case 678n:
-      2883
-    case 679n:
-      2885
-    case 680n:
-      2886
-    case 681n:
-      2889
-    case 682n:
-      2890
-    case 683n:
-      2892
-    case 684n:
-      2897
-    case 685n:
-      2898
-    case 686n:
-      2900
-    case 687n:
-      2904
-    case 688n:
-      2913
-    case 689n:
-      2914
-    case 690n:
-      2916
-    case 691n:
-      2920
-    case 692n:
-      2928
-    case 693n:
-      2947
-    case 694n:
-      2949
-    case 695n:
-      2950
-    case 696n:
-      2953
-    case 697n:
-      2954
-    case 698n:
-      2956
-    case 699n:
-      2961
-    case 700n:
-      2962
-    case 701n:
-      2964
-    case 702n:
-      2968
-    case 703n:
-      2977
-    case 704n:
-      2978
-    case 705n:
-      2980
-    case 706n:
-      2984
-    case 707n:
-      2992
-    case 708n:
-      3009
-    case 709n:
-      3010
-    case 710n:
-      3012
-    case 711n:
-      3016
-    case 712n:
-      3024
-    case 713n:
-      3040
-    case 714n:
-      3087
-    case 715n:
-      3095
-    case 716n:
-      3099
-    case 717n:
-      3101
-    case 718n:
-      3102
-    case 719n:
-      3111
-    case 720n:
-      3115
-    case 721n:
-      3117
-    case 722n:
-      3118
-    case 723n:
-      3123
-    case 724n:
-      3125
-    case 725n:
-      3126
-    case 726n:
-      3129
-    case 727n:
-      3130
-    case 728n:
-      3132
-    case 729n:
-      3143
-    case 730n:
-      3147
-    case 731n:
-      3149
-    case 732n:
-      3150
-    case 733n:
-      3155
-    case 734n:
-      3157
-    case 735n:
-      3158
-    case 736n:
-      3161
-    case 737n:
-      3162
-    case 738n:
-      3164
-    case 739n:
-      3171
-    case 740n:
-      3173
-    case 741n:
-      3174
-    case 742n:
-      3177
-    case 743n:
-      3178
-    case 744n:
-      3180
-    case 745n:
-      3185
-    case 746n:
-      3186
-    case 747n:
-      3188
-    case 748n:
-      3192
-    case 749n:
-      3207
-    case 750n:
-      3211
-    case 751n:
-      3213
-    case 752n:
-      3214
-    case 753n:
-      3219
-    case 754n:
-      3221
-    case 755n:
-      3222
-    case 756n:
-      3225
-    case 757n:
-      3226
-    case 758n:
-      3228
-    case 759n:
-      3235
-    case 760n:
-      3237
-    case 761n:
-      3238
-    case 762n:
-      3241
-    case 763n:
-      3242
-    case 764n:
-      3244
-    case 765n:
-      3249
-    case 766n:
-      3250
-    case 767n:
-      3252
-    case 768n:
-      3256
-    case 769n:
-      3267
-    case 770n:
-      3269
-    case 771n:
-      3270
-    case 772n:
-      3273
-    case 773n:
-      3274
-    case 774n:
-      3276
-    case 775n:
-      3281
-    case 776n:
-      3282
-    case 777n:
-      3284
-    case 778n:
-      3288
-    case 779n:
-      3297
-    case 780n:
-      3298
-    case 781n:
-      3300
-    case 782n:
-      3304
-    case 783n:
-      3312
-    case 784n:
-      3335
-    case 785n:
-      3339
-    case 786n:
-      3341
-    case 787n:
-      3342
-    case 788n:
-      3347
-    case 789n:
-      3349
-    case 790n:
-      3350
-    case 791n:
-      3353
-    case 792n:
-      3354
-    case 793n:
-      3356
-    case 794n:
-      3363
-    case 795n:
-      3365
-    case 796n:
-      3366
-    case 797n:
-      3369
-    case 798n:
-      3370
-    case 799n:
-      3372
-    case 800n:
-      3377
-    case 801n:
-      3378
-    case 802n:
-      3380
-    case 803n:
-      3384
-    case 804n:
-      3395
-    case 805n:
-      3397
-    case 806n:
-      3398
-    case 807n:
-      3401
-    case 808n:
-      3402
-    case 809n:
-      3404
-    case 810n:
-      3409
-    case 811n:
-      3410
-    case 812n:
-      3412
-    case 813n:
-      3416
-    case 814n:
-      3425
-    case 815n:
-      3426
-    case 816n:
-      3428
-    case 817n:
-      3432
-    case 818n:
-      3440
-    case 819n:
-      3459
-    case 820n:
-      3461
-    case 821n:
-      3462
-    case 822n:
-      3465
-    case 823n:
-      3466
-    case 824n:
-      3468
-    case 825n:
-      3473
-    case 826n:
-      3474
-    case 827n:
-      3476
-    case 828n:
-      3480
-    case 829n:
-      3489
-    case 830n:
-      3490
-    case 831n:
-      3492
-    case 832n:
-      3496
-    case 833n:
-      3504
-    case 834n:
-      3521
-    case 835n:
-      3522
-    case 836n:
-      3524
-    case 837n:
-      3528
-    case 838n:
-      3536
-    case 839n:
-      3552
-    case 840n:
-      3591
-    case 841n:
-      3595
-    case 842n:
-      3597
-    case 843n:
-      3598
-    case 844n:
-      3603
-    case 845n:
-      3605
-    case 846n:
-      3606
-    case 847n:
-      3609
-    case 848n:
-      3610
-    case 849n:
-      3612
-    case 850n:
-      3619
-    case 851n:
-      3621
-    case 852n:
-      3622
-    case 853n:
-      3625
-    case 854n:
-      3626
-    case 855n:
-      3628
-    case 856n:
-      3633
-    case 857n:
-      3634
-    case 858n:
-      3636
-    case 859n:
-      3640
-    case 860n:
-      3651
-    case 861n:
-      3653
-    case 862n:
-      3654
-    case 863n:
-      3657
-    case 864n:
-      3658
-    case 865n:
-      3660
-    case 866n:
-      3665
-    case 867n:
-      3666
-    case 868n:
-      3668
-    case 869n:
-      3672
-    case 870n:
-      3681
-    case 871n:
-      3682
-    case 872n:
-      3684
-    case 873n:
-      3688
-    case 874n:
-      3696
-    case 875n:
-      3715
-    case 876n:
-      3717
-    case 877n:
-      3718
-    case 878n:
-      3721
-    case 879n:
-      3722
-    case 880n:
-      3724
-    case 881n:
-      3729
-    case 882n:
-      3730
-    case 883n:
-      3732
-    case 884n:
-      3736
-    case 885n:
-      3745
-    case 886n:
-      3746
-    case 887n:
-      3748
-    case 888n:
-      3752
-    case 889n:
-      3760
-    case 890n:
-      3777
-    case 891n:
-      3778
-    case 892n:
-      3780
-    case 893n:
-      3784
-    case 894n:
-      3792
-    case 895n:
-      3808
-    case 896n:
-      3843
-    case 897n:
-      3845
-    case 898n:
-      3846
-    case 899n:
-      3849
-    case 900n:
-      3850
-    case 901n:
-      3852
-    case 902n:
-      3857
-    case 903n:
-      3858
-    case 904n:
-      3860
-    case 905n:
-      3864
-    case 906n:
-      3873
-    case 907n:
-      3874
-    case 908n:
-      3876
-    case 909n:
-      3880
-    case 910n:
-      3888
-    case 911n:
-      3905
-    case 912n:
-      3906
-    case 913n:
-      3908
-    case 914n:
-      3912
     case _:
       63
 
-def stat.code.lo0(+lo: Nat) -> Nat:
+def stat.key.lo0(+lo: Nat) -> Nat:
   match lo:
     case 63n:
       0n
     case _:
       0n
 
-def stat.code.lo1(+lo: Nat) -> Nat:
+def stat.key.lo1(+lo: Nat) -> Nat:
   match lo:
     case 31n:
       1n
@@ -14985,7 +13767,7 @@ def stat.code.lo1(+lo: Nat) -> Nat:
     case _:
       0n
 
-def stat.code.lo2(+lo: Nat) -> Nat:
+def stat.key.lo2(+lo: Nat) -> Nat:
   match lo:
     case 31n:
       7n
@@ -15002,7 +13784,7 @@ def stat.code.lo2(+lo: Nat) -> Nat:
     case _:
       0n
 
-def stat.code.lo3(+lo: Nat) -> Nat:
+def stat.key.lo3(+lo: Nat) -> Nat:
   match lo:
     case 15n:
       13n
@@ -15037,7 +13819,7 @@ def stat.code.lo3(+lo: Nat) -> Nat:
     case _:
       0n
 
-def stat.code.lo4(+lo: Nat) -> Nat:
+def stat.key.lo4(+lo: Nat) -> Nat:
   match lo:
     case 31n:
       28n
@@ -15054,7 +13836,7 @@ def stat.code.lo4(+lo: Nat) -> Nat:
     case _:
       0n
 
-def stat.code.lo5(+lo: Nat) -> Nat:
+def stat.key.lo5(+lo: Nat) -> Nat:
   match lo:
     case 15n:
       34n
@@ -15089,7 +13871,7 @@ def stat.code.lo5(+lo: Nat) -> Nat:
     case _:
       0n
 
-def stat.code.lo6(+lo: Nat) -> Nat:
+def stat.key.lo6(+lo: Nat) -> Nat:
   match lo:
     case 15n:
       49n
@@ -15124,7 +13906,7 @@ def stat.code.lo6(+lo: Nat) -> Nat:
     case _:
       0n
 
-def stat.code.lo7(+lo: Nat) -> Nat:
+def stat.key.lo7(+lo: Nat) -> Nat:
   match lo:
     case 7n:
       64n
@@ -15169,7 +13951,7 @@ def stat.code.lo7(+lo: Nat) -> Nat:
     case _:
       0n
 
-def stat.code.lo8(+lo: Nat) -> Nat:
+def stat.key.lo8(+lo: Nat) -> Nat:
   match lo:
     case 31n:
       84n
@@ -15186,7 +13968,7 @@ def stat.code.lo8(+lo: Nat) -> Nat:
     case _:
       0n
 
-def stat.code.lo9(+lo: Nat) -> Nat:
+def stat.key.lo9(+lo: Nat) -> Nat:
   match lo:
     case 15n:
       90n
@@ -15221,7 +14003,7 @@ def stat.code.lo9(+lo: Nat) -> Nat:
     case _:
       0n
 
-def stat.code.lo10(+lo: Nat) -> Nat:
+def stat.key.lo10(+lo: Nat) -> Nat:
   match lo:
     case 15n:
       105n
@@ -15256,7 +14038,7 @@ def stat.code.lo10(+lo: Nat) -> Nat:
     case _:
       0n
 
-def stat.code.lo11(+lo: Nat) -> Nat:
+def stat.key.lo11(+lo: Nat) -> Nat:
   match lo:
     case 7n:
       120n
@@ -15301,7 +14083,7 @@ def stat.code.lo11(+lo: Nat) -> Nat:
     case _:
       0n
 
-def stat.code.lo12(+lo: Nat) -> Nat:
+def stat.key.lo12(+lo: Nat) -> Nat:
   match lo:
     case 15n:
       140n
@@ -15336,7 +14118,7 @@ def stat.code.lo12(+lo: Nat) -> Nat:
     case _:
       0n
 
-def stat.code.lo13(+lo: Nat) -> Nat:
+def stat.key.lo13(+lo: Nat) -> Nat:
   match lo:
     case 7n:
       155n
@@ -15381,7 +14163,7 @@ def stat.code.lo13(+lo: Nat) -> Nat:
     case _:
       0n
 
-def stat.code.lo14(+lo: Nat) -> Nat:
+def stat.key.lo14(+lo: Nat) -> Nat:
   match lo:
     case 7n:
       175n
@@ -15426,7 +14208,7 @@ def stat.code.lo14(+lo: Nat) -> Nat:
     case _:
       0n
 
-def stat.code.lo15(+lo: Nat) -> Nat:
+def stat.key.lo15(+lo: Nat) -> Nat:
   match lo:
     case 3n:
       195n
@@ -15461,7 +14243,7 @@ def stat.code.lo15(+lo: Nat) -> Nat:
     case _:
       0n
 
-def stat.code.lo16(+lo: Nat) -> Nat:
+def stat.key.lo16(+lo: Nat) -> Nat:
   match lo:
     case 31n:
       210n
@@ -15478,7 +14260,7 @@ def stat.code.lo16(+lo: Nat) -> Nat:
     case _:
       0n
 
-def stat.code.lo17(+lo: Nat) -> Nat:
+def stat.key.lo17(+lo: Nat) -> Nat:
   match lo:
     case 15n:
       216n
@@ -15513,7 +14295,7 @@ def stat.code.lo17(+lo: Nat) -> Nat:
     case _:
       0n
 
-def stat.code.lo18(+lo: Nat) -> Nat:
+def stat.key.lo18(+lo: Nat) -> Nat:
   match lo:
     case 15n:
       231n
@@ -15548,7 +14330,7 @@ def stat.code.lo18(+lo: Nat) -> Nat:
     case _:
       0n
 
-def stat.code.lo19(+lo: Nat) -> Nat:
+def stat.key.lo19(+lo: Nat) -> Nat:
   match lo:
     case 7n:
       246n
@@ -15593,7 +14375,7 @@ def stat.code.lo19(+lo: Nat) -> Nat:
     case _:
       0n
 
-def stat.code.lo20(+lo: Nat) -> Nat:
+def stat.key.lo20(+lo: Nat) -> Nat:
   match lo:
     case 15n:
       266n
@@ -15628,7 +14410,7 @@ def stat.code.lo20(+lo: Nat) -> Nat:
     case _:
       0n
 
-def stat.code.lo21(+lo: Nat) -> Nat:
+def stat.key.lo21(+lo: Nat) -> Nat:
   match lo:
     case 7n:
       281n
@@ -15673,7 +14455,7 @@ def stat.code.lo21(+lo: Nat) -> Nat:
     case _:
       0n
 
-def stat.code.lo22(+lo: Nat) -> Nat:
+def stat.key.lo22(+lo: Nat) -> Nat:
   match lo:
     case 7n:
       301n
@@ -15683,1570 +14465,77 @@ def stat.code.lo22(+lo: Nat) -> Nat:
       303n
     case 14n:
       304n
-    case 19n:
-      305n
-    case 21n:
-      306n
-    case 22n:
-      307n
-    case 25n:
-      308n
-    case 26n:
-      309n
-    case 28n:
-      310n
-    case 35n:
-      311n
-    case 37n:
-      312n
-    case 38n:
-      313n
-    case 41n:
-      314n
-    case 42n:
-      315n
-    case 44n:
-      316n
-    case 49n:
-      317n
-    case 50n:
-      318n
-    case 52n:
-      319n
-    case 56n:
-      320n
     case _:
       0n
 
-def stat.code.lo23(+lo: Nat) -> Nat:
-  match lo:
-    case 3n:
-      321n
-    case 5n:
-      322n
-    case 6n:
-      323n
-    case 9n:
-      324n
-    case 10n:
-      325n
-    case 12n:
-      326n
-    case 17n:
-      327n
-    case 18n:
-      328n
-    case 20n:
-      329n
-    case 24n:
-      330n
-    case 33n:
-      331n
-    case 34n:
-      332n
-    case 36n:
-      333n
-    case 40n:
-      334n
-    case 48n:
-      335n
-    case _:
-      0n
-
-def stat.code.lo24(+lo: Nat) -> Nat:
-  match lo:
-    case 15n:
-      336n
-    case 23n:
-      337n
-    case 27n:
-      338n
-    case 29n:
-      339n
-    case 30n:
-      340n
-    case 39n:
-      341n
-    case 43n:
-      342n
-    case 45n:
-      343n
-    case 46n:
-      344n
-    case 51n:
-      345n
-    case 53n:
-      346n
-    case 54n:
-      347n
-    case 57n:
-      348n
-    case 58n:
-      349n
-    case 60n:
-      350n
-    case _:
-      0n
-
-def stat.code.lo25(+lo: Nat) -> Nat:
-  match lo:
-    case 7n:
-      351n
-    case 11n:
-      352n
-    case 13n:
-      353n
-    case 14n:
-      354n
-    case 19n:
-      355n
-    case 21n:
-      356n
-    case 22n:
-      357n
-    case 25n:
-      358n
-    case 26n:
-      359n
-    case 28n:
-      360n
-    case 35n:
-      361n
-    case 37n:
-      362n
-    case 38n:
-      363n
-    case 41n:
-      364n
-    case 42n:
-      365n
-    case 44n:
-      366n
-    case 49n:
-      367n
-    case 50n:
-      368n
-    case 52n:
-      369n
-    case 56n:
-      370n
-    case _:
-      0n
-
-def stat.code.lo26(+lo: Nat) -> Nat:
-  match lo:
-    case 7n:
-      371n
-    case 11n:
-      372n
-    case 13n:
-      373n
-    case 14n:
-      374n
-    case 19n:
-      375n
-    case 21n:
-      376n
-    case 22n:
-      377n
-    case 25n:
-      378n
-    case 26n:
-      379n
-    case 28n:
-      380n
-    case 35n:
-      381n
-    case 37n:
-      382n
-    case 38n:
-      383n
-    case 41n:
-      384n
-    case 42n:
-      385n
-    case 44n:
-      386n
-    case 49n:
-      387n
-    case 50n:
-      388n
-    case 52n:
-      389n
-    case 56n:
-      390n
-    case _:
-      0n
-
-def stat.code.lo27(+lo: Nat) -> Nat:
-  match lo:
-    case 3n:
-      391n
-    case 5n:
-      392n
-    case 6n:
-      393n
-    case 9n:
-      394n
-    case 10n:
-      395n
-    case 12n:
-      396n
-    case 17n:
-      397n
-    case 18n:
-      398n
-    case 20n:
-      399n
-    case 24n:
-      400n
-    case 33n:
-      401n
-    case 34n:
-      402n
-    case 36n:
-      403n
-    case 40n:
-      404n
-    case 48n:
-      405n
-    case _:
-      0n
-
-def stat.code.lo28(+lo: Nat) -> Nat:
-  match lo:
-    case 7n:
-      406n
-    case 11n:
-      407n
-    case 13n:
-      408n
-    case 14n:
-      409n
-    case 19n:
-      410n
-    case 21n:
-      411n
-    case 22n:
-      412n
-    case 25n:
-      413n
-    case 26n:
-      414n
-    case 28n:
-      415n
-    case 35n:
-      416n
-    case 37n:
-      417n
-    case 38n:
-      418n
-    case 41n:
-      419n
-    case 42n:
-      420n
-    case 44n:
-      421n
-    case 49n:
-      422n
-    case 50n:
-      423n
-    case 52n:
-      424n
-    case 56n:
-      425n
-    case _:
-      0n
-
-def stat.code.lo29(+lo: Nat) -> Nat:
-  match lo:
-    case 3n:
-      426n
-    case 5n:
-      427n
-    case 6n:
-      428n
-    case 9n:
-      429n
-    case 10n:
-      430n
-    case 12n:
-      431n
-    case 17n:
-      432n
-    case 18n:
-      433n
-    case 20n:
-      434n
-    case 24n:
-      435n
-    case 33n:
-      436n
-    case 34n:
-      437n
-    case 36n:
-      438n
-    case 40n:
-      439n
-    case 48n:
-      440n
-    case _:
-      0n
-
-def stat.code.lo30(+lo: Nat) -> Nat:
-  match lo:
-    case 3n:
-      441n
-    case 5n:
-      442n
-    case 6n:
-      443n
-    case 9n:
-      444n
-    case 10n:
-      445n
-    case 12n:
-      446n
-    case 17n:
-      447n
-    case 18n:
-      448n
-    case 20n:
-      449n
-    case 24n:
-      450n
-    case 33n:
-      451n
-    case 34n:
-      452n
-    case 36n:
-      453n
-    case 40n:
-      454n
-    case 48n:
-      455n
-    case _:
-      0n
-
-def stat.code.lo31(+lo: Nat) -> Nat:
-  match lo:
-    case 1n:
-      456n
-    case 2n:
-      457n
-    case 4n:
-      458n
-    case 8n:
-      459n
-    case 16n:
-      460n
-    case 32n:
-      461n
-    case _:
-      0n
-
-def stat.code.lo32(+lo: Nat) -> Nat:
-  match lo:
-    case 31n:
-      462n
-    case 47n:
-      463n
-    case 55n:
-      464n
-    case 59n:
-      465n
-    case 61n:
-      466n
-    case 62n:
-      467n
-    case _:
-      0n
-
-def stat.code.lo33(+lo: Nat) -> Nat:
-  match lo:
-    case 15n:
-      468n
-    case 23n:
-      469n
-    case 27n:
-      470n
-    case 29n:
-      471n
-    case 30n:
-      472n
-    case 39n:
-      473n
-    case 43n:
-      474n
-    case 45n:
-      475n
-    case 46n:
-      476n
-    case 51n:
-      477n
-    case 53n:
-      478n
-    case 54n:
-      479n
-    case 57n:
-      480n
-    case 58n:
-      481n
-    case 60n:
-      482n
-    case _:
-      0n
-
-def stat.code.lo34(+lo: Nat) -> Nat:
-  match lo:
-    case 15n:
-      483n
-    case 23n:
-      484n
-    case 27n:
-      485n
-    case 29n:
-      486n
-    case 30n:
-      487n
-    case 39n:
-      488n
-    case 43n:
-      489n
-    case 45n:
-      490n
-    case 46n:
-      491n
-    case 51n:
-      492n
-    case 53n:
-      493n
-    case 54n:
-      494n
-    case 57n:
-      495n
-    case 58n:
-      496n
-    case 60n:
-      497n
-    case _:
-      0n
-
-def stat.code.lo35(+lo: Nat) -> Nat:
-  match lo:
-    case 7n:
-      498n
-    case 11n:
-      499n
-    case 13n:
-      500n
-    case 14n:
-      501n
-    case 19n:
-      502n
-    case 21n:
-      503n
-    case 22n:
-      504n
-    case 25n:
-      505n
-    case 26n:
-      506n
-    case 28n:
-      507n
-    case 35n:
-      508n
-    case 37n:
-      509n
-    case 38n:
-      510n
-    case 41n:
-      511n
-    case 42n:
-      512n
-    case 44n:
-      513n
-    case 49n:
-      514n
-    case 50n:
-      515n
-    case 52n:
-      516n
-    case 56n:
-      517n
-    case _:
-      0n
-
-def stat.code.lo36(+lo: Nat) -> Nat:
-  match lo:
-    case 15n:
-      518n
-    case 23n:
-      519n
-    case 27n:
-      520n
-    case 29n:
-      521n
-    case 30n:
-      522n
-    case 39n:
-      523n
-    case 43n:
-      524n
-    case 45n:
-      525n
-    case 46n:
-      526n
-    case 51n:
-      527n
-    case 53n:
-      528n
-    case 54n:
-      529n
-    case 57n:
-      530n
-    case 58n:
-      531n
-    case 60n:
-      532n
-    case _:
-      0n
-
-def stat.code.lo37(+lo: Nat) -> Nat:
-  match lo:
-    case 7n:
-      533n
-    case 11n:
-      534n
-    case 13n:
-      535n
-    case 14n:
-      536n
-    case 19n:
-      537n
-    case 21n:
-      538n
-    case 22n:
-      539n
-    case 25n:
-      540n
-    case 26n:
-      541n
-    case 28n:
-      542n
-    case 35n:
-      543n
-    case 37n:
-      544n
-    case 38n:
-      545n
-    case 41n:
-      546n
-    case 42n:
-      547n
-    case 44n:
-      548n
-    case 49n:
-      549n
-    case 50n:
-      550n
-    case 52n:
-      551n
-    case 56n:
-      552n
-    case _:
-      0n
-
-def stat.code.lo38(+lo: Nat) -> Nat:
-  match lo:
-    case 7n:
-      553n
-    case 11n:
-      554n
-    case 13n:
-      555n
-    case 14n:
-      556n
-    case 19n:
-      557n
-    case 21n:
-      558n
-    case 22n:
-      559n
-    case 25n:
-      560n
-    case 26n:
-      561n
-    case 28n:
-      562n
-    case 35n:
-      563n
-    case 37n:
-      564n
-    case 38n:
-      565n
-    case 41n:
-      566n
-    case 42n:
-      567n
-    case 44n:
-      568n
-    case 49n:
-      569n
-    case 50n:
-      570n
-    case 52n:
-      571n
-    case 56n:
-      572n
-    case _:
-      0n
-
-def stat.code.lo39(+lo: Nat) -> Nat:
-  match lo:
-    case 3n:
-      573n
-    case 5n:
-      574n
-    case 6n:
-      575n
-    case 9n:
-      576n
-    case 10n:
-      577n
-    case 12n:
-      578n
-    case 17n:
-      579n
-    case 18n:
-      580n
-    case 20n:
-      581n
-    case 24n:
-      582n
-    case 33n:
-      583n
-    case 34n:
-      584n
-    case 36n:
-      585n
-    case 40n:
-      586n
-    case 48n:
-      587n
-    case _:
-      0n
-
-def stat.code.lo40(+lo: Nat) -> Nat:
-  match lo:
-    case 15n:
-      588n
-    case 23n:
-      589n
-    case 27n:
-      590n
-    case 29n:
-      591n
-    case 30n:
-      592n
-    case 39n:
-      593n
-    case 43n:
-      594n
-    case 45n:
-      595n
-    case 46n:
-      596n
-    case 51n:
-      597n
-    case 53n:
-      598n
-    case 54n:
-      599n
-    case 57n:
-      600n
-    case 58n:
-      601n
-    case 60n:
-      602n
-    case _:
-      0n
-
-def stat.code.lo41(+lo: Nat) -> Nat:
-  match lo:
-    case 7n:
-      603n
-    case 11n:
-      604n
-    case 13n:
-      605n
-    case 14n:
-      606n
-    case 19n:
-      607n
-    case 21n:
-      608n
-    case 22n:
-      609n
-    case 25n:
-      610n
-    case 26n:
-      611n
-    case 28n:
-      612n
-    case 35n:
-      613n
-    case 37n:
-      614n
-    case 38n:
-      615n
-    case 41n:
-      616n
-    case 42n:
-      617n
-    case 44n:
-      618n
-    case 49n:
-      619n
-    case 50n:
-      620n
-    case 52n:
-      621n
-    case 56n:
-      622n
-    case _:
-      0n
-
-def stat.code.lo42(+lo: Nat) -> Nat:
-  match lo:
-    case 7n:
-      623n
-    case 11n:
-      624n
-    case 13n:
-      625n
-    case 14n:
-      626n
-    case 19n:
-      627n
-    case 21n:
-      628n
-    case 22n:
-      629n
-    case 25n:
-      630n
-    case 26n:
-      631n
-    case 28n:
-      632n
-    case 35n:
-      633n
-    case 37n:
-      634n
-    case 38n:
-      635n
-    case 41n:
-      636n
-    case 42n:
-      637n
-    case 44n:
-      638n
-    case 49n:
-      639n
-    case 50n:
-      640n
-    case 52n:
-      641n
-    case 56n:
-      642n
-    case _:
-      0n
-
-def stat.code.lo43(+lo: Nat) -> Nat:
-  match lo:
-    case 3n:
-      643n
-    case 5n:
-      644n
-    case 6n:
-      645n
-    case 9n:
-      646n
-    case 10n:
-      647n
-    case 12n:
-      648n
-    case 17n:
-      649n
-    case 18n:
-      650n
-    case 20n:
-      651n
-    case 24n:
-      652n
-    case 33n:
-      653n
-    case 34n:
-      654n
-    case 36n:
-      655n
-    case 40n:
-      656n
-    case 48n:
-      657n
-    case _:
-      0n
-
-def stat.code.lo44(+lo: Nat) -> Nat:
-  match lo:
-    case 7n:
-      658n
-    case 11n:
-      659n
-    case 13n:
-      660n
-    case 14n:
-      661n
-    case 19n:
-      662n
-    case 21n:
-      663n
-    case 22n:
-      664n
-    case 25n:
-      665n
-    case 26n:
-      666n
-    case 28n:
-      667n
-    case 35n:
-      668n
-    case 37n:
-      669n
-    case 38n:
-      670n
-    case 41n:
-      671n
-    case 42n:
-      672n
-    case 44n:
-      673n
-    case 49n:
-      674n
-    case 50n:
-      675n
-    case 52n:
-      676n
-    case 56n:
-      677n
-    case _:
-      0n
-
-def stat.code.lo45(+lo: Nat) -> Nat:
-  match lo:
-    case 3n:
-      678n
-    case 5n:
-      679n
-    case 6n:
-      680n
-    case 9n:
-      681n
-    case 10n:
-      682n
-    case 12n:
-      683n
-    case 17n:
-      684n
-    case 18n:
-      685n
-    case 20n:
-      686n
-    case 24n:
-      687n
-    case 33n:
-      688n
-    case 34n:
-      689n
-    case 36n:
-      690n
-    case 40n:
-      691n
-    case 48n:
-      692n
-    case _:
-      0n
-
-def stat.code.lo46(+lo: Nat) -> Nat:
-  match lo:
-    case 3n:
-      693n
-    case 5n:
-      694n
-    case 6n:
-      695n
-    case 9n:
-      696n
-    case 10n:
-      697n
-    case 12n:
-      698n
-    case 17n:
-      699n
-    case 18n:
-      700n
-    case 20n:
-      701n
-    case 24n:
-      702n
-    case 33n:
-      703n
-    case 34n:
-      704n
-    case 36n:
-      705n
-    case 40n:
-      706n
-    case 48n:
-      707n
-    case _:
-      0n
-
-def stat.code.lo47(+lo: Nat) -> Nat:
-  match lo:
-    case 1n:
-      708n
-    case 2n:
-      709n
-    case 4n:
-      710n
-    case 8n:
-      711n
-    case 16n:
-      712n
-    case 32n:
-      713n
-    case _:
-      0n
-
-def stat.code.lo48(+lo: Nat) -> Nat:
-  match lo:
-    case 15n:
-      714n
-    case 23n:
-      715n
-    case 27n:
-      716n
-    case 29n:
-      717n
-    case 30n:
-      718n
-    case 39n:
-      719n
-    case 43n:
-      720n
-    case 45n:
-      721n
-    case 46n:
-      722n
-    case 51n:
-      723n
-    case 53n:
-      724n
-    case 54n:
-      725n
-    case 57n:
-      726n
-    case 58n:
-      727n
-    case 60n:
-      728n
-    case _:
-      0n
-
-def stat.code.lo49(+lo: Nat) -> Nat:
-  match lo:
-    case 7n:
-      729n
-    case 11n:
-      730n
-    case 13n:
-      731n
-    case 14n:
-      732n
-    case 19n:
-      733n
-    case 21n:
-      734n
-    case 22n:
-      735n
-    case 25n:
-      736n
-    case 26n:
-      737n
-    case 28n:
-      738n
-    case 35n:
-      739n
-    case 37n:
-      740n
-    case 38n:
-      741n
-    case 41n:
-      742n
-    case 42n:
-      743n
-    case 44n:
-      744n
-    case 49n:
-      745n
-    case 50n:
-      746n
-    case 52n:
-      747n
-    case 56n:
-      748n
-    case _:
-      0n
-
-def stat.code.lo50(+lo: Nat) -> Nat:
-  match lo:
-    case 7n:
-      749n
-    case 11n:
-      750n
-    case 13n:
-      751n
-    case 14n:
-      752n
-    case 19n:
-      753n
-    case 21n:
-      754n
-    case 22n:
-      755n
-    case 25n:
-      756n
-    case 26n:
-      757n
-    case 28n:
-      758n
-    case 35n:
-      759n
-    case 37n:
-      760n
-    case 38n:
-      761n
-    case 41n:
-      762n
-    case 42n:
-      763n
-    case 44n:
-      764n
-    case 49n:
-      765n
-    case 50n:
-      766n
-    case 52n:
-      767n
-    case 56n:
-      768n
-    case _:
-      0n
-
-def stat.code.lo51(+lo: Nat) -> Nat:
-  match lo:
-    case 3n:
-      769n
-    case 5n:
-      770n
-    case 6n:
-      771n
-    case 9n:
-      772n
-    case 10n:
-      773n
-    case 12n:
-      774n
-    case 17n:
-      775n
-    case 18n:
-      776n
-    case 20n:
-      777n
-    case 24n:
-      778n
-    case 33n:
-      779n
-    case 34n:
-      780n
-    case 36n:
-      781n
-    case 40n:
-      782n
-    case 48n:
-      783n
-    case _:
-      0n
-
-def stat.code.lo52(+lo: Nat) -> Nat:
-  match lo:
-    case 7n:
-      784n
-    case 11n:
-      785n
-    case 13n:
-      786n
-    case 14n:
-      787n
-    case 19n:
-      788n
-    case 21n:
-      789n
-    case 22n:
-      790n
-    case 25n:
-      791n
-    case 26n:
-      792n
-    case 28n:
-      793n
-    case 35n:
-      794n
-    case 37n:
-      795n
-    case 38n:
-      796n
-    case 41n:
-      797n
-    case 42n:
-      798n
-    case 44n:
-      799n
-    case 49n:
-      800n
-    case 50n:
-      801n
-    case 52n:
-      802n
-    case 56n:
-      803n
-    case _:
-      0n
-
-def stat.code.lo53(+lo: Nat) -> Nat:
-  match lo:
-    case 3n:
-      804n
-    case 5n:
-      805n
-    case 6n:
-      806n
-    case 9n:
-      807n
-    case 10n:
-      808n
-    case 12n:
-      809n
-    case 17n:
-      810n
-    case 18n:
-      811n
-    case 20n:
-      812n
-    case 24n:
-      813n
-    case 33n:
-      814n
-    case 34n:
-      815n
-    case 36n:
-      816n
-    case 40n:
-      817n
-    case 48n:
-      818n
-    case _:
-      0n
-
-def stat.code.lo54(+lo: Nat) -> Nat:
-  match lo:
-    case 3n:
-      819n
-    case 5n:
-      820n
-    case 6n:
-      821n
-    case 9n:
-      822n
-    case 10n:
-      823n
-    case 12n:
-      824n
-    case 17n:
-      825n
-    case 18n:
-      826n
-    case 20n:
-      827n
-    case 24n:
-      828n
-    case 33n:
-      829n
-    case 34n:
-      830n
-    case 36n:
-      831n
-    case 40n:
-      832n
-    case 48n:
-      833n
-    case _:
-      0n
-
-def stat.code.lo55(+lo: Nat) -> Nat:
-  match lo:
-    case 1n:
-      834n
-    case 2n:
-      835n
-    case 4n:
-      836n
-    case 8n:
-      837n
-    case 16n:
-      838n
-    case 32n:
-      839n
-    case _:
-      0n
-
-def stat.code.lo56(+lo: Nat) -> Nat:
-  match lo:
-    case 7n:
-      840n
-    case 11n:
-      841n
-    case 13n:
-      842n
-    case 14n:
-      843n
-    case 19n:
-      844n
-    case 21n:
-      845n
-    case 22n:
-      846n
-    case 25n:
-      847n
-    case 26n:
-      848n
-    case 28n:
-      849n
-    case 35n:
-      850n
-    case 37n:
-      851n
-    case 38n:
-      852n
-    case 41n:
-      853n
-    case 42n:
-      854n
-    case 44n:
-      855n
-    case 49n:
-      856n
-    case 50n:
-      857n
-    case 52n:
-      858n
-    case 56n:
-      859n
-    case _:
-      0n
-
-def stat.code.lo57(+lo: Nat) -> Nat:
-  match lo:
-    case 3n:
-      860n
-    case 5n:
-      861n
-    case 6n:
-      862n
-    case 9n:
-      863n
-    case 10n:
-      864n
-    case 12n:
-      865n
-    case 17n:
-      866n
-    case 18n:
-      867n
-    case 20n:
-      868n
-    case 24n:
-      869n
-    case 33n:
-      870n
-    case 34n:
-      871n
-    case 36n:
-      872n
-    case 40n:
-      873n
-    case 48n:
-      874n
-    case _:
-      0n
-
-def stat.code.lo58(+lo: Nat) -> Nat:
-  match lo:
-    case 3n:
-      875n
-    case 5n:
-      876n
-    case 6n:
-      877n
-    case 9n:
-      878n
-    case 10n:
-      879n
-    case 12n:
-      880n
-    case 17n:
-      881n
-    case 18n:
-      882n
-    case 20n:
-      883n
-    case 24n:
-      884n
-    case 33n:
-      885n
-    case 34n:
-      886n
-    case 36n:
-      887n
-    case 40n:
-      888n
-    case 48n:
-      889n
-    case _:
-      0n
-
-def stat.code.lo59(+lo: Nat) -> Nat:
-  match lo:
-    case 1n:
-      890n
-    case 2n:
-      891n
-    case 4n:
-      892n
-    case 8n:
-      893n
-    case 16n:
-      894n
-    case 32n:
-      895n
-    case _:
-      0n
-
-def stat.code.lo60(+lo: Nat) -> Nat:
-  match lo:
-    case 3n:
-      896n
-    case 5n:
-      897n
-    case 6n:
-      898n
-    case 9n:
-      899n
-    case 10n:
-      900n
-    case 12n:
-      901n
-    case 17n:
-      902n
-    case 18n:
-      903n
-    case 20n:
-      904n
-    case 24n:
-      905n
-    case 33n:
-      906n
-    case 34n:
-      907n
-    case 36n:
-      908n
-    case 40n:
-      909n
-    case 48n:
-      910n
-    case _:
-      0n
-
-def stat.code.lo61(+lo: Nat) -> Nat:
-  match lo:
-    case 1n:
-      911n
-    case 2n:
-      912n
-    case 4n:
-      913n
-    case 8n:
-      914n
-    case _:
-      0n
-
-def stat.code.hl(+hi: Nat, +lo: Nat) -> Nat:
+def stat.key.hl(+hi: Nat, +lo: Nat) -> Nat:
   match hi:
     case 0n:
-      stat.code.lo0(lo)
+      stat.key.lo0(lo)
     case 1n:
-      stat.code.lo1(lo)
+      stat.key.lo1(lo)
     case 2n:
-      stat.code.lo2(lo)
+      stat.key.lo2(lo)
     case 3n:
-      stat.code.lo3(lo)
+      stat.key.lo3(lo)
     case 4n:
-      stat.code.lo4(lo)
+      stat.key.lo4(lo)
     case 5n:
-      stat.code.lo5(lo)
+      stat.key.lo5(lo)
     case 6n:
-      stat.code.lo6(lo)
+      stat.key.lo6(lo)
     case 7n:
-      stat.code.lo7(lo)
+      stat.key.lo7(lo)
     case 8n:
-      stat.code.lo8(lo)
+      stat.key.lo8(lo)
     case 9n:
-      stat.code.lo9(lo)
+      stat.key.lo9(lo)
     case 10n:
-      stat.code.lo10(lo)
+      stat.key.lo10(lo)
     case 11n:
-      stat.code.lo11(lo)
+      stat.key.lo11(lo)
     case 12n:
-      stat.code.lo12(lo)
+      stat.key.lo12(lo)
     case 13n:
-      stat.code.lo13(lo)
+      stat.key.lo13(lo)
     case 14n:
-      stat.code.lo14(lo)
+      stat.key.lo14(lo)
     case 15n:
-      stat.code.lo15(lo)
+      stat.key.lo15(lo)
     case 16n:
-      stat.code.lo16(lo)
+      stat.key.lo16(lo)
     case 17n:
-      stat.code.lo17(lo)
+      stat.key.lo17(lo)
     case 18n:
-      stat.code.lo18(lo)
+      stat.key.lo18(lo)
     case 19n:
-      stat.code.lo19(lo)
+      stat.key.lo19(lo)
     case 20n:
-      stat.code.lo20(lo)
+      stat.key.lo20(lo)
     case 21n:
-      stat.code.lo21(lo)
+      stat.key.lo21(lo)
     case 22n:
-      stat.code.lo22(lo)
-    case 23n:
-      stat.code.lo23(lo)
-    case 24n:
-      stat.code.lo24(lo)
-    case 25n:
-      stat.code.lo25(lo)
-    case 26n:
-      stat.code.lo26(lo)
-    case 27n:
-      stat.code.lo27(lo)
-    case 28n:
-      stat.code.lo28(lo)
-    case 29n:
-      stat.code.lo29(lo)
-    case 30n:
-      stat.code.lo30(lo)
-    case 31n:
-      stat.code.lo31(lo)
-    case 32n:
-      stat.code.lo32(lo)
-    case 33n:
-      stat.code.lo33(lo)
-    case 34n:
-      stat.code.lo34(lo)
-    case 35n:
-      stat.code.lo35(lo)
-    case 36n:
-      stat.code.lo36(lo)
-    case 37n:
-      stat.code.lo37(lo)
-    case 38n:
-      stat.code.lo38(lo)
-    case 39n:
-      stat.code.lo39(lo)
-    case 40n:
-      stat.code.lo40(lo)
-    case 41n:
-      stat.code.lo41(lo)
-    case 42n:
-      stat.code.lo42(lo)
-    case 43n:
-      stat.code.lo43(lo)
-    case 44n:
-      stat.code.lo44(lo)
-    case 45n:
-      stat.code.lo45(lo)
-    case 46n:
-      stat.code.lo46(lo)
-    case 47n:
-      stat.code.lo47(lo)
-    case 48n:
-      stat.code.lo48(lo)
-    case 49n:
-      stat.code.lo49(lo)
-    case 50n:
-      stat.code.lo50(lo)
-    case 51n:
-      stat.code.lo51(lo)
-    case 52n:
-      stat.code.lo52(lo)
-    case 53n:
-      stat.code.lo53(lo)
-    case 54n:
-      stat.code.lo54(lo)
-    case 55n:
-      stat.code.lo55(lo)
-    case 56n:
-      stat.code.lo56(lo)
-    case 57n:
-      stat.code.lo57(lo)
-    case 58n:
-      stat.code.lo58(lo)
-    case 59n:
-      stat.code.lo59(lo)
-    case 60n:
-      stat.code.lo60(lo)
-    case 61n:
-      stat.code.lo61(lo)
+      stat.key.lo22(lo)
     case _:
       0n
 
-# a word's code (0 for one no code has)
-def stat.code.cw(+w: Nat) -> Nat:
-  stat.code.hl(Nat.div(w, 64n), Nat.mod(w, 64n))
+# a word's key (0 for one no key has)
+def stat.key.cw(+w: Nat) -> Nat:
+  stat.key.hl(Nat.div(w, 64n), Nat.mod(w, 64n))
 
 # the high twelve bits of the hash of a call of GET, SET, INCR and
 # RESTORE that runs, as the parser writes them
 def stat.mark.get() -> U32:
-  191889408
+  124780544
 
 def stat.mark.set() -> U32:
-  199229440
+  128974848
 
 def stat.mark.incr() -> U32:
-  326107136
+  196083712
 
 def stat.mark.restore() -> U32:
-  2744123392
+  1019215872
 # END gen_commands: stats
 
 # a container (CLIENT, FUNCTION, CONFIG, COMMAND, OBJECT, MEMORY, PUBSUB,
@@ -17401,13 +14690,18 @@ def fail.if(+class: Nat, c: Cmd) -> Cmd:
     case _:
       c
 
-# a hint's hash with code's word in its high twelve bits
+# a hint's hash with its call's code: a call that runs (class 0) has its
+# key's word in the high twelve bits and the hint in the low twenty; any
+# other has all twelve bits set and its code in the low twenty, where it
+# has no hint (resp.bend gives it none), so that a batch with one is never
+# a batch of one word (tally)
 def stat.hash(+h: U32, +code: Nat) -> U32:
-  U32.or(U32.and(h, 1048575), U32.shln(stat.cw(code), 20n))
+  Bool.pick(U32, Nat.is_eq(code.class(code), 0n), U32.or(U32.and(h, 1048575), U32.shln(stat.kw(code.key(code)), 20n)), U32.or(4293918720, U32.from_nat(code)))
 
-# the code of the word in a hash's high twelve bits
+# the code of a hash's call (stat.hash)
 def code.of(+h: U32) -> Nat:
-  stat.code.cw(U32.to_nat(U32.shrn(h, 20n)))
+  +w = U32.shrn(h, 20n)
+  Bool.pick(Nat, U32.is_eq(w, 4095), U32.to_nat(U32.and(h, 1048575)), Nat.mul(stat.key.cw(U32.to_nat(w)), 3n))
 
 # A batch's calls are counted as runs of one code each: a run is
 # code * 2^32 + how many calls in a row have it.
@@ -17485,8 +14779,8 @@ def tally.each(+hs: List<&2, U32>, t: Tally) -> Tally:
     case Con{+h, +rest}:
       tally.each(rest, tally.step(t, code.of(h)))
 
-# A batch of one code k (the code of tl's low twelve bits), n calls (its
-# high twenty bits), is counted as code.calls and code.risky count: with
+# A batch of one code k (the code of tl's low twelve bits: of a key's
+# word, a call that runs), n calls (its high twenty bits), is counted as code.calls and code.risky count: with
 # c its class, n calls ran unless c is 1 (((c xor 1) + 3) / 4 is 1, 0 and
 # 1 for c of 0, 1 and 2). It is one only when tl counts all its requests:
 # when it came in fewer than 2^20 bytes, it has 2^19 + 1 at most (the
@@ -17498,7 +14792,7 @@ def tally.one(+k: Nat, +n: U32) -> Tally:
 def tally.if(one: Bool, small: Bool, +tl: U32, +hs: List<&2, U32>) -> Tally:
   match one small:
     case True{} True{}:
-      tally.one(stat.code.cw(U32.to_nat(U32.and(tl, 4095))), U32.shrn(tl, 12n))
+      tally.one(Nat.mul(stat.key.cw(U32.to_nat(U32.and(tl, 4095))), 3n), U32.shrn(tl, 12n))
     case _ _:
       tally.each(hs, Tally{0n, False{}, 0n, Nil{}})
 

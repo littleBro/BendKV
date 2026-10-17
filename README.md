@@ -986,7 +986,7 @@ away.
 | file | lines of code | of them written by a generator | the laws import it |
 |---|---:|---:|---|
 | `src/map.bend` | 4,700 | 1,200 | yes |
-| `src/redis.bend` | 19,000 | 8,400 | yes |
+| `src/redis.bend` | 18,000 | 6,000 | yes |
 | `src/batch.bend` | 84 |  | yes |
 | `src/aof.bend` | 1,300 |  | yes |
 | `src/session.bend` | 2,700 |  | yes |
@@ -1008,7 +1008,7 @@ away.
 | `proof/LAWS.bend` | 920 | 20 |  |
 | `proof/SPEC.bend` | 370 |  |  |
 | `proof/PROOF.bend` | 16,000 | 2,800 |  |
-| `src/`, the 6 files the laws import | 30,000 | 10,000 |  |
+| `src/`, the 6 files the laws import | 28,000 | 7,400 |  |
 | `src/`, the 14 others | 30,000 | 2,700 |  |
 | `proof/` | 18,000 | 2,800 |  |
 <!-- END gen_counts: numbers -->

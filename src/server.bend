@@ -11204,11 +11204,11 @@ def hs.last(+hs: List<&2, U32>, +w: U32) -> U32:
     case Nil{}:
       w
     case Con{+h, rest}:
-      hs.last(rest, U32.shrn(h, 20n))
+      hs.last(rest, h)
 
 # (k: 0, after the marks of the batch's keys: Access)
 def mark.hs(+back: Chan(Ans), +hs: List<&2, U32>, +now: Nat, k: U32) -> Chan(Ans):
-  mark(back, R.stat.code.cw(U32.to_nat(hs.last(hs, k))), now)
+  mark(back, R.code.of(hs.last(hs, k)), now)
 
 # Access
 # ------

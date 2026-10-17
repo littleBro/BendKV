@@ -8401,6 +8401,20 @@ request of issue 68.
     run moves `used_memory_vm_functions` only at the next change.
   - Reading them after every script would cost every EVAL an effect, as section 3zzzd
     counted.
+- **INFO's codes** (`tools/gen_commands.py`; `src/redis.bend`: `stat.hash`, `code.of`).
+  FCALL, FCALL_RO and seven subcommands of FUNCTION bring INFO's keys to 304, and with
+  the writes of a stream (section 3zzzza) to 308: past the 307 for which each code, three
+  a key, had a word of twelve bits with six set (section 3zzzy foresaw it).
+  - A call that runs keeps its key's word in its hash's high twelve bits, and its hint
+    in the low twenty. A call refused, or failing as it parses, has no hint there (the
+    parser gives it none): it carries the word of all twelve bits, and its code in the
+    low twenty.
+  - A batch with such a call is never one of one word, as twelve bits set are more than
+    six, so it is counted call by call (`code.of` of each hash), as a batch of two codes
+    is. A batch of calls of one key that run is counted at once, as before.
+  - So a key takes one word: room for 923 keys. The tables of words shrink from 927
+    cases to one per key (`stat.kw`, `stat.key.cw`), and `src/redis.bend` by about 2,800
+    lines.
 
 **Found on the way**, each by a test of Redis's or of the new `tests/function_test.py`:
 
