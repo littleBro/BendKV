@@ -9672,6 +9672,57 @@ node's entries around, and the keyspace drops the old version.
   write runs, which needs every write of a stream to write its stream back, the writes
   that change nothing too, with no effect; XDEL's walk from the newest entry, in place.
 
+## 3zzzzb. RDB 11, as Redis 7.2.16 writes and reads it
+
+**What changed** (#128, kind E: `src/rdb.bend`, `src/map.bend`, `src/server.bend`). DUMP
+and RESTORE, FUNCTION DUMP and RESTORE, SAVE, BGSAVE and the start write and read the
+format as 7.2.16's `rdb.c` does.
+- **The version** is 11 (`rdbver`): a payload's version and a file's `REDIS0011`, with
+  `redis-ver` 7.2.16 among the file's AUX fields. Versions 1 to 11 are read; a payload of
+  12 is "DUMP payload version or checksum are wrong", a file of 12 "Can't handle RDB
+  format version 12".
+- **Sets.** A set kept as a listpack (section 3zzzs) is written as SET_LISTPACK (20), its
+  members in their order; an intset is INTSET (11) still, a table SET (2). Type 20 is
+  read as a listpack when it has 128 members at most (7.2's reader checks no member's
+  length there), as a table past that; a member twice is corrupt. Type 2, which 7.0 wrote
+  for every set of strings, is read as 7.2's `rdbLoadObject` builds it: an intset while
+  the members are integers, and at the first that is not, a listpack if the intset had
+  fewer than 128 members and no member so far is longer than 64 bytes, its integers
+  first, sorted, then the rest in the file's order (`set.order`); a table past those
+  limits, or for more than 512 members. That order is SMEMBERS's and SSCAN's.
+- **Streams** are STREAM_LISTPACKS_3 (21). Each consumer has an active time after its
+  seen time, the last time it read or claimed an entry: none (−1, eight 0xFF bytes) for
+  one that has done neither (`KV.XAct`: `XActNone`, `XActAt`). A stream of type 19
+  (7.0's) gives each consumer its seen time for its active time, as 7.2's reader does.
+  The commands that set the active time and show it (XINFO CONSUMERS' `inactive`) are
+  the streams' (`src/stream.bend`): the value only keeps it.
+- **What 7.2.16 reads no more.** A library as 7.0's release candidates wrote it
+  (FUNCTION, 246) stops a load: "Pre-release function format not supported." (FUNCTION
+  RESTORE refuses it too: section 3zzzv); so does a module's value of type 6 (4.0's
+  release candidates): "Pre-release module format not supported". BendKV read both
+  before, as 7.0.15 did; the readers of the old library go.
+- **Lines in the log.** A file that does not load ends with "Fatal error loading the DB,
+  check server logs. Exiting." (7.0 named `errno`'s text); one that is there but does
+  not open first says "Fatal error: can't open the RDB file dump.rdb for reading: ...".
+  A save's write error is "Write error while saving DB to the disk(...)"; a directory
+  that does not sync after the rename is "Failed to fsync directory while saving DB:
+  ...", the save failed and its file in place.
+- **A bug not copied.** RESTORE with a time to live near 2^63 ms overflows its sum with
+  the clock, and 7.2.16 makes a key that its cycle of expiries deletes a moment later,
+  where 7.0.15 makes none: bug 4 of [UPSTREAM.md](UPSTREAM.md). BendKV makes none, and
+  `dump_test` holds it to 7.0.15's replies there.
+
+**Tests.** `dump_test`, `stream_dump_test` and `rdb_test` take 7.2.16's payloads, versions
+and lines: a payload of version 10 or 9 is still restored, 12 refused; type 19's
+payloads are made from 7.2's by the test (`older`), with the shapes of entries that 7.2
+no longer makes (XSETID below the greatest ID deleted) left out. Against 7.2.16 what still
+differs is other kinds': OBJECT ENCODING of lists and sets (D), the doubles of sorted
+sets (C); in `stream_write_test`, XSETID below the greatest ID deleted (G).
+
+**What it costs.** Nothing on a request's path. A save writes a packed set as one string,
+the listpack, where 7.0's format took a string for each member; a consumer takes 8 more
+bytes in the file and a word in the value.
+
 ## 4. Where a request's time goes, and hiding the memory waits
 
 With the eight patches, BendKV ran fewer instructions on GET and SET than Redis, missed
