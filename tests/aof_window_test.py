@@ -20,10 +20,17 @@ and the entries it queued left in the file for its next start to
 revert: README.md, "Where BendKV differs"). Then the file with an
 unknown command after it, which both refuse: BendKV names the entry and
 the byte it starts at, which it finds reading the file again a window at
-a time. Last, two small files whose transaction left open holds entries
+a time. Then two small files whose transaction left open holds entries
 Redis reads but does not write (bulks with no length, a MULTI written
 *01), which both cut at the byte the MULTI starts at, and a file whose
-entry ends exactly at the first window's end.
+entry ends exactly at the first window's end. Last, files with libraries
+of functions, whose FUNCTION commands the start runs in the engine and
+the replay leaves out (src/server.bend: The libraries at the start): a
+library longer than a window, one loaded in a transaction and one
+deleted, among windows of other entries; an unknown command after them,
+which BendKV numbers among all the entries; and a transaction left open
+after two libraries, with a third in it, which neither server loads. On
+these both servers must answer the same FCALLs of the functions.
 
     python3 tests/aof_window_test.py --bin build/bendkv --bendkv 6380 --redis 6391 --dir build/aofwin
 """
@@ -141,6 +148,9 @@ def cases():
     e.pad(MIB)
     e.put(entry(b"SET", b"edge", b"e"))
     edge = e.bytes()
+    libs, lib_n = with_libs()
+    lib_bad = entry(b"SXT", b"lost", b"v")
+    held, held_keep = libs_left_open()
     return [("a file of several windows, ending inside one", b, len(b), EOF_WHY),
             ("its last entry cut short inside a long value", b + cut, len(b), EOF_WHY),
             ("a transaction left open, an entry longer than a window in it", b + opened, len(b), EOF_WHY),
@@ -151,7 +161,60 @@ def cases():
               % (n + 1, len(b)))),
             ("bulks with no length in a transaction left open", loose + loose_tx, len(loose), EOF_WHY),
             ("a MULTI written *01 left open", zero + zero_tx, len(zero), EOF_WHY),
-            ("an entry that ends at the first window's end", edge, len(edge), EOF_WHY)]
+            ("an entry that ends at the first window's end", edge, len(edge), EOF_WHY),
+            ("libraries among windows, one longer than a window", libs, len(libs), EOF_WHY, LIB_CALLS),
+            ("an unknown command after libraries", libs + lib_bad, None,
+             ("Unknown command 'SXT' reading the append only file",
+              "Bad command reading the append only file appendonly.aof: entry %d, at byte %d: ERR unknown command 'SXT'"
+              % (lib_n + 1, len(libs))), LIB_CALLS),
+            ("a transaction left open after two libraries, a third in it", held, held_keep, EOF_WHY, LIB_CALLS)]
+
+
+def lib(name, fn, body):
+    """a library of one function, fn, which runs body"""
+    return b"#!lua name=%s\nredis.register_function('%s', function(keys, args) %s end)\n" % (name, fn, body)
+
+
+# the FCALLs both servers must answer alike after a start with libraries
+LIB_CALLS = [[b"FCALL", fn, b"0"] for fn in (b"wf1", b"wbig", b"wtx", b"wf4", b"wa", b"wb", b"wc")]
+
+
+def with_libs():
+    """libraries among windows of other entries: one before the first
+    window's end, one longer than a window (1.5 MiB of code), one loaded
+    in a transaction and one deleted; and the number of its entries"""
+    f = File()
+    f.put(entry(b"SELECT", b"0"))
+    f.put(entry(b"FUNCTION", b"LOAD", lib(b"w1", b"wf1", b"return 1")))
+    f.put(entry(b"FUNCTION", b"LOAD", lib(b"w2", b"wf2", b"return 2")))
+    f.pad(MIB - 300)
+    f.put(entry(b"FUNCTION", b"LOAD", b"#!lua name=wbig\nlocal s = '" + b"b" * (MIB + MIB // 2) +
+                b"'\nredis.register_function('wbig', function(keys, args) return #s end)\n"))
+    f.put(entry(b"SET", b"after:big", b"1"))
+    f.put(entry(b"MULTI"))
+    f.put(entry(b"FUNCTION", b"LOAD", lib(b"wtx", b"wtx", b"return redis.call('get', 'after:big')")))
+    f.put(entry(b"SET", b"in:tx", b"2"))
+    f.put(entry(b"EXEC"))
+    f.put(entry(b"FUNCTION", b"DELETE", b"w1"))
+    f.pad(3 * MIB + 100)
+    f.put(entry(b"FUNCTION", b"LOAD", lib(b"w4", b"wf4", b"return 4")))
+    for i in range(500):
+        f.put(entry(b"SET", b"lib:tail:%d" % i, b"l" * (i % 40)))
+    return f.bytes(), f.entries
+
+
+def libs_left_open():
+    """two libraries, then a transaction left open with a third in it: the
+    file and where both cut it, at its MULTI"""
+    f = File()
+    f.put(entry(b"FUNCTION", b"LOAD", lib(b"wa", b"wa", b"return 'a'")))
+    f.put(entry(b"SET", b"k", b"v"))
+    f.put(entry(b"FUNCTION", b"LOAD", lib(b"wb", b"wb", b"return 'b'")))
+    keep = f.n
+    f.put(entry(b"MULTI"))
+    f.put(entry(b"FUNCTION", b"LOAD", lib(b"wc", b"wc", b"return 'c'")))
+    f.put(entry(b"SET", b"x", b"y"))
+    return f.bytes(), keep
 
 
 def up(port, p, log, timeout=60):
@@ -180,22 +243,26 @@ def size(path):
     return os.path.getsize(moved if os.path.exists(moved) else path)
 
 
-def run(argv, port, log, path, dbs):
+def run(argv, port, log, path, dbs, calls=()):
     """a start on the file at path: (whether it started, its databases,
-    the file's length after it, its log)"""
+    the file's length after it, its log, the replies to calls)"""
     with open(log, "w") as out:
         p = subprocess.Popen(argv, stdout=out, stderr=subprocess.STDOUT)
     c = up(port, p, log)
     ks = None
+    rs = []
     if c is not None:
         ks = keyspace(c, dbs)
+        for cmd in calls:
+            c.send([cmd])
+            rs.append(c.reply())
         c.sock.close()
     if p.poll() is None:
         p.terminate()
     p.wait()
     with open(log, errors="replace") as f:
         text = f.read()
-    return c is not None, ks, size(path), text
+    return c is not None, ks, size(path), text, rs
 
 
 def main():
@@ -207,7 +274,8 @@ def main():
     a = ap.parse_args()
     d = os.path.abspath(a.dir)
     ok = True
-    for i, (name, data, keep, why) in enumerate(cases()):
+    for i, (name, data, keep, why, *calls) in enumerate(cases()):
+        calls = calls[0] if calls else ()
         for trunc in ["yes", "no"]:
             got = {}
             for who in ["redis", "bendkv"]:
@@ -221,12 +289,12 @@ def main():
                     argv = ["redis-server", "--port", str(a.redis), "--bind", "127.0.0.1", "--save", "",
                             "--dir", w, "--appendonly", "yes", "--appendfilename", "appendonly.aof",
                             "--aof-load-truncated", trunc]
-                    got[who] = run(argv, a.redis, os.path.join(w, "log"), path, 16)
+                    got[who] = run(argv, a.redis, os.path.join(w, "log"), path, 16, calls)
                 else:
                     argv = [a.bin, "--port", str(a.bendkv), "--dir", w, "--appendonly", "yes",
                             "--appendfilename", "appendonly.aof", "--aof-load-truncated", trunc]
-                    got[who] = run(argv, a.bendkv, os.path.join(w, "log"), path, 16)
-            (rs, rk, rz, rt), (bs, bk, bz, bt) = got["redis"], got["bendkv"]
+                    got[who] = run(argv, a.bendkv, os.path.join(w, "log"), path, 16, calls)
+            (rs, rk, rz, rt, rc), (bs, bk, bz, bt, bc) = got["redis"], got["bendkv"]
             what = "%s, aof-load-truncated %s" % (name, trunc)
             if rs != bs:
                 print("FAIL: %s: Redis %s, BendKV %s" % (what, "starts" if rs else "refuses", "starts" if bs else "refuses"))
@@ -240,12 +308,19 @@ def main():
             elif rk != bk:
                 print("FAIL: %s: the databases differ (%d keys on Redis, %d on BendKV)" % (what, len(rk), len(bk)))
                 ok = False
+            elif rc != bc:
+                print("FAIL: %s: the FCALLs answer differently" % what)
+                for cmd, x, y in zip(calls, rc, bc):
+                    if x != y:
+                        print("  %s: Redis %r, BendKV %r" % (b" ".join(cmd).decode(), x, y))
+                ok = False
             elif keep is not None and not rz == bz == keep:
                 print("FAIL: %s: the file is cut to %d bytes by Redis, %d by BendKV, of %d whole" % (what, rz, bz, keep))
                 ok = False
             else:
-                print("OK: %s: the same databases (%d keys), the file %s" % (
-                    what, len(bk), "cut to %d bytes on both" % bz if keep is not None and bz < len(data)
+                print("OK: %s: the same databases (%d keys)%s, the file %s" % (
+                    what, len(bk), ", the same %d FCALLs" % len(bc) if bc else "",
+                    "cut to %d bytes on both" % bz if keep is not None and bz < len(data)
                     else "kept whole" if bz == len(data) else "cut to %d bytes by BendKV, %d by Redis" % (bz, rz)))
     print("ALL OK" if ok else "SOME CHECKS FAILED")
     return ok
