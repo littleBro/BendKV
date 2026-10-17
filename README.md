@@ -3,7 +3,7 @@
 A Redis-compatible key-value server written in [Bend2](https://github.com/bendlang/bend),
 whose core is formally verified: the command semantics, the hash trie behind them, the
 append-only file, the databases, the connection state and the configuration are proved
-against 67 laws,
+against 68 laws,
 checked by Bend
 and rechecked by the BendTT kernel, whose soundness is proved in Lean.
 
@@ -16,11 +16,11 @@ throughput of Redis 7.0.15 on the same machine, with half its memory for small v
 > lists, sets, sorted sets, HyperLogLogs, GEO and their times to live, DUMP and RESTORE, the
 > blocking commands, transactions, pub/sub and keyspace notifications, the keyspace, several databases,
 > connection commands, CLIENT LIST, INFO, KILL, PAUSE and UNPAUSE, MONITOR, the slow log
-> and the latency monitor, ACL users, the server's administrative commands, an append-only file and
-> its rewrite, maxmemory and its eviction, RESP3). The goal now is a
-> drop-in replacement for a single Redis node, measured by Redis's own test suite: of the
-> 1,677 tests Redis 7.0.15 passes against a server it did not start, BendKV passes 1,305,
-> and 1,302 of the 1,365 in what it implements
+> and the latency monitor, ACL users, the server's administrative commands, an
+> append-only file and its rewrite, maxmemory and its eviction, Lua scripts and
+> functions, RESP3). The goal now is a drop-in replacement for a single Redis node,
+> measured by Redis's own test suite: of the 1,677 tests Redis 7.0.15 passes against a
+> server it did not start, BendKV passes 1,556, and 1,516 of the 1,565 in what it implements
 > ([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)). Do not use it for data you cannot
 > lose.
 
@@ -43,9 +43,10 @@ AddressSanitizer check the heap).
 
 ## What is proved
 
-The laws are stated by hand in [`proof/LAWS.bend`](proof/LAWS.bend) and proved in
-[`proof/PROOF.bend`](proof/PROOF.bend). A database is a record: the trie, whose
-entries hold each key's value (a string, or a collection) and the time it expires at; how many keys it holds (which
+The laws are stated in [`proof/LAWS.bend`](proof/LAWS.bend), where a human approves
+every change, and proved in [`proof/PROOF.bend`](proof/PROOF.bend). A database is a
+record: the trie, whose entries hold each key's value (a string, or a collection) and
+the time it expires at; how many keys it holds (which
 DBSIZE answers) and how many of them have a time; and the time its batch runs at. The
 server holds several (16, as Redis), with the one a connection selected in focus while
 its batch runs. A key whose time has passed is there for no command. The laws about what keys read and what
@@ -60,7 +61,7 @@ counts are proved to be the trie's own.
 | Keys | 2 | key comparison is exactly string equality, down to the bits of `U32` |
 | Commands | 24 | no command changes a key it does not write, neither its value nor its time (`frame`); reads keep the database (the commands of hashes, lists, sets and sorted sets, PFADD, PFCOUNT of one key and PFDEBUG are reads and updates of their key, LMOVE, LMPOP, SMOVE, ZMPOP and the operations of several sets and sorted sets of their keys, so these laws and those below hold of them); a key whose time has passed is there for no command, and the sweep of expired keys deletes no key that is there; GET, DEL, APPEND, SETRANGE, SETNX, INCR, GETDEL, PERSIST, PTTL, SET with KEEPTTL, RENAME, MSETNX and BITOP behave as specified, on keys of the types they take (SET, SETNX, the times and the key commands take any), a key they add counted; a pipelined batch runs exactly as its commands in order; the cache hints before a batch change nothing |
 | Commuting | 5 | commands on different keys commute: replies and key contents are the same in either order, and adjacent independent commands in a batch can be swapped, when neither writes a key the other's writes depend on (RENAME moves a value from one key to another, MSETNX sets its keys only when none is there, BITOP sets its destination from its sources, LMOVE pushes onto its destination what it pops from its source, LMPOP pops from the first of its keys that is there, a STORE of a set operation sets its destination to what its sources make, SMOVE moves a member from its source to its destination, a STORE of a sorted-set operation or of a range sets its destination to what its sources or its source make, ZMPOP pops from the first of its keys that is there); SORT, whose patterns may read any key, swaps with reads alone |
-| Persistence | 9 | logging changes no reply; the file reads back as written, times included; after any history, each batch at its own time, on any of the databases, the server restores exactly the databases it held; a file cut by a crash at any byte restores the databases after some prefix of its acts in which every transaction is whole, never a partial act or transaction; the start's replay, which first checks that each entry replays as written, is that replay whenever the check refuses none |
+| Persistence | 10 | logging changes no reply; the file reads back as written, times included; after any history, each batch at its own time, on any of the databases, the server restores exactly the databases it held; a file cut by a crash at any byte restores the databases after some prefix of its acts in which every transaction is whole, never a partial act or transaction; the start's replay, which first checks that each entry replays as written, is that replay whenever the check refuses none; the start, which reads its file a window at a time, makes of any windows what it makes of the whole file |
 | Databases | 6 | SELECT changes no database and focuses the one it names; SWAPDB puts each of two databases in the other's place; FLUSHALL empties them all; MOVE takes a key's entry, its value and its time, out of the selected database and sets it in the other; COPY sets a key's entry at another key, in the selected database or another, when that key is not there or REPLACE is given |
 | Key count | 2 | after any history, the counts every database keeps are its trie's own, how many keys it holds and how many of them have a time, and its trie holds each key once; so DBSIZE answers the number of keys in its trie |
 | Sessions | 5 | however the server dispatches a batch, it runs as its commands in order; a batch changes the databases and the log as its executed commands do; a client that has not authenticated against a password cannot read or change any key |
@@ -77,7 +78,11 @@ in about a minute.
 `src/command.bend`), the doubles in software (`src/float.bend`, tested against glibc as
 well), what HyperLogLogs, GEO and LOLWUT compute (`src/hll.bend`, `src/geo.bend`,
 `src/lolwut.bend`) and DUMP's payloads (`src/rdb.bend`), all tested against
-`redis-server`; clang, libc and the OS. This is not
+`redis-server`; the Lua engine of scripts: Redis 7.0.15's own Lua 5.1.5 and its libraries
+(`deps/redis`, C, as Redis ships them but for their casts of numbers to integers, which
+give Redis's results defined in C, two fixes of CVEs that the reference carries, and Redis 7.2's test of a table's index, defined in C: NOTICE) and the glue that drives it (`src/lua/engine.c`,
+ported from Redis's `script_lua.c`, `eval.c` and `script.c`, behind the effects of
+`src/script.bend`); clang, libc and the OS. This is not
 end-to-end verification in the sense of CompCert or seL4; see
 [docs/FINDINGS.md](docs/FINDINGS.md), section 1.
 
@@ -141,8 +146,9 @@ translation stays in the trusted base.
   HINCRBYFLOAT as the HSET of the sum); a hash made where a key whose time had passed still lay is logged as
   one EVAL of a fixed script that deletes the key and sets the pairs, which Redis runs as
   it loads the file and BendKV reads back (Redis itself logs a MULTI with a DEL and the
-  HSET, two entries a crash could part). BendKV runs no other Lua but the like scripts of
-  lists, sets and sorted sets, below.
+  HSET, two entries a crash could part). BendKV's parser reads this script, and the like
+  scripts of lists, sets and sorted sets below, as the commands they stand for; any other
+  script runs on the engine (Scripts, below).
 - **Lists:** LPUSH, RPUSH, LPUSHX, RPUSHX, LPOP and RPOP (with a count), LLEN, LINDEX,
   LRANGE, LSET, LINSERT, LREM, LTRIM, LPOS (RANK, COUNT, MAXLEN, read as Redis 7.0.15
   reads them, a RANK of LLONG_MIN included), LMOVE, RPOPLPUSH and LMPOP, their arguments
@@ -166,10 +172,13 @@ translation stays in the trusted base.
   random numbers in Redis's ways of picking), SMOVE, SINTER, SUNION, SDIFF, SINTERSTORE,
   SUNIONSTORE, SDIFFSTORE and SINTERCARD (LIMIT), their arguments and errors read where
   and as Redis reads them. A set is an intset while its members are canonical 64-bit
-  integers, at most 512 of them, and a trie of its own past that, for good, as Redis
-  turns an intset into a hashtable: an intset answers its members in numeric order and
-  scans whole with cursor 0, as Redis's does. OBJECT ENCODING answers `intset` or
-  `hashtable`, MEMORY USAGE estimates a set's bytes, and a key never holds an empty set.
+  integers, at most 512 of them, and a hashtable past that, for good, as Redis turns an
+  intset into a hashtable: an intset answers its members in numeric order and scans
+  whole with cursor 0, as Redis's does. A hashtable keeps its members in one string, in
+  the order they came, while it holds at most 128 of at most 64 bytes (Redis 7.2's
+  listpack limits), and in a trie of its own past that, for good. OBJECT ENCODING
+  answers `intset` or `hashtable`, MEMORY USAGE estimates a set's bytes, and a key never
+  holds an empty set.
   A set write is logged as the SADD or SREM it makes (SPOP as the SREM of the members it
   took, or the DEL of the key when it took the last; a STORE as the SADD of the members
   it made, or the DEL of its destination when there are none); a set made where a key
@@ -271,10 +280,11 @@ translation stays in the trusted base.
   `sanitize-dump-payload yes`, and takes REPLACE, ABSTTL, IDLETIME and FREQ, with
   Redis's errors in Redis's order and its keyspace events. The append-only file logs a
   RESTORE with REPLACE and ABSTTL. Where BendKV differs: DUMP writes no LZF; a hashtable's
-  pairs or members come in the order of BendKV's trie; RESTORE checks every payload in
-  depth, as Redis does only with `sanitize-dump-payload yes`. A value of 100,000 elements
-  takes 3 to 38 times Redis's time to dump or restore, less than the commands that make
-  it (section 3zzu of [docs/FINDINGS.md](docs/FINDINGS.md), section 62 of
+  pairs or members come in BendKV's order (its trie's, or a small set's own, the order its
+  members came in); RESTORE checks every payload in depth, as Redis does only with
+  `sanitize-dump-payload yes`. A value of 100,000 elements takes 3 to 38 times Redis's
+  time to dump or restore, less than the commands that make it (section 3zzu of
+  [docs/FINDINGS.md](docs/FINDINGS.md), section 62 of
   [docs/PERFORMANCE.md](docs/PERFORMANCE.md)).
 - **Streams:** a stream as Redis 7.0.15 keeps one, its entries in nodes that are
   Redis's listpacks byte for byte, its groups with their pending entries and their
@@ -287,20 +297,30 @@ translation stays in the trusted base.
   out), with COUNT; XREAD of one key or several, with COUNT and `$`, and with BLOCK when
   an entry is there to serve; XINFO STREAM (FULL, with COUNT), GROUPS, CONSUMERS and
   HELP, their lag, entries read and count of the radix tree's nodes as Redis counts
-  them; XPENDING, its summary and its entries (IDLE, a consumer). The commands that
-  write one (XADD, XDEL, XTRIM, XSETID, XGROUP, XREADGROUP, XACK, XCLAIM, XAUTOCLAIM)
-  are not there yet. Where BendKV differs: XREAD with BLOCK answers an error where
-  Redis would make its client wait (in MULTI, where Redis does not wait, it answers a
-  null array, as Redis does); RESTORE and the start refuse payloads Redis takes but
-  never writes (a node with no entry, or whose counts or master entry are not its
+  them; XPENDING, its summary and its entries (IDLE, a consumer). XADD, XTRIM, XDEL and
+  XSETID write one as Redis does, node for node and byte for byte: XADD with an ID,
+  `<ms>-*` or `*`, NOMKSTREAM, MAXLEN and MINID with `=` or `~` and LIMIT, XSETID with
+  ENTRIESADDED and MAXDELETEDID, their errors in Redis's order and their keyspace
+  events; the append-only file logs each as the write it made (XADD with the ID it
+  added, a trim by `~` as the exact trim it made), which Redis loads too. The commands
+  of groups (XGROUP, XREADGROUP, XACK, XCLAIM, XAUTOCLAIM) are not there yet. Where
+  BendKV differs: XREAD with BLOCK answers an error where Redis would make its client
+  wait (in MULTI, where Redis does not wait, it answers a null array, as Redis does);
+  RESTORE and the start refuse payloads Redis takes but never writes (a node with no
+  entry, or whose counts or master entry are not its
   entries', live entries out of order, a pending entry no consumer holds or two hold,
   a time past 2^47, ...); the rewrite of the append-only file writes a stream as a
   RESTORE of its payload, where Redis writes XADD, XSETID, XGROUP and XCLAIM; MEMORY
-  USAGE estimates otherwise (sections 3zzzu and 3zzzy of
-  [docs/FINDINGS.md](docs/FINDINGS.md)); XINFO STREAM takes time with the stream's
-  nodes, as it counts the radix tree's nodes where Redis keeps the count, and the
-  ranges take 3 to 7 times Redis's time (section 82 of
-  [docs/PERFORMANCE.md](docs/PERFORMANCE.md)).
+  USAGE estimates otherwise; a node is full at Redis's defaults, 4096 bytes or 100
+  entries, whatever `stream-node-max-bytes` and `stream-node-max-entries` say; an XADD
+  whose fields and values pass 1 GiB leaves no key where there was none, where Redis
+  leaves an empty stream; a trim by `~` takes out the nodes Redis's takes out but in
+  two rare cases, where the stream is what a Redis replica holds; the start refuses a
+  Redis file that holds a trim by `~` with LIMIT, which Redis writes as `=` with LIMIT
+  (sections 3zzzu, 3zzzy and 3zzzza of [docs/FINDINGS.md](docs/FINDINGS.md)); XINFO
+  STREAM takes time with the stream's nodes, as it counts the radix tree's nodes where
+  Redis keeps the count, the ranges take 3 to 7 times Redis's time, and the writes 3 to
+  12 times (sections 82 and 84 of [docs/PERFORMANCE.md](docs/PERFORMANCE.md)).
 - **Clients that wait:** BLPOP, BRPOP, BLMOVE, BRPOPLPUSH, BLMPOP, BZPOPMIN, BZPOPMAX
   and BZMPOP, their timeouts (seconds, a double; 0 waits for ever) read as Redis reads
   them, with its errors. A command that finds nothing to pop makes its client wait, and
@@ -380,9 +400,8 @@ translation stays in the trusted base.
   with AUTH and SETNAME), AUTH (a password, or a user and its password), SELECT, QUIT,
   RESET (which selects database 0 again, RESP2 and the default user),
   CLIENT (ID, GETNAME, SETNAME, REPLY ON/OFF/SKIP, NO-EVICT, TRACKING, CACHING, GETREDIR,
-  TRACKINGINFO, UNBLOCK (TIMEOUT or ERROR), LIST, INFO, KILL, PAUSE, UNPAUSE, HELP),
-  FUNCTION FLUSH. A client
-  must authenticate where Redis asks it to: once a command's name and number of arguments
+  TRACKINGINFO, UNBLOCK (TIMEOUT or ERROR), LIST, INFO, KILL, PAUSE, UNPAUSE, HELP). A
+  client must authenticate where Redis asks it to: once a command's name and number of arguments
   are checked, before it runs (a syntax error is NOAUTH for a client that has not
   authenticated); a client is authenticated as it connects, and at RESET, when the
   default user is on and takes no password then, and by AUTH and HELLO's AUTH, and
@@ -405,6 +424,52 @@ translation stays in the trusted base.
   from the client's last batch, where Redis also counts a reply written (to a subscriber
   that gets messages, to a client that waited); user is the client's (ACL), redir the
   client its invalidations go to (0 itself, -1 when it does not track), resp 2 or 3.
+- **Scripts:** EVAL, EVALSHA, EVAL_RO, EVALSHA_RO and SCRIPT (LOAD, EXISTS, FLUSH, KILL,
+  HELP), on Redis 7.0.15's own Lua (its sandbox, `redis.call`, `redis.pcall` and the rest
+  of its API, cjson, cmsgpack, struct, bit, the shebang and its flags, `redis.setresp`,
+  Redis's random numbers), driven a step at a time from the actor: a script's calls run as
+  a client's commands run (their statistics, MONITOR's lines, keyspace events, the keys
+  they touch for WATCH), refused as Redis refuses them from a script, and its writes are
+  logged to the append-only file as one transaction; scripts in MULTI and EXEC; replies and
+  errors byte for byte as Redis's, in RESP2 and RESP3. Past `lua-time-limit` every other
+  client is answered BUSY but for the commands Redis lets run then; SCRIPT KILL ends a
+  script that has not written (UNKILLABLE otherwise), and SHUTDOWN NOSAVE stops the server.
+  With CLIENT TRACKING a script's calls are its caller's, as in Redis: the caller's own
+  invalidations come after the script's reply, and a read remembers the KEYS the script
+  declared. With ACL a script's calls are checked with its caller's user, as in Redis, a
+  call refused going to ACL LOG in context lua, and `redis.acl_check_cmd` answers by
+  that user's rules. Where BendKV differs: a script runs once the group of requests that brought it has run
+  (no client can tell the order of requests that came together), SCRIPT DEBUG is not
+  there, the five fixed scripts of the file are read as commands, and
+  `redis.acl_check_cmd` of a command with a number of arguments its arity does not allow
+  answers true (FINDINGS.md, section 3zzzd).
+- **Functions:** FUNCTION (LOAD, DELETE, FLUSH, LIST, STATS, KILL, DUMP, RESTORE, HELP),
+  FCALL and FCALL_RO, on the same engine, as Redis 7.0.15 runs them:
+  - **Libraries.** They are loaded as Redis loads them: the `#!lua name=` line, and
+    `redis.register_function` with its positional and named arguments and its flags,
+    with Redis's errors for each. The library API holds at load time, the globals are
+    protected, and a load past 500 ms fails.
+  - **Running.** A function runs as a script runs: its calls (with ACL, checked with
+    its caller's user), BUSY past `busy-reply-threshold`, FUNCTION KILL, and FUNCTION
+    STATS while it runs. FCALL_RO refuses a function that may write.
+  - **DUMP and RESTORE.** FUNCTION DUMP writes the libraries in Redis's payload, without
+    LZF, as DUMP does. FUNCTION RESTORE reads Redis's payloads, with LZF and the records
+    of 7.0's release candidates, with APPEND, REPLACE and FLUSH.
+  - **Persistence.** The libraries go to the append-only file as the FUNCTION commands
+    that made them. A rewrite starts with the FUNCTION LOAD of each, SAVE writes them
+    into the RDB file, and the start makes them from either file, as Redis does. INFO's
+    memory section shows them.
+
+  Where BendKV differs:
+  - FUNCTION LIST and DUMP give the libraries in the order they were loaded, and a
+    library's functions in the order they were registered. Redis's order follows its
+    dictionaries' hashes, seeded at random at each start, and so does the function
+    that a load's error names when more than one of the library's is there already.
+  - A FUNCTION command in a transaction is written to the append-only file before the
+    transaction, not inside it.
+  - INFO's `used_memory_vm_functions` is 0 until the first load, where Redis makes an
+    empty Lua state at its start. It counts the functions' memory as of the last change
+    of the libraries (FINDINGS.md, section 3zzzp).
 - **ACL:** users as Redis 7.0.15 keeps them (ACL SETUSER with selectors, key patterns
   with what each may do, channels, passwords as SHA-256, and Redis's errors; GETUSER,
   LIST, USERS, WHOAMI, CAT, DELUSER, DRYRUN, GENPASS, LOG, HELP), AUTH and HELLO's AUTH
@@ -427,16 +492,18 @@ translation stays in the trusted base.
   rest of its client's batch (CLIENT LIST's flag b, INFO's blocked_clients) and runs when
   the pause ends, at CLIENT UNPAUSE or at its time, in the order the clients came; a
   monitor is never held back. While the pause holds, keys are not swept as they expire,
-  nor evicted, as Redis keeps the data set still. Where BendKV differs: CLIENT UNBLOCK of
-  a client held back answers 0 (Redis 7.0.15 crashes on it), and EVAL of a script BendKV
-  does not run is answered at once (FINDINGS.md, section 3zzk).
+  nor evicted, as Redis keeps the data set still. A script is held back by its flags, as
+  Redis reads them: one that may write (EVAL without a shebang, EVALSHA, a shebang without
+  no-writes), not one that declares no-writes, and an EXEC by the scripts it queued. Where BendKV differs: CLIENT UNBLOCK of a
+  client held back answers 0 (Redis 7.0.15 crashes on it) (FINDINGS.md, section 3zzk).
 - **MONITOR**, as Redis 7.0.15 runs it: each call that runs after it, of any client,
   sends every monitor a line, `+<s>.<us> [<db> <ip:port>]` and the call's arguments as
   the client sent them, quoted as Redis quotes them. As in Redis, a command refused
   before it runs (unknown, the wrong number of arguments, before AUTH, to a subscribed
   client) sends no line, nor do the administrative commands (CONFIG, CLIENT LIST, KILL,
-  NO-EVICT and UNBLOCK) and EVAL; a queued command sends its line as EXEC runs it, a
-  blocking command as it blocks, and AUTH's password and HELLO's user and password are
+  NO-EVICT and UNBLOCK); EVAL and its kin send theirs before their script runs, and each
+  call of the script its own, from `[<db> lua]`; a queued command sends its line as EXEC
+  runs it, a blocking command as it blocks, and AUTH's password and HELLO's user and password are
   `"(redacted)"`. A monitor is refused the commands that read or write keys ("ERR Replica
   can't interact with the keyspace"), gets its own line after its reply and no line with
   CLIENT REPLY OFF or SKIP; RESET, QUIT and CLIENT KILL end it, and CLIENT LIST shows it
@@ -521,8 +588,9 @@ translation stays in the trusted base.
   process, its parameters, its connections, commands and bytes (with the instantaneous
   rates sampled every 100 ms, as Redis's cron samples them), its memory (`used_memory` is
   what its heap's live values hold, as Redis's is what its allocator handed out; Memory,
-  below), its keys, its evictions, its append-only file; for what BendKV does not have
-  (replication, forks, scripts) they are what Redis shows when it has none. The
+  below), its keys, its evictions, its append-only file, its scripts and functions (the
+  engine's memory, the scripts cached, the functions and libraries); for what BendKV does
+  not have (replication, forks) they are what Redis shows when it has none. The
   statistics per command count as Redis counts them: each command's and subcommand's
   calls, the calls refused before they run (a wrong number of arguments by Redis's arity,
   a client that must authenticate first, a command refused for memory) and the calls
@@ -570,16 +638,20 @@ translation stays in the trusted base.
   `-` for the standard input, read line by line as Redis reads them (includes, `dir`
   changing the directory at once, save points that add up, the same errors at the same
   lines), and a log in Redis's form, on the standard output or in `logfile`. The port,
-  `bind` (IPv4), `requirepass`, `protected-mode`, the append-only file (`appendonly`,
-  `appendfilename`, `appendfsync`, `aof-load-truncated`), `logfile`, `loglevel` and
-  `pidfile` act. With `appendonly no` the RDB file (`dbfilename` in `dir`) is loaded
-  when it is there, as Redis loads it, with its log's lines; a file that does not load
-  stops the start with Redis's reason. With `appendonly yes` the append-only file is
-  loaded and the RDB file left aside, as in Redis. What BendKV cannot do (modules, ACL
-  users from the configuration or a file, renamed commands, the background, a cluster, a
-  replica, TLS, a supervisor to signal, Redis 7's multi-part append-only file, or an RDB
-  file that holds a module's data or functions, to load) stops the start with a line
-  saying so.
+  `bind` (IPv4 and IPv6, each IPv6 socket IPv6 alone, as Redis binds them),
+  `unixsocket` and `unixsocketperm`, `requirepass`, `protected-mode`, `supervised`
+  (systemd is told the server loads, is ready and stops, as Redis's sd_notify tells it),
+  the append-only file (`appendonly`, `appendfilename`, `appendfsync`,
+  `aof-load-truncated`), `logfile`, `loglevel` and `pidfile` act. A unix socket's client
+  is named as Redis names it: its path and port 0 in CLIENT LIST, with the flag U, and
+  unix:path in a monitor's lines. With `appendonly no` the RDB file (`dbfilename` in
+  `dir`) is loaded when it is there, as Redis loads it, with its log's lines; a file that
+  does not load stops the start with Redis's reason. With `appendonly yes` the
+  append-only file is loaded and the RDB file left aside, as in Redis. What BendKV cannot
+  do (modules, ACL users from the configuration or a file, renamed commands, the
+  background without a supervisor, a cluster, a replica, TLS, upstart's supervision,
+  Redis 7's multi-part append-only file, or an RDB file that holds a module's data, to
+  load) stops the start with a line saying so.
 - **Protocol:** pipelining, partial packets, inline commands with quoting,
   binary-safe values; requests framed as Redis 7.0.15 frames them (a length as `string2ll`
   reads it, with no `0` before its first digit, a count of 0 or less skipped down to
@@ -601,20 +673,27 @@ translation stays in the trusted base.
   whole entry at any size; a file that ends inside a transaction (a crash cut it as it
   was written) has the transaction reverted and is cut back to before its MULTI, as Redis
   does ("Revert incomplete MULTI/EXEC transaction"; with `aof-load-truncated no` both stop
-  the start instead). A file with an entry the start cannot replay as it was written (an
+  the start instead). Where BendKV differs: a file that ends inside a transaction, then in
+  an entry cut short, BendKV cuts back to before the MULTI, where Redis cuts it after the
+  transaction's last whole entry and leaves the MULTI and the entries it queued for its
+  next start to revert; the databases are the same. The start reads the file a window
+  at a time (1 MiB, or as long as an entry that runs past the window), so that what it
+  holds at once is a window, a transaction until its EXEC and the databases it builds,
+  not the whole file (section 3zzzg of [docs/FINDINGS.md](docs/FINDINGS.md)). A file
+  with an entry the start cannot replay as it was written (an
   unknown command, a wrong number of arguments, an argument that does not read, a
   database not there, a MULTI inside another, an EXEC without one) stops the start,
   naming the entry and the byte it starts at, the file left as it was, where Redis stops
   at an unknown command. BGREWRITEAOF, and the cron's rewrites as the file grows
   (`auto-aof-rewrite-percentage`, `auto-aof-rewrite-min-size`), write the file again
-  as Redis writes its base: the commands that make the databases as they are when it
-  starts, then the entries appended meanwhile, into a temporary file renamed onto the
-  file; without a fork, the databases being values, a slice at a time between the
-  groups of requests the server answers meanwhile; with INFO's fields of a rewrite
-  (FINDINGS.md, section 3zv). The RDB file as Redis 7.0.15 writes it (`REDIS0010` and
-  its AUX fields, each database's SELECTDB and RESIZEDB, each key's EXPIRETIME_MS and
-  value as DUMP writes it, EOF and the CRC64, or eight zero bytes with `rdbchecksum
-  no`): SAVE writes it into `temp-<pid>.rdb`, syncs it, renames it onto `dbfilename` and
+  as Redis writes its base: the FUNCTION LOAD of each library, the commands that make the
+  databases as they are when it starts, then the entries appended meanwhile, into a
+  temporary file renamed onto the file; without a fork, the databases being values, a
+  slice at a time between the groups of requests the server answers meanwhile; with
+  INFO's fields of a rewrite (FINDINGS.md, section 3zv). The RDB file as Redis 7.0.15
+  writes it (`REDIS0010` and its AUX fields, the libraries of functions, each database's
+  SELECTDB and RESIZEDB, each key's EXPIRETIME_MS and value as DUMP writes it, EOF and
+  the CRC64, or eight zero bytes with `rdbchecksum no`): SAVE writes it into `temp-<pid>.rdb`, syncs it, renames it onto `dbfilename` and
   syncs the directory, as Redis's `rdbSave` does, with its replies and log lines;
   SHUTDOWN saves it (above), and FLUSHALL with save points saves the emptied databases,
   as Redis 7.0's does; BGSAVE [SCHEDULE] writes it in the background from a snapshot of
@@ -632,7 +711,8 @@ translation stays in the trusted base.
   them, for the save points; LASTSAVE and INFO's `rdb_last_save_time`, `rdb_saves`,
   `rdb_last_bgsave_status` and `rdb_last_load_keys_loaded` and `_expired` follow it
   (FINDINGS.md, section 3zzzk). The start reads every version from 1 to 10, every
-  encoding Redis 7.0.15 reads but a module's, AUX fields it does not know, and drops
+  encoding Redis 7.0.15 reads but a module's, the libraries of functions (and those of
+  7.0's release candidates), AUX fields it does not know, and drops
   the keys whose time has passed, counting them; it reads the file a window at a time
   (1 MiB, or as long as a value that runs past the window), so that
   what it holds at once is a window and the databases it builds (FINDINGS.md, section
@@ -663,8 +743,7 @@ translation stays in the trusted base.
   background save takes longer than Redis's, and so does the start from a large file
   (PERFORMANCE.md, sections 72 and 78; FINDINGS.md, sections 3zzzk and 3zzzt).
 
-Not yet: the commands that write a stream and XREAD's wait, Lua
-scripts, CONFIG REWRITE (it answers as Redis does without a configuration file).
+Not yet: the commands of a stream's groups and XREAD's wait, CONFIG REWRITE (it answers as Redis does without a configuration file).
 Times in ms are limited to 14 digits.
 
 ## Performance
@@ -680,7 +759,9 @@ VM (medians over 8–13 interleaved pairs):
 
 With Redis's own benchmark specs run by `memtier_benchmark`, BendKV reaches 1.26–1.39×
 Redis. Without pipelining both are bound by network latency and stay within noise of each
-other. About 950 thousand keys with 3-byte values take 60 MB RSS against Redis's 121 MB.
+other. Lua scripts are the exception: pipelined, a script costs BendKV's actor several
+times Redis's work (section 68 of [docs/PERFORMANCE.md](docs/PERFORMANCE.md)). About 950
+thousand keys with 3-byte values take 60 MB RSS against Redis's 121 MB.
 The full record, with every measurement and method, is in
 [docs/PERFORMANCE.md](docs/PERFORMANCE.md) and
 [docs/FINDINGS.md](docs/FINDINGS.md).
@@ -716,7 +797,7 @@ loads no RDB file.
 
 ```bash
 make smoke     BEND="$B"   # the pure path end to end and the append-only file, no network; fails on any mismatch
-make test      BEND="$B"   # needs redis-server, redis-cli and a C compiler
+make test      BEND="$B"   # needs redis-server, redis-cli, redis-benchmark and a C compiler
 make perfcheck BEND="$B"   # instructions, misses and prefetches per request against a baseline (needs valgrind)
 make gencheck              # the generated parts (trie, its proofs, the parameter and command tables, the counts) are up to date
 make bench     BEND="$B"   # redis-benchmark: BendKV against Redis
@@ -757,7 +838,8 @@ after it compared), hashes (each command at its edges, past a listpack's limits,
 whose time has passed, and at random, the fields of a hashtable compared as sets), lists
 (each command at its edges, lists of up to 20,000 elements, moves onto keys whose time
 has passed, and at random, with moves between a few keys), sets (each command at its
-edges, intsets on both sides of 512 members and hashtables of up to 20,000, moves and
+edges, intsets on both sides of 512 members, small sets on both sides of 128 members of
+64 bytes and hashtables of up to 20,000, moves and
 STOREs onto keys whose time has passed, and at random, the members of a hashtable
 compared as sets and each random pick checked against the set it came from), sorted sets
 (each command at its edges, sorted sets of up to 20,000 elements on both sides of a
@@ -778,7 +860,11 @@ RESTORE's options, errors, times and keyspace events, IDLETIME and FREQ), stream
 (`tests/stream_dump_test.py`: streams of 27 shapes Redis made, restored and dumped back
 byte for byte, and 2,000 payloads changed at random; `tests/stream_read_test.py`: the
 reads of those streams, each reply compared whole in RESP2 and RESP3, over the
-streams' IDs, their neighbours and the edges, counts, groups, consumers and errors),
+streams' IDs, their neighbours and the edges, counts, groups, consumers and errors;
+`tests/stream_write_test.py`: random XADD, XTRIM, XDEL and XSETID, each reply compared
+and each stream's DUMP and XINFO after each write, the errors, the events, WATCH and
+MULTI; `tests/stream_aof_test.py`: the writes in both servers' append-only files, each
+server started from its own and from the other's),
 robustness and concurrency checks, a client that stops reading while the others are
 served (`tests/writer_test.py`), clients that wait (`tests/blocking_test.py`: 18 scenarios
 of the blocking commands on BendKV and on Redis, their transcripts compared line by line,
@@ -800,7 +886,12 @@ with their time and address put aside, then 4 monitors that each get every line 
 clients that pipeline 200 SETs each, each client's lines in order), CLIENT PAUSE and
 UNPAUSE (`tests/pause_test.py`: scenarios on BendKV and on Redis of what a pause holds
 back and lets run, its end and the order the clients go on in, their transcripts compared
-line by line, then 100 clients held back and let go in order), the administrative
+line by line, then 100 clients held back and let go in order), Lua scripts
+(`tests/script_test.py`: scenarios on BendKV and on Redis of EVAL's replies in RESP2 and
+RESP3, `redis.call` and `redis.pcall`, errors, the script cache, the libraries, scripts in
+transactions and with WATCH, the statistics, a script past `lua-time-limit`, its BUSY
+and SCRIPT KILL, the slow log and the latency monitor of scripts, scripts in pipelines,
+and scripts under a pause, compared byte for byte), the administrative
 commands (`tests/admin_test.py`: LASTSAVE, ROLE, WAIT, MEMORY, LOLWUT's drawings byte for
 byte and SHUTDOWN's errors on BendKV and on Redis, then SHUTDOWN on servers of their own,
 the append-only file and the pid file after it, and a SHUTDOWN while a rewrite runs), AUTH
@@ -817,7 +908,10 @@ connections that end every way one can, many times
 (the client closing or resetting, QUIT, a protocol error), on a BendKV of their own whose
 table of channels is read to show that each closed the channel it opened,
 restarts from the append-only file (every database read back, including after a
-truncated tail or a transaction left open), kills at random moments while clients write
+truncated tail or a transaction left open; files whose entries, transactions and values
+straddle the windows the start reads them in, started on by BendKV and by Redis alike,
+`tests/aof_window_test.py`; and the resident memory after a restart from a file of a
+million SETs, `tools/restore_mem.sh`), kills at random moments while clients write
 (`tests/crash_test.py`: rounds of a SIGKILL under load, some while a rewrite runs, some
 starts killed as they load the file, each start holding the databases after a prefix of
 the commands sent, every one acknowledged among them), disk failures
@@ -873,9 +967,12 @@ src/        the server
   sha.bend      SHA-256, as Redis keeps a password's               tested
   acl.bend      ACL users: rules, checks and the log, as Redis's   tested
   startup.bend  the command line and the configuration file        tested
+  script.bend   the effects of the Lua engine (src/lua/engine.c)   tested
   server.bend   TCP, connections, the database actor, the log      tested
+  lua/          the engine's C: Redis's Lua driven in steps         tested
+deps/redis/ Redis 7.0.15's Lua 5.1.5 with its libraries, and three of its helpers, as Redis ships them (NOTICE: their licenses, and the two changes)
 proof/      LAWS.bend (the laws), PROOF.bend (their proofs), SPEC.bend (the commands on the trie alone)
-tests/      smoke (the pure checks), float, start, differential, expiry, protocol, session, the end of a connection, CONFIG, INFO, statistics per command, COMMAND, SCAN, numbers at their edges, BITFIELD, hash, list, set, sorted set, SORT, HyperLogLog, GEO, DUMP and RESTORE, blocking, transaction, Pub/Sub, CLIENT, MONITOR, timing of calls, CLIENT PAUSE, administrative commands, AUTH, ACL, RESP3, maxmemory, robustness, stalled reader, concurrency, AOF, AOF crash, AOF rewrite and RDB file tests
+tests/      smoke (the pure checks), float, start, differential, expiry, protocol, session, the end of a connection, CONFIG, INFO, statistics per command, COMMAND, SCAN, numbers at their edges, BITFIELD, hash, list, set, sorted set, SORT, HyperLogLog, GEO, DUMP and RESTORE, blocking, transaction, Pub/Sub, CLIENT, MONITOR, timing of calls, CLIENT PAUSE, Lua scripts, administrative commands, AUTH, ACL, RESP3, maxmemory, robustness, stalled reader, concurrency, AOF, AOF crash, AOF rewrite and RDB file tests
 bench/      in-process benchmarks of the map, the core and channels, and `make bench` against Redis
 tools/      measurement scripts, the runners of Redis's test suite and of the client libraries'
             suites, and the generators of the trie, of the parameter table, of the command
@@ -895,21 +992,21 @@ away.
 <!-- BEGIN gen_counts: numbers -->
 | what | how many | counted in |
 |---|---:|---|
-| laws | 67 | `proof/LAWS.bend` (by group: [What is proved](#what-is-proved)) |
-| patches to the Bend compiler | 35 | `bend-patches/apply.sh` |
+| laws | 68 | `proof/LAWS.bend` (by group: [What is proved](#what-is-proved)) |
+| patches to the Bend compiler | 36 | `bend-patches/apply.sh` |
 | constructors of `Cmd`, a parsed command | 30 | `src/redis.bend` |
 | Redis 7.0.15's parameters, all of which CONFIG serves | 178 | `tools/data/redis-configs.json` |
 
 | file | lines of code | of them written by a generator | the laws import it |
 |---|---:|---:|---|
-| `src/map.bend` | 3,900 | 1,200 | yes |
-| `src/redis.bend` | 18,000 | 7,300 | yes |
+| `src/map.bend` | 5,000 | 1,500 | yes |
+| `src/redis.bend` | 18,000 | 6,000 | yes |
 | `src/batch.bend` | 84 |  | yes |
-| `src/aof.bend` | 1,200 |  | yes |
-| `src/session.bend` | 2,700 |  | yes |
+| `src/aof.bend` | 1,300 |  | yes |
+| `src/session.bend` | 3,000 |  | yes |
 | `src/config.bend` | 1,200 | 180 | yes |
-| `src/acl.bend` | 2,100 | 600 | no |
-| `src/command.bend` | 2,500 | 1,900 | no |
+| `src/acl.bend` | 2,200 | 670 | no |
+| `src/command.bend` | 2,800 | 2,100 | no |
 | `src/float.bend` | 1,200 |  | no |
 | `src/geo.bend` | 870 |  | no |
 | `src/hll.bend` | 1,400 |  | no |
@@ -917,15 +1014,16 @@ away.
 | `src/lolwut.bend` | 470 |  | no |
 | `src/rdb.bend` | 3,100 |  | no |
 | `src/resp.bend` | 980 |  | no |
-| `src/server.bend` | 11,000 |  | no |
+| `src/script.bend` | 51 |  | no |
+| `src/server.bend` | 13,000 |  | no |
 | `src/sha.bend` | 120 |  | no |
 | `src/startup.bend` | 460 |  | no |
-| `src/stream.bend` | 600 |  | no |
+| `src/stream.bend` | 1,100 |  | no |
 | `proof/LAWS.bend` | 920 | 20 |  |
 | `proof/SPEC.bend` | 370 |  |  |
-| `proof/PROOF.bend` | 16,000 | 2,800 |  |
-| `src/`, the 6 files the laws import | 28,000 | 9,100 |  |
-| `src/`, the 13 others | 28,000 | 2,600 |  |
+| `proof/PROOF.bend` | 18,000 | 2,800 |  |
+| `src/`, the 6 files the laws import | 28,000 | 7,400 |  |
+| `src/`, the 14 others | 30,000 | 2,700 |  |
 | `proof/` | 18,000 | 2,800 |  |
 <!-- END gen_counts: numbers -->
 
@@ -957,4 +1055,5 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
-Not decided yet. Until a license is added, all rights are reserved by the authors.
+Not decided yet. Until a license is added, all rights are reserved by the authors. The
+third-party software in `deps/` keeps its own licenses ([NOTICE](NOTICE)).

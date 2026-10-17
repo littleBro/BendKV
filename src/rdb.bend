@@ -1303,8 +1303,10 @@ def is.read(+b: String) -> Maybe<&2, List<&2, String>>:
 # came as a listpack, ziplist or zipmap of at most 512 pairs (a zipmap's
 # fields and values of at most 64 bytes too), or as a hashtable of at
 # most 512 pairs of at most 64 bytes; a set an intset (MInts) when it
-# holds at most 512 members, all integers as Redis writes them; a sorted
-# set small (ZSmall) when it came as a listpack or ziplist of at most 128
+# holds at most 512 members, all integers as Redis writes them, else a
+# hashtable, small (MSmall or MLong, its members in the payload's order)
+# when it holds at most 128 members of at most 64 bytes; a sorted set
+# small (ZSmall) when it came as a listpack or ziplist of at most 128
 # elements, or as a skiplist of at most 128 whose members are of at most
 # 64 bytes. A collection with no element, or a member, field or element
 # of a sorted set twice, or a score that is no number (a NaN), is no
@@ -1331,14 +1333,6 @@ def mems.trie(xs: List<&2, String>, t: KV.Trie<Unit>) -> KV.Trie<Unit>:
     case Con{x, rest}:
       mems.trie(rest, KV.set(Unit, t, x, Unit{}))
 
-# the tree of the integers xs, each added in its place
-def ints.tree(xs: List<&2, String>, t: KV.ITree) -> KV.ITree:
-  match xs:
-    case Nil{}:
-      t
-    case Con{x, rest}:
-      ints.tree(rest, KV.ints.put(x, t))
-
 def all.ints(xs: List<&2, String>) -> Bool:
   match xs:
     case Nil{}:
@@ -1362,31 +1356,40 @@ def val.list(+xs: List<&2, String>) -> Maybe<&2, KV.Val>:
   +n = List.length(&2, String, xs)
   Bool.pick(Maybe<&2, KV.Val>, Nat.is_lt(0n, n), Some{KV.VColl{KV.CList{KV.deq.of(n, xs)}}}, None{})
 
-def val.set.of(ints: Bool, +n: Nat, xs: List<&2, String>, t: KV.Trie<Unit>) -> KV.Val:
-  match ints:
+# a hashtable of the n members xs (small: as a small one, in their order)
+def val.set.table(small: Bool, +n: Nat, xs: List<&2, String>, t: KV.Trie<Unit>) -> KV.Val:
+  match small:
     case True{}:
-      KV.VColl{KV.CMems{KV.MInts{n, ints.tree(xs, KV.ITip{})}}}
+      KV.VColl{KV.CMems{KV.ms.make(n, xs)}}
     case False{}:
       KV.VColl{KV.CMems{KV.MBig{n, t}}}
+
+def val.set.of(ints: Bool, +n: Nat, +xs: List<&2, String>, t: KV.Trie<Unit>) -> KV.Val:
+  match ints:
+    case True{}:
+      KV.VColl{KV.CMems{KV.MInts{n, KV.ints.of(xs, "", 0n)}}}
+    case False{}:
+      val.set.table(Bool.and(Nat.is_le(n, 128n), Bool.not(len.gt(xs, 64n))), n, xs, t)
 
 # a set of the n members xs, the trie of which finds a member twice
 def val.set.any(+n: Nat, +xs: List<&2, String>) -> Maybe<&2, KV.Val>:
   +t = mems.trie(xs, KV.empty(Unit))
   Bool.pick(Maybe<&2, KV.Val>, Bool.and(Nat.is_lt(0n, n), Nat.is_eq(KV.size(Unit, t), n)), Some{val.set.of(Bool.and(Nat.is_le(n, 512n), all.ints(xs)), n, xs, t)}, None{})
 
-def val.set.go(ints: Bool, +n: Nat, +xs: List<&2, String>) -> Maybe<&2, KV.Val>:
+def val.set.go(ints: Bool, +n: Nat, +xs: List<&2, String>, +b: String) -> Maybe<&2, KV.Val>:
   match ints:
     case True{}:
-      Some{KV.VColl{KV.CMems{KV.MInts{n, KV.ints.build(n, xs)}}}}
+      Some{KV.VColl{KV.CMems{KV.MInts{n, KV.pk.flat(String.drop(b, 8n), Nat.sub(String.length(b), 8n))}}}}
     case False{}:
       val.set.any(n, xs)
 
-# a set of the members xs (sorted: integers in increasing order, from an
-# intset, which are an intset at once when they are 512 at most: each is
-# there once, so no trie of them is made)
-def val.set(+sorted: Bool, +xs: List<&2, String>) -> Maybe<&2, KV.Val>:
+# a set of the members xs (sorted: integers in increasing order, from the
+# intset b, which are an intset at once when they are 512 at most, its
+# string as Redis wrote it, whatever its width: each is there once, so no
+# trie of them is made)
+def val.set(+sorted: Bool, +xs: List<&2, String>, +b: String) -> Maybe<&2, KV.Val>:
   +n = List.length(&2, String, xs)
-  val.set.go(Bool.and(sorted, Bool.and(Nat.is_lt(0n, n), Nat.is_le(n, 512n))), n, xs)
+  val.set.go(Bool.and(sorted, Bool.and(Nat.is_lt(0n, n), Nat.is_le(n, 512n))), n, xs, b)
 
 def zel.trie(es: List<&2, KV.ZEl>, t: KV.Trie<F.F64>) -> KV.Trie<F.F64>:
   match es:
@@ -2879,25 +2882,26 @@ def obj.list.b(m: Maybe<&2, List<&2, String>>, t: String) -> Vr:
     case None{}:
       VrBad{}
 
-def obj.set.of(+sorted: Bool, xs: List<&2, String>, t: String) -> Vr:
+def obj.set.of(+sorted: Bool, xs: List<&2, String>, +b: String, t: String) -> Vr:
   match xs:
     case Nil{}:
       VrEmpty{t}
     case Con{x, more}:
-      vr.of(val.set(sorted, x <> more), t)
+      vr.of(val.set(sorted, x <> more, b), t)
 
 def obj.set(m: Maybe<&1, List<&2, String> & String>) -> Vr:
   match m:
     case Some{p}:
       (xs, t) = p
-      obj.set.of(False{}, xs, t)
+      obj.set.of(False{}, xs, "", t)
     case None{}:
       VrBad{}
 
-def obj.set.b(m: Maybe<&2, List<&2, String>>, t: String) -> Vr:
+# the intset b, its members xs (is.read)
+def obj.set.b(m: Maybe<&2, List<&2, String>>, +b: String, t: String) -> Vr:
   match m:
     case Some{xs}:
-      obj.set.of(True{}, xs, t)
+      obj.set.of(True{}, xs, b, t)
     case None{}:
       VrBad{}
 
@@ -2975,7 +2979,7 @@ def obj.blob.of(k: Nat, +b: String, t: String) -> Vr:
     case 10n:
       obj.list.b(zl.read(b), t)
     case 11n:
-      obj.set.b(is.read(b), t)
+      obj.set.b(is.read(b), b, t)
     case 12n:
       obj.zlp(zl.read(b), t)
     case 13n:
@@ -3064,13 +3068,14 @@ def obj(+k: Nat, s: String) -> Maybe<&2, KV.Val>:
 # nodes RPUSH makes of its elements (at list-max-listpack-size -2: a node
 # takes an element while its listpack's bytes, the element's and 8 stay
 # within 8192), each packed (2) as a listpack; an intset (SET_INTSET) of
-# the narrowest width that holds its members, a large set as its count and
-# members (SET); a small sorted set as one listpack (ZSET_LISTPACK) of its
-# members and scores (a score as a listpack keeps it: F.f64.show_lp), a
-# large one as its count, then its members and their scores' bits from
-# the greatest down (ZSET_2). The value's type (rdbSaveObjectType) comes
-# before it: in a payload right before it (put.val), in a file before the
-# key (The file, below).
+# the narrowest width that holds its members, any other set as its count
+# and members (SET: Redis 7.0 has no listpack of a set, and cannot read
+# Redis 7.2's, SET_LISTPACK); a small sorted set as one listpack
+# (ZSET_LISTPACK) of its members and scores (a score as a listpack keeps
+# it: F.f64.show_lp), a large one as its count, then its members and
+# their scores' bits from the greatest down (ZSET_2). The value's type
+# (rdbSaveObjectType) comes before it: in a payload right before it
+# (put.val), in a file before the key (The file, below).
 
 def put.blob(+b: String, rest: String) -> String:
   len.put(String.length(b), b ++ rest)
@@ -3138,52 +3143,19 @@ def put.list(+d: KV.Deq, rest: String) -> String:
   +ns = ql.part(KV.deq.all(d), QlS{Nil{}, 0n, 7n, Nil{}})
   len.put(List.length(&2, List<&2, String>, ns), put.nodes(ns, rest))
 
-# Sets: an intset's width (2, 4 or 8 bytes) is the widest its members need
-def is.w.of(v: IV) -> Nat:
-  match v:
-    case IN{+neg, +m}:
-      +b = Bool.pick(Nat, neg, 1n, 0n)
-      Bool.pick(Nat, Nat.is_lt(m, Nat.add(32768n, b)), 2n, Bool.pick(Nat, Nat.is_lt(m, Nat.add(2147483648n, b)), 4n, 8n))
-    case _:
-      8n
-
-def is.w(xs: List<&2, String>, +w: Nat) -> Nat:
-  match xs:
-    case Nil{}:
-      w
-    case Con{+x, rest}:
-      is.w(rest, Nat.max(w, is.w.of(iv(x))))
-
-def is.put.of(w: Nat, v: IV, rest: String) -> String:
-  match w v:
-    case 2n IN{+neg, +m}:
-      le(2n, twos(neg, 65536n, m), rest)
-    case 4n IN{+neg, +m}:
-      le(4n, twos(neg, two32(), m), rest)
-    case _ IN{+neg, +m}:
-      q.le(q.of_nat(neg, m), rest)
-    case _ IQ{q}:
-      q.le(q, rest)
-    case _ INo{}:
-      le(8n, 0n, rest)
-
-def is.puts(+w: Nat, xs: List<&2, String>, rest: String) -> String:
-  match xs:
-    case Nil{}:
-      rest
-    case Con{+x, more}:
-      is.put.of(w, iv(x), is.puts(w, more, rest))
-
-def is.blob(+n: Nat, +xs: List<&2, String>) -> String:
-  +w = is.w(xs, 2n)
-  le(4n, w, le(4n, n, is.puts(w, xs, "")))
-
+# Sets: an intset as Redis writes one, its header (its members' width
+# and their count, 4 bytes each, the low first) before its string
+# (map.bend: the same bytes)
 def put.mems(m: KV.Mems, rest: String) -> String:
   match m:
-    case KV.MInts{+n, xs}:
-      put.blob(is.blob(n, KV.ints.list(xs)), rest)
+    case KV.MInts{+n, +b}:
+      put.blob(le(4n, KV.ints.w(b, n), le(4n, n, b)), rest)
     case KV.MBig{+n, +t}:
       len.put(n, put.strs(KV.keys(Unit, t, 0n), rest))
+    case KV.MSmall{+n, +b}:
+      len.put(n, put.strs(KV.ms.all(n, b), rest))
+    case KV.MLong{+n, +ps}:
+      len.put(n, put.strs(KV.ml.all(ps), rest))
 
 # Sorted sets
 def zel.words(es: List<&2, KV.ZEl>) -> List<&2, String>:
@@ -3357,6 +3329,10 @@ def put.mems.kind(+m: KV.Mems) -> U32:
       11
     case KV.MBig{n, t}:
       2
+    case KV.MSmall{n, b}:
+      2
+    case KV.MLong{n, ps}:
+      2
 
 def put.zset.kind(+z: KV.Zset) -> U32:
   match z:
@@ -3419,13 +3395,178 @@ def load(p: String) -> Maybe<&2, KV.Val>:
     case SNil{}:
       None{}
 
+# Libraries of functions
+# ----------------------
+# FUNCTION DUMP's payload and an RDB file hold each library of functions
+# as FUNCTION2 (245) and the library's code as a string (rdbSaveFunctions:
+# the code as FUNCTION LOAD took it, its "#!lua name=..." line first).
+# Redis 7.0's first release candidates wrote FUNCTION (246) and the
+# library's name, its engine's, a length (a description follows unless it
+# is 0) and the code without that line, which Redis 7.0.15 still reads
+# (rdbFunctionLoad): the code it makes of them is "#!<engine>
+# name=<name>\n" and that code, each part as sdscatfmt's %s copies it, up
+# to its first NUL, the description let go.
+
+# the libraries' codes cs, oldest first, before rest
+def lib.put(cs: List<&2, String>, rest: String) -> String:
+  match cs:
+    case Nil{}:
+      rest
+    case Con{c, more}:
+      b1(245) ++ str.put(c, lib.put(more, rest))
+
+# FUNCTION DUMP's payload (functionDumpCommand): the libraries, version 10
+# of the format and the CRC64 of both
+def lib.dump(cs: List<&2, String>) -> String:
+  +body = lib.put(cs, b1(10) ++ b1(0))
+  body ++ crc.le(crc.k(String.length(body), body, C{0, 0}), "")
+
+# s up to its first NUL
+def lib.cstr(+s: String) -> String:
+  String.take(s, String.find(s, Chr{0}, 0n))
+
+# a library read: its code and the bytes after it, or the error's text
+type LibR is Data:
+  LibOk{code: String, rest: String}
+  LibBad{err: String}
+
+def lib.str(m: Maybe<&1, String & String>, +err: String) -> LibR:
+  match m:
+    case Some{p}:
+      (c, t) = p
+      LibOk{c, t}
+    case None{}:
+      LibBad{err}
+
+# FUNCTION's parts after the name and the engine's
+def lib.old.code(+name: String, +eng: String, m: Maybe<&1, String & String>) -> LibR:
+  match m:
+    case Some{p}:
+      (b, t) = p
+      LibOk{"#!" ++ lib.cstr(eng) ++ " name=" ++ lib.cstr(name) ++ "\n" ++ lib.cstr(b), t}
+    case None{}:
+      LibBad{"Failed loading library blob"}
+
+def lib.old.desc(+name: String, +eng: String, m: Maybe<&1, String & String>) -> LibR:
+  match m:
+    case Some{p}:
+      (d, t) = p
+      lib.old.code(name, eng, rd.str(t))
+    case None{}:
+      LibBad{"Failed loading library description"}
+
+def lib.old.if(none: Bool, +name: String, +eng: String, t: String) -> LibR:
+  match none:
+    case True{}:
+      lib.old.code(name, eng, rd.str(t))
+    case False{}:
+      lib.old.desc(name, eng, rd.str(t))
+
+def lib.old.has(+name: String, +eng: String, m: Maybe<&1, Nat & String>) -> LibR:
+  match m:
+    case Some{p}:
+      (h, t) = p
+      lib.old.if(Nat.is_eq(h, 0n), name, eng, t)
+    case None{}:
+      LibBad{"Failed loading library description indicator"}
+
+def lib.old.eng(+name: String, m: Maybe<&1, String & String>) -> LibR:
+  match m:
+    case Some{p}:
+      (e, t) = p
+      lib.old.has(name, e, rd.num(t))
+    case None{}:
+      LibBad{"Failed loading engine name"}
+
+def lib.old(m: Maybe<&1, String & String>) -> LibR:
+  match m:
+    case Some{p}:
+      (n, t) = p
+      lib.old.eng(n, rd.str(t))
+    case None{}:
+      LibBad{"Failed loading library name"}
+
+# a library after its type (k: 1 FUNCTION2, 2 FUNCTION), from s
+def lib.one(k: Nat, s: String) -> LibR:
+  match k:
+    case 1n:
+      lib.str(rd.str(s), "Failed loading library payload")
+    case _:
+      lib.old(rd.str(s))
+
+# FUNCTION RESTORE's read of a payload that verify takes
+# (functionRestoreCommand): while more than its last ten bytes (the
+# version and the CRC64) are left, a type, FUNCTION2 or FUNCTION, and a
+# library. Lib is a read under way (the bytes left, the codes read, the
+# newest first) or its end: the codes, and the error's text that stopped
+# the read ("" for none). Redis makes each library as it reads it, so a
+# read that fails after some answers a failure to make one of them first:
+# the engine makes the codes read, then fails with the read's error
+type Lib is Data:
+  LibGo{s: String, cs: List<&2, String>}
+  LibEnd{cs: List<&2, String>, err: String}
+
+def lib.got(r: LibR, cs: List<&2, String>) -> Lib:
+  match r:
+    case LibOk{c, t}:
+      LibGo{t, c <> cs}
+    case LibBad{e}:
+      LibEnd{cs, e}
+
+def lib.kind(k: Nat, t: String, cs: List<&2, String>) -> Lib:
+  match k:
+    case 0n:
+      LibEnd{cs, "given type is not a function"}
+    case 1n:
+      lib.got(lib.one(1n, t), cs)
+    case _:
+      lib.got(lib.one(2n, t), cs)
+
+def lib.type(m: Maybe<&1, Nat & String>, cs: List<&2, String>) -> Lib:
+  match m:
+    case Some{p}:
+      (+x, t) = p
+      lib.kind(Bool.pick(Nat, Nat.is_eq(x, 245n), 1n, Bool.pick(Nat, Nat.is_eq(x, 246n), 2n, 0n)), t, cs)
+    case None{}:
+      LibEnd{cs, "can not read data type"}
+
+def lib.step(more: Bool, s: String, cs: List<&2, String>) -> Lib:
+  match more:
+    case True{}:
+      lib.type(rd.u8(s), cs)
+    case False{}:
+      LibEnd{cs, ""}
+
+# each step reads two bytes at least: the payload's length and one is fuel
+# enough
+def lib.run(f: Nat, r: Lib) -> Lib:
+  match f r:
+    case 1n+g LibGo{+s, cs}:
+      lib.run(g, lib.step(Nat.is_lt(10n, String.length(s)), s, cs))
+    case _ LibEnd{cs, e}:
+      LibEnd{cs, e}
+    case 0n LibGo{s, cs}:
+      LibEnd{cs, ""}
+
+def lib.fin(r: Lib) -> List<&2, String> & String:
+  match r:
+    case LibEnd{cs, e}:
+      (List.reverse(&2, String, cs), e)
+    case LibGo{s, cs}:
+      (List.reverse(&2, String, cs), "")
+
+# the codes read, oldest first, and the read's error ("" for none)
+def lib.read(+p: String) -> List<&2, String> & String:
+  lib.fin(lib.run(Nat.add(String.length(p), 1n), LibGo{p, Nil{}}))
+
 # The file
 # --------
 # An RDB file as Redis 7.0.15's rdbSaveRio writes it with rdbcompression
 # no (rdb.c): "REDIS0010"; the AUX fields of rdbSaveInfoAuxFields (250,
 # then a name and a value, each a string: redis-ver 7.0.15, redis-bits 64,
 # ctime, used-mem and aof-base 0; a master with no replica writes no
-# replication fields); for each database that holds keys, SELECTDB (254
+# replication fields); the libraries of functions (lib.put, which the
+# shell writes after the head); for each database that holds keys, SELECTDB (254
 # and its number) and RESIZEDB (251, then how many keys it holds and how
 # many of them have a time); then each key: its time (252, then its ms
 # since 1970 in eight bytes, the low first) when it has one, its value's
@@ -3562,9 +3703,13 @@ def file.tail(+sum: Bool, c: C) -> String:
 # a key twice in a database stops the load (Redis panics). After EOF, from
 # version 5 on, the CRC64 of every byte up to it, eight bytes, the low
 # first, checked with rdbchecksum yes unless it is 0 (a file written with
-# rdbchecksum no). A module's data or value or a library of functions
-# stops the load with a line that says why: BendKV has none of them. Every read takes its bytes from the front of what is left, so the
-# offset of a failure is the file's length less what is left.
+# rdbchecksum no). A library of functions (FUNCTION2, or FUNCTION of
+# 7.0's release candidates: Libraries of functions) is read and kept for
+# the start, which makes it in the engine once the load is done. A
+# module's data or value stops the load with a line that says why:
+# BendKV has none. Every read takes its bytes from the front of what is
+# left, so the offset of a failure is the file's length less what is
+# left.
 
 # a line to log, at its level (2 notice, 3 warning)
 type FLine is Data:
@@ -3591,12 +3736,18 @@ type FSum is Data:
   FSumZero{}
   FSumAt{n: Nat, hi: Nat, lo: Nat}
 
+# a library of functions a load read: its code, and the file's offset
+# after it (where a start that cannot make it says the load stopped)
+type FLib is Data:
+  FLib{code: String, at: Nat}
+
 # what a load came to: the databases, in order, the keys loaded, those
-# dropped as their time had passed and those skipped as empty, the lines
-# to log (newest first), the CRC64 to check; or the lines that say why it
-# stopped (newest first)
+# dropped as their time had passed and those skipped as empty, the
+# libraries of functions (in the file's order), the lines to log (newest
+# first), the CRC64 to check; or the lines that say why it stopped
+# (newest first)
 type FLd is Data:
-  FOk{dbs: List<&2, FDb>, loaded: Nat, expired: Nat, empty: Nat, logs: List<&2, FLine>, sum: FSum}
+  FOk{dbs: List<&2, FDb>, loaded: Nat, expired: Nat, empty: Nat, libs: List<&2, FLib>, logs: List<&2, FLine>, sum: FSum}
   FFail{logs: List<&2, FLine>}
 
 # The text of numbers in a file's lines
@@ -3708,9 +3859,6 @@ def fl.short(+at: Nat, ls: List<&2, FLine>) -> FLd:
 def fl.stop(+msg: String, ls: List<&2, FLine>) -> FLd:
   FFail{fl.line(3, msg, ls)}
 
-def fl.nofn() -> String:
-  "BendKV runs no functions: the RDB file holds a library of functions, which it cannot load"
-
 # The databases a load fills
 def fdb.empty() -> FDb:
   FDb{KV.empty(KV.Val), 0n, 0n}
@@ -3772,30 +3920,36 @@ def fds.put(ds: FDs, +k: String, v: KV.Val, +e: Nat) -> Bool & FDs:
 # (the file's length, its version, the load's time, whether the CRC64 is
 # checked)
 type FN is Data:
-  FN{ld: Nat, ex: Nat, em: Nat}
+  FN{ld: Nat, ex: Nat, em: Nat, libs: List<&2, FLib>}
 
 type FK is Data:
   FK{len: Nat, ver: Nat, now: Nat, sum: Bool}
 
 def fn.loaded(n: FN) -> FN:
   match n:
-    case FN{+ld, ex, em}:
-      FN{1n+ld, ex, em}
+    case FN{+ld, ex, em, ls}:
+      FN{1n+ld, ex, em, ls}
 
 def fn.expired(n: FN) -> FN:
   match n:
-    case FN{ld, +ex, em}:
-      FN{ld, 1n+ex, em}
+    case FN{ld, +ex, em, ls}:
+      FN{ld, 1n+ex, em, ls}
 
 def fn.empty(n: FN) -> FN:
   match n:
-    case FN{ld, ex, +em}:
-      FN{ld, ex, 1n+em}
+    case FN{ld, ex, +em, ls}:
+      FN{ld, ex, 1n+em, ls}
 
 def fn.em(+n: FN) -> Nat:
   match n:
-    case FN{ld, ex, +em}:
+    case FN{ld, ex, +em, ls}:
       em
+
+# a library read, kept (newest first)
+def fn.lib(l: FLib, n: FN) -> FN:
+  match n:
+    case FN{ld, ex, em, ls}:
+      FN{ld, ex, em, l <> ls}
 
 def fk.now(+k: FK) -> Nat:
   match k:
@@ -3848,6 +4002,12 @@ def fat.left(+a: FAt) -> String:
   match a:
     case FAt{len, +left}:
       left
+
+# the offset of t, the bytes left after a step at a
+def fat.to(+a: FAt, +t: String) -> Nat:
+  match a:
+    case FAt{+len, left}:
+      Nat.sub(len, String.length(t))
 
 # a step at at that ran out of bytes: the load as it was before it, and
 # fail
@@ -3996,8 +4156,8 @@ def fl.key(m: Maybe<&1, String & String>, +op: Nat, +at: FAt, k: FK, dbs: FDs, e
 # to be checked (fl.checked) over the bytes up to EOF, with it
 def fl.done(dbs: FDs, n: FN, ls: List<&2, FLine>, sm: FSum) -> FLd:
   match n:
-    case FN{ld, ex, em}:
-      FOk{fds.list(dbs), ld, ex, em, ls, sm}
+    case FN{ld, ex, em, libs}:
+      FOk{fds.list(dbs), ld, ex, em, List.reverse(&2, FLib, libs), ls, sm}
 
 def fl.sum(sum: Bool, +n: Nat, +hi: Nat, +lo: Nat) -> FSum:
   match sum:
@@ -4042,6 +4202,18 @@ def fl.eof.v(old: Bool, t: String, +at: FAt, k: FK, dbs: FDs, exp: FT, n: FN, ls
 def fl.eof(t: String, +at: FAt, +k: FK, dbs: FDs, exp: FT, n: FN, ls: List<&2, FLine>) -> FS:
   fl.eof.v(Nat.is_lt(fk.ver(k), 5n), t, at, k, dbs, exp, n, ls)
 
+# a library of functions read (FUNCTION2 or FUNCTION) and kept; one that
+# does not read (each of its reads comes short) waits for the file's next
+# window, and stops a load that has none as rdbLoadRio's eoferr does,
+# after Redis's line
+def fl.lib(r: LibR, +at: FAt, k: FK, dbs: FDs, exp: FT, n: FN, +ls: List<&2, FLine>) -> FS:
+  match r:
+    case LibOk{c, +t}:
+      +o = fat.to(at, t)
+      FGo{FR{t, k, dbs, exp, fn.lib(FLib{c, o}, n), ls}}
+    case LibBad{e}:
+      fl.more(at, k, dbs, exp, n, ls, fl.short(fat.n(at), fl.line(3, "Failed loading library, " ++ e, ls)))
+
 # an opcode (op, of code c: 0 a value's type, 1 FUNCTION2, 2 FUNCTION, 3
 # MODULE_AUX, 4 IDLE, 5 FREQ, 6 AUX, 7 RESIZEDB, 8 EXPIRETIME_MS, 9
 # EXPIRETIME, 10 SELECTDB, 11 EOF) at offset at, and the bytes after it
@@ -4050,9 +4222,9 @@ def fl.code(c: Nat, +op: Nat, t: String, +at: FAt, k: FK, dbs: FDs, exp: FT, n: 
     case 0n:
       fl.key(rd.str(t), op, at, k, dbs, exp, n, ls)
     case 1n:
-      FEnd{fl.stop(fl.nofn(), ls)}
+      fl.lib(lib.one(1n, t), at, k, dbs, exp, n, ls)
     case 2n:
-      FEnd{fl.stop(fl.nofn(), ls)}
+      fl.lib(lib.one(2n, t), at, k, dbs, exp, n, ls)
     case 3n:
       FEnd{fl.stop("BendKV has no modules: the RDB file holds a module's data (MODULE_AUX), which it cannot load", ls)}
     case 4n:
@@ -4107,7 +4279,7 @@ def fl.run(f: Nat, s: FS) -> FS:
 def fl.version.ok(ok: Bool, +neg: Bool, +v: Nat, s: String, +len: Nat, dbs: FDs, +now: Nat, +sum: Bool) -> FS:
   match ok:
     case True{}:
-      FGo{FR{String.drop(s, 9n), FK{len, v, now, sum}, dbs, FTNone{}, FN{0n, 0n, 0n}, Nil{}}}
+      FGo{FR{String.drop(s, 9n), FK{len, v, now, sum}, dbs, FTNone{}, FN{0n, 0n, 0n, Nil{}}, Nil{}}}
     case False{}:
       FEnd{FFail{[FLine{3, "Fatal error loading the DB: Invalid argument. Exiting."}, FLine{3, "Can't handle RDB format version " ++ num.show((neg, v))}]}}
 
@@ -4127,32 +4299,32 @@ def fl.magic(c: Nat, +s: String, +len: Nat, dbs: FDs, +now: Nat, +sum: Bool) -> 
 
 # the end of a load: its last line (Done loading RDB), or the CRC64 found
 # wrong
-def fl.fin(dbs: List<&2, FDb>, +ld: Nat, +ex: Nat, +em: Nat, ls: List<&2, FLine>) -> FLd:
-  FOk{dbs, ld, ex, em, fl.line(Bool.pick(U32, Nat.is_eq(em, 0n), 2, 3), "Done loading RDB, keys loaded: " ++ Nat.show(ld) ++ ", keys expired: " ++ Nat.show(ex) ++ Bool.pick(String, Nat.is_eq(em, 0n), ".", ", empty keys skipped: " ++ Nat.show(em) ++ "."), ls), FSumNone{}}
+def fl.fin(dbs: List<&2, FDb>, +ld: Nat, +ex: Nat, +em: Nat, libs: List<&2, FLib>, ls: List<&2, FLine>) -> FLd:
+  FOk{dbs, ld, ex, em, libs, fl.line(Bool.pick(U32, Nat.is_eq(em, 0n), 2, 3), "Done loading RDB, keys loaded: " ++ Nat.show(ld) ++ ", keys expired: " ++ Nat.show(ex) ++ Bool.pick(String, Nat.is_eq(em, 0n), ".", ", empty keys skipped: " ++ Nat.show(em) ++ "."), ls), FSumNone{}}
 
-def fl.crc.ok(same: Bool, +want: String, +got: String, +n: Nat, dbs: List<&2, FDb>, +ld: Nat, +ex: Nat, +em: Nat, ls: List<&2, FLine>) -> FLd:
+def fl.crc.ok(same: Bool, +want: String, +got: String, +n: Nat, dbs: List<&2, FDb>, +ld: Nat, +ex: Nat, +em: Nat, libs: List<&2, FLib>, ls: List<&2, FLine>) -> FLd:
   match same:
     case True{}:
-      fl.fin(dbs, ld, ex, em, ls)
+      fl.fin(dbs, ld, ex, em, libs, ls)
     case False{}:
       FFail{fl.line(3, "Internal error in RDB reading offset " ++ Nat.show(n) ++ " -> RDB CRC error", fl.line(3, "Wrong RDB checksum expected: (" ++ want ++ ") but got (" ++ got ++ "). Aborting now.", ls))}
 
-def fl.crc.cmp(c: C, +n: Nat, +hi: Nat, +lo: Nat, dbs: List<&2, FDb>, +ld: Nat, +ex: Nat, +em: Nat, ls: List<&2, FLine>) -> FLd:
+def fl.crc.cmp(c: C, +n: Nat, +hi: Nat, +lo: Nat, dbs: List<&2, FDb>, +ld: Nat, +ex: Nat, +em: Nat, libs: List<&2, FLib>, ls: List<&2, FLine>) -> FLd:
   match c:
     case C{+ch, +cl}:
-      fl.crc.ok(Bool.and(Nat.is_eq(U32.to_nat(ch), hi), Nat.is_eq(U32.to_nat(cl), lo)), hex.q(U32.to_nat(ch), U32.to_nat(cl)), hex.q(hi, lo), n, dbs, ld, ex, em, ls)
+      fl.crc.ok(Bool.and(Nat.is_eq(U32.to_nat(ch), hi), Nat.is_eq(U32.to_nat(cl), lo)), hex.q(U32.to_nat(ch), U32.to_nat(cl)), hex.q(hi, lo), n, dbs, ld, ex, em, libs, ls)
 
 # a load's end checked against its CRC64: c the CRC of the bytes before w,
 # which starts at the file's offset base (0 for a whole file, as SAVE's
 # reads it; the start's last window otherwise)
 def file.checked(d: FLd, c: C, +w: String, +base: Nat) -> FLd:
   match d:
-    case FOk{dbs, +ld, +ex, +em, ls, FSumAt{+n, +hi, +lo}}:
-      fl.crc.cmp(crc.k(Nat.sub(n, base), w, c), n, hi, lo, dbs, ld, ex, em, ls)
-    case FOk{dbs, +ld, +ex, +em, ls, FSumZero{}}:
-      fl.fin(dbs, ld, ex, em, fl.line(3, "RDB file was saved with checksum disabled: no check performed.", ls))
-    case FOk{dbs, +ld, +ex, +em, ls, FSumNone{}}:
-      fl.fin(dbs, ld, ex, em, ls)
+    case FOk{dbs, +ld, +ex, +em, libs, ls, FSumAt{+n, +hi, +lo}}:
+      fl.crc.cmp(crc.k(Nat.sub(n, base), w, c), n, hi, lo, dbs, ld, ex, em, libs, ls)
+    case FOk{dbs, +ld, +ex, +em, libs, ls, FSumZero{}}:
+      fl.fin(dbs, ld, ex, em, libs, fl.line(3, "RDB file was saved with checksum disabled: no check performed.", ls))
+    case FOk{dbs, +ld, +ex, +em, libs, ls, FSumNone{}}:
+      fl.fin(dbs, ld, ex, em, libs, ls)
     case FFail{ls}:
       FFail{ls}
 

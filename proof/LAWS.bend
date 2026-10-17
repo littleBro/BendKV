@@ -1063,6 +1063,19 @@ law checked_replay:
   for  e: {A.check(A.marks(reqs), A.file.acts(A.parse_all(reqs)), n) == None{} : Maybe<&1, Nat & Nat>}
   {A.checked(reqs, n) == A.Replayed{A.replay(reqs, n)} : A.Replay}
 
+# LAW: the start reads its file a window at a time (A.windows: the whole
+# entries of each window, after what the window before left, each run as
+# it comes, a transaction held until its EXEC), and makes of the windows,
+# whatever they are, what it made of the whole file (A.start: the check's
+# verdict, A.checked's, on the entries A.untx keeps of those A.load
+# reads, their number, the entries of a transaction the file ends inside,
+# and what follows the last whole entry), so that the laws above, about
+# the whole file, are about what the start runs
+law load_windows:
+  for +ws: List<&2, String>
+  for +n: Nat
+  {A.windows(ws, n) == A.start(A.cat(ws), n) : A.Start}
+
 # Several databases
 # =================
 # The acts that change the databases as a whole (R.Act; session.bend:

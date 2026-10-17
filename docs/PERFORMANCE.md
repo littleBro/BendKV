@@ -23,8 +23,8 @@ numbers are in [tools/](../tools/README.md).
    holding up the `TCP.post` writer (section 40), the twenty-sixth fixes the fifth
    (section 41), the thirty-first has a walker that reads a tree borrow it from a caller
    that owns it (section 51), and the thirty-second keeps the string of a value that is a
-   string or else something else as the string itself, with no node (section 56). Eight
-   more only add effects or natives: the twentieth, the
+   string or else something else as the string itself, with no node (section 56). Nine
+   more only add or widen effects or natives: the twentieth, the
    process and the clock for starting as `redis-server` does; the twenty-fourth, cutting a
    file of any size and syncing a directory (`File.sync_dir`); the twenty-fifth, waiting
    for a socket on a channel (`TCP.watch`, section 41); the twenty-seventh, a socket's
@@ -32,7 +32,9 @@ numbers are in [tools/](../tools/README.md).
    another's place and a name removed (section 47); the twenty-ninth, the heap's account
    (`IO.heap`); the thirtieth, words outside the heap (`Mem.touch`, `Mem.cell`; both
    section 48); the thirty-third, C's doubles (`F64`, section 60); the thirty-fifth, the
-   monotonic clock without an effect (`Clock.us`, section 64). The thirty-fourth
+   monotonic clock without an effect (`Clock.us`, section 64); the thirty-sixth, listeners
+   on IPv6 and on unix sockets and systemd's notification (FINDINGS.md, section 3zzze).
+   The thirty-fourth
    changes only a build with AddressSanitizer, whose heap it lets ASan check
    (FINDINGS.md, section 3zzp). Before section 14
    there were twenty patches: the sixteenth (effect pairs) was taken out in section 14,
@@ -7296,6 +7298,75 @@ histogram. The histogram's four levels take a quarter of them. Most of the rest 
 updates of `Info` and the passes of the group, which travels in 13 registers and is saved
 to the frame and loaded back around each call that is not a tail call.
 
+## 65. ZADD and ZINCRBY in place
+
+**What was left** (sections 54, 55). HSET, and SADD of a new member, take their collection
+out of the keyspace and change it in place. ZADD and ZINCRBY still copied the paths they
+changed in a sorted set's tree and trie, and the keyspace dropped the old ones after. A
+prototype that took every write's value (section 54) put ZADD at −28% and ZINCRBY at −34%;
+each needed a test before the take that the write changes the sorted set, and a proof
+of it.
+
+**The change** (FINDINGS 3zzza). A ZADD to a large sorted set whose first pair adds its
+member or gives it another score takes the sorted set out of the keyspace; the test reads
+the member's score in the trie and the pair's score as ZADD reads them, and only then
+checks the options and the pairs. The sorted set's tree then turned out shared while a
+write changed it: `zt.ins` read the side it went down after giving it to the insertion,
+which shares it first, so the insertion copied each node of its path. Each side is now
+compared before it goes down, and the tree and the trie go to their writes whole.
+
+**Measured on main of 15 October** (callgrind, instructions per command, one at a time; a
+sorted set of 100,000 elements, as `tools/colls.sh` makes it, and one of 100):
+
+| command | before | the take alone | both | |
+|---|---:|---:|---:|---:|
+| ZADD of a new score to a member there | 76,861 | 61,025 | 49,427 | −35.7% |
+| ZINCRBY | 77,882 | 65,684 | 53,807 | −30.9% |
+| ZADD of a new member | 47,668 | 43,874 | 33,922 | −28.8% |
+| ZADD of three new members | 103,228 | 90,131 | 58,387 | −43.4% |
+| ZADD of the score a member has | 23,696 | 25,035 | 24,955 | +5.3% |
+| ZADD XX of a member not there | 24,894 | 25,928 | 25,849 | +3.8% |
+| ZINCRBY on the sorted set of 100 (not taken) | 93,911 | 94,047 | 89,607 | −4.6% |
+| ZSCORE | 17,790 | 17,845 | 17,789 | |
+
+The table's runs hold z and zs alone and go in this order: ZADD z 1 m50000 (the score a
+member has), ZADD z <random> m50000 (a new score), ZADD z 1 n:<random> (a new member),
+three new members at once, ZINCRBY z 1 m50000, ZADD z XX 1 x:<random>, ZINCRBY zs 1
+m50. `tools/colls.sh` runs ZINCRBY z 1 m50000 right after ZADD z 1 m50000, so its member
+starts from the score 1, where the table's starts from a random score, elsewhere in the
+tree: hence 68,728 there and 77,882 here before the change.
+
+The first test checked the options and the pairs before it read the member: a ZADD that
+changes nothing paid 2,929 instructions for it (+12%); checked last, 1,339. Of the rest of
+a ZINCRBY's test, its increment, added in software (FINDINGS 3zk), is most. `tools/colls.sh`
+(which now also runs ZADD of a new score and of a new member): ZINCRBY 68,728 → 50,220,
+ZADD of a new score 76,830 → 49,443, of a new member 47,807 → 33,854, of the score a
+member has 23,695 → 24,950; the other commands as before, within 0.4%. `make perfcheck`:
+GET 3,302, SET 4,067 and INCR 4,417 instructions per request (main 3,302, 4,069 and
+4,411).
+
+**On main of 16 October** (merged with small sorted sets in one string, FINDINGS 3zzzn,
+and with streams). `tools/colls.sh`, main's build and the merge's:
+
+| command | main | merge | |
+|---|---:|---:|---:|
+| ZADD of a new score to a member there | 73,485 | 55,234 | −24.8% |
+| ZINCRBY | 68,182 | 57,792 | −15.2% |
+| ZADD of a new member | 55,964 | 39,738 | −29.0% |
+| ZADD of the score a member has | 29,445 | 30,682 | +4.2% |
+| the other commands of `colls.sh` | | | −1.3% to +0.1% |
+
+ZADD of a new score and ZINCRBY now keep 5,800 and 7,600 instructions more than the
+change left them on the older main (49,443 and 50,220), while main's own costs for them
+moved little; where those instructions go is not measured yet. `make perfcheck` on the
+merge: GET 3,490, SET 4,285 and INCR 4,604 (main 3,484, 4,246 and 4,588).
+
+**What is left.** The test reads the trie and parses the first score, and the write does
+both again; an update given the test's reading would do each once. ZINCRBY's soft-float
+addition takes thousands of instructions where C's takes one; the runtime's doubles
+(section 60) would serve it. ZREM, the ZPOPs and the ZREMRANGEBYs still copy their paths:
+each needs a test of its own.
+
 ## 66. CLIENT TRACKING
 
 **What was added** (FINDINGS 3zzzb). The keys a tracking client reads go to the tracking
@@ -7537,6 +7608,193 @@ up, would take the drops out of SAVE, and of the rewrite of the append-only file
 instructions per request (3,419, 4,183 and 4,527 on main, built here and counted in
 turn); with 100 clients in BLPOP, GET 3,525 and SET 4,310, 3.0% and 3.1% above (main
 3.1% and 3.4%).
+
+## 68. Lua scripts
+
+**What was added** (FINDINGS 3zzzd). EVAL, EVALSHA, EVAL_RO, EVALSHA_RO and SCRIPT run
+on Redis 7.0.15's Lua. A script command suspends its client's batch as a wait. Once the
+group is answered, the driver runs each script on the engine a step at a time, each step
+two switches of C stacks (`swapcontext`). A script's calls run as EXEC runs the commands
+it queued.
+
+**Measured** (`tools/script_cost.sh`: callgrind, instructions per request, 20 clients
+pipelining 16 deep, 100,000 keys):
+
+| request | the first build | main merged in again (afa98a7) | now, with ACL users (a92597d) |
+|---|---:|---:|---:|
+| `EVAL "return 1" 0` | 438,703 | 56,824 | 61,241 |
+| EVALSHA of it | 457,958 | 52,221 | 56,571 |
+| a script that calls GET | 490,836 | 83,773 | 89,395 |
+| a script that calls SET | 512,055 | 99,871 | 102,853 |
+| GET, beside them | 3,438 | 3,492 | 3,561 |
+
+On main's build (fc28490) the same EVALs are answered with an error, at 500 to 1,250
+instructions, and GET beside them costs 3,466.
+
+**On the way.** `tools/phases.py` on the first build's EVAL showed costs that each grew
+with something other than the script. Each step was measured again:
+
+| step | EVAL "return 1" |
+|---|---:|
+| the first build | 438,703 |
+| the configuration read when a script needs it; the driver's windows | 110,985 |
+| a script's wait not sized; EVALSHA's sha not lowered | 78,026 |
+| the script command's call counted at its end; the engine's facts once a drive; the clients that wait served after a write | 58,137 |
+| an EVAL's body not looked up as a sha | 55,734 |
+| the replies before a script held with it | 54,318 |
+| main merged in (its timing's runs bounded, section 71); the casts of numbers defined (FINDINGS 3zzzd) | 53,985 |
+| main merged in again, with CLIENT TRACKING and the RDB file; the scripts' state a node of its own; a busy group's answers at its first tick | 61,711 |
+| the scripts' state changed and read in place | 56,360 |
+| main merged in again (afa98a7) | 56,824 |
+| main merged in again (a92597d: ACL users) | 61,241 |
+
+- *Three walks of the parameter table per script.* Each script read lua-time-limit,
+  logfile and loglevel at its start. `config.get_value` walks the table of 180
+  parameters and compares names, about 600 instructions a parameter: 324,000 of a
+  script's 438,000. A script now reads them when it first needs them, at its first tick
+  or log line. lua-time-limit cannot change while a script runs.
+- *A walk of the window's calls.* The first driver timed all its work as one window, and
+  the script command's call blocked as its wait began. Served in the same window, the
+  call was looked for among the window's calls (`fresh.unblk`): with 20 clients
+  pipelining 16 scripts, a walk of up to 320 calls per script, 72,000 instructions. The
+  driver now reads the clock as each command of the engine starts and ends and around
+  each call of a script.
+- *A parse of the batch per script.* A script's wait sized its arguments for CLIENT
+  LIST's argv-mem, which leaves a script's wait out: a parse of the batch's bytes up to
+  the command (`P.argvs`), once per command of a pipeline.
+- *EVALSHA's sha lowered three times* (72,000 instructions for EVALSHA after the step,
+  from 128,005). Redis compares shas case aside, and each lowering made the sha's 40
+  cells again. The sha is now looked up as given first.
+- *The calls kept by client.* At its script's end, the blocked call was looked for among
+  the calls kept by client (`wt.get`, `wt.del`), and keeping it had walked them once
+  already: three walks per script of the clients that wait, 20 here. The call is now
+  counted when its script ends, as a window of its own as long as the script ran. Two
+  more costs per script went with it: the engine's three facts for INFO (`Engine.count`,
+  `Engine.mem`, `Engine.cache_mem`), now read once per drive, and the walk of the clients
+  that wait after a script, now only after one that wrote.
+- *An EVAL's body looked up as a sha.* `Bool.and` takes both its arguments: the mirror
+  of the cache was asked for every EVAL's body, which was lowered when not found.
+- *The scripts' state copied at each change and read* (FINDINGS 3zzzd). Once the
+  scripts' state (`Scr`) was a node of its own, an accessor that returned it from the
+  server's state (`ps.scr`) made each change of it a copy of the node and a drop of the
+  old one, about 400 instructions six times an EVAL, and each read of its bits a copy,
+  eight times. Changes and reads now go through the match of the server's state.
+- *A write per script.* A script's wait sent its client's replies before it at once
+  (Hold), so each script of a pipeline cost a `sendto`: 20,000 for 20,000 pipelined
+  scripts. Redis writes a script's caller's replies once the script ends, and BendKV now
+  holds them with the wait: 1,251 `sendto` for the same load, one per batch. A client
+  with a subscription still gets its replies before its script, so that the pushes its
+  script sends it come after them, as in Redis.
+
+**In time** (`tools/script_bench.sh`, 50 clients, requests per second, BendKV and Redis
+7.0.15 on the same machine, the runs of a test taking turns; medians of five runs, and of
+their ratios):
+
+| request | BendKV, one at a time | Redis | ratio | BendKV, 16 deep | Redis | ratio |
+|---|---:|---:|---:|---:|---:|---:|
+| GET | 87,032 | 93,545 | 0.96 | 1,215,806 | 766,284 | 1.70 |
+| `EVAL "return 1" 0` | 84,388 | 92,764 | 0.92 | 127,186 | 601,504 | 0.22 |
+| EVALSHA of it | 87,260 | 91,659 | 0.95 | 128,576 | 683,761 | 0.19 |
+| a script that calls GET | 57,438 | 94,340 | 0.60 | 76,761 | 312,012 | 0.25 |
+| a script that calls INCR | 53,735 | 94,251 | 0.53 | 58,480 | 329,489 | 0.18 |
+
+On the slower machine of the first measurements (one run each), the first build ran
+`EVAL "return 1" 0` at 16,480 requests per second one at a time and 14,872 pipelined, and
+the build before main was merged in at 57,604 and 74,349. One at a time, the network
+takes much of a request's time on either server, and a script that calls a command runs at
+0.53 to 0.60 of Redis's throughput, for its call (What is left, below). Pipelined, the
+actor's instructions bound a script, about 57,000 of them; writing the replies once per
+batch spared the connections' threads 19 of 20 writes but not the actor's time.
+
+**`make perfcheck`**: GET 3,438, SET 4,206 and INCR 4,550 instructions per request,
+where main (013d9ac, with the RDB file) gives 3,439, 4,201 and 4,545, all within 1% of
+the baseline; with 100 clients in BLPOP, GET and SET 3.1% and 3.6% above those (main
+3.2% and 3.7%). With the scripts' state changed and read in place, 3,440, 4,207 and
+4,547, and 3.2% and 3.6% with the clients in BLPOP; with main merged in again (afa98a7),
+3,472, 4,241 and 4,583, within 0.7% of the baseline, and 3.6% and 3.4%, where main's
+last change gives 3,491, 4,235 and 4,577 (FINDINGS 3zzzt); with ACL users merged in
+(a92597d), 3,480, 4,244 and 4,586, within 0.8% of the baseline, and 3.2% and 3.6%, where
+main gives 3,459, 4,221 and 4,564 (section 70). Before main was merged in
+again, against 998e76f, it was 3,447, 4,207 and 4,548 against 3,443, 4,206 and 4,550;
+before the scripts' state was a node of its own (`ScrOf`: FINDINGS 3zzzd), 3,482, 4,243
+and 4,584. The counts with clients in BLPOP move from one run to the next by up to 2%
+(3,552 to 3,621 for one build), more than the others' 0.05%.
+
+**ACL users merged in.** EVAL costs 4,417 instructions more than before (61,241 against
+56,824), and a call of a script about 1,200 more, though no client is restricted and
+nothing is checked. A script's command runs the general way, and each script ends a run
+of it: its batch's end tunes the actor's bits (`ps.tune`, from `bg.out`), which costs
+3,800 instructions a script now. The memory bits read maxmemory and the eviction's state
+(`mem.bits`: `mm.max`, `mm.kick`), and ACL's bit 20 reads whether some client is
+restricted (`acl.bit`: `acl.on`); each read copies the session's memory state (`Mm`,
+twelve words with ACL's), about 593 instructions apiece, three a script
+(`tools/phases.py callers` of `ctr_own_slow`). `srv.max` passes `mm.max` the state it
+computes (`srv.mm`), so `mm.max` owns its parameter for every call (section 38), and
+`srv.mm` returns a field of a lent `Srv`. The general way's ACL steps for each command
+(`bg.acl.sort`, `bg.mark.call` and `av.if`, each giving back what it was lent) add the
+rest. All of it is main's code, and it is paid by every batch of the general way (a
+client in MULTI, a blocking command), not by scripts alone; FINDINGS 3zzzd.
+
+**What is left.** A call of a script costs about 28,100 instructions (89,395 against
+61,241), where Redis's `scriptCall` takes a few thousand. The call runs the general way
+of EXEC's commands: naming, statistics, MONITOR's lines, keyspace events, the keys for
+WATCH, the entry for the file. Its window is timed as any call's (`info.window`, the
+histogram's merge), and its request and reply cross the engine as RESP bytes. The rest
+of a script is spread thin: the SHA1 of an EVAL's body (Redis computes it too), the
+engine's effects (`Engine.load`, `Engine.start`) and two readings of the clock, the
+general way's bookkeeping of the script command, its wait and the batch going on after
+it. Each switch of stacks also costs a system call: `swapcontext` sets the signal mask,
+three `rt_sigprocmask` per script (`getcontext` once, a switch in and one back), two
+more per call; a switch written for the purpose would not, at the price of code for each
+processor in the trusted base.
+
+## 69. The start reads its file in windows
+
+**What changed** (FINDINGS 3zzzg). The start read its append-only file whole into one
+string, listed its entries and replayed the list, and the heap kept that peak as the
+process's memory for good. It now reads the file 1 MiB at a time and runs each window's
+entries as they come, so that it holds a window and the databases it builds.
+
+**Measured** (`tools/restore_mem.sh`: a million SETs of 100-byte values on random keys,
+about 632,000 keys, a file of 144,000,000 bytes, the automatic rewrite off; three runs of
+main's build and three of this one, in turns, then two of Redis 7.0.15 under the same
+script, on the 4-vCPU VM with other work on it; kB as `/proc` gives them):
+
+| | main | windows | Redis 7.0.15 |
+|---|---:|---:|---:|
+| VmRSS after the load (kB) | 145,848–146,116 | 146,184–146,768 | 146,432–146,476 |
+| VmRSS after the restart (kB) | 589,620–589,708 | 147,952–148,968 | 145,936–146,028 |
+| after the restart / before | 4.04 | 1.01–1.02 | 1.00 |
+| the restore: ms to the first PONG | 2,671–3,097 | 1,420–1,532 | 1,572–2,221 |
+
+`used_memory` after the restart is that after the load less 2 to 3.5 kB, in both builds.
+The restore takes half the time it took: it no longer copies the file into one string,
+lists its entries or makes all their acts before it runs them, and it touches a quarter
+of the memory.
+
+**The rewrite during the load** (`PCT=100`: the cron starts a rewrite when the file passes
+64 MB; the counts once it has ended; three runs of each build, in turns):
+
+| | main | windows |
+|---|---:|---:|
+| VmHWM during the load (kB) | 395,836–407,352 | 408,372–420,496 |
+| VmRSS after it (kB) | 334,972–343,032 | 343,976–352,272 |
+| VmRSS after a restart from the rewritten file (kB) | 532,588–537,316 | 147,892–149,000 |
+| the restore: ms to the first PONG | 1,226–1,808 | 1,220–1,328 |
+
+The rewrite is the same code in both builds: six more runs of each, the counts read once
+the rewrite had ended, gave peaks of 407,476–419,516 kB on main and 402,204–420,572 kB
+with the windows. It is the peak issue #32 measured (413 MB, and 344 MB after it), and
+the heap keeps it (FINDINGS 3zzzg, "What is left"). Redis rewrites in a child process,
+whose pages are not the server's: 146,628–148,144 kB after the load.
+
+**`make perfcheck`** (the same machine, one build after the other): GET 3,423, SET 4,183
+and INCR 4,527 instructions per request (main 3,407, 4,180 and 4,546); with 100 clients
+in BLPOP, GET 3,529 and SET 4,326, 3.1% and 3.4% above the counts without them (main 3.4%
+and 3.9%); the misses and prefetches within 1.2% of the baseline in both. No request runs
+the start's code: GET counted again alone (`tools/callgrind_req.sh`, `TESTS=get`) takes
+3,417 instructions on both builds, so the 16 between them above are the count's spread
+from one run to the next.
 
 ## 70. ACL users
 
@@ -8073,6 +8331,156 @@ parsed as before.
 as many members 3.8 times. A key of a long MSET costs 5,900 instructions, where a whole
 pipelined SET costs 4,181; where they go is not broken down here (FINDINGS 3zzzo).
 
+## 76. Functions: FUNCTION and FCALL
+
+**What was added** (FINDINGS 3zzzp). FCALL and FCALL_RO run a function of a library on
+the engine of section 68, as EVAL runs a script: the client's batch waits, and the
+driver runs the function a step at a time. The actor keeps a mirror of the functions'
+names and flags in the scripts' state (`Fni`), for FCALL's lookup, for the pause and for
+maxmemory.
+
+**Measured** (`tools/script_cost.sh`, as in section 68: callgrind, instructions per
+request, 20 clients pipelining 16 deep, 100,000 keys; Redis 7.0.15 under the same load):
+
+| request | BendKV | with ACL users merged in (a92597d) | Redis |
+|---|---:|---:|---:|
+| `FCALL one 0`, a function that returns 1 | 50,060 | 54,425 | 7,784 |
+| `FCALL get1 1 <key>`, a function that calls GET | 78,250 | 83,820 | 13,530 |
+| `EVAL "return 1" 0` | 57,815 | 62,139 | 15,087 |
+| EVALSHA of it | 53,117 | 57,498 | 9,834 |
+| a script that calls GET | 84,867 | 90,500 | 19,133 |
+| GET, beside them | 3,495 | 3,565 | 3,538 |
+
+With ACL users merged in, a function and a script each cost about 4,400 instructions
+more, and a call of either about 1,200 more, though no client is restricted: each ends a
+run of the general way, whose end now copies the session's memory state three times
+(`ps.tune`), and the general way's ACL steps copy what they were lent (section 68).
+
+FCALL costs 3,100 instructions less than EVALSHA. A sha is 40 bytes, which the parser
+and the mirror hash and compare, and which the engine converts for its cache and makes a
+Lua string of, to find the script's function in Lua's registry (`f_<sha>`, as Redis
+does); a function's name is short. Redis's FCALL is the cheaper of its two as well, by
+2,050. A call of a function costs about 28,200 instructions (78,250 against 50,060), a
+call of a script about 27,100 (section 68).
+
+**On the way.** The first build of this change (252ef8d) cost `EVAL "return 1" 0` 67,221
+instructions, 5,510 more than #99's head then (61,711), and FCALL 63,761. The functions'
+state in the scripts' state made `Scr`'s node twice as wide, so each of the copies of it
+that section 68 found cost more, 713 instructions a copy against 402, and each script's
+end set the functions' state from a copy of it, a seventh copy. The scripts' state and
+the functions' are now read and changed in place (FINDINGS 3zzzd, 3zzzp), and FCALL
+looks its function's name up in the mirror as given first, lowered only when the mirror
+has it not as given (as EVALSHA's sha: a name lowered is a string made again, about 300
+instructions, three lookups an FCALL; 50,983 before). With main merged in to both, EVAL
+costs 57,815 here and 56,824 on #99's head: about 1,000 instructions for the way between
+scripts and functions (FCALL's early check, the flags of a script command, a wider
+state of a script to drop at its end).
+
+**In time** (`tools/script_bench.sh`, as in section 68: 50 clients, requests per
+second, BendKV and Redis 7.0.15 on the same machine, the runs of a test taking turns;
+medians of five runs, and of their ratios):
+
+| request | BendKV, one at a time | Redis | ratio | BendKV, 16 deep | Redis | ratio |
+|---|---:|---:|---:|---:|---:|---:|
+| GET | 88,496 | 99,305 | 0.91 | 1,194,030 | 809,717 | 1.40 |
+| EVALSHA of `return 1` | 86,356 | 90,992 | 0.89 | 123,077 | 740,741 | 0.17 |
+| `FCALL one 0` | 88,028 | 90,334 | 1.03 | 138,074 | 819,672 | 0.17 |
+| `FCALL get1 1 <key>` | 60,976 | 106,838 | 0.54 | 77,474 | 405,268 | 0.19 |
+
+One at a time, FCALL runs as fast as Redis's and a function that calls GET at about half
+of Redis's rate, for its call (section 68). Pipelined 16 deep, functions run at 0.17 to
+0.19 of Redis's throughput, bound by the actor's instructions as scripts are, and FCALL
+at 1.12 times EVALSHA's rate, as their instructions say.
+
+**`make perfcheck`**: GET 3,471, SET 4,236 and INCR 4,580 instructions per request,
+within 0.6% of the baseline, and 3.1% and 3.7% above those with 100 clients in BLPOP:
+#99's counts (section 68: 3,472, 4,241 and 4,583), with the work loop's bank of 49
+words. With ACL users merged in, 3,483, 4,245 and 4,585, and 3.1% and 3.6%, as #99's
+head then (3,480, 4,244 and 4,586; 3.2% and 3.6%). One run of the same build beside other work (a callgrind run of the scripts and
+a check of the proofs) gave GET 3,506 and INCR 4,607, 1% more: the counts move with the
+load of the machine, so they are compared on a quiet one.
+
+## 77. Small sets in one string
+
+**What changed** (FINDINGS 3zzzs). A set of at most 128 members of at most 64 bytes is
+one string of its members, as Redis 7.2's listpack is one allocation, where it was a trie
+of its members; an intset is one string of its integers in 2, 4 or 8 bytes each, as
+Redis's intset is, where it was a tree of their strings.
+
+**In time and memory** (200,000 sets `set:000000000000` to `set:000000199999`, each of 10
+members `m0000000` to `m0000009`, loaded by pipelined SADDs; then redis-benchmark, 20
+clients at a pipeline depth of 16, keys at random among the 200,000: 2,000,000 SISMEMBER
+of `m0000003`, 500,000 SMEMBERS, 500,000 SINTER of two sets, 2,000,000 SADD of
+`m0000003`, which is there, and 1,000,000 SADD of a new member; the server on one CPU,
+redis-benchmark on another; three rounds of main's build (a92597d, whose sets are main
+8b0993e's), this one and Redis 7.0.15, in turn; the median of each):
+
+| per second, and memory | main | this change | Redis 7.0.15 |
+|---|---:|---:|---:|
+| `used_memory` a key | 5,971.0 | 291.0 | 826.7 |
+| SISMEMBER | 285,551 | 423,639 | 367,715 |
+| SMEMBERS | 99,681 | 309,981 | 246,063 |
+| SINTER of two sets | 48,295 | 150,557 | 177,999 |
+| SADD of a member there | 266,880 | 396,354 | 372,370 |
+| SADD of a new member | 167,476 | 357,654 | 335,570 |
+
+On sets of 10 members this change serves 1.5 times main's SISMEMBER and SADD of a member
+there, 2.1 times its SADD of a new member and 3.1 times its SMEMBERS and SINTER, in a
+twentieth of its memory. Against Redis it serves SISMEMBER, SMEMBERS and both SADDs at
+106% to 126% of Redis's rate and SINTER at 85%, in a third of Redis's memory. A find runs
+more instructions than the trie's but misses the cache half as often, and the reads of a
+whole set run fewer of both (FINDINGS 3zzzs).
+
+**Sets of 128 members** (20,000 sets of 128 members of 15 bytes, `m0000000m000000` to
+`m0000127m000012`, one string of 2,048 bytes each here, loaded by pipelined SADDs; then
+redis-benchmark as above: 1,000,000 SISMEMBER of the 64th member and 1,000,000 of the
+last, 50,000 SMEMBERS and 20,000 SINTER of two sets; three rounds in turn, the median of
+each):
+
+| per second, and memory | main | this change | Redis 7.0.15 |
+|---|---:|---:|---:|
+| `used_memory` a key | 54,783.6 | 2,303.5 | 9,374.8 |
+| SISMEMBER of the 64th member | 292,997 | 339,328 | 400,962 |
+| SISMEMBER of the last | 312,989 | 278,940 | 490,436 |
+| SMEMBERS | 14,108 | 57,143 | 61,275 |
+| SINTER of two sets | 6,618 | 10,091 | 41,494 |
+
+A find of the 64th member runs twice main's instructions and still serves 16% more
+requests than main's, as it misses the cache less; a find of the last runs three times
+main's and serves 11% fewer. SMEMBERS serves 4 times main's requests and SINTER 1.5
+times, in a twenty-fourth of main's memory and a quarter of Redis's. Against Redis 7.0.15
+this change serves 85% of its rate for the 64th member, 57% for the last, 93% for
+SMEMBERS and 24% for SINTER, which finds each member of one set in the other by a walk,
+where Redis's hashtable finds it at once.
+
+**Instructions** (FINDINGS 3zzzs: callgrind per request): on these sets SISMEMBER runs
+11% more than main's and half its last-level misses, SMEMBERS 56% fewer, SINTER 30%
+fewer, SSCAN 76% fewer; on sets of 128 members a find runs twice main's instructions and
+SINTER three times and more, with a quarter of its misses or fewer; an SADD of 100
+members to a new key runs 4.4 times main's (issue #119).
+
+**Intsets** (20,000 intsets of the 511 integers j * m for j below 511, m 7, 100,000 or
+36,028,797,018,963, so that each is 2, 4 or 8 bytes in Redis's intset; loaded by pipelined
+SADDs; then redis-benchmark as above: 1,000,000 SISMEMBER of the middle member and 20,000
+SMEMBERS; three rounds in turn, the median of each):
+
+| per second | main | this change | Redis 7.0.15 |
+|---|---:|---:|---:|
+| SISMEMBER, 2 bytes | 670,691 | 537,924 | 713,776 |
+| SMEMBERS, 2 bytes | 17,841 | 16,764 | 27,360 |
+| SISMEMBER, 4 bytes | 468,165 | 485,437 | 615,385 |
+| SMEMBERS, 4 bytes | 11,403 | 7,345 | 26,702 |
+| SISMEMBER, 8 bytes | 461,255 | 330,907 | 634,115 |
+| SMEMBERS, 8 bytes | 10,724 | 4,154 | 20,429 |
+
+An intset of 512 takes 7 to 12 times less memory than on main, about what Redis's takes
+or less (FINDINGS 3zzzs), and its reads cost more: each member is read from its bytes and
+SMEMBERS writes each as text, where main's tree held the texts. SISMEMBER serves 20%
+fewer requests than main's on integers of 2 bytes, 4% more on 4 and 28% fewer on 8;
+SMEMBERS 6%, 36% and 61% fewer. Main was already below Redis's rate on each.
+
+**`make perfcheck`**: GET 3,481, SET 4,242 and INCR 4,587 instructions a request (the
+baseline's 3,452, 4,214 and 4,552), within its bounds.
 
 ## 78. The start's RDB file in windows
 
@@ -8295,3 +8703,53 @@ of its own, so each EVAL pays the batch's copies whole.
 `make perfcheck` (the fast way, which reads neither): GET 3,499, SET 4,307 and INCR 4,600
 instructions per request, 3.1% and 3.1% more with 100 clients in BLPOP; main 7048b7d
 gives 3,516, 4,307 and 4,601, and 3.2% and 3.0%.
+
+## 84. The writes of a stream
+
+**What changed** (FINDINGS 3zzzza). XADD, XTRIM, XDEL and XSETID write the stream of
+section 3zzzu of FINDINGS: an entry is appended to its node's list of entries (the newest
+first) as the bytes Redis's listpack holds for it, and the node's counts and sizes are
+written again; a trim takes nodes out of the tree by master ID, and marks the entries of
+the first node left; XDEL marks an entry, or takes its node out.
+
+**Throughput** (redis-benchmark; each server on fresh keys of its own; 20 clients at a
+pipeline depth of 16; one run of each, on a shared machine). Requests a second:
+
+| command | BendKV | Redis 7.0.15 | Redis's / BendKV's |
+|---|---:|---:|---:|
+| XADD s1 * f v (to 100,000 entries) | 78,200 | 546,000 | 7.0 |
+| XADD s2 * of five pairs | 64,700 | 452,000 | 7.0 |
+| XADD s3 MAXLEN ~ 1000 * f v | 46,500 | 452,000 | 9.7 |
+| XADD s4 MAXLEN 1000 * f v | 12,200 | 141,000 | 11.6 |
+| XADD s5 * of values that differ | 81,800 | 617,000 | 7.5 |
+| XDEL of an ID not there (100,000 entries) | 139,000 | 847,000 | 6.1 |
+| XTRIM MAXLEN ~ that trims nothing | 74,900 | 847,000 | 11.3 |
+| XSETID on a stream of one entry | 248,000 | 694,000 | 2.8 |
+| XLEN (for scale) | 1,587,000 | 935,000 | 0.6 |
+
+**Where the time goes** (callgrind, 20,000 requests each, instructions per request): XADD
+74,700, XDEL of an ID not there 49,800, XTRIM that trims nothing 86,300, XSETID 30,000;
+SET 3,900 and HSET 10,900 alike. Their cost is the same on a stream of 100, 10,000 and
+100,000 entries: no write walks the stream.
+- **A write reads a stream it borrows.** The stream stays in the keyspace while a write
+  runs on it, so each part the write takes by value is copied, and dropped after
+  (`term_drop`, `span_fade`: 59% of XDEL's instructions, 37% of XTRIM's, 28% of
+  XADD's). XDEL's walk turns its node's entries around to walk them from the oldest,
+  where Redis steps through its listpack, and drops each one it passes: 4,300 and
+  16,800 instructions. A node's live entries increase, so a walk from the newest finds
+  the same entry, in place. XTRIM by ~ walks the first node's entries to its oldest,
+  for the MINID threshold it may resolve to (8,300 in drops), where a MAXLEN trim needs
+  none.
+- **The old version is dropped.** XADD's new stream replaces the old one in the
+  keyspace, which drops the path that changed (5,100). An update in place, the stream
+  taken out of the keyspace while it is written (as section 3zzd of FINDINGS did for
+  HSET), needs every write of a stream to write its stream back, the writes that
+  change nothing too (an error, a trim that trims nothing, an XDEL of IDs not there),
+  with no effect: the next step.
+- **XADD** reads its words twice, as they came and resolved, and prints the ID it adds,
+  for its reply and the file.
+
+**`make perfcheck`**: GET, SET and INCR unchanged: 3,484, 4,247 and 4,592 instructions
+per request, +0.8% to +0.9% from the baseline, as the reads' build counted (3,484, 4,246
+and 4,588); last-level misses 2.83, 3.14 and 3.32; with 100 clients in BLPOP, +3.1% and
++3.6%.

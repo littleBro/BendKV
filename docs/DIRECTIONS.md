@@ -322,15 +322,17 @@ Where performance and proof meet: **batched execution under proved laws.**
    the latency monitor (done, section 3zzz), the RDB file with SAVE, the saves of
    SHUTDOWN and FLUSHALL and its load at the start (done, section 3zzzc), CLIENT TRACKING
    (done, section 3zzzb), ACL users (done, section 3zzzh), BGSAVE and the save points
-   (done, section 3zzzk), measured by Redis's
-   own test suite run against BendKV and by client libraries' test suites (redis-py's and
-   go-redis's, in CI: done, section 3zy).
-   Streams are under way: a stream is a value BendKV holds (section 3zzzu), its commands
-   next. Lua, cluster, replication and modules are out of scope. The suite's count: of the 1,677 tests
-   Redis 7.0.15 passes against a server it did not start, BendKV passes 1,305, 1,302 of
-   the 1,365 in what it has ([COMPATIBILITY.md](COMPATIBILITY.md)); most of the other 63
-   need commands BendKV does not have (replication's SYNC, Lua, streams) or run after a
-   test that left its client in MULTI on one of them.
+   (done, section 3zzzk), Lua scripts on Redis's own Lua (done, section 3zzzd), and Lua's
+   functions, FUNCTION and FCALL, on the same engine (done, section 3zzzp), measured by
+   Redis's own test suite run against BendKV and by client libraries' test suites
+   (redis-py's and go-redis's, in CI: done, section 3zy).
+   Streams are under way: a stream is a value BendKV holds (section 3zzzu), its reads
+   and writes answer as Redis's (sections 3zzzy and 3zzzza), its groups and XREAD's wait
+   next. Cluster, replication and modules are out of scope. The suite's count: of the 1,677 tests
+   Redis 7.0.15 passes against a server it did not start, BendKV passes 1,556, 1,516 of
+   the 1,565 in what it has ([COMPATIBILITY.md](COMPATIBILITY.md)); most of the other 49
+   need commands BendKV does not have (replication's SYNC, streams' groups, CLUSTER) or run
+   after a test that left its client in MULTI on one of them.
    What maxmemory left to do (section 3zw): a delete takes the nodes it empties now
    (section 3zz), so the eviction gets within a limit with the keys Redis keeps, but its
    samples still walk the trie's empty buckets, and an eviction takes six times Redis's
@@ -341,9 +343,10 @@ Where performance and proof meet: **batched execution under proved laws.**
    sorted set borrow their trees now, and so do the reads of a key's entry (section
    3zzc), so a read of a collection costs a GET and the read. HSET, and SADD of a member
    new to a set, take their collection out of the keyspace and change it in place
-   (sections 3zzd, 3zze, 3zzy); ZADD and ZINCRBY still copy the path they change and drop
-   the old one's, and each needs a proved test that it changes its sorted set before it
-   can take it. An intset is a tree of its members compared as integers (section 3zzy):
+   (sections 3zzd, 3zze, 3zzy), and so do ZADD and ZINCRBY whose first pair changes a
+   large sorted set for sure, its tree too (section 3zzza: 15 to 29% fewer
+   instructions); ZREM, the ZPOPs and the ZREMRANGEBYs still copy their paths. An
+   intset is a tree of its members compared as integers (section 3zzy):
    its SADD, SISMEMBER and SREM take 1.7, 1.3 and 1.1 times a hashtable's instructions,
    where a list of them took twenty times, and a round trip as Redis's do; a member takes
    34 bytes of the heap, where Redis's array of integers takes 2 to 8. SORT of 1,000

@@ -132,6 +132,17 @@ def znew.effect(gone: Bool, +k: String, o: R.ZOpts, ps: List<&2, R.ZPair>) -> Li
     case False{}:
       [R.Upd{k, R.UZset{R.ZWNew{o, ps}}}]
 
+# a new stream, made by the XADD of the words ws (resolved): the XADD
+# where the trie held no entry for the key (gone), else the script that
+# deletes the key and runs the XADD (R.XWNew), one entry, as for a new
+# hash
+def xnew.effect(gone: Bool, +k: String, ws: List<&2, String>) -> List<&2, R.Cmd>:
+  match gone:
+    case True{}:
+      [R.Upd{k, R.UStream{R.XWAdd{ws}}}]
+    case False{}:
+      [R.Upd{k, R.UStream{R.XWNew{ws}}}]
+
 # the effects of an update, from the change it made to its key, whose
 # code was c (R.ent.code)
 def ch.effect(+k: String, +c: Nat, +ch: R.Change) -> List<&2, R.Cmd>:
@@ -168,6 +179,10 @@ def ch.effect(+k: String, +c: Nat, +ch: R.Change) -> List<&2, R.Cmd>:
       znew.effect(Nat.is_eq(c, 0n), k, o, ps)
     case R.CRestore{p, v, +e}:
       restore.effect(k, p, e)
+    case R.CStream{op, x}:
+      [R.Upd{k, R.UStream{op}}]
+    case R.CStreamNew{ws, x}:
+      xnew.effect(Nat.is_eq(c, 0n), k, ws)
 
 def upd.effect(+k: String, +c: Nat, +o: R.Out) -> List<&2, R.Cmd>:
   match o:
@@ -760,6 +775,22 @@ def zset.args(+k: String, op: R.ZWrite) -> List<&2, String>:
     case R.ZWPopN{max, c}:
       [zpop.name(max), k, c]
 
+# a stream's write as the file logs it: its command with the words it
+# keeps (resolved: R.xwrite), or the script of a new stream
+# (R.xnew.script)
+def stream.args(+k: String, op: R.XWrite) -> List<&2, String>:
+  match op:
+    case R.XWAdd{ws}:
+      "XADD" <> k <> ws
+    case R.XWTrim{ws}:
+      "XTRIM" <> k <> ws
+    case R.XWDel{ids}:
+      "XDEL" <> k <> ids
+    case R.XWSetId{ws}:
+      "XSETID" <> k <> ws
+    case R.XWNew{ws}:
+      "EVAL" <> R.xnew.script() <> "1" <> k <> ws
+
 # RESTORE as the file logs it: with REPLACE, and ABSTTL with a time
 def restore.args(+k: String, p: String, t: R.TmR) -> List<&2, String>:
   match t:
@@ -792,6 +823,8 @@ def upd.args(+k: String, op: R.UpdOp) -> List<&2, String>:
       zset.args(k, op)
     case R.URestore{p, t, rep, ac}:
       restore.args(k, p, t)
+    case R.UStream{op}:
+      stream.args(k, op)
     case _:
       Nil{}
 
@@ -1001,10 +1034,13 @@ def encode(reqs: List<&2, List<&2, String>>) -> String:
 
 # Reading
 # -------
-# A plain parser, one char at a time, over the whole file: each step
-# looks at the next char (ch) before it is taken, so that it can match on
-# it. A file that ends inside an entry (a crash during a write) loads up
-# to that entry, and load says what is left.
+# A plain parser, one char at a time: each step looks at the next char
+# (ch) before it is taken, so that it can match on it, and a char it
+# expects is compared by its code (U32.is_eq), so that a proof can follow
+# a parse of a string it does not know (an entry read with more bytes
+# after it reads the same: load_windows). A file that ends inside an
+# entry (a crash during a write) loads up to that entry, and load says
+# what is left.
 
 # what a char is to a number line: a digit and its value, the '\r' that
 # ends the line, or anything else
@@ -1029,11 +1065,20 @@ def ch(s: String) -> Ch:
     case SNil{}:
       COther{}
 
+# what follows the '\n' (10) that ends a number line, when the char after
+# its '\r' is one (nl)
+def num.lf.of(nl: Bool, acc: Nat, t: String) -> Maybe<&1, Nat & String>:
+  match nl:
+    case True{}:
+      Some{(acc, t)}
+    case False{}:
+      None{}
+
 def num.lf(acc: Nat, s: String) -> Maybe<&1, Nat & String>:
   match s:
-    case SCon{'\n', t}:
-      Some{(acc, t)}
-    case _:
+    case SCon{Chr{+x}, t}:
+      num.lf.of(U32.is_eq(x, 10), acc, t)
+    case SNil{}:
       None{}
 
 # the number a line of digits spells, read on after acc, and what follows
@@ -1047,18 +1092,33 @@ def num(s: String, acc: Nat, c: Ch) -> Maybe<&1, Nat & String>:
     case _ _:
       None{}
 
+# a bulk's "\r\n" (13, 10) after its bytes
+def bulk.lf.of(nl: Bool, arg: String, t: String) -> Maybe<&1, String & String>:
+  match nl:
+    case True{}:
+      Some{(arg, t)}
+    case False{}:
+      None{}
+
 def bulk.lf(arg: String, s: String) -> Maybe<&1, String & String>:
   match s:
-    case SCon{'\n', t}:
-      Some{(arg, t)}
-    case _:
+    case SCon{Chr{+x}, t}:
+      bulk.lf.of(U32.is_eq(x, 10), arg, t)
+    case SNil{}:
+      None{}
+
+def bulk.end.of(cr: Bool, arg: String, t: String) -> Maybe<&1, String & String>:
+  match cr:
+    case True{}:
+      bulk.lf(arg, t)
+    case False{}:
       None{}
 
 def bulk.end(arg: String, s: String) -> Maybe<&1, String & String>:
   match s:
-    case SCon{'\r', t}:
-      bulk.lf(arg, t)
-    case _:
+    case SCon{Chr{+x}, t}:
+      bulk.end.of(U32.is_eq(x, 13), arg, t)
+    case SNil{}:
       None{}
 
 def bulk.body(m: Maybe<&1, Nat & String>) -> Maybe<&1, String & String>:
@@ -1069,12 +1129,20 @@ def bulk.body(m: Maybe<&1, Nat & String>) -> Maybe<&1, String & String>:
     case None{}:
       None{}
 
-# a bulk string, and what follows it
+# a bulk string, and what follows it: '$' (36), its length's line, its
+# bytes and "\r\n"
+def bulk.of(dollar: Bool, +t: String) -> Maybe<&1, String & String>:
+  match dollar:
+    case True{}:
+      bulk.body(num(t, 0n, ch(t)))
+    case False{}:
+      None{}
+
 def bulk(s: String) -> Maybe<&1, String & String>:
   match s:
-    case SCon{'$', +t}:
-      bulk.body(num(t, 0n, ch(t)))
-    case _:
+    case SCon{Chr{+x}, +t}:
+      bulk.of(U32.is_eq(x, 36), t)
+    case SNil{}:
       None{}
 
 # the k more bulks of an entry after b, the one just read
@@ -1104,12 +1172,19 @@ def entry.head(m: Maybe<&1, Nat & String>) -> Maybe<&1, List<&2, String> & Strin
     case None{}:
       None{}
 
-# an entry, and what follows it
+# an entry, and what follows it: '*' (42), its count's line and its bulks
+def entry.of(star: Bool, +t: String) -> Maybe<&1, List<&2, String> & String>:
+  match star:
+    case True{}:
+      entry.head(num(t, 0n, ch(t)))
+    case False{}:
+      None{}
+
 def entry(s: String) -> Maybe<&1, List<&2, String> & String>:
   match s:
-    case SCon{'*', +t}:
-      entry.head(num(t, 0n, ch(t)))
-    case _:
+    case SCon{Chr{+x}, +t}:
+      entry.of(U32.is_eq(x, 42), t)
+    case SNil{}:
       None{}
 
 # the entries of s, m the next one read, at most f of them; and what is
@@ -1535,6 +1610,202 @@ def skip(i: Nat, +s: String, m: Maybe<&1, List<&2, String> & String>) -> String:
 # entry is)
 def offset(+s: String, i: Nat) -> Nat:
   Nat.sub(String.length(s), String.length(skip(i, s, entry(s))))
+
+# The start
+# ---------
+# What the start makes of a file: the check's verdict on the entries it
+# restores (untx's: all of them, or those before a transaction the file
+# ends inside), how many those are, the entries of that transaction,
+# which it leaves out, and what follows the last whole entry. Its parts
+# are A.restore's: when the check refuses no entry, the verdict holds the
+# databases restore gives (checked_replay), and the entries left out,
+# written again, then what follows, are what restore leaves.
+type Start is Data:
+  Start{r: Replay, k: Nat, cut: List<&2, List<&2, String>>, rest: String}
+
+def start.of(l: List<&2, List<&2, String>> & String, +n: Nat) -> Start:
+  (+reqs, rest) = l
+  +kept = untx(reqs)
+  +k = List.length(&2, List<&2, String>, kept)
+  Start{checked(kept, n), k, List.drop(&2, List<&2, String>, reqs, k), rest}
+
+# what the start makes of a file read whole, with 1 + n databases there
+def start(s: String, +n: Nat) -> Start:
+  start.of(load(s), n)
+
+# Reading in windows
+# ------------------
+# The start reads its file a window at a time (server.bend: restore), so
+# that it holds a window and the databases it builds, not the file, its
+# entries and their acts all at once, which the heap kept as the
+# process's memory for good (FINDINGS.md, 3zzzg). Each window is read
+# after what the window before left (the start of an entry it ends
+# inside): load gives its whole entries and what follows the last of
+# them, kept for the next. Each entry is run as it comes (win.ent): its
+# act on the databases, and its mark and act through the check,
+# check.go's steps on a value (Ck). From a MULTI on, until its EXEC, the
+# entries are held instead (WinTx), as the transaction is reverted if the
+# file ends inside it (untx). After the last window the start makes of
+# all this what it made of the whole file: the law load_windows says it
+# is the same, whatever the windows.
+
+# the check after some entries, as check.go goes: on at entry i, open 1 +
+# the number of the MULTI whose EXEC is still to come (0: none); or
+# stopped at entry i, the first that does not replay as the file means
+# it, with why (why's words)
+type Ck is Data:
+  CkGo{i: Nat, open: Nat}
+  CkStop{i: Nat, why: String}
+
+# the check after entry i, of check c and act a, as check.go takes it
+def ck.go(c: Chk, +a: R.Act, +i: Nat, o: Nat) -> Ck:
+  match c o:
+    case ChkBad{k} _:
+      CkStop{i, why(k, 0n, [a])}
+    case ChkMulti{} 0n:
+      CkGo{1n+i, 1n+i}
+    case ChkMulti{} 1n+m:
+      CkStop{i, why(9n, 0n, [a])}
+    case ChkExec{} 0n:
+      CkStop{i, why(10n, 0n, [a])}
+    case ChkExec{} 1n+m:
+      CkGo{1n+i, 0n}
+    case ChkRuns{} o:
+      CkGo{1n+i, o}
+
+def ck.next(c: Chk, +a: R.Act, ck: Ck) -> Ck:
+  match ck:
+    case CkGo{+i, o}:
+      ck.go(c, a, i, o)
+    case CkStop{i, w}:
+      CkStop{i, w}
+
+# the check after an entry of mark m and act a, with 1 + n databases
+def ck.ent(+m: Nat, +a: R.Act, +n: Nat, ck: Ck) -> Ck:
+  ck.next(entry.chk(m, act.code(a, n)), a, ck)
+
+# the check's verdict on the entries, which leave the databases ds
+def ck.end(ck: Ck, ds: R.Ds) -> Replay:
+  match ck:
+    case CkGo{i, 0n}:
+      Replayed{ds}
+    case CkGo{i, 1n+m}:
+      Refused{m, why(8n, 0n, Nil{})}
+    case CkStop{i, w}:
+      Refused{i, w}
+
+# the start after some entries: the databases the entries it keeps
+# leave, the check on them and their number; and, from a MULTI on until
+# its EXEC (WinTx), the entries from the MULTI on, held (the newest
+# first), with the check on all the entries and their number
+type Win is Data:
+  WinAll{ds: R.Ds, ck: Ck, k: Nat}
+  WinTx{ds: R.Ds, ck: Ck, k: Nat, held: List<&2, List<&2, String>>, all: Ck, j: Nat}
+
+# before any entry, with 1 + n empty databases
+def win.new(+n: Nat) -> Win:
+  WinAll{R.ds.empty(n), CkGo{0n, 0n}, 0n}
+
+# the databases after the entries held
+def win.run(held: List<&2, List<&2, String>>, ds: R.Ds) -> R.Ds:
+  R.acts(file.acts(parse_all(List.reverse(&2, List<&2, String>, held))), ds)
+
+# an entry r of mark m and act a, after entries none of which is a MULTI
+# still open: a MULTI holds itself, any other runs
+def win.all(+m: Nat, +a: R.Act, +r: List<&2, String>, +n: Nat, ds: R.Ds, +ck: Ck, +k: Nat) -> Win:
+  match m:
+    case 1n:
+      WinTx{ds, ck, k, [r], ck.ent(1n, a, n, ck), 1n+k}
+    case _:
+      WinAll{R.ds_of(R.act(a, ds)), ck.ent(m, a, n, ck), 1n+k}
+
+# an entry r of mark m and act a, after a MULTI still open: a MULTI
+# keeps all the entries before it and holds itself, an EXEC keeps all of
+# them and itself, any other is held
+def win.tx(+m: Nat, +a: R.Act, +r: List<&2, String>, +n: Nat, ds: R.Ds, ck: Ck, +k: Nat, +held: List<&2, List<&2, String>>, +all: Ck, +j: Nat) -> Win:
+  match m:
+    case 1n:
+      WinTx{win.run(held, ds), all, j, [r], ck.ent(1n, a, n, all), 1n+j}
+    case 2n:
+      WinAll{R.ds_of(R.act(a, win.run(held, ds))), ck.ent(2n, a, n, all), 1n+j}
+    case _:
+      WinTx{ds, ck, k, r <> held, ck.ent(m, a, n, all), 1n+j}
+
+def win.at(+m: Nat, +a: R.Act, +r: List<&2, String>, +n: Nat, w: Win) -> Win:
+  match w:
+    case WinAll{ds, +ck, +k}:
+      win.all(m, a, r, n, ds, ck, k)
+    case WinTx{ds, ck, +k, +held, +all, +j}:
+      win.tx(m, a, r, n, ds, ck, k, held, all, j)
+
+# the start after one more entry
+def win.ent(w: Win, +r: List<&2, String>, +n: Nat) -> Win:
+  win.at(mark(r), file.act(R.parse(r)), r, n, w)
+
+def win.ents(reqs: List<&2, List<&2, String>>, w: Win, +n: Nat) -> Win:
+  match reqs:
+    case Nil{}:
+      w
+    case Con{+r, rest}:
+      win.ents(rest, win.ent(w, r, n), n)
+
+# what the start makes of the entries, rest following the last
+def win.done(w: Win, rest: String) -> Start:
+  match w:
+    case WinAll{ds, ck, k}:
+      Start{ck.end(ck, ds), k, Nil{}, rest}
+    case WinTx{ds, ck, k, held, all, j}:
+      Start{ck.end(ck, ds), k, List.reverse(&2, List<&2, String>, held), rest}
+
+# The windows read so far: the start after their whole entries, and what
+# follows the last of them
+type Wins is Data:
+  Wins{w: Win, left: String}
+
+def wins.new(+n: Nat) -> Wins:
+  Wins{win.new(n), ""}
+
+def wins.load(w: Win, l: List<&2, List<&2, String>> & String, +n: Nat) -> Wins:
+  (reqs, rest) = l
+  Wins{win.ents(reqs, w, n), rest}
+
+# one more window, x: the whole entries of what the windows before left,
+# then x
+def wins.step(s: Wins, x: String, +n: Nat) -> Wins:
+  match s:
+    case Wins{w, left}:
+      wins.load(w, load(left ++ x), n)
+
+# what the windows before left, lent
+def wins.left(+s: Wins) -> String:
+  match s:
+    case Wins{w, +left}:
+      left
+
+def wins.done(s: Wins) -> Start:
+  match s:
+    case Wins{w, left}:
+      win.done(w, left)
+
+def wins.feed(ws: List<&2, String>, s: Wins, +n: Nat) -> Wins:
+  match ws:
+    case Nil{}:
+      s
+    case Con{x, rest}:
+      wins.feed(rest, wins.step(s, x, n), n)
+
+# a file's windows, one after another
+def cat(ws: List<&2, String>) -> String:
+  match ws:
+    case Nil{}:
+      ""
+    case Con{x, rest}:
+      x ++ cat(rest)
+
+# what the start makes of a file read in the windows ws, with 1 + n
+# databases there (LAWS.bend: load_windows, that of the file read whole)
+def windows(ws: List<&2, String>, +n: Nat) -> Start:
+  wins.done(wins.feed(ws, wins.new(n), n))
 
 # The rewrite
 # -----------

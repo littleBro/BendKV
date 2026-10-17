@@ -15,8 +15,9 @@ Then what BendKV refuses although Redis starts (what it cannot do: modules,
 ACL users from the configuration or a file, renamed commands, the
 background, a cluster, a replica, TLS,
 data it cannot read, a supervisor it cannot signal), each with its line;
-and what is BendKV's own: --version, --help, the short form, the log file,
-the pid file, protected mode and several addresses.
+a unix socket and systemd's supervision, and IPv6's addresses, against
+Redis; and what is BendKV's own: --version, --help, the short form, the
+log file, the pid file, protected mode and several addresses.
 
     python3 tests/start_test.py [--bin build/bendkv] [--redis redis-server]
 """
@@ -48,8 +49,13 @@ def resp(*args):
 
 
 class Client:
-    def __init__(self, port, host="127.0.0.1"):
-        self.s = socket.create_connection((host, port), timeout=5)
+    def __init__(self, port, host="127.0.0.1", path=None):
+        if path is not None:
+            self.s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            self.s.settimeout(5)
+            self.s.connect(path)
+        else:
+            self.s = socket.create_connection((host, port), timeout=5)
         self.buf = b""
 
     def line(self):
@@ -227,6 +233,10 @@ REFUSED = [
     ("a port in use", ["--port", "{busy}"], {}, None),
     ("port 0", ["--port", "0"], {}, None),
     ("no address", ["--port", "{port}", "--bind", ""], {}, None),
+    ("an octal value past its bound", ["--port", "{port}", "--unixsocketperm", "1000"], {}, None),
+    ("an octal value with an 8", ["--port", "{port}", "--unixsocketperm", "8"], {}, None),
+    ("a unix socket that cannot open", ["--port", "{port}", "--unixsocket", "nodir/s.sock"], {}, None),
+    ("a unix socket's path too long", ["--port", "{port}", "--unixsocket", "s" * 120], {}, None),
 ]
 
 # Cases both start: name, arguments, files, standard input, the
@@ -267,6 +277,7 @@ STARTED = [
     # an RDB file of one key, its checksum 0 (none): loaded at the start
     # (tests/rdb_test.py compares what both servers load)
     ("an RDB file", ["--port", "{port}"], {"dump.rdb": b"REDIS0010\xfe\x00\xfb\x01\x00\x00\x01k\x01v\xff" + bytes(8)}, None, ["dbfilename"], None),
+    ("an octal value", ["--port", "{port}", "--unixsocketperm", "0755"], {}, None, ["unixsocketperm"], None),
 ]
 
 # What BendKV refuses although Redis starts: name, arguments, files,
@@ -283,7 +294,6 @@ BENDKV_REFUSES = [
     ("a cluster", ["--port", "{port}", "--cluster-enabled", "yes"], {}, {}, "BendKV has no cluster mode: set cluster-enabled no"),
     ("a replica", ["--port", "{port}", "--replicaof", "127.0.0.1", "1"], {}, {}, "BendKV cannot be a replica: replicaof must be no one"),
     ("TLS", ["--port", "{port}", "--tls-port", "1"], {}, {}, "BendKV has no TLS: set tls-port 0"),
-    ("systemd", ["--port", "{port}", "--supervised", "systemd"], {}, {"NOTIFY_SOCKET": "/run/x"}, "supervised by systemd, which BendKV cannot notify (READY=1): run it as a Type=simple service with supervised no"),
     ("upstart", ["--port", "{port}", "--supervised", "auto"], {}, {"UPSTART_JOB": "x"}, "supervised by upstart, which BendKV cannot signal (it cannot stop itself): run it unsupervised"),
     ("a multi-part append-only file", ["--port", "{port}", "--appendonly", "yes"], {"appendonlydir/appendonly.aof.manifest": "file appendonly.aof.1.incr.aof seq 1 type i\n"}, {}, "BendKV cannot read Redis 7's multi-part append-only files yet: {dir}/appendonlydir holds one"),
     ("a cut file, with aof-load-truncated no", ["--port", "{port}", "--appendonly", "yes", "--aof-load-truncated", "no"], {"appendonly.aof": "*3\r\n$3\r\nSET\r\n$1\r\na\r\n$1"}, {}, "Unexpected end of file reading the append only file appendonly.aof. You can: 1) Make a backup of your AOF file, then use ./redis-check-aof --fix <filename>. 2) Alternatively you can set the 'aof-load-truncated' configuration option to yes and restart the server."),
@@ -347,6 +357,94 @@ def bendkv_refuses(a, case):
         return check("BendKV refuses: " + name, code == 1 and said, "exit %s, stderr %r, log %r" % (code, err, last))
     finally:
         b.stop()
+
+
+def unix_seen(a, cmd, abstract=False):
+    """a server with a unix socket under systemd's supervision: the
+    socket's mode, its client as CLIENT LIST and MONITOR show it, what
+    systemd is told (at a path, or at an abstract name: NOTIFY_SOCKET's
+    "@"), the log's lines of both, and the socket's file after SHUTDOWN"""
+    n = len(os.listdir(a.tmp))
+    note = "@bendkv-start-%d-%d" % (os.getpid(), n) if abstract else os.path.join(a.tmp, "n%d.sock" % n)
+    ns = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+    ns.bind("\0" + note[1:] if abstract else note)
+    ns.settimeout(0.3)
+    s = Server(a, cmd, ["--port", "{port}", "--unixsocket", "s.sock", "--unixsocketperm", "700",
+                        "--supervised", "systemd"], {}, None, {"NOTIFY_SOCKET": note})
+    seen = {}
+    try:
+        if s.up() is not None:
+            return {"exit": s.report()}
+        path = os.path.join(s.dir, "s.sock")
+        seen["mode"] = oct(os.stat(path).st_mode & 0o777)
+        c = Client(None, path=path)
+        seen["ping"] = c.ask("PING")
+        line = c.ask("CLIENT", "LIST").decode()
+        f = dict(w.split("=", 1) for w in line.split() if "=" in w)
+        seen["client"] = (f.get("addr"), f.get("laddr"), f.get("flags"))
+        m = Client(s.port)
+        m.ask("MONITOR")
+        c.ask("SET", "k", "v")
+        seen["monitor"] = m.read().decode().split(" ", 1)[1]
+        m.close()
+        c.close()
+        Client(s.port).s.sendall(resp("SHUTDOWN", "NOSAVE"))
+        s.p.wait(10)
+        seen["left"] = os.path.exists(path)
+        grams = []
+        try:
+            while True:
+                grams.append(ns.recv(512).decode().replace("Redis is loading", "BendKV is loading"))
+        except socket.timeout:
+            pass
+        seen["systemd"] = grams
+        out = s.text("out")
+        seen["log"] = [l for l in ("Supervised by systemd. Please make sure you set appropriate values for TimeoutStartSec and TimeoutStopSec in your service unit.",
+                                   "The server is now ready to accept connections at s.sock",
+                                   "Removing the unix socket file.") if l in out]
+        return seen
+    finally:
+        s.stop()
+        ns.close()
+
+
+def host_ipv6():
+    try:
+        t = socket.socket(socket.AF_INET6)
+        t.bind(("::1", 0))
+        t.close()
+        return True
+    except OSError:
+        return False
+
+
+def ipv6_seen(a, cmd, v6):
+    """a server bound to 127.0.0.1 and -::1, as Redis's own redis.conf binds
+    it: on a host with IPv6 it answers on ::1; on one without, it starts
+    with the line that lets ::1 go"""
+    s = Server(a, cmd, ["--port", "{port}", "--bind", "127.0.0.1 -::1"], {}, None, {})
+    try:
+        if s.up() is not None:
+            return ("exit", s.report())
+        if v6:
+            return ("answers on ::1", answers(s.port, "::1"))
+        return ("lets ::1 go", "Warning: Could not create server TCP listening socket ::1:{port}: unable to bind socket, errno: 97" in s.text("out"))
+    finally:
+        s.stop()
+
+
+def against_redis(a):
+    ok = True
+    r, b = unix_seen(a, a.redis), unix_seen(a, a.bin)
+    ok &= check("a unix socket under systemd, as Redis", r == b and "mode" in r, "redis %r\n      bendkv %r" % (r, b))
+    r, b = unix_seen(a, a.redis, True), unix_seen(a, a.bin, True)
+    ok &= check("systemd at an abstract name, as Redis", r == b and len(r.get("systemd", [])) >= 3,
+                "redis %r\n      bendkv %r" % (r, b))
+    v6 = host_ipv6()
+    r, b = ipv6_seen(a, a.redis, v6), ipv6_seen(a, a.bin, v6)
+    ok &= check("IPv6's loopback (%s)" % ("the host has IPv6" if v6 else "the host has no IPv6"), r == b and r[1] is True,
+                "redis %r\n      bendkv %r" % (r, b))
+    return ok
 
 
 def own(a):
@@ -417,6 +515,7 @@ def main():
             ok &= started(a, case)
         for case in BENDKV_REFUSES:
             ok &= bendkv_refuses(a, case)
+        ok &= against_redis(a)
         ok &= own(a)
     finally:
         shutil.rmtree(a.tmp, ignore_errors=True)

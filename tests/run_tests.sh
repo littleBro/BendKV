@@ -19,7 +19,11 @@
 # and checks under load), CLIENT TRACKING (scenarios against Redis),
 # MONITOR (scenarios against Redis, and a check
 # under load), CLIENT PAUSE and UNPAUSE (scenarios against Redis, and
-# checks of BendKV alone and under load), the administrative commands
+# checks of BendKV alone and under load), Lua scripts (EVAL, EVALSHA,
+# SCRIPT, scripts in transactions, BUSY and SCRIPT KILL: scenarios
+# against Redis), functions (FUNCTION and FCALL, their DUMP and RESTORE,
+# BUSY and FUNCTION KILL: scenarios against Redis, and payloads both
+# ways), the administrative commands
 # (LASTSAVE, ROLE, WAIT, MEMORY, LOLWUT and SHUTDOWN: scenarios against
 # Redis, and, with the defaults, SHUTDOWN on servers of their own), AUTH
 # (scenarios against Redis:
@@ -37,7 +41,8 @@
 # their edges in every argument that is one, BITFIELD's fields at
 # random, hashes, lists, sets and sorted sets, SORT and SORT_RO,
 # HyperLogLogs and GEO (each in RESP2 and RESP3), DUMP and RESTORE (of
-# streams too, which Redis makes), and
+# streams too, which Redis makes), the reads of streams and their
+# writes, and
 # RESP3 (its
 # scenarios, and the differential tests again in RESP3); then stops
 # them. Then the append-only file: a
@@ -53,7 +58,15 @@
 # must stop the server, with everysec as with always. Last, the files
 # both ways: the same commands against BendKV and a redis-server that
 # keeps its own file, then BendKV started from Redis's file and Redis
-# from BendKV's, each holding the databases the other held. And the
+# from BendKV's, each holding the databases the other held, and the
+# same for the writes of streams. Then files
+# whose entries, transactions and values straddle the windows the start
+# reads them in, cut short, or with a transaction left open, each started
+# on by BendKV and by Redis, with aof-load-truncated yes and no: both
+# start or refuse alike, with the same databases and the file cut alike
+# (tests/aof_window_test.py); and a restart from a file of a million
+# SETs, after which the server's resident memory must be at most 1.3
+# times what it was before (tools/restore_mem.sh). And the
 # rewrite of the file (BGREWRITEAOF): its replies and INFO's account
 # against Redis's, the rewritten file against Redis's base, command for
 # command, writes while it runs (and a kill while it runs), BendKV and
@@ -69,11 +82,12 @@
 # it; files read in windows (values longer than a window, cuts and a
 # wrong checksum past the first one, and the resident memory after the
 # start); SAVE, LASTSAVE, INFO and the saves of FLUSHALL and SHUTDOWN
-# against Redis's; files that do not load, each stopping both starts. And
-# the background saves (tests/bgsave_test.py): the count of changes of
-# each write, BGSAVE and its fields in INFO, BGSAVE and BGREWRITEAOF, the
-# save points, MISCONF after a save that failed and the cron's next try,
-# and SHUTDOWN and FLUSHALL while a save runs, against Redis's.
+# against Redis's; files that do not load, each stopping both starts;
+# libraries of functions in the file, both ways. And the background saves
+# (tests/bgsave_test.py): the count of changes of each write, BGSAVE and
+# its fields in INFO, BGSAVE and BGREWRITEAOF, the save points, MISCONF
+# after a save that failed and the cron's next try, and SHUTDOWN and
+# FLUSHALL while a save runs, against Redis's.
 set -e
 cd "$(dirname "$0")/.."
 PORT=${PORT:-6380}
@@ -135,6 +149,8 @@ for n in "" post send "post build/test.aof everysec"; do
   python3 tests/tracking_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
   python3 tests/monitor_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
   python3 tests/pause_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
+  python3 tests/script_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
+  python3 tests/function_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
   if [ -z "$n" ]; then
     python3 tests/admin_test.py --bendkv "$PORT" --redis "$REDIS_PORT" --bin build/bendkv
   else
@@ -165,6 +181,7 @@ for n in "" post send "post build/test.aof everysec"; do
     python3 tests/dump_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
     python3 tests/stream_dump_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
     python3 tests/stream_read_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
+    python3 tests/stream_write_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
     # RESP3: its scenarios, then the differential tests again with each
     # connection in RESP3 (HELLO 3)
     python3 tests/resp3_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
@@ -230,6 +247,11 @@ ${CC:-cc} -shared -fPIC -o build/fail_io.so tests/fail_io.c -ldl
 python3 tests/aof_fail_test.py --port "$PORT" --shim build/fail_io.so
 echo "== append-only files of Redis and of BendKV"
 python3 tests/aof_redis_test.py --bin build/bendkv --bendkv "$PORT" --redis "$((REDIS_PORT + 1))" --dir build/aofio
+python3 tests/stream_aof_test.py --bin build/bendkv --bendkv "$PORT" --redis "$((REDIS_PORT + 1))" --dir build/xaof
+echo "== the append-only file read in windows, against Redis"
+python3 tests/aof_window_test.py --bin build/bendkv --bendkv "$PORT" --redis "$((REDIS_PORT + 1))" --dir build/aofwin
+echo "== resident memory after a restart from the append-only file"
+PORT="$PORT" sh tools/restore_mem.sh build/bendkv
 echo "== the rewrite of the append-only file"
 python3 tests/rewrite_test.py --bin build/bendkv --bendkv "$PORT" --redis "$((REDIS_PORT + 1))" --dir build/rewrite
 echo "== maxmemory and eviction"

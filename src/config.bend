@@ -212,7 +212,7 @@ def config.table() -> List<&2, CItem>:
     CItem{CParam{"shutdown-timeout", "", False{}, False{}, False{}, False{}, CNum{True{}, "0", "2147483647", NPlain{}}, AppNone{}}, "10"},
     CItem{CParam{"repl-diskless-sync-max-replicas", "", False{}, False{}, False{}, False{}, CNum{True{}, "0", "2147483647", NPlain{}}, AppNone{}}, "0"},
     CItem{CParam{"maxclients", "", False{}, False{}, False{}, False{}, CNum{False{}, "1", "4294967295", NPlain{}}, AppNone{}}, "10000"},
-    CItem{CParam{"unixsocketperm", "", True{}, False{}, False{}, False{}, CNum{False{}, "0", "511", NOct{}}, AppNone{}}, "0"},
+    CItem{CParam{"unixsocketperm", "", True{}, False{}, False{}, False{}, CNum{False{}, "0", "777", NOct{}}, AppNone{}}, "0"},
     CItem{CParam{"socket-mark-id", "", True{}, False{}, False{}, False{}, CNum{False{}, "0", "4294967295", NPlain{}}, AppNone{}}, "0"},
     CItem{CParam{"active-defrag-max-scan-fields", "", False{}, False{}, False{}, False{}, CNum{False{}, "1", "9223372036854775807", NPlain{}}, AppNone{}}, "1000"},
     CItem{CParam{"slowlog-max-len", "", False{}, False{}, False{}, False{}, CNum{False{}, "0", "9223372036854775807", NPlain{}}, AppNone{}}, "128"},
