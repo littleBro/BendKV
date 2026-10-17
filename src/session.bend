@@ -2219,16 +2219,30 @@ def obj.hash.enc(+h: KV.Hash, +cfg: List<&2, C.CItem>) -> String:
     case KV.HLong{+n, +ps}:
       Bool.pick(String, Bool.and(Nat.is_le(n, cfg.nat(cfg, "hash-max-listpack-entries")), obj.wide.ok(KV.hl.widest(ps, 0n), cfg.nat(cfg, "hash-max-listpack-value"))), "listpack", "hashtable")
 
+# the longest of the members xs, and w
+def obj.widest(xs: List<&2, String>, +w: Nat) -> Nat:
+  match xs:
+    case Nil{}:
+      w
+    case Con{x, rest}:
+      obj.widest(rest, Nat.max(w, String.length(x)))
+
+# a small set (KV.Mems) is a listpack, as Redis 7.2 makes one at the
+# parameters' defaults, within set-max-listpack-entries and
+# set-max-listpack-value as they are now, as a hash
+def obj.mems.small(+n: Nat, xs: List<&2, String>, +cfg: List<&2, C.CItem>) -> String:
+  Bool.pick(String, Bool.and(Nat.is_le(n, cfg.nat(cfg, "set-max-listpack-entries")), obj.wide.ok(obj.widest(xs, 0n), cfg.nat(cfg, "set-max-listpack-value"))), "listpack", "hashtable")
+
 def obj.mems.enc(+m: KV.Mems, +cfg: List<&2, C.CItem>) -> String:
   match m:
     case KV.MInts{+n, b}:
       Bool.pick(String, Nat.is_le(n, cfg.nat(cfg, "set-max-intset-entries")), "intset", "hashtable")
     case KV.MBig{n, t}:
       "hashtable"
-    case KV.MSmall{n, b}:
-      "hashtable"
-    case KV.MLong{n, ps}:
-      "hashtable"
+    case KV.MSmall{+n, +b}:
+      obj.mems.small(n, KV.ms.all(n, b), cfg)
+    case KV.MLong{+n, +ps}:
+      obj.mems.small(n, KV.ml.all(ps), cfg)
 
 # a sorted set is a listpack while it is small (KV.Zset: as Redis turns
 # one into a skiplist at the parameters' defaults) and within
@@ -2250,8 +2264,8 @@ def obj.coll.enc(+c: KV.Coll, +cfg: List<&2, C.CItem>) -> String:
   match c:
     case KV.CHash{+h}:
       obj.hash.enc(h, cfg)
-    case KV.CList{l}:
-      "quicklist"
+    case KV.CList{+l}:
+      Bool.pick(String, KV.deq.qk(l), "quicklist", "listpack")
     case KV.CMems{+m}:
       obj.mems.enc(m, cfg)
     case KV.CZset{+z}:

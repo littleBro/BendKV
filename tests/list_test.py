@@ -11,7 +11,13 @@ elements grown, read, set (a piece made longer than a buffer is dealt
 again), trimmed and emptied from either end, each dumped by BendKV and
 restored in Redis; searched (LPOS), written in the middle (LINSERT) and
 taken from (LREM) across their pieces, from either end; then random
-commands on lists of long elements.
+commands on lists of long elements. Redis 7.2 holds a small list as a
+listpack and a larger one as a quicklist of nodes: each turn from one to
+the other, and the nodes each write leaves (a push at either end, a pop,
+LSET, LINSERT into a node, next to it or splitting it, LREM, LTRIM, a
+move, a payload read), are checked by OBJECT ENCODING and by DUMP, its
+payload compared byte for byte (Redis runs with rdbcompression no), as
+the random commands are.
 
     python3 tests/list_test.py --bendkv 6380 --redis 6390 [--rounds 3000] [--seed 1]
 """
@@ -38,18 +44,62 @@ def fail(cmd, x, y):
         print("FAIL: %r: BendKV %r, Redis %r" % (b" ".join(cmd)[:200], str(x)[:300], str(y)[:300]))
 
 
+# Where BendKV differs (README, Lists): an LSET of an index the list does
+# not have and an LINSERT whose pivot is not there leave the list as it
+# was, where Redis has already made a listpack a quicklist when the element
+# would take it past 8 KB; and LMOVE counts an integer it takes from a
+# quicklist by its length, and checks a list moved onto itself after the
+# pop. Right after such a command, a list whose encoding parted from
+# Redis's is followed apart: its OBJECT ENCODING and DUMP are not compared
+# until they meet again (both nil when the key goes), and every other reply
+# is.
+apart = set()
+parted = 0
+
+
+LP, QL = (b"$", b"listpack"), (b"$", b"quicklist")
+
+
+# key k parted from Redis's as BendKV and Redis hold it: (BendKV's, Redis's)
+def part(b, r, k, way):
+    global parted
+    x, y = run(b, [b"OBJECT", b"ENCODING", k]), run(r, [b"OBJECT", b"ENCODING", k])
+    if (x, y) == way and k not in apart:
+        apart.add(k)
+        parted += 1
+
+
+def ints(x):
+    return x[0] == b"$" and x[1] is not None and (x[1] == b"0" or (x[1].lstrip(b"-")[:1] in b"123456789" and x[1].lstrip(b"-").isdigit()))
+
+
 def same(b, r, cmd):
     global n
     n += 1
     x, y = run(b, cmd), run(r, cmd)
-    if cmd[0].upper() == b"MEMORY":
+    name = cmd[0].upper()
+    if name == b"MEMORY":
         if x[0] != y[0] or (x[0] != b":" and x != y):
             fail(cmd, x, y)
         return
-    if cmd[0].upper() == b"SCAN" and x[0] == y[0] == b"*":
+    if name == b"SCAN" and x[0] == y[0] == b"*":
         x, y = sorted(x[1][1][1]), sorted(y[1][1][1])
+    key = cmd[2] if name == b"OBJECT" and len(cmd) > 2 else (cmd[1] if len(cmd) > 1 else None)
+    if name in (b"OBJECT", b"DUMP") and key in apart:
+        if x == y and name == b"OBJECT":
+            d1, d2 = run(b, [b"DUMP", key]), run(r, [b"DUMP", key])
+            if d1 == d2:
+                apart.discard(key)
+        return
     if x != y:
         fail(cmd, x, y)
+    elif (name == b"LSET" and x[0] == b"-") or (name == b"LINSERT" and x == (b":", b"-1")):
+        part(b, r, cmd[1], (LP, QL))
+    elif name in (b"LMOVE", b"RPOPLPUSH") and len(cmd) > 2:
+        if cmd[1] == cmd[2]:
+            part(b, r, cmd[1], (LP, QL))
+        elif ints(x):
+            part(b, r, cmd[2], (QL, LP))
 
 
 LLONG_MIN = b"-9223372036854775808"
@@ -295,6 +345,85 @@ def searches(b, r):
         same(b, r, cmd)
 
 
+# A list's encoding, and the nodes of a quicklist, as Redis 7.2 makes
+# them: OBJECT ENCODING and the DUMP of each key compared after each step
+def encodings(b, r):
+    el = lambda i, w: (b"%d:" % i).ljust(w, b"x")
+    look = lambda key: ([b"OBJECT", b"ENCODING", key], [b"LLEN", key], [b"DUMP", key])
+
+    def steps(key, cmds, every=1, keys=()):
+        for i, cmd in enumerate(cmds):
+            same(b, r, cmd)
+            if i % every == 0 or i == len(cmds) - 1:
+                for k in (key,) + keys:
+                    for c in look(k):
+                        same(b, r, c)
+
+    # grown an element at a time at either end, past 8 KB and on into
+    # more nodes, then emptied from the other end: a quicklist until one
+    # node of 4 KB at most is left
+    for key, push, pop in ((b"eg1", b"RPUSH", b"LPOP"), (b"eg2", b"LPUSH", b"RPOP"), (b"eg3", b"RPUSH", b"RPOP")):
+        steps(key, [[push, key, el(i, 40 + i % 70)] for i in range(400)], 3)
+        steps(key, [[pop, key] for _ in range(400)], 3)
+    # many elements in one push, past 8 KB at once (the listpack made a
+    # quicklist before them), and integers of every width
+    steps(b"eg4", [[b"RPUSH", b"eg4"] + [el(i, 50) for i in range(300)], [b"LPUSH", b"eg4"] + [el(i, 9) for i in range(500)]])
+    ints = [b"%d" % v for v in (0, 1, 127, 128, -1, -4096, 4095, 4096, -32768, 32767, 32768, -8388608, 8388607,
+                                8388608, -2147483648, 2147483647, 2147483648, -9223372036854775808, 9223372036854775807)]
+    steps(b"eg5", [[b"RPUSH", b"eg5"] + ints * 40, [b"LPUSH", b"eg5"] + [b"%d" % (i * 7919) for i in range(1500)],
+                   [b"RPUSH", b"eg5", b"01", b"-0", b"+1", b"1e3", b"9223372036854775808"]])
+    steps(b"eg5", [[b"LPOP", b"eg5", b"700"], [b"RPOP", b"eg5", b"900"], [b"LMPOP", b"1", b"eg5", b"LEFT", b"COUNT", b"500"],
+                   [b"LMPOP", b"1", b"eg5", b"RIGHT", b"COUNT", b"300"]])
+    # at the edge: a listpack of 8 KB and a byte, and of 8 KB
+    for key, w in ((b"eg6", 8183), (b"eg7", 8184), (b"eg8", 8185), (b"eg9", 8186)):
+        steps(key, [[b"RPUSH", key, b"x" * w], [b"RPUSH", key, b"y"], [b"RPOP", key], [b"LPUSH", key, b"z"]])
+    # LTRIM to a node or less, LREM of many and of none, LSET of an element
+    # that takes a listpack past 8 KB and back
+    steps(b"et", [[b"RPUSH", b"et"] + [el(i, 30 + i % 50) for i in range(600)], [b"LTRIM", b"et", b"0", b"-1"],
+                  [b"LTRIM", b"et", b"5", b"-6"], [b"LTRIM", b"et", b"100", b"300"], [b"LTRIM", b"et", b"10", b"150"],
+                  [b"LTRIM", b"et", b"0", b"60"], [b"RPUSH", b"et"] + [b"r"] * 50 + [el(9, 3000)] * 3,
+                  [b"LREM", b"et", b"0", b"nothing"], [b"LREM", b"et", b"-20", b"r"], [b"LREM", b"et", b"0", el(9, 3000)],
+                  [b"LREM", b"et", b"0", b"r"]])
+    steps(b"es", [[b"RPUSH", b"es", b"a", b"b", b"c"], [b"LSET", b"es", b"1", b"x" * 9000], [b"LSET", b"es", b"1", b"b"],
+                  [b"RPUSH", b"es"] + [el(i, 100) for i in range(120)],
+                  [b"LSET", b"es", b"60", b"y" * 7000], [b"LSET", b"es", b"0", b"z" * 9000], [b"LSET", b"es", b"-1", b""],
+                  [b"LPOP", b"es", b"100"], [b"LSET", b"es", b"0", b"s"], [b"LPOP", b"es", b"3"]])
+    # LINSERT: into a node with room, at a full node's end into the next
+    # node or the one before, into a node of its own, or splitting the
+    # node, whose parts then merge with their neighbours
+    base = [el(i, 60) for i in range(300)]
+    cmds = [[b"RPUSH", b"ei"] + base]
+    for i in (0, 1, 60, 61, 120, 121, 122, 199, 250, 298, 299):
+        for where in (b"BEFORE", b"AFTER"):
+            cmds.append([b"LINSERT", b"ei", where, base[i], el(1000 + i, 30 + i % 200)])
+    cmds += [[b"LPOP", b"ei", b"200"], [b"LINSERT", b"ei", b"BEFORE", base[250], b"q" * 5000],
+             [b"LINSERT", b"ei", b"AFTER", base[251], b"q" * 3000], [b"RPOP", b"ei", b"40"]]
+    steps(b"ei", cmds)
+    steps(b"ej", [[b"RPUSH", b"ej", b"a", b"b", b"c"], [b"LINSERT", b"ej", b"AFTER", b"b", b"w" * 8190],
+                  [b"LINSERT", b"ej", b"BEFORE", b"a", b"v" * 100], [b"LINSERT", b"ej", b"AFTER", b"c", b"u"],
+                  [b"LREM", b"ej", b"0", b"w" * 8190]])
+    # moves between a listpack and a quicklist, either way
+    steps(b"em1", [[b"RPUSH", b"em1"] + [el(i, 70) for i in range(200)], [b"RPUSH", b"em2"] + [el(i, 70) for i in range(110)]])
+    steps(b"em2", [[b"LMOVE", b"em1", b"em2", b"LEFT", b"RIGHT"] for _ in range(30)] +
+          [[b"RPOPLPUSH", b"em2", b"em1"] for _ in range(80)], 4, (b"em1",))
+    # payloads: Redis's DUMP restored in BendKV and BendKV's in Redis, each
+    # read as Redis reads it (a quicklist of one node of 8 KB at most is a
+    # listpack)
+    for key in (b"eg4", b"eg5", b"et", b"es", b"ei", b"em1", b"em2"):
+        pb, pr = run(b, [b"DUMP", key]), run(r, [b"DUMP", key])
+        if pb[1] is None or pr[1] is None:
+            continue
+        for c, p in ((b, pr[1]), (r, pb[1])):
+            run(c, [b"RESTORE", key + b".r", b"0", p, b"REPLACE"])
+        for c in look(key + b".r"):
+            same(b, r, c)
+        # a node of its own for the elements past one node, then popped to one node
+        steps(key + b".r", [[b"LTRIM", key + b".r", b"0", b"40"], [b"RPOP", key + b".r"]])
+    for c in (b, r):
+        run(c, [b"DEL", b"eg1", b"eg2", b"eg3", b"eg4", b"eg5", b"eg6", b"eg7", b"eg8", b"eg9", b"et", b"es", b"ei", b"ej",
+                b"em1", b"em2"] + [k + b".r" for k in (b"eg4", b"eg5", b"et", b"es", b"ei", b"em1", b"em2")])
+
+
 # a list whose time passed: a read finds nothing, a write makes it anew,
 # a move takes it as not there, as a source or a destination
 def expired(b, r):
@@ -352,7 +481,8 @@ def rand_cmd(r):
     if k < 0.78:
         return [b"RPUSH", key] + [v() for _ in range(r.randint(5, 30))]
     return r.choice([[b"LLEN", key], [b"LINDEX", key, num()], [b"LRANGE", key, num(), num()],
-                     [b"LRANGE", key, b"0", b"-1"], [b"TYPE", key], [b"EXISTS", key], [b"TTL", key]])
+                     [b"LRANGE", key, b"0", b"-1"], [b"TYPE", key], [b"EXISTS", key], [b"TTL", key],
+                     [b"OBJECT", b"ENCODING", key], [b"DUMP", key]])
 
 
 # random commands on two lists of elements of up to 400 bytes, a few
@@ -383,7 +513,8 @@ def rand_wide(r):
                                                [b"RANK", b"-1", b"COUNT", b"3", b"MAXLEN", b"50"]])
     if k < 0.9:
         return [b"LREM", key, r.choice([b"0", b"1", b"2", b"-1", b"-2"]), v()]
-    return r.choice([[b"LINDEX", key, idx()], [b"LLEN", key], [b"LINSERT", key, r.choice([b"BEFORE", b"AFTER"]), v(), v()]])
+    return r.choice([[b"LINDEX", key, idx()], [b"LLEN", key], [b"LINSERT", key, r.choice([b"BEFORE", b"AFTER"]), v(), v()],
+                     [b"OBJECT", b"ENCODING", key], [b"DUMP", key]])
 
 
 def main():
@@ -396,11 +527,24 @@ def main():
     b, rd = Conn(a.bendkv), Conn(a.redis)
     for c in (b, rd):
         run(c, [b"FLUSHALL"])
+    comp = run(rd, [b"CONFIG", b"GET", b"rdbcompression"])[1][1][1]
+    run(rd, [b"CONFIG", b"SET", b"rdbcompression", b"no"])
+    try:
+        script(b, rd, a)
+    finally:
+        run(rd, [b"CONFIG", b"SET", b"rdbcompression", comp])
+    if bad:
+        sys.exit("FAIL: %d of %d" % (bad, n))
+    print("OK: %d list commands, each answered as Redis answers it (%d lists parted for a while, as README says)" % (n, parted))
+
+
+def script(b, rd, a):
     for cmd in SCRIPT:
         same(b, rd, cmd)
     sizes(b, rd)
     pieces(b, rd)
     searches(b, rd)
+    encodings(b, rd)
     expired(b, rd)
     r = random.Random(a.seed)
     for _ in range(a.rounds):
@@ -414,9 +558,6 @@ def main():
                 dumped(b, rd, key)
     for c in (b, rd):
         run(c, [b"FLUSHALL"])
-    if bad:
-        sys.exit("FAIL: %d of %d" % (bad, n))
-    print("OK: %d list commands, each answered as Redis answers it" % n)
 
 
 if __name__ == "__main__":

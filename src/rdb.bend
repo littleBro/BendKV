@@ -1313,7 +1313,12 @@ def is.read(+b: String) -> Maybe<&2, List<&2, String>>:
 # it a hashtable); one that came as an intset stays one; a sorted set
 # small (ZSmall) when it came as a listpack or ziplist of at most 128
 # elements, or as a skiplist of at most 128 whose members are of at most
-# 64 bytes. A collection with no element, or a member, field or element
+# 64 bytes; a list a listpack when it came as a quicklist of one node of
+# at most 8 KB, or as a linked list (LIST) that one node holds as RPUSH
+# fills it, else a quicklist of the nodes it came in (of the nodes RPUSH
+# makes, for a linked list), and a quicklist when it came as a ziplist
+# (LIST_ZIPLIST, Redis before 3.2; map.bend: Lists as Redis 7.2 holds
+# them). A collection with no element, or a member, field or element
 # of a sorted set twice, or a score that is no number (a NaN), is no
 # value Redis takes ("Bad data format").
 
@@ -1357,9 +1362,19 @@ def val.hash(+small: Bool, +n: Nat, +ps: List<&2, KV.HPair>) -> Maybe<&2, KV.Val
   +t = KV.hps.trie(ps, KV.empty(String))
   Bool.pick(Maybe<&2, KV.Val>, Bool.and(Nat.is_lt(0n, n), Nat.is_eq(KV.size(String, t), n)), Some{val.hash.of(small, n, ps, t)}, None{})
 
-def val.list(+xs: List<&2, String>) -> Maybe<&2, KV.Val>:
+# a list of the n elements xs, as Redis 7.2 holds it once read: a
+# ziplist's (zl) as a quicklist, any other's as a listpack when it fits
+# in one node (KV.deq.zl, KV.deq.of)
+def val.deq(zl: Bool, +n: Nat, +xs: List<&2, String>) -> KV.Deq:
+  match zl:
+    case True{}:
+      KV.deq.zl(n, xs)
+    case False{}:
+      KV.deq.of(n, xs)
+
+def val.list(+zl: Bool, +xs: List<&2, String>) -> Maybe<&2, KV.Val>:
   +n = List.length(&2, String, xs)
-  Bool.pick(Maybe<&2, KV.Val>, Nat.is_lt(0n, n), Some{KV.VColl{KV.CList{KV.deq.of(n, xs)}}}, None{})
+  Bool.pick(Maybe<&2, KV.Val>, Nat.is_lt(0n, n), Some{KV.VColl{KV.CList{val.deq(zl, n, xs)}}}, None{})
 
 # The members of a set that came as a hashtable, as Redis 7.2.16 orders
 # them when its load makes a listpack of them (rdbLoadObject): it reads
@@ -2929,25 +2944,42 @@ def ql.node(two: Bool, t: String) -> Maybe<&1, List<&2, String> & String>:
     case False{}:
       ql.blob(False{}, 2n, rd.str(t))
 
+# A quicklist read: its elements and its nodes, each in order
+type QlRd is Data:
+  QlRd{xs: List<&2, String>, ns: List<&2, KV.QN>}
+
+# the node of the elements xs before ns, when it holds any (Redis skips
+# an empty one): its count and its listpack's bytes
+def ql.qn.of(c: Nat, xs: List<&2, String>, ns: List<&2, KV.QN>) -> List<&2, KV.QN>:
+  match c:
+    case 0n:
+      ns
+    case 1n+k:
+      KV.QN{1n+k, KV.lpk.sum(xs, KV.lpk.empty())} <> ns
+
+def ql.qn(+xs: List<&2, String>, ns: List<&2, KV.QN>) -> List<&2, KV.QN>:
+  ql.qn.of(List.length(&2, String, xs), xs, ns)
+
 # the nodes after r, the one just read, k more after it: their elements
-# before acc, the newest first; and the bytes after them
-def ql.nodes(k: Nat, +two: Bool, r: Maybe<&1, List<&2, String> & String>, acc: List<&2, String>) -> Maybe<&1, List<&2, String> & String>:
+# before acc, the newest first, their nodes before ns, the newest first;
+# and the bytes after them
+def ql.nodes(k: Nat, +two: Bool, r: Maybe<&1, List<&2, String> & String>, acc: List<&2, String>, ns: List<&2, KV.QN>) -> Maybe<&1, QlRd & String>:
   match k r:
     case 0n Some{p}:
-      (xs, t) = p
-      Some{(List.reverse(&2, String, List.reverse.go(&2, String, xs, acc)), t)}
+      (+xs, t) = p
+      Some{(QlRd{List.reverse(&2, String, List.reverse.go(&2, String, xs, acc)), List.reverse(&2, KV.QN, ql.qn(xs, ns))}, t)}
     case 1n+j Some{p}:
-      (xs, t) = p
-      ql.nodes(j, two, ql.node(two, t), List.reverse.go(&2, String, xs, acc))
+      (+xs, t) = p
+      ql.nodes(j, two, ql.node(two, t), List.reverse.go(&2, String, xs, acc), ql.qn(xs, ns))
     case _ None{}:
       None{}
 
-def ql.nodes.n(n: Nat, +two: Bool, t: String) -> Maybe<&1, List<&2, String> & String>:
+def ql.nodes.n(n: Nat, +two: Bool, t: String) -> Maybe<&1, QlRd & String>:
   match n:
     case 0n:
-      Some{(Nil{}, t)}
+      Some{(QlRd{Nil{}, Nil{}}, t)}
     case 1n+k:
-      ql.nodes(k, two, ql.node(two, t), Nil{})
+      ql.nodes(k, two, ql.node(two, t), Nil{}, Nil{})
 
 def obj.str(m: Maybe<&1, String & String>) -> Vr:
   match m:
@@ -2958,25 +2990,46 @@ def obj.str(m: Maybe<&1, String & String>) -> Vr:
       VrBad{}
 
 # a list of the elements xs, the bytes t after it
-def obj.list.of(xs: List<&2, String>, t: String) -> Vr:
+def obj.list.of(+zl: Bool, xs: List<&2, String>, t: String) -> Vr:
   match xs:
     case Nil{}:
       VrEmpty{t}
     case Con{x, more}:
-      vr.of(val.list(x <> more), t)
+      vr.of(val.list(zl, x <> more), t)
 
 def obj.list(m: Maybe<&1, List<&2, String> & String>) -> Vr:
   match m:
     case Some{p}:
       (xs, t) = p
-      obj.list.of(xs, t)
+      obj.list.of(False{}, xs, t)
     case None{}:
       VrBad{}
 
 def obj.list.b(m: Maybe<&2, List<&2, String>>, t: String) -> Vr:
   match m:
     case Some{xs}:
-      obj.list.of(xs, t)
+      obj.list.of(True{}, xs, t)
+    case None{}:
+      VrBad{}
+
+# a quicklist's list, of its nodes (QUICKLIST, QUICKLIST_2)
+def obj.ql.of(xs: List<&2, String>, ns: List<&2, KV.QN>, t: String) -> Vr:
+  match xs:
+    case Nil{}:
+      VrEmpty{t}
+    case Con{+x, +more}:
+      vr.of(Some{KV.VColl{KV.CList{KV.deq.nodes(1n+List.length(&2, String, more), x <> more, ns)}}}, t)
+
+def obj.ql.rd(r: QlRd, t: String) -> Vr:
+  match r:
+    case QlRd{xs, ns}:
+      obj.ql.of(xs, ns, t)
+
+def obj.ql(m: Maybe<&1, QlRd & String>) -> Vr:
+  match m:
+    case Some{p}:
+      (r, t) = p
+      obj.ql.rd(r, t)
     case None{}:
       VrBad{}
 
@@ -3132,9 +3185,9 @@ def obj.n.at(k: Nat, +n: Nat, +t: String) -> Vr:
     case 5n:
       obj.zels(z.els.n(n, True{}, t))
     case 14n:
-      obj.list(ql.nodes.n(n, False{}, t))
+      obj.ql(ql.nodes.n(n, False{}, t))
     case _:
-      obj.list(ql.nodes.n(n, True{}, t))
+      obj.ql(ql.nodes.n(n, True{}, t))
 
 def obj.n(k: Nat, m: Maybe<&1, Nat & String>) -> Vr:
   match m:
@@ -3181,10 +3234,9 @@ def obj(+k: Nat, s: String) -> Maybe<&2, KV.Val>:
 # rdbSaveObject, with rdbcompression no: a string; a small hash as one
 # listpack (HASH_LISTPACK) and a large one as its count and its fields
 # and values (HASH, in the order of its trie, where Redis's are in the
-# order of its table); a list as a quicklist (LIST_QUICKLIST_2) of the
-# nodes RPUSH makes of its elements (at list-max-listpack-size -2: a node
-# takes an element while its listpack's bytes, the element's and 8 stay
-# within 8192), each packed (2) as a listpack; an intset (SET_INTSET) of
+# order of its table); a list as a quicklist (LIST_QUICKLIST_2) of its
+# nodes, a listpack as one node (KV.deq.parts), each packed (2) as a
+# listpack; an intset (SET_INTSET) of
 # the narrowest width that holds its members, a small set as one listpack
 # of its members in their order (SET_LISTPACK), a large one as its count
 # and members (SET, in the order of its trie); a small sorted set as one listpack
@@ -3221,34 +3273,6 @@ def put.hash(h: KV.Hash, rest: String) -> String:
       len.put(n, put.strs(hps.words(KV.hash.kv(t, KV.keys(String, t, 0n))), rest))
 
 # Lists as quicklist nodes
-type QlS is Data:
-  QlS{cur: List<&2, String>, cn: Nat, cb: Nat, acc: List<&2, List<&2, String>>}
-
-def ql.step(fits: Bool, +x: String, +e: Nat, st: QlS) -> QlS:
-  match fits st:
-    case True{} QlS{cur, +cn, +cb, acc}:
-      QlS{x <> cur, Nat.add(cn, 1n), Nat.add(cb, e), acc}
-    case False{} QlS{cur, cn, cb, acc}:
-      QlS{[x], 1n, Nat.add(7n, e), List.reverse(&2, String, cur) <> acc}
-
-def ql.at(+x: String, st: QlS) -> QlS:
-  match st:
-    case QlS{cur, +cn, +cb, acc}:
-      ql.step(Bool.or(Nat.is_eq(cn, 0n), Nat.is_le(Nat.add(Nat.add(cb, String.length(x)), 8n), 8192n)), x, lp.esize(x), QlS{cur, cn, cb, acc})
-
-def ql.done(st: QlS) -> List<&2, List<&2, String>>:
-  match st:
-    case QlS{cur, cn, cb, acc}:
-      List.reverse(&2, List<&2, String>, List.reverse(&2, String, cur) <> acc)
-
-# the nodes, in order, each its elements in order
-def ql.part(xs: List<&2, String>, st: QlS) -> List<&2, List<&2, String>>:
-  match xs:
-    case Nil{}:
-      ql.done(st)
-    case Con{+x, rest}:
-      ql.part(rest, ql.at(x, st))
-
 def put.nodes(ns: List<&2, List<&2, String>>, rest: String) -> String:
   match ns:
     case Nil{}:
@@ -3257,7 +3281,7 @@ def put.nodes(ns: List<&2, List<&2, String>>, rest: String) -> String:
       b1(2) ++ put.blob(lp.blob(xs, List.length(&2, String, xs)), put.nodes(more, rest))
 
 def put.list(+d: KV.Deq, rest: String) -> String:
-  +ns = ql.part(KV.deq.all(d), QlS{Nil{}, 0n, 7n, Nil{}})
+  +ns = KV.deq.parts(d)
   len.put(List.length(&2, List<&2, String>, ns), put.nodes(ns, rest))
 
 # Sets: an intset as Redis writes one, its header (its members' width
