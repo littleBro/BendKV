@@ -1033,7 +1033,7 @@ away.
 | `src/acl.bend` | 2,200 | 670 | no |
 | `src/aofdir.bend` | 360 |  | no |
 | `src/command.bend` | 2,800 | 2,100 | no |
-| `src/float.bend` | 1,200 |  | no |
+| `src/float.bend` | 1,600 |  | no |
 | `src/geo.bend` | 870 |  | no |
 | `src/hll.bend` | 1,400 |  | no |
 | `src/info.bend` | 2,900 |  | no |

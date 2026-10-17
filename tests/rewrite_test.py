@@ -14,8 +14,8 @@ of words, hashes, sorted sets with scores of each form, small and past 64
 elements, times to expire at, keys in several databases), both rewrite
 their files, and BendKV's holds what Redis's base holds, command for
 command: a SELECT of each database with keys, a key's SET, RPUSH, SADD,
-HMSET or ZADD (64 elements or pairs to a command, scores as %.17g
-writes them) and its PEXPIREAT; the elements of a set, a hash and a
+HMSET or ZADD (64 elements or pairs to a command, scores as Redis 7.2's
+fpconv_dtoa writes them) and its PEXPIREAT; the elements of a set, a hash and a
 sorted set in any order; before them, the FUNCTION LOAD of each library
 (in any order). BendKV started from its rewritten file, and Redis from
 it, hold the databases and the libraries.

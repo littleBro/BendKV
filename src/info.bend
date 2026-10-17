@@ -3683,7 +3683,7 @@ def mem.pct(+a: Nat, +b: Nat) -> F.Fl:
   F.fl.div(F.fmt.f(), F.fl.mul(F.fmt.f(), mem.f(a), mem.f(100n)), mem.f(b))
 
 def mem.dbl(x: F.Fl) -> R.Reply:
-  R.RDbl{F.fl.show_g(F.fl.to(F.fmt.d(), x))}
+  R.RDbl{F.f64.show(F.f64.of(F.fl.to(F.fmt.d(), x)))}
 
 # a - b, signed (ssize_t)
 def mem.diff(+a: Nat, +b: Nat) -> R.Int:

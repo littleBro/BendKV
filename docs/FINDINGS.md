@@ -9798,6 +9798,78 @@ bytes in the file and a word in the value.
 **What it costs.** Nothing on a request's path: the texts are made for an error alone, and HELLO
 and ACL LOG are not on the fast way.
 
+## 3zzzze. Doubles as Redis 7.2.16 writes them
+
+**What changed** (#128, kind C: `src/float.bend`, and the places that write a double in
+`src/redis.bend`, `src/rdb.bend`, `src/aof.bend`, `src/acl.bend` and `src/info.bend`).
+- **Where Redis 7.2 writes a double, and how.**
+  - A reply (`addReplyDouble`) and a sorted set's listpack (`zzlInsertAt`) take `d2string`:
+    `nan`, `inf`, `-inf`, `0` or `-0`; an integral double of magnitude 2^62 at most
+    (`double2ll`) as its integer; any other as `fpconv_dtoa` writes it. In 7.0, a reply was
+    `%.17g`, and `d2string` ended in `%.17g` too. So ZSCORE, WITHSCORES, ZINCRBY, ZADD INCR
+    and the rest now answer `0.1` where 7.0 answered `0.10000000000000001`, and
+    `123456789012345680` where it answered `1.2345678901234568e+17`. MEMORY STATS's ratios
+    and ACL LOG's `age-seconds` are replies too.
+  - The AOF rewrite (`rioWriteBulkDouble`) takes `fpconv_dtoa` alone, with no integer of its
+    own: a score of 100000000 is `1e+8` in a rewritten file and `100000000` in a reply.
+  - As in 7.0: ZSCAN of a sorted set kept as a table (`ld2string`: `%.17Lg`), GEO's
+    distances (`fixedpoint_d2string`), its coordinates and INCRBYFLOAT (`%.17Lf`).
+- **`fpconv_dtoa`** is Florian Loitsch's Grisu2, in night-shift's C, which Redis 7.2 vendors
+  in `deps/fpconv`. BendKV vendors the same files (`deps/redis/deps/fpconv`, Boost Software
+  License 1.0: NOTICE); the Makefile builds them into the server, for the Lua engine's
+  numbers, which are the scripting kinds'. Grisu2 finds digits that read back as the double:
+  few, though not always the fewest. It lays out n digits whose last is at 10^K:
+  - as an integer, with K '0's after them, when K ≥ 0 and the first digit's exponent is
+    below n + 7 (`10000000`, but `1e+8`);
+  - as a fraction when K < 0, and K > -7 or that exponent is below 4 in magnitude
+    (`0.000001`, but `1e-7`);
+  - else as `d.ddde±X`, with no leading '0' in X (`1e+22`, `5e-324`), and 18 digits at most
+    (17 for a negative number).
+- **In Bend** (`src/float.bend`, section Grisu2) the C is ported step for step.
+  - None of Grisu2's sums, products and shifts passes 2^64 (of a product it keeps the high
+    half), so none wraps in C, and exact arithmetic gives C's results.
+  - A 64-bit integer is a `U64`: its high and low 32 bits, two Nats. A product goes by
+    16-bit pieces, so that no Nat passes 2^48. The first port used the file's big integers
+    (lists of 24-bit limbs), and wrote a double 2 to 4 times slower than the `%.17g` it
+    replaces; the halves make it faster than `%.17g` (below).
+  - A Python model of the same steps matched the C on 3 million random doubles and on the
+    edges of every exponent first. The bounds it saw (two steps to find the cached power,
+    six for `round_digit`, 16 digits in the second loop) set the Bend loops' fuel, with room.
+  - `F.f64.show` is `d2string` now, for replies and listpacks alike (it was `%.17g`, with
+    `f64.show_lp` for listpacks). `F.f64.dtoa` is `fpconv_dtoa`; `F.f64.show_g` is `%.17g`,
+    for ZSCAN.
+- **XINFO** shows a consumer's active time, which kind E keeps (section 3zzzzc):
+  `active-time` in STREAM FULL, and `inactive` in CONSUMERS (now less it; −1 for none).
+
+**Tests.** `float_test` also writes doubles given by their bits: random ones, integers and
+their neighbours, short decimals, subnormals, every exponent's edges, NaNs, infinities and
+zeros. Each is written as `d2string` and as `fpconv_dtoa` write it. Its reference
+(`tests/float_ref.c`) is built with the vendored `fpconv_dtoa.c` and has 7.2.16's `d2string`.
+Six seeds of it pass, about 9,400 doubles by their bits.
+- Against 7.2.16, `zset_test`, `geo_test`, `numbers_test`, `diff_test` (1,000 rounds),
+  `sort_test`, `keyspace_test`, `stream_read_test`, `stream_dump_test`, `acl_test` and
+  `admin_test` pass, and so does `rewrite_test`, whose rewritten file has each score as
+  `fpconv_dtoa` writes it. What still differs there is other kinds': the encodings of sets
+  (`zset_test`'s OBJECT ENCODING, `dump_test`, `aof_redis_test`: kind D) and the order of
+  RESP3's pushes (`resp3_test`: kind F).
+- `stream_read_test` reads `inactive` as it reads `idle`: now less a time, each server at its
+  own now, within 2 s (and -1 only as -1).
+
+**What it costs.** A double is written faster than before, most of all one far from 1
+(redis-benchmark, pipelines of 16, 20 clients, requests a second):
+
+| | `%.17g` (before) | Grisu2 |
+|---|---:|---:|
+| ZSCORE of 0.1 | 257 thousand | 560 thousand |
+| ZSCORE of 3.141592653589793 (17 digits) | 239 thousand | 271 thousand |
+| ZSCORE of 1e-300 | 6 thousand | 725 thousand |
+| ZRANGE 0 -1 WITHSCORES, 100 random scores | 2,233 | 2,599 |
+
+`%.17g` made the exact decimal value of the double, whose digits grow with its exponent;
+Grisu2 makes 17 digits at most from 64-bit integers. An integral score (ZSCORE of 1) takes
+the integer's path, as before. DUMP writes a small sorted set's scores with `d2string`
+too.
+
 ## 4. Where a request's time goes, and hiding the memory waits
 
 With the eight patches, BendKV ran fewer instructions on GET and SET than Redis, missed

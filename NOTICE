@@ -8,7 +8,9 @@ code ported from it, under the licenses that come with it.
 deps/redis: the Lua engine of Redis 7.2.16 and three of Redis's helpers,
 built into the server for EVAL, FUNCTION and their kin (src/lua/engine.c,
 which is ported from Redis's script_lua.c, eval.c, script.c,
-function_lua.c and functions.c).
+function_lua.c and functions.c), and the fpconv_dtoa with which Redis
+7.2.16 writes a double, built into the server too, and into the reference
+of tests/float_test.py (tests/float_ref.c).
 
 - Redis 7.2.16 (deps/redis/src: resp_parser.c, rand.c and their
   headers; server.h, a stand-in with what resp_parser.c takes from
@@ -27,6 +29,11 @@ function_lua.c and functions.c).
 - LuaBitOp (deps/redis/deps/lua/src/lua_bit.c): Copyright (C) 2008-2012
   Mike Pall. MIT License, in the file's header.
 - SHA-1 in C (deps/redis/src/sha1.c), by Steve Reid: public domain.
+- fpconv (deps/redis/deps/fpconv: fpconv_dtoa.c, fpconv_dtoa.h and
+  fpconv_powers.h, as Redis 7.2.16 ships them): Copyright (c) 2013-2019,
+  night-shift; Copyright (c) 2009, Florian Loitsch; and, in
+  fpconv_powers.h, Copyright (c) 2021, Redis Labs. Boost Software License
+  1.0: deps/redis/deps/fpconv/LICENSE.txt.
 
 deps/redis/src/config.h and solarisfixes.h are BendKV's: stand-ins for
 Redis's, which give sha1.c the byte order and nothing. One change to Lua
@@ -146,6 +153,16 @@ parts of it are written from 7.2.16's sources:
 - ACL LOG's entry-id, timestamp-created and timestamp-last-updated, and
   the count of entries made, which ACL LOG RESET keeps (acl.c), in
   src/acl.bend.
+- Doubles: src/float.bend's f64.dtoa, ported from fpconv_dtoa.c and
+  fpconv_powers.h (Grisu2, under the Boost Software License 1.0 as
+  above), and its f64.show, from util.c's d2string and double2ll; and
+  which of them Redis writes a double with where (networking.c's
+  addReplyDouble, t_zset.c's zzlInsertAt, rio.c's rioWriteBulkDouble,
+  db.c's scan of a sorted set), in src/redis.bend, src/rdb.bend,
+  src/aof.bend, src/acl.bend and src/info.bend; and d2string and
+  double2ll in tests/float_ref.c.
+- XINFO STREAM FULL's active-time and XINFO CONSUMERS' inactive
+  (t_stream.c), in src/redis.bend and src/stream.bend.
 
 Bend (bend-patches/): patches to the Bend compiler and its runtime
 (github.com/bendlang/bend at 1cce499, Bend 2.0.35), Copyright 2026

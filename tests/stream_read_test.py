@@ -21,9 +21,10 @@ compared whole.
   edge, WRONGTYPE, a key or a group not there, XREAD's options, XINFO's
   subcommands.
 
-An idle time (XINFO CONSUMERS, XPENDING) is now less a time, read by
-each server at its own now: two that differ by less than 2 s count as
-the same.
+An idle time (XINFO CONSUMERS' idle and, as Redis 7.2 adds it,
+inactive; XPENDING) is now less a time, read by each server at its own
+now: two that differ by less than 2 s count as the same (an inactive of
+-1, a consumer that has read nothing, only as -1).
 
 XREAD with BLOCK is served when an entry is there; BendKV blocks on no
 stream yet, so where Redis would wait it answers an error, which the
@@ -55,7 +56,7 @@ def fail(what, x, y):
 
 
 # whether two replies are the same, an idle time within LOOSE ms (one
-# after a bulk "idle", and an XPENDING entry's third item)
+# after a bulk "idle" or "inactive", and an XPENDING entry's third item)
 def alike(x, y, xpend=False):
     if x == y:
         return True
@@ -73,9 +74,11 @@ def alike(x, y, xpend=False):
         return True
     i = 0
     while i < len(vx):
-        if vx[i] == vy[i] == (b"$", b"idle") and i + 1 < len(vx):
+        if vx[i] == vy[i] and vx[i] in ((b"$", b"idle"), (b"$", b"inactive")) and i + 1 < len(vx):
             a, b = vx[i + 1], vy[i + 1]
             if a[0] != b":" or b[0] != b":" or abs(int(a[1]) - int(b[1])) > LOOSE:
+                return False
+            if b"-1" in (a[1], b[1]) and a != b:
                 return False
             i += 2
             continue

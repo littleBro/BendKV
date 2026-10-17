@@ -1859,13 +1859,15 @@ def rw.hwords(ps: List<&2, KV.HPair>) -> List<&2, String>:
     case Con{KV.HP{f, v}, rest}:
       f <> v <> rw.hwords(rest)
 
-# a sorted set's elements as words: score, member, ...
+# a sorted set's elements as words: score, member, ...; a score as Redis
+# 7.2's rewrite writes it (rio.c's rioWriteBulkDouble: fpconv_dtoa, with
+# no integer of its own, so that 100000000 is 1e+8)
 def rw.zwords(es: List<&2, KV.ZEl>) -> List<&2, String>:
   match es:
     case Nil{}:
       Nil{}
     case Con{KV.ZEl{m, +d}, rest}:
-      F.f64.show(d) <> m <> rw.zwords(rest)
+      F.f64.dtoa(d) <> m <> rw.zwords(rest)
 
 # the commands that make a key's value again, newest first before acc
 def rw.val(+k: String, v: KV.Val, acc: List<&2, List<&2, String>>) -> List<&2, List<&2, String>>:

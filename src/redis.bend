@@ -16910,8 +16910,9 @@ def sread.coll(op: SRead, +cl: KV.Coll) -> Reply:
 # A sorted set's reads. A key not there reads as an empty sorted set, as
 # in Redis (ZCARD 0, nils for scores and ranks, no elements in a range,
 # an empty scan with cursor 0); a key that holds another kind answers
-# WRONGTYPE. A score is answered as Redis writes a double (%.17g; inf,
-# -inf: F.f64.show), a double of RESP3 (RDbl).
+# WRONGTYPE. A score is answered as Redis 7.2 writes a double (an
+# integer, or fpconv_dtoa's digits; inf, -inf: F.f64.show), a double of
+# RESP3 (RDbl).
 
 def zscore.reply(m: Maybe<&2, F.F64>) -> Reply:
   match m:
@@ -17219,20 +17220,21 @@ def zcount.args(+k: Nat, args: List<&2, String>, +z: KV.Zset) -> Reply:
       zrng.err(k)
 
 # ZSCAN: a small sorted set answers all its elements at once, with cursor
-# 0, each score as a listpack keeps it (F.f64.show_lp); a large one scans
-# its trie of members as HSCAN scans a hash's, each score as Redis writes
-# a double (the options as HSCAN reads them)
+# 0, each score as a listpack keeps it (F.f64.show); a large one scans
+# its trie of members as HSCAN scans a hash's, each score as "%.17Lg"
+# writes it (ld2string's LD_STR_AUTO: F.f64.show_g; the options as HSCAN
+# reads them)
 def zscan.lp(xs: List<&2, KV.ZEl>) -> List<&2, KV.HPair>:
   match xs:
     case Nil{}:
       Nil{}
     case Con{KV.ZEl{m, +d}, rest}:
-      KV.HP{m, F.f64.show_lp(d)} <> zscan.lp(rest)
+      KV.HP{m, F.f64.show(d)} <> zscan.lp(rest)
 
 def zscan.score(m: Maybe<&2, F.F64>) -> String:
   match m:
     case Some{+d}:
-      F.f64.show(d)
+      F.f64.show_g(d)
     case None{}:
       "0"
 
@@ -17650,9 +17652,27 @@ def xv.cnacks.full(ns: List<&2, KV.XNack>) -> List<&2, Reply>:
     case Nil{}:
       Nil{}
 
+# a consumer's active time, as Redis 7.2 shows it: the time it last read
+# or claimed an entry (FULL's active-time), or how long ago that was (now
+# less it: XINFO CONSUMERS' inactive, below 0 for a time past now, which
+# Redis leaves so); -1 for a consumer that has done neither
+def xv.act(+a: KV.XAct) -> Reply:
+  match a:
+    case KV.XActNone{}:
+      RInt{INeg{0n}}
+    case KV.XActAt{+ms}:
+      r_int(ms)
+
+def xv.inactive(+a: KV.XAct, +now: Nat) -> Reply:
+  match a:
+    case KV.XActNone{}:
+      RInt{INeg{0n}}
+    case KV.XActAt{+ms}:
+      RInt{Bool.pick(Int, Nat.is_le(ms, now), IPos{Nat.sub(now, ms)}, INeg{Nat.sub(Nat.sub(ms, now), 1n)})}
+
 def xv.con.full(+c: KV.XCon, +pel: KV.XPel, +n: Nat) -> Reply:
   +ids = X.xcon.ids(c)
-  RMap{[RBulk{"name"}, RBulk{KV.xcon.name(c)}, RBulk{"seen-time"}, r_int(X.xcon.seen(c)), RBulk{"pel-count"}, r_int(KV.xis.size(ids)), RBulk{"pending"}, RArray{xv.cnacks.full(X.xs.pending(pel, Some{ids}, X.xid.zero(), X.xid.max(), n, X.XINone{}, 0n))}]}
+  RMap{[RBulk{"name"}, RBulk{KV.xcon.name(c)}, RBulk{"seen-time"}, r_int(X.xcon.seen(c)), RBulk{"active-time"}, xv.act(X.xcon.active(c)), RBulk{"pel-count"}, r_int(KV.xis.size(ids)), RBulk{"pending"}, RArray{xv.cnacks.full(X.xs.pending(pel, Some{ids}, X.xid.zero(), X.xid.max(), n, X.XINone{}, 0n))}]}
 
 def xv.cons.full(cs: List<&2, KV.XCon>, +pel: KV.XPel, +n: Nat) -> List<&2, Reply>:
   match cs:
@@ -17725,9 +17745,9 @@ def xv.groups.info(gs: List<&2, KV.XGroup>, +x: KV.XStream) -> List<&2, Reply>:
       Nil{}
 
 # XINFO CONSUMERS: each consumer's idle time, now less its seen time (0
-# for one past now)
+# for one past now), and, as Redis 7.2 adds it, its inactive time
 def xv.con.info(+c: KV.XCon, +now: Nat) -> Reply:
-  RMap{[RBulk{"name"}, RBulk{KV.xcon.name(c)}, RBulk{"pending"}, r_int(KV.xis.size(X.xcon.ids(c))), RBulk{"idle"}, r_int(Nat.sub(now, X.xcon.seen(c)))]}
+  RMap{[RBulk{"name"}, RBulk{KV.xcon.name(c)}, RBulk{"pending"}, r_int(KV.xis.size(X.xcon.ids(c))), RBulk{"idle"}, r_int(Nat.sub(now, X.xcon.seen(c))), RBulk{"inactive"}, xv.inactive(X.xcon.active(c), now)]}
 
 def xv.cons.info(cs: List<&2, KV.XCon>, +now: Nat) -> List<&2, Reply>:
   match cs:
