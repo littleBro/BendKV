@@ -84,6 +84,10 @@ def upd.ch(t: KV.Trie<KV.Val>, +k: String, +h: U32, r: R.Reply, ch: R.Change) ->
       (r, KV.setx.at(KV.Val, t, k, KV.VColl{KV.CZset{zv}}, 0n, h))
     case R.CRestore{p, v, +e}:
       (r, KV.setx.at(KV.Val, t, k, v, e, h))
+    case R.CStream{op, xv}:
+      (r, KV.keep.at(KV.Val, t, k, KV.VColl{KV.CStream{xv}}, h))
+    case R.CStreamNew{op, xv}:
+      (r, KV.setx.at(KV.Val, t, k, KV.VColl{KV.CStream{xv}}, 0n, h))
 
 def upd.put(t: KV.Trie<KV.Val>, +k: String, +h: U32, o: R.Out) -> R.Reply & KV.Trie<KV.Val>:
   match o:

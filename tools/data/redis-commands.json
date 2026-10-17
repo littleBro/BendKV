@@ -30848,6 +30848,473 @@
     }
    ]
   },
+  "xadd": {
+   "docs": {
+    "%": [
+     "summary",
+     "Appends a new entry to a stream",
+     "since",
+     "5.0.0",
+     "group",
+     "stream",
+     "complexity",
+     "O(1) when adding a new entry, O(N) when trimming where N being the number of entries evicted.",
+     "history",
+     {
+      "~": [
+       [
+        "6.2.0",
+        "Added the `NOMKSTREAM` option, `MINID` trimming strategy and the `LIMIT` option."
+       ],
+       [
+        "7.0.0",
+        "Added support for the `<ms>-*` explicit ID form."
+       ]
+      ]
+     },
+     "arguments",
+     [
+      {
+       "%": [
+        "name",
+        "key",
+        "type",
+        "key",
+        "key_spec_index",
+        0
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "nomkstream",
+        "type",
+        "pure-token",
+        "token",
+        "NOMKSTREAM",
+        "since",
+        "6.2.0",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "trim",
+        "type",
+        "block",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        },
+        "arguments",
+        [
+         {
+          "%": [
+           "name",
+           "strategy",
+           "type",
+           "oneof",
+           "arguments",
+           [
+            {
+             "%": [
+              "name",
+              "maxlen",
+              "type",
+              "pure-token",
+              "token",
+              "MAXLEN"
+             ]
+            },
+            {
+             "%": [
+              "name",
+              "minid",
+              "type",
+              "pure-token",
+              "token",
+              "MINID",
+              "since",
+              "6.2.0"
+             ]
+            }
+           ]
+          ]
+         },
+         {
+          "%": [
+           "name",
+           "operator",
+           "type",
+           "oneof",
+           "flags",
+           {
+            "~": [
+             {
+              "+": "optional"
+             }
+            ]
+           },
+           "arguments",
+           [
+            {
+             "%": [
+              "name",
+              "equal",
+              "type",
+              "pure-token",
+              "token",
+              "="
+             ]
+            },
+            {
+             "%": [
+              "name",
+              "approximately",
+              "type",
+              "pure-token",
+              "token",
+              "~"
+             ]
+            }
+           ]
+          ]
+         },
+         {
+          "%": [
+           "name",
+           "threshold",
+           "type",
+           "string"
+          ]
+         },
+         {
+          "%": [
+           "name",
+           "count",
+           "type",
+           "integer",
+           "token",
+           "LIMIT",
+           "since",
+           "6.2.0",
+           "flags",
+           {
+            "~": [
+             {
+              "+": "optional"
+             }
+            ]
+           }
+          ]
+         }
+        ]
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "id_or_auto",
+        "type",
+        "oneof",
+        "arguments",
+        [
+         {
+          "%": [
+           "name",
+           "auto_id",
+           "type",
+           "pure-token",
+           "token",
+           "*"
+          ]
+         },
+         {
+          "%": [
+           "name",
+           "id",
+           "type",
+           "string"
+          ]
+         }
+        ]
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "field_value",
+        "type",
+        "block",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "multiple"
+          }
+         ]
+        },
+        "arguments",
+        [
+         {
+          "%": [
+           "name",
+           "field",
+           "type",
+           "string"
+          ]
+         },
+         {
+          "%": [
+           "name",
+           "value",
+           "type",
+           "string"
+          ]
+         }
+        ]
+       ]
+      }
+     ]
+    ]
+   },
+   "info": [
+    "xadd",
+    -5,
+    {
+     "~": [
+      {
+       "+": "write"
+      },
+      {
+       "+": "denyoom"
+      },
+      {
+       "+": "fast"
+      }
+     ]
+    },
+    1,
+    1,
+    1,
+    {
+     "~": [
+      {
+       "+": "@write"
+      },
+      {
+       "+": "@stream"
+      },
+      {
+       "+": "@fast"
+      }
+     ]
+    },
+    {
+     "~": [
+      "nondeterministic_output"
+     ]
+    },
+    {
+     "~": [
+      {
+       "%": [
+        "notes",
+        "UPDATE instead of INSERT because of the optional trimming feature",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "RW"
+          },
+          {
+           "+": "update"
+          }
+         ]
+        },
+        "begin_search",
+        {
+         "%": [
+          "type",
+          "index",
+          "spec",
+          {
+           "%": [
+            "index",
+            1
+           ]
+          }
+         ]
+        },
+        "find_keys",
+        {
+         "%": [
+          "type",
+          "range",
+          "spec",
+          {
+           "%": [
+            "lastkey",
+            0,
+            "keystep",
+            1,
+            "limit",
+            0
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "~": []
+    }
+   ]
+  },
+  "xdel": {
+   "docs": {
+    "%": [
+     "summary",
+     "Removes the specified entries from the stream. Returns the number of items actually deleted, that may be different from the number of IDs passed in case certain IDs do not exist.",
+     "since",
+     "5.0.0",
+     "group",
+     "stream",
+     "complexity",
+     "O(1) for each single item to delete in the stream, regardless of the stream size.",
+     "arguments",
+     [
+      {
+       "%": [
+        "name",
+        "key",
+        "type",
+        "key",
+        "key_spec_index",
+        0
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "id",
+        "type",
+        "string",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "multiple"
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    ]
+   },
+   "info": [
+    "xdel",
+    -3,
+    {
+     "~": [
+      {
+       "+": "write"
+      },
+      {
+       "+": "fast"
+      }
+     ]
+    },
+    1,
+    1,
+    1,
+    {
+     "~": [
+      {
+       "+": "@write"
+      },
+      {
+       "+": "@stream"
+      },
+      {
+       "+": "@fast"
+      }
+     ]
+    },
+    {
+     "~": []
+    },
+    {
+     "~": [
+      {
+       "%": [
+        "flags",
+        {
+         "~": [
+          {
+           "+": "RW"
+          },
+          {
+           "+": "delete"
+          }
+         ]
+        },
+        "begin_search",
+        {
+         "%": [
+          "type",
+          "index",
+          "spec",
+          {
+           "%": [
+            "index",
+            1
+           ]
+          }
+         ]
+        },
+        "find_keys",
+        {
+         "%": [
+          "type",
+          "range",
+          "spec",
+          {
+           "%": [
+            "lastkey",
+            0,
+            "keystep",
+            1,
+            "limit",
+            0
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "~": []
+    }
+   ]
+  },
   "xinfo": {
    "docs": {
     "%": [
@@ -32121,6 +32588,413 @@
           },
           {
            "+": "access"
+          }
+         ]
+        },
+        "begin_search",
+        {
+         "%": [
+          "type",
+          "index",
+          "spec",
+          {
+           "%": [
+            "index",
+            1
+           ]
+          }
+         ]
+        },
+        "find_keys",
+        {
+         "%": [
+          "type",
+          "range",
+          "spec",
+          {
+           "%": [
+            "lastkey",
+            0,
+            "keystep",
+            1,
+            "limit",
+            0
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "~": []
+    }
+   ]
+  },
+  "xsetid": {
+   "docs": {
+    "%": [
+     "summary",
+     "An internal command for replicating stream values",
+     "since",
+     "5.0.0",
+     "group",
+     "stream",
+     "complexity",
+     "O(1)",
+     "history",
+     {
+      "~": [
+       [
+        "7.0.0",
+        "Added the `entries_added` and `max_deleted_entry_id` arguments."
+       ]
+      ]
+     },
+     "arguments",
+     [
+      {
+       "%": [
+        "name",
+        "key",
+        "type",
+        "key",
+        "key_spec_index",
+        0
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "last-id",
+        "type",
+        "string"
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "entries_added",
+        "type",
+        "integer",
+        "token",
+        "ENTRIESADDED",
+        "since",
+        "7.0.0",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "max_deleted_entry_id",
+        "type",
+        "string",
+        "token",
+        "MAXDELETEDID",
+        "since",
+        "7.0.0",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    ]
+   },
+   "info": [
+    "xsetid",
+    -3,
+    {
+     "~": [
+      {
+       "+": "write"
+      },
+      {
+       "+": "denyoom"
+      },
+      {
+       "+": "fast"
+      }
+     ]
+    },
+    1,
+    1,
+    1,
+    {
+     "~": [
+      {
+       "+": "@write"
+      },
+      {
+       "+": "@stream"
+      },
+      {
+       "+": "@fast"
+      }
+     ]
+    },
+    {
+     "~": []
+    },
+    {
+     "~": [
+      {
+       "%": [
+        "flags",
+        {
+         "~": [
+          {
+           "+": "RW"
+          },
+          {
+           "+": "update"
+          }
+         ]
+        },
+        "begin_search",
+        {
+         "%": [
+          "type",
+          "index",
+          "spec",
+          {
+           "%": [
+            "index",
+            1
+           ]
+          }
+         ]
+        },
+        "find_keys",
+        {
+         "%": [
+          "type",
+          "range",
+          "spec",
+          {
+           "%": [
+            "lastkey",
+            0,
+            "keystep",
+            1,
+            "limit",
+            0
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "~": []
+    }
+   ]
+  },
+  "xtrim": {
+   "docs": {
+    "%": [
+     "summary",
+     "Trims the stream to (approximately if '~' is passed) a certain size",
+     "since",
+     "5.0.0",
+     "group",
+     "stream",
+     "complexity",
+     "O(N), with N being the number of evicted entries. Constant times are very small however, since entries are organized in macro nodes containing multiple entries that can be released with a single deallocation.",
+     "history",
+     {
+      "~": [
+       [
+        "6.2.0",
+        "Added the `MINID` trimming strategy and the `LIMIT` option."
+       ]
+      ]
+     },
+     "arguments",
+     [
+      {
+       "%": [
+        "name",
+        "key",
+        "type",
+        "key",
+        "key_spec_index",
+        0
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "trim",
+        "type",
+        "block",
+        "arguments",
+        [
+         {
+          "%": [
+           "name",
+           "strategy",
+           "type",
+           "oneof",
+           "arguments",
+           [
+            {
+             "%": [
+              "name",
+              "maxlen",
+              "type",
+              "pure-token",
+              "token",
+              "MAXLEN"
+             ]
+            },
+            {
+             "%": [
+              "name",
+              "minid",
+              "type",
+              "pure-token",
+              "token",
+              "MINID",
+              "since",
+              "6.2.0"
+             ]
+            }
+           ]
+          ]
+         },
+         {
+          "%": [
+           "name",
+           "operator",
+           "type",
+           "oneof",
+           "flags",
+           {
+            "~": [
+             {
+              "+": "optional"
+             }
+            ]
+           },
+           "arguments",
+           [
+            {
+             "%": [
+              "name",
+              "equal",
+              "type",
+              "pure-token",
+              "token",
+              "="
+             ]
+            },
+            {
+             "%": [
+              "name",
+              "approximately",
+              "type",
+              "pure-token",
+              "token",
+              "~"
+             ]
+            }
+           ]
+          ]
+         },
+         {
+          "%": [
+           "name",
+           "threshold",
+           "type",
+           "string"
+          ]
+         },
+         {
+          "%": [
+           "name",
+           "count",
+           "type",
+           "integer",
+           "token",
+           "LIMIT",
+           "since",
+           "6.2.0",
+           "flags",
+           {
+            "~": [
+             {
+              "+": "optional"
+             }
+            ]
+           }
+          ]
+         }
+        ]
+       ]
+      }
+     ]
+    ]
+   },
+   "info": [
+    "xtrim",
+    -4,
+    {
+     "~": [
+      {
+       "+": "write"
+      }
+     ]
+    },
+    1,
+    1,
+    1,
+    {
+     "~": [
+      {
+       "+": "@write"
+      },
+      {
+       "+": "@stream"
+      },
+      {
+       "+": "@slow"
+      }
+     ]
+    },
+    {
+     "~": [
+      "nondeterministic_output"
+     ]
+    },
+    {
+     "~": [
+      {
+       "%": [
+        "flags",
+        {
+         "~": [
+          {
+           "+": "RW"
+          },
+          {
+           "+": "delete"
           }
          ]
         },

@@ -641,6 +641,8 @@ def dw.upd(+op: R.UpdOp, +k: String, +ds: R.Ds) -> Nat:
       dw.pfdebug(sub, R.ds.ent(ds, k))
     case R.URestore{+p, +t, +rep, +ac}:
       dw.restore(t, k, ds)
+    case R.UStream{R.XWNew{+ws}}:
+      Nat.add(dw.live(ds, k), 1n)
     case _:
       0n
 
@@ -1835,10 +1837,13 @@ def touch.ents(t: Tx, +xs: List<&2, A.Ent>, +pre: Maybe<&2, R.Ds>, +post: R.Ds) 
   touch.ents.if(tx.on(x), x, xs, pre, post)
 
 # the keys a command's effects touch: all of them, but PFDEBUG's, which
-# changes a value's encoding without signalModifiedKey
+# changes a value's encoding without signalModifiedKey, and XSETID's,
+# which changes its stream without it
 def touch.by(+c: R.Cmd, t: Tx, +xs: List<&2, A.Ent>, +pre: Maybe<&2, R.Ds>, +post: R.Ds) -> Tx:
   match c:
     case R.Upd{k, R.UHll{R.HDebug{s}}}:
+      t
+    case R.Upd{k, R.UStream{R.XWSetId{ws}}}:
       t
     case _:
       touch.ents(t, xs, pre, post)
@@ -4423,10 +4428,13 @@ def iv.ents(+xs: List<&2, A.Ent>, +pre: Maybe<&2, R.Ds>, +post: R.Ds, +cur: Nat,
 
 # a command's effects (xs, its entries), the databases before it (pre;
 # none: each key a DEL deleted was there) and after it, cur the client
-# whose command it is (0: none); PFDEBUG's write is none (Touches)
+# whose command it is (0: none); PFDEBUG's write is none, and XSETID's
+# (Touches)
 def ps.trk.cmd.if(on: Bool, +c: R.Cmd, +xs: List<&2, A.Ent>, +pre: Maybe<&2, R.Ds>, +post: R.Ds, +cur: Nat, pb: Ps) -> Ps:
   match on c:
     case True{} R.Upd{k, R.UHll{R.HDebug{s}}}:
+      pb
+    case True{} R.Upd{k, R.UStream{R.XWSetId{ws}}}:
       pb
     case True{} c0:
       iv.ps(iv.ents(xs, pre, post, cur, iv.of(pb)))
@@ -4915,6 +4923,9 @@ def ev.x() -> U32:
 def ev.n() -> U32:
   16384
 
+def ev.t() -> U32:
+  1024
+
 # an event: its class, its name, its key and its database
 type Ev is Data:
   Ev{cls: U32, name: String, key: String, db: Nat}
@@ -4925,7 +4936,8 @@ type Ev is Data:
 # time set (EkX: [expired], then name when the key is there after it,
 # else del); a delete (EkD: [expired] del); an event that comes as it is
 # (EkA); the expiry of a key replaced (EkE); a trim (EkL: name when the
-# key held a list, then [del])
+# key held a list, then [del]); XADD's trim (EkXt: xtrim when it deleted
+# entries, the stream no longer after it than before)
 type Ek is Data:
   EkW{j: Nat, k: String, name: String, cls: U32}
   EkS{j: Nat, k: String, name: String, cls: U32}
@@ -4934,6 +4946,7 @@ type Ek is Data:
   EkA{j: Nat, k: String, name: String, cls: U32}
   EkE{j: Nat, k: String}
   EkL{j: Nat, k: String, name: String}
+  EkXt{j: Nat, k: String}
 
 # a key in ds: gone (0), there (1), or there with its time passed (2)
 def ek.state.of(m: Maybe<&2, KV.Item<KV.Val>>, +now: Nat) -> Nat:
@@ -4953,6 +4966,14 @@ def ek.list.of(m: Maybe<&2, KV.Item<KV.Val>>, +now: Nat) -> Bool:
       KV.live(now, x)
     case _:
       False{}
+
+# a stream's length there at now, 0 for none
+def ek.xlen(m: Maybe<&2, KV.Item<KV.Val>>, +now: Nat) -> Nat:
+  match m:
+    case Some{KV.Item{KV.VColl{KV.CStream{+x}}, +e}}:
+      Bool.pick(Nat, KV.live(now, e), KV.xstream.len(x), 0n)
+    case _:
+      0n
 
 def ev.one(on: Bool, +cls: U32, +name: String, +k: String, +j: Nat, acc: List<&2, Ev>) -> List<&2, Ev>:
   match on:
@@ -5004,6 +5025,9 @@ def ek.evs(e: Ek, +pre: R.Ds, +post: R.Ds, acc: List<&2, Ev>) -> List<&2, Ev>:
       ev.one(ek.expired(ek.state(j, k, pre), ek.state(j, k, post)), ev.x(), "expired", k, j, acc)
     case EkL{+j, +k, +name}:
       ek.trim(ek.list.of(ds.entry(j, k, pre), R.ds.now(pre)), ek.state(j, k, post), j, k, name, acc)
+    case EkXt{+j, +k}:
+      +now = R.ds.now(pre)
+      ev.one(Nat.is_le(ek.xlen(ds.entry(j, k, post), now), ek.xlen(ds.entry(j, k, pre), now)), ev.t(), "xtrim", k, j, acc)
 
 def ek.evs.all(es: List<&2, Ek>, +pre: R.Ds, +post: R.Ds, acc: List<&2, Ev>) -> List<&2, Ev>:
   match es:
@@ -5091,6 +5115,21 @@ def ek.zset(op: R.ZWrite) -> String:
     case R.ZWPopN{max, c}:
       ek.zpop(max)
 
+# a stream's write: XADD's events and its trim's, or the event of the
+# others (each when it changed the stream)
+def ek.stream(+j: Nat, +k: String, op: R.XWrite) -> List<&2, Ek>:
+  match op:
+    case R.XWAdd{ws}:
+      [EkW{j, k, "xadd", ev.t()}, EkXt{j, k}]
+    case R.XWNew{ws}:
+      [EkW{j, k, "xadd", ev.t()}, EkXt{j, k}]
+    case R.XWTrim{ws}:
+      [EkA{j, k, "xtrim", ev.t()}]
+    case R.XWDel{ids}:
+      [EkA{j, k, "xdel", ev.t()}]
+    case R.XWSetId{ws}:
+      [EkA{j, k, "xsetid", ev.t()}]
+
 def ek.sstore(k: R.SetK) -> String:
   match k:
     case R.KInter{}:
@@ -5165,6 +5204,8 @@ def ek.upd(+j: Nat, +k: String, op: R.UpdOp) -> List<&2, Ek>:
       Nil{}
     case R.URestore{p, t, rep, ac}:
       Nil{}
+    case R.UStream{op}:
+      ek.stream(j, k, op)
 
 # DEL's keys, each deleted
 def ek.dels(+j: Nat, ks: List<&2, String>) -> List<&2, Ek>:
