@@ -4,7 +4,8 @@ cases of Redis's unit/hyperloglog and of hyperloglog.c (the sparse
 opcodes split and merged, the turn to dense, the count kept in the value
 and when it is made again, the union of several, the errors and their
 order), values made by hand (registers past 32, every register at its
-most, opcodes that do not cover 16384 registers or end within an XZERO),
+most, opcodes that do not cover 16384 registers, end within an XZERO or
+pass the last register, 4 MB of them too, answered within 5 s),
 values corrupted at random bytes, then random sequences of the commands
 over a few keys. Every reply is compared, and after each write the
 value itself (GET), byte for byte.
@@ -24,6 +25,7 @@ import argparse
 import random
 import struct
 import sys
+import time
 
 from diff_test import Conn
 
@@ -305,6 +307,22 @@ def script(b, r):
             both(b, r, [b"DEL", b"m", b"m2"])
             both(b, r, [b"SET", b"m", v])
             write(b, r, c, [b"m", b"m2"])
+    # opcodes that pass the last register: a walk ends at the first that
+    # does (the fix of CVE-2025-32023, in Redis 7.2.16), and so answers
+    # one of 4 MB of zeros at once, where BendKV's walks read on to the end
+    # in a time that grew with the square of the length (1.5 s for 1 MB;
+    # Redis's unit/hyperloglog sets 32 MB)
+    for ops in (zero(64) * 300 + val(32, 4), xzero(16384) + zero(1), val(1, 4) * 4097,
+                zero(64) * 4000000 + bytes([0xff])):
+        for c in ([b"PFCOUNT", b"m"], [b"PFCOUNT", b"m", b"m"], [b"PFADD", b"m", b"a"],
+                  [b"PFDEBUG", b"GETREG", b"m"], [b"PFDEBUG", b"TODENSE", b"m"],
+                  [b"PFMERGE", b"m2", b"m"]):
+            both(b, r, [b"DEL", b"m", b"m2"])
+            both(b, r, [b"SET", b"m", hll(1, ops=ops)])
+            t = time.time()
+            write(b, r, c, [b"m", b"m2"])
+            if time.time() - t > 5:
+                fail(c, b"%.1f s" % (time.time() - t), b"at once")
     # opcodes that end within an XZERO: Redis reads the byte past the
     # string's end as its second (the NUL of its sds string, as a command
     # starts); a set that splits it writes the last byte of the opcodes it

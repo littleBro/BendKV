@@ -7,7 +7,7 @@
 # make bench (needs redis-benchmark), make perfcheck (instructions, misses
 # and prefetches per request against a baseline; needs valgrind and
 # objdump), make suite (Redis's own
-# test suite; needs a Redis 7.0.15 source tree in REDIS_SRC, its
+# test suite; needs a Redis 7.2.16 source tree in REDIS_SRC, its
 # redis-server on the PATH, and tclsh), make clients (the test suites of
 # redis-py and go-redis; needs python3, go, and PyPI and the Go module
 # proxy). Everything needs Bend with

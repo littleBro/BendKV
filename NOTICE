@@ -191,6 +191,13 @@ parts of it are written from 7.2.16's sources:
   afterSleep, beforeSleep, serverCron and genRedisInfoString, latency.c's
   durationAddSample), in src/info.bend, src/session.bend and
   src/server.bend.
+- A blocking pop's timeout out of range (timeout.c's
+  getTimeoutFromObjectOrReply), in src/session.bend; the changes a pop
+  served by a push counts, as its command run again (blocked.c's
+  unblockClientOnKey), in src/server.bend; and the walks of a sparse
+  HyperLogLog's opcodes, which end at the first past the last register
+  (hyperloglog.c's hllSparseRegHisto, hllMerge and hllSparseToDense), in
+  src/hll.bend.
 - Encodings: lists as listpacks and quicklists, each node's count and
   bytes moved as quicklist.c moves its nodes (_quicklistNodeAllowInsert,
   _quicklistNodeAllowMerge, _quicklistInsert with its splits and merges,

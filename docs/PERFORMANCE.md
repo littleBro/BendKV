@@ -8757,7 +8757,7 @@ and 4,588); last-level misses 2.83, 3.14 and 3.32; with 100 clients in BLPOP, +3
 
 ## 85. Lists and sets as Redis 7.2.16 holds them
 
-FINDINGS 3zzzzk. "Before" is the build of 8a4caf0, the integration branch this change was
+FINDINGS 3zzzzl. "Before" is the build of 8a4caf0, the integration branch this change was
 made on, and "now" this change on it; each pair ran side by side on the same machine
 (four cores, shared with other work), under callgrind with the save points off (`--save
 ""`: a save writes its file from the server's own process, and its instructions would
