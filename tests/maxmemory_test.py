@@ -453,7 +453,13 @@ def main():
             cmd(c, "CONFIG", "SET", "maxmemory", "0")
         warn = "You specified a maxmemory value that is less than 1MB (current value is 100 bytes)"
         for log in (klog, rlog):
-            if warn not in open(log).read():
+            # BendKV's lines reach the file as its loop flushes the standard output, which
+            # may come after its first reply
+            for _ in range(50):
+                if warn in open(log).read():
+                    break
+                time.sleep(0.1)
+            else:
                 fail("no warning of maxmemory below 1 MB in " + log)
         ok("the warning of a maxmemory below 1 MB at the start")
         servers = [args.bendkv, args.redis]

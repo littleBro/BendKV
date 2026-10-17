@@ -2265,9 +2265,14 @@ def trk.off(+id: Nat, +cur: Tk, t: Trk) -> Trk:
 # NO-EVICT and CLIENT NO-TOUCH on or off (NO-TOUCH, below), and the
 # library CLIENT SETINFO names (lname, lver: "" for none), which RESET
 # keeps, as Redis 7.2.16 keeps lib_name and lib_ver
-# (clearClientConnectionState)
+# (clearClientConnectionState). ClfOf, never built, makes Clf a node of
+# its own: one word of Cl, which the tracking's invalidations (Iv) and
+# CLIENT LIST's lines carry taken apart, in segments as wide as the work
+# loop's register bank (WL_BANK: FINDINGS 3zzzd), where Clf's own four
+# words widened them
 type Clf is Data:
   Clf{noev: Bool, nt: Bool, lname: String, lver: String}
+  ClfOf{f: Clf}
 
 # a change of it: NO-EVICT, NO-TOUCH, SETINFO of the version (ver) or the
 # name, and RESET's (NO-EVICT and NO-TOUCH off)
@@ -2292,26 +2297,36 @@ def clf.set(op: ClfOp, f: Clf) -> Clf:
       Clf{e, nt, x, v}
     case FReset{} Clf{e, nt, n, v}:
       Clf{False{}, False{}, n, v}
+    case o ClfOf{x}:
+      clf.set(o, x)
 
 def clf.noev(+f: Clf) -> Bool:
   match f:
     case Clf{+e, nt, n, v}:
       e
+    case ClfOf{+x}:
+      clf.noev(x)
 
 def clf.nt(+f: Clf) -> Bool:
   match f:
     case Clf{e, +nt, n, v}:
       nt
+    case ClfOf{+x}:
+      clf.nt(x)
 
 def clf.lname(+f: Clf) -> String:
   match f:
     case Clf{e, nt, +n, v}:
       n
+    case ClfOf{+x}:
+      clf.lname(x)
 
 def clf.lver(+f: Clf) -> String:
   match f:
     case Clf{e, nt, n, +v}:
       v
+    case ClfOf{+x}:
+      clf.lver(x)
 
 # Every client the server holds, by id, from its connection's start
 # (Join, which the actor answers with the client's state as it comes:
@@ -14613,12 +14628,21 @@ def sc.trk.read(+code: Nat, +raw: String, l: LRun) -> LRun:
     case LHeld{h}:
       LHeld{h}
 
+# a call of the script that runs marks its key used (Access), as Redis's
+# lookupKey marks a key a script's call looks up; none while the script's
+# caller has NO-TOUCH on, as Redis 7.2.16 asks lookupKey whether the
+# caller's command (EVAL or FCALL) is TOUCH: so the script's TOUCH leaves
+# its key as it was too (NO-TOUCH)
+def sc.call.mark(+code: Nat, +raw: String, +back: Chan(Ans), +srv: S.Srv, +ds: R.Ds, +pb: Ps) -> Chan(Ans):
+  bg.mark.key(Bool.and(Bool.and(Nat.is_eq(R.code.class(code), 0n), R.stat.touch(R.code.key(code))), Bool.not(ps.nt(ps.scr.who(pb), pb))), back, code, AvRaw{raw, 0n}, srv, ds, pb)
+
 def sc.batch(+c: R.Cmd, +code: Nat, +r3: Bool, +raw: String, sc: Sc, g: Grp) -> Sc & (Grp & String):
   match sc g:
-    case Sc{w, +back, cn, es0, t0, cf, ro, aoom, sha, ex} Grp{outs, es, srv, ds, ws, up, tx, pb}:
+    case Sc{w, +back, cn, es0, t0, cf, ro, aoom, sha, ex} Grp{outs, es, +srv, ds, ws, up, tx, +pb}:
       +c0 = sc.conn.r3(r3, cn)
       +fd = R.ds.focus(S.conn.db(c0), ds)
-      sc.batch.of(sc.trk.read(code, raw, sc.run.call(sc.sort(c, fd), code, back, raw, LRun{Nil{}, es, c0, srv, fd, ws, up, tx.front(0n, tx), pb})), outs, w, back, es0, t0, cf, ro, aoom, sha, ex)
+      +bk = sc.call.mark(code, raw, back, srv, fd, pb)
+      sc.batch.of(sc.trk.read(code, raw, sc.run.call(sc.sort(c, fd), code, bk, raw, LRun{Nil{}, es, c0, srv, fd, ws, up, tx.front(0n, tx), pb})), outs, w, bk, es0, t0, cf, ro, aoom, sha, ex)
     case ScOf{x} g0:
       sc.batch(c, code, r3, raw, x, g0)
 

@@ -29,7 +29,8 @@ errors); NO-TOUCH's keys: a counter of access (OBJECT FREQ, with
 lfu-log-factor 0, so that each access steps it) and an idle time (OBJECT
 IDLETIME) left as they were by the commands of a client with NO-TOUCH
 on, but TOUCH's, those of a pipeline after the CLIENT NO-TOUCH that turns
-it on too; the library CLIENT SETINFO names (lib-name, lib-ver), its
+it on too, and by a script's calls, TOUCH's too, while its caller has it
+on (a script's calls mark them otherwise); the library CLIENT SETINFO names (lib-name, lib-ver), its
 errors, and RESET, which keeps it; KILL's errors; KILL of another
 client by id, address, local address, type and user, of the client
 itself (SKIPME no, the old form of its own address), of a client that
@@ -234,7 +235,15 @@ def scenarios(port, log):
     a.raw(enc(["CLIENT", "NO-TOUCH", "on"]) + enc(["GET", "f"]) + enc(["GET", "f"]))
     log("5 no-touch pipelined", a.read(), a.read(), a.read(), r.cmd("OBJECT", "FREQ", "f"))
     a.raw(enc(["CLIENT", "NO-TOUCH", "off"]) + enc(["GET", "f"]))
-    log("5 no-touch off pipelined", a.read(), a.read(), r.cmd("OBJECT", "FREQ", "f"),
+    log("5 no-touch off pipelined", a.read(), a.read(), r.cmd("OBJECT", "FREQ", "f"))
+    get1, touch1 = "return redis.call('GET', KEYS[1])", "return redis.call('TOUCH', KEYS[1])"
+    log("5 no-touch scripts", a.cmd("EVAL", get1, "1", "f"), r.cmd("OBJECT", "FREQ", "f"),
+        a.cmd("EVAL", touch1, "1", "f"), r.cmd("OBJECT", "FREQ", "f"), a.cmd("CLIENT", "NO-TOUCH", "on"),
+        a.cmd("EVAL", get1, "1", "f"), a.cmd("EVAL_RO", get1, "1", "f"), r.cmd("OBJECT", "FREQ", "f"),
+        a.cmd("EVAL", touch1, "1", "f"), r.cmd("OBJECT", "FREQ", "f"),
+        a.cmd("MULTI"), a.cmd("EVAL", get1, "1", "f"), a.cmd("EXEC"), r.cmd("OBJECT", "FREQ", "f"),
+        b.cmd("EVAL", get1, "1", "f"), r.cmd("OBJECT", "FREQ", "f"), a.cmd("CLIENT", "NO-TOUCH", "off"),
+        a.cmd("EVAL", get1, "1", "f"), r.cmd("OBJECT", "FREQ", "f"),
         r.cmd("CONFIG", "SET", "maxmemory-policy", "noeviction"), r.cmd("CONFIG", "SET", "lfu-log-factor", "10"))
     log("5 no-touch idle", a.cmd("SET", "g", "v"), a.cmd("CLIENT", "NO-TOUCH", "on"))
     time.sleep(2.1)

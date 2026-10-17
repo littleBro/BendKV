@@ -405,7 +405,7 @@ translation stays in the trusted base.
   CLIENT (ID, GETNAME, SETNAME, SETINFO, REPLY ON/OFF/SKIP, NO-EVICT, NO-TOUCH, TRACKING,
   CACHING, GETREDIR, TRACKINGINFO, UNBLOCK (TIMEOUT or ERROR), LIST, INFO, KILL, PAUSE,
   UNPAUSE, HELP). With NO-TOUCH on, a client's commands leave the keys' access times and
-  counters as they were, but TOUCH's. A
+  counters as they were, but TOUCH's, and its scripts' calls, TOUCH's too. A
   client must authenticate where Redis asks it to: once a command's name and number of arguments
   are checked, before it runs (a syntax error is NOAUTH for a client that has not
   authenticated); a client is authenticated as it connects, and at RESET, when the
@@ -651,8 +651,8 @@ translation stays in the trusted base.
   its child's snapshot keeps; BendKV's snapshot holds the values the writes replace,
   and INFO's `used_memory` with it (FINDINGS.md, section 3zzzk); the uses
   are kept in a table of 2^20 words by the key's hash, which keys whose hashes share
-  their low 20 bits share, and a request marks its first key alone, before it runs
-  (MGET's others are not marked); evicting many keys at once is about ten times
+  their low 20 bits share, and a request marks its first key alone, before it runs, as a
+  script's call does as it runs (MGET's others are not marked); evicting many keys at once is about ten times
   slower than in Redis; and BendKV has no defragmentation: `activedefrag yes` fails as
   in a Redis built without its own jemalloc, where Redis built from its tarball turns
   it on.

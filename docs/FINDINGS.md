@@ -10025,7 +10025,8 @@ too.
   - CLIENT LIST and INFO show the library as `lib-name=` and `lib-ver=`, up to the first
     NUL, as `%s` prints them; RESET keeps it.
   - The registry keeps it with what else a client set of itself (`Clf`: NO-EVICT,
-    NO-TOUCH and the library), which takes NO-EVICT's place in the client's record.
+    NO-TOUCH and the library), which takes NO-EVICT's place in the client's record, as a
+    node of its own (What it costs, below).
 - **CLIENT NO-TOUCH ON|OFF**: `T` in CLIENT LIST's flags, after `e`; RESET turns it off.
   - Redis's `lookupKey` leaves a key's access time and LFU counter as they were for such
     a client's commands, but TOUCH's (in a transaction too: TOUCH is the command then).
@@ -10036,6 +10037,12 @@ too.
     goes.
   - A batch that holds a CLIENT NO-TOUCH marks its keys as its calls run too, so that a
     pipeline of CLIENT NO-TOUCH ON and GET leaves the GET's key as it was, as in Redis.
+  - A script's calls mark no key while the script's caller has NO-TOUCH on: Redis 7.2.16's
+    `lookupKey` asks whether the caller's command, EVAL or FCALL, is TOUCH, so the
+    script's TOUCH leaves its key as it was too.
+  - Otherwise a script's call now marks its key as it runs, the first key of the call as
+    BendKV marks a request's. Before, a script's calls marked no key, whoever ran it, where
+    7.0.15 and 7.2.16 mark each key they look up.
   - A first version kept the other clients on the fast way, with a look in the registry
     for each batch's client. That cost every GET 39 instructions (1.1%), so the bit sends
     every batch to the general way instead, and the fast way pays nothing for it while no
@@ -10072,8 +10079,8 @@ too.
 **Tests.** Against 7.2.16 these pass:
 - `client_test`'s new scenarios: NO-TOUCH's flag and errors; its keys' OBJECT FREQ (with
   `lfu-log-factor` 0, so that each access steps the counter) and OBJECT IDLETIME, in a
-  pipeline and in MULTI, and TOUCH's; SETINFO's fields, errors and RESET; the statistics
-  of both;
+  pipeline, in MULTI and in scripts (EVAL, EVAL_RO, in MULTI too), and TOUCH's;
+  SETINFO's fields, errors and RESET; the statistics of both;
 - `zset_test`'s WITHSCORE cases: the scripted ones, the reads of every size, the random
   rounds;
 - `admin_test`'s CLUSTER: each subcommand, wrong numbers of arguments, unknown ones, in
@@ -10082,15 +10089,18 @@ too.
   CLUSTER's;
 - `hll_test`, on three seeds, and on 7.0.15 too.
 
-**What it costs.** Nothing more while no client has NO-TOUCH on. Under callgrind here, a
-request costs 8 to 11 instructions more than before: GET 3,509 (3,500), SET 4,301 (4,293),
-INCR 4,621 (4,610); with the branch's head merged in (526b434), 3,507, 4,298 and 4,616.
-- They are all in the entry of the runtime's work loop and in its application of closures
+**What it costs.** Nothing while no client has NO-TOUCH on: under callgrind here GET costs
+3,499 instructions a request, SET 4,292 and INCR 4,608, against 3,500, 4,293 and 4,610
+before.
+- A first version laid `Clf`'s four words out in the client's record. The segments that
+  carry a registry's entry taken apart (the tracking's invalidations, CLIENT LIST's lines)
+  grew by 3 words, and the work loop's register bank with them, from 50 to 53 (section
+  3zzzd).
+- That cost every request 8 to 11 instructions (GET 3,509, SET 4,301, INCR 4,621). All of
+  them were in the entry of the work loop and in its application of closures
   (`WL_FID_ENTER`, `WL_FID_CLO_APPLY`): 10 and 12 instructions more at each of the loop's
-  steps, with as many steps as before, which reload more registers from the stack.
-- The loop is one C function for every function of the program, whose registers clang
-  allocates anew with the code added to it. The requests' own functions cost within an
-  instruction of what they cost before.
+  steps, which reloaded more registers from the stack.
+- `ClfOf`, never built, makes `Clf` a node of its own, one word, and the bank is 50 again.
 
 ## 4. Where a request's time goes, and hiding the memory waits
 

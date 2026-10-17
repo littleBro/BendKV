@@ -462,7 +462,8 @@ The connection: HELLO (2 or 3; with AUTH and SETNAME), AUTH (a password, or a us
 its password), SELECT, QUIT, RESET (selects database 0 again, RESP2 and the default
 user), CLIENT ID,
 GETNAME, SETNAME, SETINFO, REPLY ON/OFF/SKIP, NO-EVICT, NO-TOUCH (the client's commands
-leave the keys' access times and counters as they were, but TOUCH's), TRACKING
+leave the keys' access times and counters as they were, but TOUCH's, and its scripts'
+calls, TOUCH's too), TRACKING
 (client-side caching: the keys a
 client read, invalidated when they change, as Redis's tracking.c; section 3zzzb of
 FINDINGS.md), CACHING, GETREDIR, TRACKINGINFO, UNBLOCK (TIMEOUT or ERROR), LIST, INFO,
