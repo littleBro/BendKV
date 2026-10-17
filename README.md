@@ -166,7 +166,7 @@ translation stays in the trusted base.
   of 4 KB at most; each node's count of elements and bytes move as Redis's nodes move
   (a push into the node at its end while it has room, LINSERT into its node, next to it
   or splitting it, and so on), so that OBJECT ENCODING answers `listpack` or `quicklist`
-  and DUMP writes the nodes as Redis does (section 3zzzzj of
+  and DUMP writes the nodes as Redis does (section 3zzzzk of
   [docs/FINDINGS.md](docs/FINDINGS.md)). MEMORY USAGE estimates its bytes. Where BendKV
   differs: an LSET of an index the list does not have and an LINSERT whose pivot is not
   there leave the list as it was, where Redis has already made a listpack a quicklist
@@ -633,15 +633,22 @@ translation stays in the trusted base.
   is what its allocator handed out; Memory, below), its keys and those clients wait on,
   its evictions, the calls ACL refused, its append-only file, its scripts and functions
   (the engine's memory, the scripts cached, the functions and libraries); for what BendKV
-  does not have (replication, forks) they are what Redis shows when it has none. Where
-  BendKV differs: its event loop is not timed yet, so the `eventloop_*` fields read 0;
-  `listener0` lists all of bind's addresses, where Redis lists only as many as it listens
-  on. The
-  statistics per command count as Redis counts them: each command's and subcommand's
-  calls, the calls refused before they run (a wrong number of arguments by Redis's arity,
-  a client that must authenticate first, a command refused for memory) and the calls
-  that fail as they run, and the error replies by their code, held-back replies included
-  (CLIENT REPLY OFF); what each call took goes to its command's usec and, with
+  does not have (replication, forks) they are what Redis shows when it has none. The
+  `eventloop_*` fields time the actor's groups as Redis times its event loop's cycles: a
+  group (the requests the actor takes at once, the cron's ticks among them) is a cycle,
+  from the clock's reading as it starts to the one after its end, its eviction and the
+  scripts the engine runs for it held in it, with the rates of cycles and of their time
+  sampled with the others, the longest cycle and the most commands one ran. Where BendKV
+  differs: a cycle's commands' time (`eventloop_duration_cmd_sum`) is its time but its
+  ticks', where Redis counts its calls' alone; the sends of a group's replies and its
+  writes to the append-only file are not timed in its cycle (`eventloop_duration_aof_sum`
+  reads 0); the cron's time is its ticks'; `listener0` lists all of bind's addresses, where
+  Redis lists only as many as it listens on. The statistics per command count as Redis
+  counts them: each command's and subcommand's calls, the calls refused before they run
+  (a wrong number of arguments by Redis's arity, a client that must authenticate first,
+  a command refused for memory) and the calls that fail as they run, and the error
+  replies by their code, held-back replies included (CLIENT REPLY OFF); what each call
+  took goes to its command's usec and, with
   `latency-tracking`, its histogram (latencystats, at the percentiles of
   `latency-tracking-info-percentiles`), as Redis keeps them (below). CONFIG RESETSTAT
   starts the counts again. COMMAND (with INFO, DOCS, COUNT, LIST and its

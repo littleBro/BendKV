@@ -185,6 +185,12 @@ parts of it are written from 7.2.16's sources:
   clusterCommand), with its subcommands' arities from
   tools/data/redis-commands.json, in src/redis.bend, src/server.bend,
   src/session.bend and tools/gen_commands.py.
+- The event loop's statistics: INFO's eventloop_* fields, a cycle's
+  time, its commands' and the cron's, the longest cycle, the most
+  commands one ran, and the rates of cycles and of their time (server.c's
+  afterSleep, beforeSleep, serverCron and genRedisInfoString, latency.c's
+  durationAddSample), in src/info.bend, src/session.bend and
+  src/server.bend.
 - Encodings: lists as listpacks and quicklists, each node's count and
   bytes moved as quicklist.c moves its nodes (_quicklistNodeAllowInsert,
   _quicklistNodeAllowMerge, _quicklistInsert with its splits and merges,

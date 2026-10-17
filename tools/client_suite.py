@@ -5,7 +5,7 @@ asyncio, in RESP2 or RESP3) and go-redis's (RESP3, with its specs of
 RESP2), each at a fixed version taken from the language's registry (PyPI,
 the Go module proxy), each run against a server started for it, in a
 directory of its own. A client's suite is written for the newest Redis:
-what counts is what Redis 7.0.15 passes, and of that, what BendKV passes.
+what counts is what Redis 7.2.16 passes, and of that, what BendKV passes.
 
     tools/client_suite.py run --client redis-py --protocol 2 --server build/bendkv --out bendkv.xml
     tools/client_suite.py run --client redis-py --protocol 2 --server redis-server --out redis.xml
@@ -181,7 +181,7 @@ def run_go_redis(work, server, out, focus):
     with Server(server, os.path.join(os.path.dirname(os.path.abspath(out)), "server-" + os.path.basename(out))) as s:
         ends = os.path.abspath(out) + ".endpoints.json"
         json.dump({"standalone": {"endpoints": ["redis://127.0.0.1:%d" % s.port]}}, open(ends, "w"))
-        env = dict(os.environ, RE_CLUSTER="true", REDIS_ENDPOINTS_CONFIG_PATH=ends, REDIS_VERSION="7.0")
+        env = dict(os.environ, RE_CLUSTER="true", REDIS_ENDPOINTS_CONFIG_PATH=ends, REDIS_VERSION="7.2")
         args = [binary, "-test.run", "^TestGinkgoSuite$", "-test.timeout", "3h",
                 "-ginkgo.junit-report=" + os.path.abspath(out), "-ginkgo.label-filter=" + GO_LABELS,
                 "-ginkgo.skip=" + GO_SKIP, "-ginkgo.flake-attempts=3", "-ginkgo.no-color"]
@@ -295,7 +295,7 @@ def report(redis_xml, bendkv_xml, title):
         for k, n in flaky.items():
             fails[k] = "passed only after %d attempts on BendKV, at its first on Redis" % n
     lines = ["### %s" % title, "",
-             "Redis 7.0.15 passes %d of the %d tests that run; BendKV passes **%d** of those (%.1f%%)." % (
+             "Redis 7.2.16 passes %d of the %d tests that run; BendKV passes **%d** of those (%.1f%%)." % (
                  len(ok), sum(1 for v in a.values() if v[0] != "skip"), len(ok) - len(fails),
                  100.0 * (len(ok) - len(fails)) / max(1, len(ok)))]
     cmds, other = collections.Counter(), []
