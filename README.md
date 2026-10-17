@@ -43,9 +43,10 @@ AddressSanitizer check the heap).
 
 ## What is proved
 
-The laws are stated by hand in [`proof/LAWS.bend`](proof/LAWS.bend) and proved in
-[`proof/PROOF.bend`](proof/PROOF.bend). A database is a record: the trie, whose
-entries hold each key's value (a string, or a collection) and the time it expires at; how many keys it holds (which
+The laws are stated in [`proof/LAWS.bend`](proof/LAWS.bend), where a human approves
+every change, and proved in [`proof/PROOF.bend`](proof/PROOF.bend). A database is a
+record: the trie, whose entries hold each key's value (a string, or a collection) and
+the time it expires at; how many keys it holds (which
 DBSIZE answers) and how many of them have a time; and the time its batch runs at. The
 server holds several (16, as Redis), with the one a connection selected in focus while
 its batch runs. A key whose time has passed is there for no command. The laws about what keys read and what
@@ -573,20 +574,19 @@ translation stays in the trusted base.
   `-` for the standard input, read line by line as Redis reads them (includes, `dir`
   changing the directory at once, save points that add up, the same errors at the same
   lines), and a log in Redis's form, on the standard output or in `logfile`. The port,
-  `bind` (IPv4 and IPv6, each IPv6 socket IPv6 alone, as Redis binds them),
-  `unixsocket` and `unixsocketperm`, `requirepass`, `protected-mode`, `supervised`
-  (systemd is told the server loads, is ready and stops, as Redis's sd_notify tells it),
-  the append-only file (`appendonly`, `appendfilename`, `appendfsync`,
-  `aof-load-truncated`), `logfile`, `loglevel` and `pidfile` act. A unix socket's client
+  `bind` (IPv4 and IPv6, each IPv6 socket IPv6 alone, as Redis binds them), `unixsocket`
+  and `unixsocketperm`, `requirepass`, `protected-mode`, `supervised` (systemd is told the
+  server loads, is ready and stops, as Redis's sd_notify tells it), the append-only file
+  (`appendonly`, `appendfilename`, `appenddirname`, `appendfsync`, `aof-load-truncated`,
+  `aof-disable-auto-gc`), `logfile`, `loglevel` and `pidfile` act. A unix socket's client
   is named as Redis names it: its path and port 0 in CLIENT LIST, with the flag U, and
   unix:path in a monitor's lines. With `appendonly no` the RDB file (`dbfilename` in
   `dir`) is loaded when it is there, as Redis loads it, with its log's lines; a file that
-  does not load stops the start with Redis's reason. With `appendonly yes` the
-  append-only file is loaded and the RDB file left aside, as in Redis. What BendKV cannot
-  do (modules, ACL users from the configuration or a file, renamed commands, the
-  background without a supervisor, a cluster, a replica, TLS, upstart's supervision,
-  Redis 7's multi-part append-only file, or an RDB file that holds a module's data or
-  functions, to load) stops the start with a line saying so.
+  does not load stops the start with Redis's reason. With `appendonly yes` the append-only
+  file is loaded and the RDB file left aside, as in Redis. What BendKV cannot do (modules,
+  ACL users from the configuration or a file, renamed commands, the background without a
+  supervisor, a cluster, a replica, TLS, upstart's supervision, or an RDB file that holds
+  a module's data or functions, to load) stops the start with a line saying so.
 - **Protocol:** pipelining, partial packets, inline commands with quoting,
   binary-safe values; requests framed as Redis 7.0.15 frames them (a length as `string2ll`
   reads it, with no `0` before its first digit, a count of 0 or less skipped down to
@@ -625,7 +625,23 @@ translation stays in the trusted base.
   starts, then the entries appended meanwhile, into a temporary file renamed onto the
   file; without a fork, the databases being values, a slice at a time between the
   groups of requests the server answers meanwhile; with INFO's fields of a rewrite
-  (FINDINGS.md, section 3zv). The RDB file as Redis 7.0.15 writes it (`REDIS0010` and
+  (FINDINGS.md, section 3zv). Where `appenddirname` is there in `dir`, the files are
+  Redis 7's: the directory's manifest, read as Redis 7.0.15 reads it, with its refusals
+  and their lines; an old single file moved in as its base, as Redis moves it; the base
+  (an RDB file or commands) and each incremental file loaded in turn; the last
+  incremental file appended to; a rewrite that starts a new incremental file and ends
+  with a new base, the old base and incremental files made history and removed (section
+  3zzzq of [docs/FINDINGS.md](docs/FINDINGS.md)). Where BendKV differs: the runtime
+  cannot make a directory, so without one BendKV keeps Redis 6's single file, where Redis
+  7 makes the directory (`mkdir appendonlydir` once is enough); BendKV writes its bases
+  as commands (`.base.aof`) whatever `aof-use-rdb-preamble` says, and reads both kinds;
+  an RDB base followed by commands stops its start, where Redis loads both; a base or
+  history line whose sequence number is below 1, or 10^13 or more, is refused; only a
+  base is read as an RDB file, and one that does not load stops the start, the file left
+  as it was (Redis 7.0.15, when its RDB part ends early, cuts it to nothing with
+  `aof-load-truncated yes`); a BGREWRITEAOF whose new incremental file cannot be made is
+  answered as started, then fails, where Redis answers with an error. The RDB file as
+  Redis 7.0.15 writes it (`REDIS0010` and
   its AUX fields, each database's SELECTDB and RESIZEDB, each key's EXPIRETIME_MS and
   value as DUMP writes it, EOF and the CRC64, or eight zero bytes with `rdbchecksum
   no`): SAVE writes it into `temp-<pid>.rdb`, syncs it, renames it onto `dbfilename` and
@@ -846,6 +862,11 @@ databases the other held, and the rewrite of the file (`tests/rewrite_test.py`:
 BGREWRITEAOF's replies and INFO's account against Redis's, the rewritten file against
 Redis's base command for command, writes during a rewrite and a kill during one, the
 cron's rewrites, rewrites that fail, BendKV and Redis started from the new file),
+Redis 7's directory of files (`tests/aofdir_test.py`: BendKV and Redis each started on
+a copy of the same directory, Redis's with an RDB base and with one of commands, an
+empty one, an old single file to move in, manifests Redis refuses, files cut short or
+not there, history files, and rewrites in it, with the same databases, manifests and
+lines logged),
 maxmemory (`tests/maxmemory_test.py`: the refusals past it, OBJECT IDLETIME and FREQ
 and the `evicted` event against Redis's, Redis's own tests of the policies on both, an
 eviction that goes on alone, with the append-only file on and while a rewrite runs), and
@@ -879,6 +900,7 @@ src/        the server
   geo.bend      geohashes, cells, distances and sorts, as Redis's  tested
   lolwut.bend   LOLWUT's drawings, as Redis draws them             tested
   rdb.bend      the RDB format: DUMP, RESTORE and the file         tested
+  aofdir.bend   the manifest of Redis 7's append-only directory    tested
   redis.bend    command semantics: exec(cmd, db) -> (reply, db')   verified
   batch.bend    a pipelined batch with cache hints                 verified
   aof.bend      append-only file: effects, encoding, loading       verified
@@ -926,6 +948,7 @@ away.
 | `src/session.bend` | 2,700 |  | yes |
 | `src/config.bend` | 1,200 | 180 | yes |
 | `src/acl.bend` | 2,100 | 600 | no |
+| `src/aofdir.bend` | 360 |  | no |
 | `src/command.bend` | 2,500 | 1,900 | no |
 | `src/float.bend` | 1,200 |  | no |
 | `src/geo.bend` | 870 |  | no |
@@ -942,7 +965,7 @@ away.
 | `proof/SPEC.bend` | 370 |  |  |
 | `proof/PROOF.bend` | 16,000 | 2,800 |  |
 | `src/`, the 6 files the laws import | 28,000 | 9,100 |  |
-| `src/`, the 13 others | 28,000 | 2,600 |  |
+| `src/`, the 14 others | 29,000 | 2,600 |  |
 | `proof/` | 18,000 | 2,800 |  |
 <!-- END gen_counts: numbers -->
 
