@@ -58,7 +58,8 @@ import ./hll.bend as H
 # fast way drops them); the shell's
 # facts (info.bend: Live), which a connection sends before a batch that
 # asks INFO or CONFIG RESETSTAT; the cron's tick, at ms since 1970, for
-# INFO's rates; a protocol error a connection answered, for errorstats;
+# INFO's rates; a signal the cron took (SIGTERM 15, SIGINT 2: Signals); a
+# protocol error a connection answered, for errorstats;
 # a connection closed while its client waited (Blocked clients), and
 # the channel its Bye goes back on; a connection closed, whose client's
 # transaction, watched keys, subscriptions and line are forgotten
@@ -72,6 +73,7 @@ type Req is Data:
   SubReq{cn: S.Conn, job: B.Job, back: Chan(Ans), tl: U32, inb: Nat, raw: String}
   Facts{live: I.Live}
   Tick{ms: Nat}
+  Sig{n: Nat}
   Oops{}
   Gone{id: Nat, back: Chan(Ans)}
   Left{id: Nat, back: Chan(Ans)}
@@ -11537,6 +11539,60 @@ def grp.sub(+cn: S.Conn, job: B.Job, back: Chan(Ans), +inb: Nat, raw: String, g:
     case Grp{outs, es, srv, ds, ws, up, tx, pb}:
       sub_job(job, cn, back, inb, raw, Grp{outs, es, srv, R.ds.focus(S.conn.db(cn), ds), ws, up, tx, pb})
 
+# Signals
+# -------
+# SIGTERM or SIGINT, which the cron takes (IO.signal, whose handler has
+# logged "Received SIGTERM scheduling shutdown..." as Redis's does), asks
+# for a shutdown as SHUTDOWN without arguments asks for one, as Redis's
+# serverCron calls prepareForShutdown, with the flags of
+# shutdown-on-sigterm or shutdown-on-sigint: save, nosave and force as
+# SHUTDOWN's SAVE, NOSAVE and FORCE (now waits for no replica, there being
+# none). No client waits for it: once the group is run (db_down,
+# aof_down), the server stops (ps.down 2), or saves and stops (1, the
+# server's S.srv.rdb.shut set), or saves and stops whatever the save
+# gives (3: force). A save that fails without force leaves the server
+# running (down.cant), which tells IO.signal so, as Redis's cancelShutdown
+# does. A signal while a SHUTDOWN is asked for already changes nothing.
+
+def sig.has(+w: String, ws: List<&2, String>) -> Bool:
+  match ws:
+    case Nil{}:
+      False{}
+    case Con{+x, rest}:
+      Bool.or(String.eq(x, w), sig.has(w, rest))
+
+def sig.go(save: Bool, +force: Bool, g: Grp) -> Grp:
+  match save g:
+    case True{} Grp{outs, es, srv, ds, ws, up, tx, +pb}:
+      Grp{outs, es, S.srv.rdb.shutting(srv, True{}), ds, ws, up, tx, ps.down.set(Nat.max(ps.down(pb), Bool.pick(Nat, force, 3n, 1n)), pb)}
+    case False{} Grp{outs, es, srv, ds, ws, up, tx, +pb}:
+      Grp{outs, es, srv, ds, ws, up, tx, ps.down.set(Nat.max(ps.down(pb), 2n), pb)}
+
+def sig.flags(+ws: List<&2, String>, +points: Bool, g: Grp) -> Grp:
+  sig.go(Bool.or(sig.has("save", ws), Bool.and(Bool.not(sig.has("nosave", ws)), points)), sig.has("force", ws), g)
+
+def sig.param(+n: Nat) -> String:
+  Bool.pick(String, Nat.is_eq(n, 2n), "shutdown-on-sigint", "shutdown-on-sigterm")
+
+def grp.sig.of(+n: Nat, g: Grp) -> Grp:
+  match g:
+    case Grp{outs, es, +srv, ds, ws, up, tx, pb}:
+      sig.flags(String.split(C.config.get_value(S.srv.cfg(srv), sig.param(n)), ' '), save.points(srv), Grp{outs, es, srv, ds, ws, up, tx, pb})
+
+def grp.sig.if(asked: Bool, +n: Nat, g: Grp) -> Grp:
+  match asked:
+    case True{}:
+      g
+    case False{}:
+      grp.sig.of(n, g)
+
+# a signal (15 or 2), unless a SHUTDOWN is asked for already: ps.down 2
+# or 3, or 1 with the server's S.srv.rdb.shut set
+def grp.sig(+n: Nat, g: Grp) -> Grp:
+  match g:
+    case Grp{outs, es, +srv, ds, ws, up, tx, +pb}:
+      grp.sig.if(Bool.or(Nat.is_le(2n, ps.down(pb)), S.srv.rdb.shut(srv)), n, Grp{outs, es, srv, ds, ws, up, tx, pb})
+
 # the shell's facts, for INFO; the heap's used bytes left as the actor
 # read them before this group (mem.run, then after each key the eviction
 # freed: evict.heap), which the eviction went by, when it read them:
@@ -11569,6 +11625,8 @@ def group_req(+log: Bool, q: Req, g: Grp) -> Grp:
     case Tick{+ms} Grp{outs, es, srv, +ds, ws, up, tx, +pb}:
       +p = ps.pz(pb)
       grp.heed(grp.limit(ms, group.tick.if(Nat.is_le(2n, ps.down(pb)), pz.on(p), pz.over(p, R.ds.now(ds)), outs, es, srv, ms, ds, ws, up, tx, pb)))
+    case Sig{+n} g0:
+      grp.sig(n, g0)
     case Oops{} Grp{outs, es, srv, ds, ws, up, tx, pb}:
       Grp{outs, es, S.srv.erred(srv, "ERR Protocol error"), ds, ws, up, tx, pb}
     case Gone{+id, +back} Grp{outs, es, srv, ds, +ws, +up, tx, pb}:
@@ -13384,6 +13442,12 @@ def info.read(+pid: U32, +exe: String, +conf: String, +tl: Chan(Tally)) -> IO(I.
 # after, as in Redis.
 type Log is Data:
   Log{file: String, level: U32, pid: U32, role: String}
+
+# the log's path ("" for the standard output)
+def log.file(+lg: Log) -> String:
+  match lg:
+    case Log{+file, level, pid, role}:
+      file
 
 def log.level(+lg: Log) -> U32:
   match lg:
@@ -16331,7 +16395,9 @@ def down.forced(+srv: S.Srv, +lg: Log) -> IO(Unit):
 def down.cant(+lg: Log) -> IO(Unit):
   do IO<Unit>:
     Unit <- log(lg, 3, "Error trying to save the DB, can't exit.")
-    log(lg, 3, "Errors trying to shut down the server. Check the logs for more information.")
+    Unit <- log(lg, 3, "Errors trying to shut down the server. Check the logs for more information.")
+    k : U32 <- IO.signal(log.file(lg), 1)
+    IO.pure(Unit, Unit{})
 
 # the same state with run as the rewrite that runs; with a slice of its
 # snapshot taken; with n more bytes in its temporary file
@@ -19394,23 +19460,35 @@ def dir.off.gc(m: Maybe<&2, AD.Mf>, +lg: Log, +items: List<&2, C.CItem>, +dn: St
 # The actor on its database (restored from the append-only file, with
 # one), then a loop on each listener; then the server is ready.
 
-# Redis's serverCron samples its rates every 100 ms: so does the cron,
-# with a tick to the actor
+# Redis's serverCron samples its rates every 100 ms, and acts on a
+# SIGTERM or SIGINT its handler took: so does the cron, with a tick to the
+# actor, after the signal taken since the last look (IO.signal; lf, the
+# log's path, is its handler's: Signals)
 @unsafe
-def cron.next(ok: Bool, +reqs: Chan(Req)) -> IO(Unit):
+def cron.next(ok: Bool, +reqs: Chan(Req), +lf: String) -> IO(Unit):
   match ok:
     case True{}:
-      cron(reqs)
+      cron(reqs, lf)
     case False{}:
       IO.pure(Unit, Unit{})
 
 @unsafe
-def cron(+reqs: Chan(Req)) -> IO(Unit):
+def cron.sig(none: Bool, +n: U32, +reqs: Chan(Req)) -> IO(Bool):
+  match none:
+    case True{}:
+      IO.pure(Bool, True{})
+    case False{}:
+      Chan.send(Req, reqs, Sig{U32.to_nat(n)})
+
+@unsafe
+def cron(+reqs: Chan(Req), +lf: String) -> IO(Unit):
   do IO<Unit>:
     Unit <- IO.sleep(100)
     t : U32 & U32 <- IO.clock()
+    +n : U32 <- IO.signal(lf, 0)
+    k : Bool <- cron.sig(U32.is_eq(n, 0), n, reqs)
     ok : Bool <- Chan.send(Req, reqs, Tick{clock.ms(t)})
-    cron.next(ok, reqs)
+    cron.next(ok, reqs, lf)
 
 # Redis's warning, once it is ready, about a maxmemory under 1MB
 @unsafe
@@ -19433,8 +19511,10 @@ def mm.warn(+lg: Log, +max: Nat) -> IO(Unit):
 def accept_all(p: Bool & List<&1, Listener>, +sup: Bool, +reqs: Chan(Req), +post: Bool, +lg: Log, +tl: Chan(Tally), +items: List<&2, C.CItem>) -> IO(Unit):
   (tcp, ls) = p
   +path = T.cfg(items, "unixsocket")
+  +lf = T.cfg(items, "logfile")
   do IO<Unit>:
-    Unit <- IO.spawn(Unit, cron(reqs))
+    n : U32 <- IO.signal(lf, 0)
+    Unit <- IO.spawn(Unit, cron(reqs, lf))
     Unit <- accept_each(ls, reqs, post, tl)
     Unit <- log.if(tcp, lg, 2, "Ready to accept connections")
     Unit <- log.if(Bool.not(String.is_empty(path)), lg, 2, "The server is now ready to accept connections at " ++ path)

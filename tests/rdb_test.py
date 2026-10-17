@@ -71,6 +71,7 @@ import os
 import random
 import re
 import shutil
+import signal
 import socket
 import struct
 import subprocess
@@ -1123,6 +1124,101 @@ def races(a, root):
         same("race line %d" % i, x, y)
 
 
+# the lines of a shutdown, in order, as both servers log them: the
+# signal's line from its handler ("<pid>:signal-handler (<secs>) <msg>"),
+# then the others without their pid, time and level
+SHUT_LINES = (("signal", re.compile(r"^\d+:signal-handler \(\d+\) (Received SIG(TERM|INT) scheduling shutdown\.\.\.|You insist\.\.\. exiting now\.)$")),
+              ("user", re.compile(r"User requested shutdown\.\.\.$")),
+              ("fsync", re.compile(r"Calling fsync\(\) on the AOF file\.$")),
+              ("saving", re.compile(r"Saving the final RDB snapshot before exiting\.$")),
+              ("saved", re.compile(r"DB saved on disk$")),
+              ("open failed", re.compile(r"Failed opening the temp RDB file temp-\d+\.rdb \(in server root dir .*\) for saving: Is a directory$")),
+              ("cant", re.compile(r"Error trying to save the DB, can't exit\.$")),
+              ("anyway", re.compile(r"Error trying to save the DB\. Exit anyway\.$")),
+              ("errors", re.compile(r"Errors trying to shut down the server\. Check the logs for more information\.$")),
+              ("bye", re.compile(r"(Redis|BendKV) is now ready to exit, bye bye\.\.\.$")))
+
+
+def shut_lines(text):
+    out = []
+    for l in text.splitlines():
+        for name, pat in SHUT_LINES:
+            m = pat.search(l)
+            if m:
+                out.append(m.group(1) if name == "signal" else name)
+    return out
+
+
+def signals_on(exe, root, log):
+    """the transcript of the signals' cases on one server: what it logs
+    (shut_lines), how it ends, what the RDB file holds, and a restart"""
+    def fresh(name, *args):
+        return Srv(exe, os.path.join(root, name), *args)
+
+    def dump(name):
+        p = os.path.join(root, name, "dump.rdb")
+        return os.path.exists(p) and sorted(file_keys(read(p)))
+
+    def wait_down(s, sig):
+        s.p.send_signal(sig)
+        return s.exit()
+    # SIGTERM with save points: the shutdown of SHUTDOWN, its save made;
+    # a restart holds it
+    s = fresh("term", "--save", "3600 1")
+    log("1 term", talk(s.port, [["SET", "a", "1"], ["SET", "t", "2", "EX", "1000"]]), wait_down(s, signal.SIGTERM),
+        dump("term"), shut_lines(s.log()))
+    s = fresh("term", "--save", "3600 1")
+    log("1 restart", talk(s.port, [["GET", "a"], ["EXISTS", "t"]]), talk(s.port, [["SHUTDOWN", "NOSAVE"]]), s.exit())
+    # SIGINT without save points: no save
+    s = fresh("int", "--save", "")
+    log("2 int", talk(s.port, [["SET", "a", "1"]]), wait_down(s, signal.SIGINT), dump("int"), shut_lines(s.log()))
+    # shutdown-on-sigterm: nosave with save points, save without them,
+    # force through a save that fails
+    s = fresh("nosave", "--save", "3600 1", "--shutdown-on-sigterm", "nosave")
+    log("3 nosave", talk(s.port, [["SET", "a", "1"]]), wait_down(s, signal.SIGTERM), dump("nosave"), shut_lines(s.log()))
+    s = fresh("save", "--save", "", "--shutdown-on-sigint", "save")
+    log("3 save", talk(s.port, [["SET", "a", "1"]]), wait_down(s, signal.SIGINT), dump("save"), shut_lines(s.log()))
+    s = fresh("force", "--save", "3600 1", "--shutdown-on-sigterm", "force now")
+    os.mkdir(os.path.join(root, "force", "temp-%s.rdb" % s.pid()))
+    log("3 force", talk(s.port, [["SET", "a", "1"]]), wait_down(s, signal.SIGTERM), dump("force"), shut_lines(s.log()))
+    # a save that fails: the server goes on, and a later signal, once the
+    # save can be made, stops it
+    s = fresh("fails", "--save", "3600 1")
+    tmp = os.path.join(root, "fails", "temp-%s.rdb" % s.pid())
+    os.mkdir(tmp)
+    talk(s.port, [["SET", "a", "1"]])
+    s.p.send_signal(signal.SIGTERM)
+    time.sleep(1)
+    log("4 fails", s.p.poll(), talk(s.port, [["PING"], ["GET", "a"]]), shut_lines(s.log()))
+    s.p.send_signal(signal.SIGINT)
+    time.sleep(1)
+    log("4 fails again", s.p.poll(), talk(s.port, [["PING"]]), shut_lines(s.log()))
+    os.rmdir(tmp)
+    log("4 stops", wait_down(s, signal.SIGTERM), dump("fails"), shut_lines(s.log()))
+    # with the append-only file: synced, and read at the restart
+    s = fresh("aof", "--save", "", "--appendonly", "yes")
+    log("5 aof", talk(s.port, [["SET", "a", "1"]]), wait_down(s, signal.SIGTERM), dump("aof"), shut_lines(s.log()))
+    s = fresh("aof", "--save", "", "--appendonly", "yes")
+    log("5 restart", talk(s.port, [["GET", "a"]]), talk(s.port, [["SHUTDOWN", "NOSAVE"]]), s.exit())
+
+
+def signals(a, root):
+    """SIGTERM and SIGINT: the shutdown Redis runs for them, on both"""
+    outs = []
+    for name, exe in (("bendkv", a.bin), ("redis", a.redis)):
+        lines = []
+        try:
+            signals_on(exe, os.path.join(root, "sig", name), lambda *x: lines.append(" ".join(repr(v) for v in x)))
+        except Exception as e:
+            fail("the signals on %s: %r" % (name, e), traceback.format_exc()[-800:])
+            lines.append("EXCEPTION %r" % (e,))
+        outs.append(lines)
+    for i in range(max(len(outs[0]), len(outs[1]))):
+        x = outs[0][i] if i < len(outs[0]) else "<none>"
+        y = outs[1][i] if i < len(outs[1]) else "<none>"
+        same("signal line %d" % i, x, y)
+
+
 def corrupt(a, root):
     """files that do not load, one that loads on Redis alone, and one of a
     stream, which loads on both"""
@@ -1365,7 +1461,7 @@ def main():
     shutil.rmtree(root, ignore_errors=True)
     os.makedirs(root)
     try:
-        for part in (redis_writes, lzf_values, written_here, bendkv_writes, big, windows, scenarios, unchecked, shutdowns, races, corrupt, functions, short_form):
+        for part in (redis_writes, lzf_values, written_here, bendkv_writes, big, windows, scenarios, unchecked, shutdowns, races, signals, corrupt, functions, short_form):
             b0 = bad
             part(a, root)
             print("%s %s" % ("OK:  " if bad == b0 else "FAIL:", " ".join(part.__doc__.split())))

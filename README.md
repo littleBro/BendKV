@@ -562,13 +562,12 @@ translation stays in the trusted base.
   stopped, the RDB file saved with save points or SAVE and not with NOSAVE (a save that
   fails stops nothing, Redis's error answered, but with FORCE; other clients' commands
   after a SHUTDOWN that saves wait for its save, and run only if it fails), the pid file
-  removed, the process ended with code 0.
-  Where BendKV differs: SIGTERM and SIGINT end the process at once, without the shutdown
-  Redis runs for them (`shutdown-on-sigterm`, `shutdown-on-sigint`: its save with save
-  points among it, and the removal of a background save's temporary file), as the
-  runtime has no handler for them; MEMORY MALLOC-STATS has no allocator's statistics;
+  removed, the process ended with code 0. SIGTERM and SIGINT run that shutdown, as
+  Redis's handler has them run it, with the flags of `shutdown-on-sigterm` and
+  `shutdown-on-sigint` (the signal's line logged at once, a second SIGINT ending the
+  process). Where BendKV differs: MEMORY MALLOC-STATS has no allocator's statistics;
   LOLWUT's large drawings take up to a hundred times Redis's time (FINDINGS.md, sections
-  3zzl and 3zzzc).
+  3zzl, 3zzzc and 3zzzf).
 - **Configuration:** CONFIG GET (names, aliases and glob patterns), SET (several
   parameters at once, all or none), RESETSTAT, REWRITE, HELP, over every parameter of
   Redis 7.0.15 (counted in [In numbers](#in-numbers)), taken from Redis's own table by
@@ -731,8 +730,7 @@ translation stays in the trusted base.
   the keys whose time has passed, counting them; it reads the file a window at a time
   (1 MiB, or as long as a value that runs past the window), so that
   what it holds at once is a window and the databases it builds (FINDINGS.md, section
-  3zzzt). Where BendKV differs: no save on SIGTERM or SIGINT (above; the start warns of
-  it when save points are set), and the short form (`bendkv PORT`) has no save points;
+  3zzzt). Where BendKV differs: the short form (`bendkv PORT`) has no save points;
   `rdb_changes_since_last_save` counts some writes otherwise (SET with GET by its reply,
   ZADD and GEOADD each pair, BITFIELD each write that OVERFLOW FAIL let through, PFADD
   one, PFCOUNT none; FLUSHDB and FLUSHALL a key whose time has passed until the sweep
@@ -1014,7 +1012,7 @@ away.
 | what | how many | counted in |
 |---|---:|---|
 | laws | 68 | `proof/LAWS.bend` (by group: [What is proved](#what-is-proved)) |
-| patches to the Bend compiler | 36 | `bend-patches/apply.sh` |
+| patches to the Bend compiler | 37 | `bend-patches/apply.sh` |
 | constructors of `Cmd`, a parsed command | 30 | `src/redis.bend` |
 | Redis 7.0.15's parameters, all of which CONFIG serves | 178 | `tools/data/redis-configs.json` |
 

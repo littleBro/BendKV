@@ -334,8 +334,8 @@ command, a slice at a time between the groups the server answers (the databases 
 values: no fork), and so does the cron at the save points, Redis's by default
 (`3600 1 300 100 60 10000`), counting the changes since the last save as Redis counts
 them; a background save that fails stops the writes (MISCONF) until a save ends well.
-No LZF or IDLE and FREQ written, and no save on SIGTERM, which the runtime does not catch
-(sections 3zzzc and 3zzzk of docs/FINDINGS.md).
+SIGTERM and SIGINT run SHUTDOWN's shutdown, as Redis's handler has them run it. No LZF
+or IDLE and FREQ written (sections 3zzzc, 3zzzf and 3zzzk of docs/FINDINGS.md).
 Clients that wait: BLPOP, BRPOP, BLMOVE, BRPOPLPUSH, BLMPOP, BZPOPMIN, BZPOPMAX and
 BZMPOP; their timeout (seconds, a double; 0 means wait forever) is read as Redis reads
 it, with its errors. A command that has nothing to pop makes the client wait, and its

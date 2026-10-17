@@ -608,8 +608,7 @@ def warn.if(c: Bool, +w: String, ws: List<&2, String>) -> List<&2, String>:
 
 # what BendKV keeps and does less with than Redis, or nothing
 def warnings(+items: List<&2, C.CItem>) -> List<&2, String>:
-  warn.if(Bool.not(String.is_empty(cfg(items, "save"))), "BendKV does not save on SIGTERM or SIGINT, which end it at once: SHUTDOWN saves the RDB file, and so do the save points, as Redis's do",
-  warn.if(String.eq(cfg(items, "syslog-enabled"), "yes"), "BendKV does not log to syslog", Nil{}))
+  warn.if(String.eq(cfg(items, "syslog-enabled"), "yes"), "BendKV does not log to syslog", Nil{})
 
 # The addresses
 # -------------

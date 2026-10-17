@@ -516,6 +516,32 @@ They apply in order, each on top of the one before:
    of the new effects compiles to the C it compiled to before, but for the effects'
    code it links. BendKV listens on `bind`'s IPv6 addresses and on `unixsocket`, and
    tells systemd it loads, is ready and stops (FINDINGS.md, section 3zzze).
+37. **`signal.patch`** — SIGTERM and SIGINT, as Redis's `sigShutdownHandler` takes
+   them, as an effect. `IO.signal(log, done)` puts the handlers in at its first call
+   (`sigaction` with `SA_RESTART`; SIGHUP ignored, as Redis's `main` ignores it), and
+   with `done` 0 gives the signal taken since the last such call (15, 2, or 0 for none).
+   The handler calls async-signal-safe functions alone: it logs the signal at once as
+   Redis's `serverLogFromHandler` does (`<pid>:signal-handler (<secs>) Received SIGTERM
+   scheduling shutdown...`, appended to `log`, kept from the first call, or on the
+   standard output for `""`), and keeps it for the next call. A SIGINT while a shutdown
+   is asked for (a signal taken since the last call with `done` not 0) ends the process
+   with code 1 after `You insist... exiting now.` and the removal of `temp-<pid>.rdb`
+   from the working directory, as Redis's handler does for a second ^C; `done` not 0
+   says the shutdown failed (Redis's `cancelShutdown`), gives 0, and leaves a signal
+   taken for the next call. The runtime's waits already take `EINTR` (`epoll_wait`,
+   `select`, `poll`). The JS lane traps nothing: its loop runs to the end without going
+   back to bun's event loop, where a handler of `process.on` would run, and such a
+   handler would take SIGTERM's default away; there `IO.signal` gives 0 and the signals
+   end the program as before. `bend2/base.bend` (+16), `bend2/effs/io_signal.c` and
+   `.js` (new), and the tests `tests/io/io_signal.bend` (a SIGTERM the program sends
+   itself given once, then 0; one left by a call with `done` 1 for the next; a SIGINT
+   after it given rather than fatal; the handler's lines in the log),
+   `tests/io/io_signal_insist.bend` (the second SIGINT ends the program with code 1),
+   both in C alone through an effect of the test's own (`io_signal_raise.c`, `raise`),
+   and `tests/io/io_signal_none.bend` (0 on both lanes with no signal). Bend's lane
+   tests give the same results on C and JS with it as without it. BendKV shuts down
+   on SIGTERM and SIGINT as Redis does, with `shutdown-on-sigterm` and
+   `shutdown-on-sigint` (FINDINGS.md, section 3zzzf).
 
 What the patches do and what they give is worked through in
 [../PERFORMANCE.md](../docs/PERFORMANCE.md), sections 3–6, 7.7–7.17, 7.23–7.25, 16, 39,
@@ -534,7 +560,7 @@ From the `bendkv/` directory:
 
 ```bash
 git clone https://github.com/bendlang/bend ../bend-patched
-sh bend-patches/apply.sh ../bend-patched   # the bendkv-patches branch from 1cce499 with thirty-six patches
+sh bend-patches/apply.sh ../bend-patched   # the bendkv-patches branch from 1cce499 with thirty-seven patches
 bun ../bend-patched/bend2/main.ts server.bend -o build/bendkv
 ```
 
@@ -563,8 +589,8 @@ every program, the thirty-second boxes a datatype's String variant as the String
 itself, in a program without GPU calls, the thirty-third only adds natives (`F64`), and
 the thirty-fourth changes only a build with AddressSanitizer, the thirty-fifth
 only adds a native (`Clock.us`), and the thirty-sixth changes `TCP.listen` (IPv6) and
-`TCP.name` (unix sockets) and adds the effects `TCP.listen_unix` and `IO.notify`.
-The theory does not change:
+`TCP.name` (unix sockets) and adds the effects `TCP.listen_unix` and `IO.notify`, and
+the thirty-seventh only adds the effect `IO.signal`. The theory does not change:
 `String` in the proofs is still a list, and `IO` a function of `R` and `k`.
 
 ## How to reproduce the measurements

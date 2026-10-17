@@ -158,8 +158,9 @@ the string itself, with no node, in every program without GPU calls (section 3zz
 the thirty-third adds C's doubles, `F64`, run as C runs them, strtod and libm with them
 (section 3zzm); the thirty-fourth lets AddressSanitizer check the heap, in a build
 with ASan only (section 3zzp); the thirty-fifth reads the monotonic clock without
-an effect, `Clock.us` (section 3zzz); and the thirty-sixth listens on IPv6 addresses
-and unix sockets and sends systemd its notifications (section 3zzze).
+an effect, `Clock.us` (section 3zzz); the thirty-sixth listens on IPv6 addresses
+and unix sockets and sends systemd its notifications (section 3zzze); and the
+thirty-seventh takes SIGTERM and SIGINT as Redis's handler takes them (section 3zzzf).
 The sections before 3l
 number the patches as they were then: patch 16 was effect pairs, taken out in 3l with
 `TCP.post_list` of patch 11, and their patches 17–20 are today's 16–19. None changes the
@@ -205,6 +206,7 @@ to agree with the list definition, and `IO` is still a function of `R` and `k`.
 | heap asan (34th) | in a build with AddressSanitizer alone, `heap_free` poisons the node it frees and holds it in a quarantine of its size class before its free chain hands it out again, so that a read through a stale pointer gets ASan's report and stack; any other build is byte for byte as before | the `sanitize` job (`tools/sanitize.sh`): the server under ASan, UBSan and TSan with no report, and patch 26's bug found again when it is taken out (section 3zzp) |
 | clock us (35th) | `Clock.us(k)` is the host's monotonic clock in µs mod 2^32, read once `k` is known, with no effect: a pure loop times its own steps; `@unsafe`, as no law reads it | the timing of calls: a reading after each request of the actor's group, where an `IO.clock` made the group a loop of effects; GET one at a time 13,002 → 12,215 instructions (section 3zzz) |
 | unix v6 (36th) | `TCP.listen` takes IPv6 addresses (each socket IPv6 alone); `TCP.listen_unix` listens on a unix socket; `TCP.name` names a unix socket's ends `/unixsocket:0`; `IO.notify` sends systemd's `NOTIFY_SOCKET` a datagram | the start of a stock configuration: `bind`'s IPv6 addresses, `unixsocket` and `unixsocketperm`, `supervised systemd` (section 3zzze) |
+| signal (37th) | `IO.signal` traps SIGTERM and SIGINT on the C lane: the handler logs the signal as Redis's does and keeps it for the next call; a second SIGINT while a shutdown is asked for ends the process (code 1); SIGHUP ignored | the shutdown Redis runs on SIGTERM and SIGINT, with `shutdown-on-sigterm` and `shutdown-on-sigint` (section 3zzzf) |
 
 The ratios in the last column come from different series and drift by ±0.06–0.08
 between series; PERFORMANCE.md gives each one with its pairs.
@@ -6448,9 +6450,8 @@ pass.
 - No BGSAVE, and no save at the save points: they make SHUTDOWN and FLUSHALL save, and
   BendKV's start warns that they save nothing at their times. BendKV's default `save` is
   empty, where Redis's is `3600 1 300 100 60 10000`. `rdb_changes_since_last_save` is 0.
-- SIGTERM and SIGINT end the process at once. The runtime has no handler for them, so
-  the shutdown Redis runs for them (`shutdown-on-sigterm`, `shutdown-on-sigint`), with
-  its save when save points are set, would take a native of the runtime; SHUTDOWN saves.
+- SIGTERM and SIGINT ended the process at once: the runtime had no handler for them.
+  Section 3zzzf adds the one Redis has, and the shutdown it runs.
 - No LZF: the file is that of `rdbcompression no`, as DUMP's payloads are (section
   3zzu). Redis reads it.
 - No IDLE or FREQ, which Redis writes under an LRU or LFU policy and loads a file
@@ -6930,6 +6931,82 @@ alone: locally GET is 3,420 (main 3,419), SET 4,186 (4,183), INCR 4,528 (4,527).
   reach NOTIFY_SOCKET"), where Redis gives `sd_notify`'s error number.
 - Protected mode is still BendKV's: it listens on the loopback alone, where Redis
   listens on every address and answers a client from elsewhere with a DENIED error.
+
+## 3zzzf. SIGTERM and SIGINT: the shutdown Redis runs for them
+
+**What was left.** `systemctl stop`, `docker stop` and a ^C send SIGTERM or SIGINT. Redis
+takes them in a handler (`sigShutdownHandler`), which logs the signal and sets
+`shutdown_asap`; its next `serverCron` runs the shutdown of SHUTDOWN without arguments
+(`prepareForShutdown`), with the flags of `shutdown-on-sigterm` or `shutdown-on-sigint`:
+the append-only file synced, the RDB file saved when save points are set, the pid file
+and the unix socket's file removed, exit code 0. BendKV's runtime trapped SIGSEGV and
+SIGBUS alone, so either signal ended the process at once (code 143 or 130): no save, no
+last sync of the append-only file, a pid file left behind. With save points and no
+append-only file, every write since the last SAVE was lost at each `systemctl stop`.
+
+**What changed.**
+
+- A 37th patch (`signal.patch`) adds the effect `IO.signal(log, done)`. Its first call
+  puts the handlers in (`SA_RESTART`; SIGHUP ignored, as Redis's `main` ignores it). The
+  handler calls async-signal-safe functions alone. It logs the signal at once, as
+  Redis's `serverLogFromHandler` logs it: `<pid>:signal-handler (<secs>) Received SIGTERM
+  scheduling shutdown...`, appended to `logfile` or on the standard output. It keeps the
+  signal, and `IO.signal(log, 0)` gives it (15 or 2) at the next look.
+- A SIGINT that comes while a shutdown is asked for ends the process with code 1. The
+  handler logs `You insist... exiting now.` and removes `temp-<pid>.rdb` first, as
+  Redis's does for a second ^C. Two signals sent at once merge into one in the kernel,
+  for Redis as for BendKV, so the second must come after the handler has run and before
+  the next look.
+- The cron, which ticks the actor every 100 ms as `serverCron` does, looks for a signal
+  first. It sends the actor a `Sig{n}`, a request of its own (Signals in `server.bend`).
+  The group that runs it asks for the shutdown SHUTDOWN asks for, with the parameter's
+  flags: `save`, `nosave` and `force` as SAVE, NOSAVE and FORCE; `now` waits for no
+  replica, there being none. No client waits for it. Once the group is run, the shell
+  stops the server (`ps.down` 2), or saves and stops (1, with the server's
+  `S.srv.rdb.shut`), or saves and stops whatever the save gives (3), on the paths
+  SHUTDOWN takes (section 3zzzc). A signal while a SHUTDOWN is asked for already
+  changes nothing.
+- A save that fails without `force` leaves the server running, logging Redis's two
+  lines (`down.cant`). `down.cant` then calls `IO.signal(log, 1)`, as Redis's
+  `cancelShutdown` clears `shutdown_asap`, so the next SIGINT asks again rather than
+  ends the process. A signal taken in the meantime waits for the next look.
+- systemd's `STOPPING=1` (section 3zzze) follows every "User requested shutdown...",
+  on the paths that save too, as `prepareForShutdown` sends it.
+
+**Tests.** `tests/rdb_test.py` runs the same signals on both servers and compares:
+
+- what each logs, in order, the handler's line by its format;
+- how each ends (its code, or still running);
+- what its RDB file holds, and what a restart reads.
+
+The cases:
+
+- SIGTERM with save points (saved; a restart holds the keys and their times);
+- SIGINT without them (nothing saved);
+- `shutdown-on-sigterm nosave` with save points, and `shutdown-on-sigint save` without
+  them;
+- `force now` through a save that fails (it exits all the same);
+- a save that fails: the server goes on and answers, a SIGINT later fails the same way,
+  and a SIGTERM once the save can be made saves and stops;
+- the append-only file synced and read at the restart.
+
+All of them match Redis. Bend's own tests (`tests/io/io_signal*.bend`) send the program
+its signals with `raise`, the second SIGINT among them.
+
+**What it costs.** Nothing on a request's path: the cron calls `IO.signal` once a tick,
+and a `Sig` comes only with a signal. `make perfcheck` on one machine: GET 3,416, SET
+4,186 and INCR 4,537 instructions per request, against 3,419, 4,183 and 4,527 for main.
+
+**Where BendKV differs.**
+
+- A signal during the start, before the server listens, still ends the process at
+  once: the handlers go in when it starts to accept connections. Redis takes one during
+  its load and stops without a save.
+- The JS lane traps no signal (`bend-patches/README.md`, entry 37). BendKV runs on the
+  C lane.
+- The handler writes its line with `write(2)` while the server's log lines go through
+  C's `stdout` buffer, flushed whenever the event loop waits. On the standard output, a
+  signal's line may come before a line logged just before it.
 
 ## 3zzzg. The start reads its file in windows
 
