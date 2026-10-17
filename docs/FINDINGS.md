@@ -9199,7 +9199,8 @@ the move's other kinds (below).
   - `redis.REDIS_VERSION` and `REDIS_VERSION_NUM`, and HELP's last line, "Print this
     help." (kind A).
   - Lua's numbers in `redis.call`, and a script's double, in `fpconv_dtoa`'s form (kind C).
-  - The order of pushes, and the keys that a script's reads track (kind F).
+  - The order of pushes, and the keys that a script's reads track (kind F, done in
+    section 3zzzze).
 
 **Tests.** `script_test` and `function_test`, against 7.2.16. Each line that differs
 belongs to another kind: the version and HELP's last line (A), Lua's doubles (C), the
@@ -9671,6 +9672,63 @@ node's entries around, and the keyspace drops the old version.
 - The writes in place (PERFORMANCE 84): the stream taken out of the keyspace while a
   write runs, which needs every write of a stream to write its stream back, the writes
   that change nothing too, with no effect; XDEL's walk from the newest entry, in place.
+
+## 3zzzze. Pushes after the reply, as Redis 7.2.16 sends them
+
+**What changed** (#128, kind F: `src/server.bend`, Own pushes). Redis 7.0 wrote a push
+to the client whose command ran as the command ran: before the command's reply, among
+EXEC's replies, before a script's reply. Redis 7.2 keeps such pushes for the end of the
+call (`afterCommand`, from `pending_push_messages`), and BendKV now does too.
+- **What waits.** The current client's messages on a channel it subscribed to (RESP3),
+  its keyspace events and the invalidations it gets as a redirect wait in Pub/Sub's
+  `own`; its own invalidations wait in the tracking's `pend`, as they already did.
+  After the command's reply the first go out, then the second (`bg.own.after`, then
+  `bg.trk.after`). For the commands of a transaction they come after EXEC's array, and
+  for a script's calls after the script's reply (`sc.pend`).
+- **The current client** is the batch's client; while a script runs, its caller
+  (`trk.cur` gives the caller for the script client's id 0); while a blocked pop runs
+  again, the client served, whose invalidations, its own and those it gets as a
+  redirect, wait for its reply (`iv.route.me`), and what the client whose command
+  served it gets waits for that client. The pushes kept wait aside while the clients a
+  command served are served (`pd.aside`), and while a busy script's group runs other
+  clients' requests (`sc.busy.group`), so that no other command takes them.
+- **Found on the way.**
+  - PUBLISH to its own channel inside EXEC put its pushes in EXEC's array and counted
+    them there (`*5` for three replies).
+  - The keyspace events of EXEC's commands never reached their own client.
+  - A served pop's keyspace events reached the client whose command served it before
+    that command's reply.
+  - Left as it was: CONFIG SET notify-keyspace-events takes effect from the next batch,
+    not from the next command of the same pipeline, since Pub/Sub's classes of events are
+    set again at a batch's end. A pipeline that sets them, subscribes and writes at once
+    hears nothing of that write, from Redis 7.0.15 as from 7.2.16.
+- **Tracking.**
+  - A blocked pop that is served runs its command again in Redis 7.2. So BLPOP and BRPOP
+    signal the key they popped from, as BLMPOP and the sorted sets' pops did, and BLMOVE
+    and BRPOPLPUSH signal their source after their destination (`ps.trk.served.go`). In
+    BCAST mode the change is the served client's, which NOLOOP leaves out for it.
+  - A script's call that only reads remembers its own keys for the caller, as Redis
+    7.2's `call()` remembers them for the current client (`trackingRememberKeys`). The
+    script's KEYS are no longer used: a key the script reads undeclared is tracked, a
+    declared one it does not read is not. Scr's `ks` is gone.
+
+**Tests.** Against 7.2.16:
+- resp3_test: two new scenarios, a transaction and a script that publish and write to
+  their own client, and pops served to a pusher and to a served client that both
+  subscribe. Its five scenarios of a client's own pushes pass; in 7.0's order they fail.
+- tracking_test: a redirect's own write in a transaction, a served BLMOVE in BCAST
+  mode, and a redirect to the client served; "redirects" and "served pops" pass.
+- script_test: "10 pipelines" and "12 tracking" pass.
+- The other differential tests that pushes and tracking touch (blocking, multi, pubsub,
+  client, monitor, pause, function, acl, keyspace, list, info, stats, the streams'), and
+  the file tests, differ from 7.2.16 in the same lines as before kind F: none of them
+  is kind F's.
+
+**What it costs.** After each command of the general way, a look at Pub/Sub's `own`
+(`bg.own.has`); nothing on the fast way, which makes no such push. perfcheck's GET, SET
+and INCR count 3,508, 4,299 and 4,621 instructions, against 3,507, 4,302 and 4,616 for
+kind I's build (5d523c6), counted alike; with 100 clients in BLPOP, 3,611 and 4,455
+against 3,618 and 4,460.
 
 ## 4. Where a request's time goes, and hiding the memory waits
 

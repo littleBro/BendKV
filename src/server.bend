@@ -1908,7 +1908,7 @@ def touch.by(+c: R.Cmd, t: Tx, +xs: List<&2, A.Ent>, +pre: Maybe<&2, R.Ds>, +pos
 
 # Tracking
 # --------
-# CLIENT TRACKING runs as Redis 7.0.15 runs it (tracking.c). The actor
+# CLIENT TRACKING runs as Redis 7.2.16 runs it (tracking.c). The actor
 # keeps the keys each tracking client read, whatever their database (the
 # tracking table: a key and the ids of the clients that read it, as Redis
 # keeps it); when a command changes one of them (the keys its effects
@@ -1919,9 +1919,10 @@ def touch.by(+c: R.Cmd, t: Tx, +xs: List<&2, A.Ent>, +pre: Maybe<&2, R.Ds>, +pos
 # itself when it speaks RESP3 (a push), or to the client it redirects to:
 # as a push in RESP3, or as a message of the channel __redis__:invalidate
 # to a client of RESP2 with a subscription, and to no one else. The
-# client whose command runs gets its own after the command's reply (after
-# EXEC's for a command EXEC runs, after its reply for a client served),
-# as Redis keeps them for after the call. FLUSHDB and FLUSHALL send every
+# client whose command runs gets its own after the command's reply and
+# its other pushes (after EXEC's for a command EXEC runs, after its reply
+# for a client served), as Redis keeps them for after the call (Own
+# pushes). FLUSHDB and FLUSHALL send every
 # tracking client a null and empty the table; the sweep of expired keys
 # and eviction invalidate the keys they delete, as no client's. While a
 # key is in the table, a batch that may write it runs the general way
@@ -2302,15 +2303,14 @@ def fni.new() -> Fni:
 # while a script's wait is in the chain (ev's bit 17), 16 while the
 # script is a function's (FCALL); the clock's reading the driver's
 # window started at, while the driver runs (at: Timing, in The driver);
-# and while a script runs, its caller (who: 0 for none) and the keys it
-# declared (ks: its KEYS), for the tracking: its calls' changes are its
-# caller's, and a call that only reads remembers its KEYS for the caller
-# (Tracking, in The driver, below). ScrOf, never built, makes Scr a node of
-# its own: one word of Cls, which the tracking's invalidations carry
-# taken apart (Iv), in segments as wide as the work loop's register bank
-# (WL_BANK: FINDINGS 3zzzd), where Scr's own seven words widened them
+# and while a script runs, its caller (who: 0 for none), for the
+# tracking: its calls' changes and reads are its caller's (Tracking, in
+# The driver, below). ScrOf, never built, makes Scr a node of its own: one
+# word of Cls, which the tracking's invalidations carry taken apart (Iv),
+# in segments as wide as the work loop's register bank (WL_BANK: FINDINGS
+# 3zzzd), where Scr's own six words widened them
 type Scr is Data:
-  Scr{shas: KV.Trie<Nat>, fi: Fni, n: Nat, st: U32, at: Clk, who: Nat, ks: List<&2, String>}
+  Scr{shas: KV.Trie<Nat>, fi: Fni, n: Nat, st: U32, at: Clk, who: Nat}
   ScrOf{s: Scr}
 
 # a reading of the wall clock (IO.clock): s and us since 1970
@@ -2318,34 +2318,27 @@ type Clk is Data:
   Clk{s: U32, u: U32}
 
 def scr.new() -> Scr:
-  Scr{KV.empty(Nat), fni.new(), 0n, 0, Clk{0, 0}, 0n, Nil{}}
+  Scr{KV.empty(Nat), fni.new(), 0n, 0, Clk{0, 0}, 0n}
 
-# the caller of the script that runs (0: none), and its KEYS
+# the caller of the script that runs (0: none)
 def scr.who(+s: Scr) -> Nat:
   match s:
-    case Scr{shas, fi, n, st, at, +who, ks}:
+    case Scr{shas, fi, n, st, at, +who}:
       who
     case ScrOf{+x}:
       scr.who(x)
 
-def scr.ks(+s: Scr) -> List<&2, String>:
+def scr.run.set(+id: Nat, s: Scr) -> Scr:
   match s:
-    case Scr{shas, fi, n, st, at, who, +ks}:
-      ks
-    case ScrOf{+x}:
-      scr.ks(x)
-
-def scr.run.set(+id: Nat, ks: List<&2, String>, s: Scr) -> Scr:
-  match s:
-    case Scr{shas, fi, n, st, at, w0, k0}:
-      Scr{shas, fi, n, st, at, id, ks}
+    case Scr{shas, fi, n, st, at, w0}:
+      Scr{shas, fi, n, st, at, id}
     case ScrOf{x}:
-      scr.run.set(id, ks, x)
+      scr.run.set(id, x)
 
 # ev's bits 16 and 17 (busy, a script waits), from st
 def scr.bit(+s: Scr) -> U32:
   match s:
-    case Scr{shas, fi, n, +st, at, who, ks}:
+    case Scr{shas, fi, n, +st, at, who}:
       U32.or(U32.shln(U32.and(st, 1), 16n), U32.shln(U32.and(st, 8), 14n))
     case ScrOf{+x}:
       scr.bit(x)
@@ -2627,7 +2620,8 @@ def cls.unmon(+id: Nat, cs: Cls) -> Cls:
 # pattern it matches, as a push (Push) on the channel each one's answers
 # come back on, which its connection writes out while it waits for its
 # socket (A subscribed client, below); the pushes of a batch go out
-# before its answer. Redis sends the replies of SUBSCRIBE and its kin even
+# before its answer, but those to the batch's own client, which wait for
+# after its call (Own pushes). Redis sends the replies of SUBSCRIBE and its kin even
 # to a client whose replies are held back (CLIENT REPLY OFF or SKIP), and
 # so does the actor. A client with a subscription runs (P|S)SUBSCRIBE,
 # (P|S)UNSUBSCRIBE, PING (answered [pong, its argument]), QUIT and RESET
@@ -2661,8 +2655,7 @@ type Reg is Data:
 # notifications), the pushes of the batch so far, newest first, and those
 # to the client whose command runs (own: a RESP3 client with a
 # subscription that publishes to itself, or hears its own keyspace
-# events), which go among its replies, before its command's, as Redis
-# writes them to its buffer as the command runs. PsOf,
+# events), which wait for after its call (Own pushes, below). PsOf,
 # a state that holds a state, is never built: it makes Ps a type that
 # holds itself, which the compiler makes a node of its own, so that it
 # travels as one word, as the clients that wait and the transactions do
@@ -3613,7 +3606,8 @@ type Sent is Data:
   Sent{k: Nat, px: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, own: List<&2, R.Reply>}
 
 # a message (r, out its bytes in RESP2) pushed to each subscriber, before
-# those so far; the one to the client of id me goes among its replies
+# those so far; the one to the client of id me waits for after its call
+# (Own pushes)
 def push.one(mine: Bool, +b: Chan(Ans), +r3: Bool, +r: R.Reply, +out: String, d: Sent) -> Sent:
   match mine d:
     case True{} Sent{k, px, own}:
@@ -3676,16 +3670,21 @@ def ps.own.take(pb: Ps) -> List<&2, R.Reply> & Ps:
     case PsOf{p}:
       ps.own.take(p)
 
-# a command's replies (newest first) with the pushes to its own client
-# before its reply (its one reply: the head)
-def own.under(own: List<&2, R.Reply>, rs: List<&2, R.Reply>) -> List<&2, R.Reply>:
-  match own rs:
-    case Nil{} xs:
-      xs
-    case ys Con{h, t}:
-      h <> List.append(&2, R.Reply, ys, t)
-    case ys Nil{}:
-      ys
+# whether there are such pushes
+def ps.own.any(+pb: Ps) -> Bool:
+  match pb:
+    case Ps{reg, ev, px, cs, +own}:
+      Bool.not(List.is_empty(&2, R.Reply, own))
+    case PsOf{+p}:
+      ps.own.any(p)
+
+# such pushes (xs, newest first) put back, under those made since
+def ps.own.put(xs: List<&2, R.Reply>, pb: Ps) -> Ps:
+  match pb:
+    case Ps{reg, ev, px, cs, own}:
+      Ps{reg, ev, px, cs, List.append(&2, R.Reply, own, xs)}
+    case PsOf{p}:
+      ps.own.put(xs, p)
 
 # PUBSUB's CHANNELS (of a pattern, or all) and SHARDCHANNELS, NUMSUB and
 # SHARDNUMSUB, NUMPAT
@@ -3975,20 +3974,13 @@ def ps.trk(+pb: Ps) -> Trk:
     case PsOf{+p}:
       ps.trk(p)
 
-# the caller of the script that runs (0: none), and the KEYS it declared
+# the caller of the script that runs (0: none)
 def ps.scr.who(+pb: Ps) -> Nat:
   match pb:
     case Ps{reg, ev, px, Cls{tab, kd, ks, ms, pz, dn, hd, +scr}, own}:
       scr.who(scr)
     case PsOf{+p}:
       ps.scr.who(p)
-
-def ps.scr.ks(+pb: Ps) -> List<&2, String>:
-  match pb:
-    case Ps{reg, ev, px, Cls{tab, kd, ks, ms, pz, dn, hd, +scr}, own}:
-      scr.ks(scr)
-    case PsOf{+p}:
-      ps.scr.ks(p)
 
 # the tracking clients and the redirects, read: whether the client of id
 # tracks, or is a redirect's client (its pushes must go out at once)
@@ -4284,26 +4276,29 @@ def trk.err(+cur: Tk, +b: Bool, +i: Bool, +o: Bool, +gs: List<&2, String>) -> Ma
 # sendTrackingMessage sends it: to the client itself, or to the client it
 # redirects to (red); in RESP3 as a push, in RESP2 only to a redirect's
 # client with a subscription. To another client it is a push on its
-# channel; to the client whose command runs (cur), among its replies,
-# before its command's when it is another client's (own), after it when
-# it is its own, kept for after the call (the tracking's pend).
+# channel; to the client whose command runs (cur), after its call: with
+# its own pushes when it is another client's (own), after them when it is
+# its own (the tracking's pend), as Redis 7.2 keeps both for after the
+# call (Own pushes).
 #
 # While a blocked client is served (out: Some of the id of the client
 # whose command served it, else None), the served client is cur: what it
-# gets as another's goes on its channel, which its reply follows (bg.ups);
-# what the client out gets goes after that client's reply, as Redis
-# writes it once its call is over (own collects it meanwhile, and
-# pd.aside puts it with that client's pending ones).
-def iv.route.me(mine: Bool, srv: Bool, +dback: Chan(Ans), +dr3: Bool, +p: Pl, v: Iv) -> Iv:
-  match mine srv v:
-    case True{} _ Iv{reg, ev, px, cs, own, TrkOn{tab, keys, items, ids, rds, pfx, pend, over, mx}}:
+# gets, its own or as another's, waits for after its reply (pend, which
+# bg.popped puts after it), as Redis 7.2 keeps it once the call that runs
+# again is over; what the client out gets goes after that client's reply,
+# as Redis writes it once its call is over (own collects it meanwhile,
+# and pd.aside puts it with that client's pending ones).
+def iv.route.at(kept: Bool, +dr3: Bool, +p: Pl, v: Iv) -> Iv:
+  match kept v:
+    case True{} Iv{reg, ev, px, cs, own, TrkOn{tab, keys, items, ids, rds, pfx, pend, over, mx}}:
       Iv{reg, ev, px, cs, own, TrkOn{tab, keys, items, ids, rds, pfx, inv.reply(dr3, p) <> pend, over, mx}}
-    case False{} False{} Iv{reg, ev, px, cs, own, t}:
+    case False{} Iv{reg, ev, px, cs, own, t}:
       Iv{reg, ev, px, cs, inv.reply(dr3, p) <> own, t}
-    case False{} True{} Iv{reg, ev, px, cs, own, t}:
-      Iv{reg, ev, (dback, Push{inv.bytes(dr3, p)}) <> px, cs, own, t}
-    case _ _ v0:
+    case _ v0:
       v0
+
+def iv.route.me(mine: Bool, srv: Bool, +dback: Chan(Ans), +dr3: Bool, +p: Pl, v: Iv) -> Iv:
+  iv.route.at(Bool.or(mine, srv), dr3, p, v)
 
 def iv.route.other(late: Bool, +dback: Chan(Ans), +dr3: Bool, +p: Pl, v: Iv) -> Iv:
   match late v:
@@ -4329,12 +4324,12 @@ def iv.late(+id: Nat, +out: Maybe<&2, Nat>) -> Bool:
 
 # whether cur is the caller of the script that runs (Scr's who): the
 # script's calls' changes are its caller's (Redis's current_client while
-# the script runs: trk.cur), and what the caller gets of them as another
-# client's invalidation (a client that redirects to it) goes out at once,
-# as Redis writes it to the caller while its script runs, before the
-# script's reply; a key under a BCAST prefix they change is changed by
-# none (iv.by), as Redis keeps the script's own client for it
-# (trackingRememberKeyToBroadcast), which no client in NOLOOP mode is
+# the script runs: trk.cur), and what the caller gets of them, as another
+# client's invalidation (a client that redirects to it) or as its own,
+# waits for the script's reply (sc.pend); a key under a BCAST prefix they
+# change is changed by none (iv.by), as Redis keeps the script's own
+# client for it (trackingRememberKeyToBroadcast), which no client in
+# NOLOOP mode is
 def iv.lua(+cur: Nat, +cs: Cls) -> Bool:
   match cs:
     case Cls{tab, kd, ks, ms, pz, dn, hd, +scr}:
@@ -4343,17 +4338,17 @@ def iv.lua(+cur: Nat, +cs: Cls) -> Bool:
 def iv.by(+cur: Nat, +cs: Cls) -> Nat:
   Bool.pick(Nat, iv.lua(cur, cs), 0n, cur)
 
-def iv.put.as(go: Bool, +did: Nat, +dback: Chan(Ans), +dr3: Bool, +p: Pl, +tid: Nat, +cur: Nat, +out: Maybe<&2, Nat>, +lua: Bool, v: Iv) -> Iv:
+def iv.put.as(go: Bool, +did: Nat, +dback: Chan(Ans), +dr3: Bool, +p: Pl, +tid: Nat, +cur: Nat, +out: Maybe<&2, Nat>, v: Iv) -> Iv:
   match go:
     case True{}:
-      iv.route(Nat.is_eq(did, cur), Nat.is_eq(tid, cur), iv.late(did, out), Bool.or(Maybe.is_some(&2, Nat, out), lua), dback, dr3, p, v)
+      iv.route(Nat.is_eq(did, cur), Nat.is_eq(tid, cur), iv.late(did, out), Maybe.is_some(&2, Nat, out), dback, dr3, p, v)
     case False{}:
       v
 
 def iv.put(red: Bool, +did: Nat, +dback: Chan(Ans), +dr3: Bool, +p: Pl, +tid: Nat, +cur: Nat, +out: Maybe<&2, Nat>, v: Iv) -> Iv:
   match v:
-    case Iv{+reg, ev, px, +cs, own, t}:
-      iv.put.as(Bool.or(dr3, Bool.and(red, Maybe.is_some(&2, Mine, reg.mine(did, reg)))), did, dback, dr3, p, tid, cur, out, iv.lua(cur, cs), Iv{reg, ev, px, cs, own, t})
+    case Iv{+reg, ev, px, cs, own, t}:
+      iv.put.as(Bool.or(dr3, Bool.and(red, Maybe.is_some(&2, Mine, reg.mine(did, reg)))), did, dback, dr3, p, tid, cur, out, Iv{reg, ev, px, cs, own, t})
 
 # a client whose redirect is gone: flagged broken, and told so in RESP3
 # (after its reply when its own command runs, or when its command served
@@ -4696,19 +4691,17 @@ def ps.pend.put(xs: List<&2, R.Reply>, pb: Ps) -> Ps:
       ps.pend.put(xs, p)
 
 # A client served (blocked clients: bg.popped), the served client the one
-# whose command runs, as Redis serves it: BLMOVE and BRPOPLPUSH change
-# their destination (lmoveHandlePush signals it; the key they popped from
-# was signalled by the push that made it ready, as serveClientBlockedOnList
-# says), unless it holds another type: then they answer WRONGTYPE, change
-# nothing and signal nothing (ok is False); BLMPOP's pop
-# (listElementsRemoved), BZPOPMIN's, BZPOPMAX's and BZMPOP's
-# (genericZpopCommand) signal the key they popped from, and BLPOP's and
-# BRPOP's (form 1) do not. The invalidations the served
+# whose command runs, as Redis 7.2 serves it: its command runs again, so
+# every pop signals the key it popped from (listElementsRemoved,
+# genericZpopCommand), and BLMOVE and BRPOPLPUSH their destination first
+# (lmoveHandlePush), then their source (lmoveGenericCommand), unless the
+# destination holds another type: then they answer WRONGTYPE, change
+# nothing and signal nothing (ok is False). The invalidations the served
 # client gets after its reply (pend, newest first); those it gets as
 # another's go on its channel, before its reply (iv.route). Those for the
-# client out, whose command served it, go after that client's reply, with
-# its own pending ones (kept aside meanwhile), as Redis writes them once
-# that client's call is over
+# client out, whose command served it, go after that client's reply, its
+# own pushes and its own pending ones (both kept aside meanwhile), as
+# Redis writes them once that client's call is over
 type Pd is Data:
   Pd{pend: List<&2, R.Reply>, pb: Ps}
 
@@ -4719,48 +4712,53 @@ def ps.trk.popped(on: Bool, +ks: List<&2, String>, +id: Nat, +out: Maybe<&2, Nat
     case _ _:
       pb
 
-def ps.trk.moved(on: Bool, +d: String, +id: Nat, +out: Maybe<&2, Nat>, pb: Ps) -> Ps:
+def ps.trk.moved(on: Bool, +s: String, +d: String, +id: Nat, +out: Maybe<&2, Nat>, pb: Ps) -> Ps:
   match on:
     case True{}:
-      iv.ps(iv.key.as(d, id, out, True{}, iv.of(pb)))
+      iv.ps(iv.key.as(s, id, out, True{}, iv.key.as(d, id, out, True{}, iv.of(pb))))
     case False{}:
       pb
 
-def ps.trk.served.go(+pc: R.Cmd, +form: Nat, ok: Bool, +id: Nat, +out: Maybe<&2, Nat>, pb: Ps) -> Ps:
+def ps.trk.served.go(+pc: R.Cmd, ok: Bool, +id: Nat, +out: Maybe<&2, Nat>, pb: Ps) -> Ps:
   match pc:
-    case R.LMove{s, +d, e}:
-      ps.trk.moved(ok, d, id, out, pb)
+    case R.LMove{+s, +d, e}:
+      ps.trk.moved(ok, s, d, id, out, pb)
     case R.LMPop{+ks, l, n}:
-      ps.trk.popped(Bool.not(Nat.is_eq(form, 1n)), ks, id, out, pb)
+      ps.trk.popped(True{}, ks, id, out, pb)
     case R.ZMPop{+ks, m, n}:
       ps.trk.popped(True{}, ks, id, out, pb)
     case _:
       pb
 
 # the served client's pending invalidations (p), and the client out's
-# again: those the serving made for it (late, newer) on top of its own
-def pd.of(p: List<&2, R.Reply> & Ps, late: List<&2, R.Reply>, old: List<&2, R.Reply>) -> Pd:
+# again: its own pushes (mine), and its pending invalidations, those the
+# serving made for it (late, newer) on top of its own (old)
+def pd.of(p: List<&2, R.Reply> & Ps, late: List<&2, R.Reply>, old: List<&2, R.Reply>, mine: List<&2, R.Reply>) -> Pd:
   (pend, pb) = p
-  Pd{pend, ps.pend.put(List.append(&2, R.Reply, late, old), pb)}
+  Pd{pend, ps.own.put(mine, ps.pend.put(List.append(&2, R.Reply, late, old), pb))}
 
-def pd.mk(p: List<&2, R.Reply> & Ps, old: List<&2, R.Reply>) -> Pd:
+def pd.mk(p: List<&2, R.Reply> & Ps, old: List<&2, R.Reply>, mine: List<&2, R.Reply>) -> Pd:
   (late, pb) = p
-  pd.of(ps.pend.take(pb), late, old)
+  pd.of(ps.pend.take(pb), late, old, mine)
 
-def pd.aside(p: List<&2, R.Reply> & Ps, +pc: R.Cmd, +form: Nat, ok: Bool, +id: Nat, +out: Nat) -> Pd:
+def pd.own(p: List<&2, R.Reply> & Ps, old: List<&2, R.Reply>, +pc: R.Cmd, ok: Bool, +id: Nat, +out: Nat) -> Pd:
+  (mine, pb) = p
+  pd.mk(ps.own.take(ps.trk.served.go(pc, ok, id, Some{out}, pb)), old, mine)
+
+def pd.aside(p: List<&2, R.Reply> & Ps, +pc: R.Cmd, ok: Bool, +id: Nat, +out: Nat) -> Pd:
   (old, pb) = p
-  pd.mk(ps.own.take(ps.trk.served.go(pc, form, ok, id, Some{out}, pb)), old)
+  pd.own(ps.own.take(pb), old, pc, ok, id, out)
 
-def ps.trk.served.if(on: Bool, +pc: R.Cmd, +form: Nat, ok: Bool, +id: Nat, +out: Nat, pb: Ps) -> Pd:
+def ps.trk.served.if(on: Bool, +pc: R.Cmd, ok: Bool, +id: Nat, +out: Nat, pb: Ps) -> Pd:
   match on:
     case True{}:
-      pd.aside(ps.pend.take(pb), pc, form, ok, id, out)
+      pd.aside(ps.pend.take(pb), pc, ok, id, out)
     case False{}:
       Pd{Nil{}, pb}
 
-def ps.trk.served(+pc: R.Cmd, +form: Nat, ok: Bool, +id: Nat, +out: Nat, pb: Ps) -> Pd:
+def ps.trk.served(+pc: R.Cmd, ok: Bool, +id: Nat, +out: Nat, pb: Ps) -> Pd:
   +p = pb
-  ps.trk.served.if(ps.trk.hot(p), pc, form, ok, id, out, p)
+  ps.trk.served.if(ps.trk.hot(p), pc, ok, id, out, p)
 
 # The end of a group (Redis's beforeSleep): the keys changed under each
 # BCAST prefix to the clients that listen to it, each of them but the
@@ -5741,6 +5739,50 @@ type LRun is Data:
 type Grp is Data:
   Grp{outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, srv: S.Srv, ds: R.Ds, ws: Waits, up: List<&2, Up>, tx: Tx, pb: Ps}
 
+# Own pushes
+# ----------
+# A push to the client whose command runs (the current client: the
+# script's caller while its script runs, the client served while its pop
+# runs) waits for the end of its call, as Redis 7.2's afterCommand sends
+# them (pending_push_messages): its own messages, its keyspace events and
+# an invalidation that a client redirecting to it gets (own), then its
+# own invalidations (the tracking's pend). They go after the command's
+# reply (bg.own.after), after EXEC's array for the commands EXEC runs,
+# after the script's reply for its calls (sc.pend), and they wait aside
+# while the clients a command served are served (pd.aside) and while the
+# requests of a busy script's group run (sc.busy.group), so that no other
+# command takes them.
+def bg.own.put(p: List<&2, R.Reply> & Ps, rs: List<&2, R.Reply>, es: List<&2, A.Ent>, conn: S.Conn, srv: S.Srv, ds: R.Ds, ws: Waits, up: List<&2, Up>, tx: Tx) -> LRun:
+  (own, pb) = p
+  LRun{List.append(&2, R.Reply, own, rs), es, conn, srv, ds, ws, up, tx, pb}
+
+def bg.own.go(g: LRun) -> LRun:
+  match g:
+    case LRun{rs, es, conn, srv, ds, ws, up, tx, pb}:
+      bg.own.put(ps.own.take(pb), rs, es, conn, srv, ds, ws, up, tx)
+    case LHeld{h}:
+      LHeld{h}
+
+def bg.own.has(+g: LRun) -> Bool:
+  match g:
+    case LRun{rs, es, conn, srv, ds, ws, up, tx, +pb}:
+      ps.own.any(pb)
+    case LHeld{h}:
+      False{}
+
+def bg.own.if(on: Bool, g: LRun) -> LRun:
+  match on:
+    case True{}:
+      bg.own.go(g)
+    case False{}:
+      g
+
+# after a command of the batch's client, its own pushes after its reply;
+# a command that waits (LHeld) has made none yet
+def bg.own.after(g: LRun) -> LRun:
+  +h = g
+  bg.own.if(bg.own.has(h), h)
+
 # a command's replies, after it changed its client's protocol (HELLO,
 # RESET) or not: a change is a switch (R.RSw) of its replies, the
 # protocol of those after them in the batch (resp.bend, encode_as)
@@ -5797,17 +5839,15 @@ def bg.run.go(held: Bool, +ok: Bool, +k: S.Role, +c: R.Cmd, +code: Nat, rs: List
 # a command run while some client has a transaction or watches keys, or
 # keyspace events are to be sent: its effects touch the keys watched
 # (Touches), and its events are published (Keyspace notifications), with
-# the databases before it and after
-def bg.touched.of(rs: List<&2, R.Reply>, es: List<&2, A.Ent>, conn: S.Conn, srv: S.Srv, ds: R.Ds, ws: Waits, up: List<&2, Up>, tx: Tx, p: List<&2, R.Reply> & Ps) -> LRun:
-  (own, pb) = p
-  LRun{own.under(own, rs), es, conn, srv, ds, ws, up, tx, pb}
-
+# the databases before it and after; those to the client whose command
+# runs (a script's call's: its caller's, trk.cur) wait for after its call
+# (Own pushes)
 def bg.touched(+pre: Maybe<&2, R.Ds>, +c: R.Cmd, es: List<&2, A.Ent>, g: LRun) -> LRun:
   match g:
     case LRun{rs, +e1, +conn, srv, +ds, ws, up, tx, pb}:
-      +me = S.conn.id(conn)
       +p = pb
-      bg.touched.of(rs, List.append(&2, A.Ent, e1, es), conn, srv, ds, ws, up, touch.by(c, tx, e1, pre, ds), ps.own.take(ps.cmd(c, e1, pre, ds, me, ps.trk.cmd(c, e1, pre, ds, trk.cur(me, p), p))))
+      +cur = trk.cur(S.conn.id(conn), p)
+      LRun{rs, List.append(&2, A.Ent, e1, es), conn, srv, ds, ws, up, touch.by(c, tx, e1, pre, ds), ps.cmd(c, e1, pre, ds, cur, ps.trk.cmd(c, e1, pre, ds, cur, p))}
     case LHeld{h}:
       LHeld{h}
 
@@ -5959,9 +5999,12 @@ def bg.errs(srv: S.Srv, +code: Nat, +r: R.Reply) -> S.Srv:
 # a pop's effects, which touch the keys watched (each key popped from
 # was there)
 # a pop's events too (Keyspace notifications), with the databases
-# before it (pre) and its command (pc)
+# before it (pre) and its command (pc); those to the client whose command
+# served it wait for after that client's call (Own pushes)
 def bg.popped.put(+e: List<&2, A.Eff>, +ds: R.Ds, rs: List<&2, R.Reply>, es: List<&2, A.Ent>, conn: S.Conn, srv: S.Srv, ws: Waits, up: List<&2, Up>, tx: Tx, pb: Ps, +pc: R.Cmd, +pre: R.Ds) -> LRun:
-  LRun{rs, A.ents.onto(e, es), conn, srv, ds, ws, up, touch.effs(tx, e, None{}, ds), ps.cmd(pc, A.ents.of(e), Some{pre}, ds, 0n, pb)}
+  +cn = conn
+  +p = pb
+  LRun{rs, A.ents.onto(e, es), cn, srv, ds, ws, up, touch.effs(tx, e, None{}, ds), ps.cmd(pc, A.ents.of(e), Some{pre}, ds, trk.cur(S.conn.id(cn), p), p)}
 
 # a client served, with the invalidations its pop made for it after its
 # reply (ps.trk.served)
@@ -5977,7 +6020,7 @@ def bg.popped(w: Waits, r: R.Reply & (List<&2, A.Eff> & R.Ds), rs: List<&2, R.Re
       (e, ds) = q
       +y = S.blk.shape(S.blk.form(b), x)
       +left = ws
-      bg.popped.up(ps.trk.served(pc, S.blk.form(b), Bool.not(R.r_is_err(y)), id, S.conn.id(conn), pb), back, c0, c1, y, cmds, codes, av, e, ds, rs, es, conn, waits.count(left, S.srv.served(S.srv.dirtied(bg.errs(srv, code, y), dirty.served(code, y)), id)), left, up, tx, pc, pre)
+      bg.popped.up(ps.trk.served(pc, Bool.not(R.r_is_err(y)), id, S.conn.id(conn), pb), back, c0, c1, y, cmds, codes, av, e, ds, rs, es, conn, waits.count(left, S.srv.served(S.srv.dirtied(bg.errs(srv, code, y), dirty.served(code, y)), id)), left, up, tx, pc, pre)
     case WaitNone{}:
       (x, q) = r
       (e, ds) = q
@@ -7282,20 +7325,18 @@ def bg.subs(+id: Nat, +back: Chan(Ans), +on: Bool, +kind: Nat, names: List<&2, S
     case LHeld{h}:
       LHeld{h}
 
-def bg.published.of(+code: Nat, +k: Nat, q: List<&2, R.Reply> & Ps, rs: List<&2, R.Reply>, es: List<&2, A.Ent>, conn: S.Conn, srv: S.Srv, ds: R.Ds, ws: Waits, up: List<&2, Up>, tx: Tx) -> LRun:
-  (own, pb) = q
-  bg.say(R.RInt{R.IPos{k}}, code, LRun{List.append(&2, R.Reply, own, rs), es, conn, srv, ds, ws, up, tx, pb})
-
-# PUBLISH's reply after the pushes to its own client, if it has a
-# subscription to the channel (RESP3)
+# PUBLISH's reply; the pushes to the client whose command runs, when it
+# has a subscription to the channel (RESP3), wait for after its call (Own
+# pushes), a script's call's for its caller (trk.cur)
 def bg.published(+code: Nat, p: Nat & Ps, rs: List<&2, R.Reply>, es: List<&2, A.Ent>, conn: S.Conn, srv: S.Srv, ds: R.Ds, ws: Waits, up: List<&2, Up>, tx: Tx) -> LRun:
   (k, pb) = p
-  bg.published.of(code, k, ps.own.take(pb), rs, es, conn, srv, ds, ws, up, tx)
+  bg.say(R.RInt{R.IPos{k}}, code, LRun{rs, es, conn, srv, ds, ws, up, tx, pb})
 
 def bg.publish(+shard: Bool, +c: String, +m: String, +code: Nat, g: LRun) -> LRun:
   match g:
     case LRun{rs, es, +conn, srv, ds, ws, up, tx, pb}:
-      bg.published(code, ps.publish(shard, c, m, S.conn.id(conn), pb), rs, es, conn, srv, ds, ws, up, tx)
+      +p = pb
+      bg.published(code, ps.publish(shard, c, m, trk.cur(S.conn.id(conn), p), p), rs, es, conn, srv, ds, ws, up, tx)
     case LHeld{h}:
       LHeld{h}
 
@@ -9124,35 +9165,35 @@ def sha.lower(+s: String) -> String:
 
 def scr.st(+s: Scr) -> U32:
   match s:
-    case Scr{shas, fi, n, +st, at, who, ks}:
+    case Scr{shas, fi, n, +st, at, who}:
       st
     case ScrOf{+x}:
       scr.st(x)
 
 def scr.st.set(+st: U32, s: Scr) -> Scr:
   match s:
-    case Scr{shas, fi, n, s0, at, who, ks}:
-      Scr{shas, fi, n, st, at, who, ks}
+    case Scr{shas, fi, n, s0, at, who}:
+      Scr{shas, fi, n, st, at, who}
     case ScrOf{x}:
       scr.st.set(st, x)
 
 def scr.at(+s: Scr) -> Clk:
   match s:
-    case Scr{shas, fi, n, st, +at, who, ks}:
+    case Scr{shas, fi, n, st, +at, who}:
       at
     case ScrOf{+x}:
       scr.at(x)
 
 def scr.at.set(t: Clk, s: Scr) -> Scr:
   match s:
-    case Scr{shas, fi, n, st, a0, who, ks}:
-      Scr{shas, fi, n, st, t, who, ks}
+    case Scr{shas, fi, n, st, a0, who}:
+      Scr{shas, fi, n, st, t, who}
     case ScrOf{x}:
       scr.at.set(t, x)
 
 def scr.find(+sha: String, +s: Scr) -> Maybe<&2, Nat>:
   match s:
-    case Scr{+shas, fi, n, st, at, who, ks}:
+    case Scr{+shas, fi, n, st, at, who}:
       KV.get(Nat, shas, sha)
     case ScrOf{+x}:
       scr.find(sha, x)
@@ -9172,26 +9213,26 @@ def scr.find.or(m: Maybe<&2, Nat>, +sha: String, +s: Scr) -> Maybe<&2, Nat>:
 def scr.get(+sha: String, +s: Scr) -> Maybe<&2, Nat>:
   scr.find.or(scr.find(sha, s), sha, s)
 
-def scr.add.if(absent: Bool, +sha: String, +f: Nat, shas: KV.Trie<Nat>, fi: Fni, +n: Nat, +st: U32, at: Clk, +who: Nat, ks: List<&2, String>) -> Scr:
+def scr.add.if(absent: Bool, +sha: String, +f: Nat, shas: KV.Trie<Nat>, fi: Fni, +n: Nat, +st: U32, at: Clk, +who: Nat) -> Scr:
   match absent:
     case True{}:
-      Scr{KV.set(Nat, shas, sha, f), fi, 1n+n, st, at, who, ks}
+      Scr{KV.set(Nat, shas, sha, f), fi, 1n+n, st, at, who}
     case False{}:
-      Scr{shas, fi, n, st, at, who, ks}
+      Scr{shas, fi, n, st, at, who}
 
 # a script cached under its sha, with its flags
 def scr.add(+sha: String, +f: Nat, s: Scr) -> Scr:
   match s:
-    case Scr{shas, fi, +n, +st, at, +who, ks}:
+    case Scr{shas, fi, +n, +st, at, +who}:
       +t = shas
-      scr.add.if(Maybe.is_none(&2, Nat, KV.get(Nat, t, sha)), sha, f, t, fi, n, st, at, who, ks)
+      scr.add.if(Maybe.is_none(&2, Nat, KV.get(Nat, t, sha)), sha, f, t, fi, n, st, at, who)
     case ScrOf{x}:
       scr.add(sha, f, x)
 
 def scr.flush(s: Scr) -> Scr:
   match s:
-    case Scr{shas, fi, n, st, at, who, ks}:
-      Scr{KV.empty(Nat), fi, 0n, st, at, who, ks}
+    case Scr{shas, fi, n, st, at, who}:
+      Scr{KV.empty(Nat), fi, 0n, st, at, who}
     case ScrOf{x}:
       scr.flush(x)
 
@@ -9317,28 +9358,28 @@ def fni.stats(+on: Bool, +f: Fni) -> R.Reply:
 # copied Scr's node (FINDINGS 8): once a script, at its end (fni.done).
 def scr.fi.fn(+name: String, +s: Scr) -> Maybe<&2, Nat>:
   match s:
-    case Scr{shas, +fi, n, st, at, who, ks}:
+    case Scr{shas, +fi, n, st, at, who}:
       fni.fn(name, fi)
     case ScrOf{+x}:
       scr.fi.fn(name, x)
 
 def scr.fi.none(+s: Scr) -> Bool:
   match s:
-    case Scr{shas, +fi, n, st, at, who, ks}:
+    case Scr{shas, +fi, n, st, at, who}:
       fni.fx.none(fi)
     case ScrOf{+x}:
       scr.fi.none(x)
 
 def scr.fi.fx(+s: Scr) -> List<&2, List<&2, String>>:
   match s:
-    case Scr{shas, +fi, n, st, at, who, ks}:
+    case Scr{shas, +fi, n, st, at, who}:
       fni.fx.of(fi)
     case ScrOf{+x}:
       scr.fi.fx(x)
 
 def scr.fi.stats(+on: Bool, +s: Scr) -> R.Reply:
   match s:
-    case Scr{shas, +fi, n, st, at, who, ks}:
+    case Scr{shas, +fi, n, st, at, who}:
       fni.stats(on, fi)
     case ScrOf{+x}:
       scr.fi.stats(on, x)
@@ -9404,8 +9445,8 @@ def fni.do(op: FiOp, f: Fni) -> Fni:
 
 def scr.fi.do(op: FiOp, s: Scr) -> Scr:
   match s:
-    case Scr{shas, fi, n, st, at, who, ks}:
-      Scr{shas, fni.do(op, fi), n, st, at, who, ks}
+    case Scr{shas, fi, n, st, at, who}:
+      Scr{shas, fni.do(op, fi), n, st, at, who}
     case ScrOf{x}:
       scr.fi.do(op, x)
 
@@ -9462,13 +9503,13 @@ def ps.sc.st.set(+st: U32, pb: Ps) -> Ps:
     case PsOf{p}:
       ps.sc.st.set(st, p)
 
-# the caller of the script that runs and its KEYS (scr.run.set)
-def ps.scr.run.set(+id: Nat, ks: List<&2, String>, pb: Ps) -> Ps:
+# the caller of the script that runs (scr.run.set)
+def ps.scr.run.set(+id: Nat, pb: Ps) -> Ps:
   match pb:
-    case Ps{reg, ev, px, Cls{tab, kd, k0, ms, pz, dn, hd, s0}, own}:
-      Ps{reg, ev, px, Cls{tab, kd, k0, ms, pz, dn, hd, scr.run.set(id, ks, s0)}, own}
+    case Ps{reg, ev, px, Cls{tab, kd, ks, ms, pz, dn, hd, s0}, own}:
+      Ps{reg, ev, px, Cls{tab, kd, ks, ms, pz, dn, hd, scr.run.set(id, s0)}, own}
     case PsOf{p}:
-      ps.scr.run.set(id, ks, p)
+      ps.scr.run.set(id, p)
 
 def ps.scr.add(+sha: String, +f: Nat, pb: Ps) -> Ps:
   match pb:
@@ -10218,7 +10259,7 @@ def bg.go(+um: Bool, +id: Nat, +back: Chan(Ans), +inb: Nat, cmds: List<&2, R.Cmd
       +a = trk.pre.av(pre, av1)
       +ar = av.rest(a)
       +g1 = bg.cmd(id, bk, inb, sh, c1, k, rest, more, a, ar, LRun{rs, es, conn, S.srv.call(srv, id, av.arg(a)), ds, ws, up, tx, pb})
-      bg.go(um, id, back, inb, rest, more, bg.feed(mon.seen(q, may, sh, k), id, k, S.conn.mode(conn), a, ar, bg.trk.after(pre, id, k, a, g1)))
+      bg.go(um, id, back, inb, rest, more, bg.feed(mon.seen(q, may, sh, k), id, k, S.conn.mode(conn), a, ar, bg.trk.after(pre, id, k, a, bg.own.after(g1))))
     case _ _ Fed{g0, av}:
       g0
 
@@ -13800,12 +13841,11 @@ def grp.sc.find(+sha: String, +g: Grp) -> Maybe<&2, Nat>:
     case Grp{outs, es, srv, ds, ws, up, tx, +pb}:
       ps.scr.find(sha, pb)
 
-# the caller of the script that starts and its KEYS (Scr's who and ks),
-# and none at its end
-def grp.sc.run(+id: Nat, ks: List<&2, String>, g: Grp) -> Grp:
+# the caller of the script that starts (Scr's who), and none at its end
+def grp.sc.run(+id: Nat, g: Grp) -> Grp:
   match g:
     case Grp{outs, es, srv, ds, ws, up, tx, pb}:
-      Grp{outs, es, srv, ds, ws, up, tx, ps.scr.run.set(id, ks, pb)}
+      Grp{outs, es, srv, ds, ws, up, tx, ps.scr.run.set(id, pb)}
 
 def grp.fi.fn(+name: String, +g: Grp) -> Maybe<&2, Nat>:
   match g:
@@ -13877,11 +13917,11 @@ def grp.es.take(g: Grp) -> List<&2, A.Ent> & Grp:
 # the script's entries wrapped as one transaction after those before it
 # (es0), and the run's state cleared but whether it wrote (bit 2, which
 # sc.done.at reads and clears; a script's wait may still be in the
-# chain), its caller and KEYS with it
+# chain), its caller with it
 def grp.sc.end(es0: List<&2, A.Ent>, g: Grp) -> Grp:
   match g:
     case Grp{outs, es, srv, ds, ws, up, tx, pb}:
-      grp.sc.run(0n, Nil{}, Grp{outs, tx.effs(es, es0), srv, ds, ws, up, tx, ps.fi.do(FiDone{}, ps.sc.off(21, pb))})
+      grp.sc.run(0n, Grp{outs, tx.effs(es, es0), srv, ds, ws, up, tx, ps.fi.do(FiDone{}, ps.sc.off(21, pb))})
 
 # a state of the general way as a group's, with the group's answers
 def lrun.grp(outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, l: LRun) -> Grp:
@@ -13948,25 +13988,25 @@ def blk.replies(b: S.Blk) -> List<&2, R.Reply>:
 # --------
 # With CLIENT TRACKING, a script's calls are its caller's, as Redis's
 # current_client is the script's caller while the script runs. The
-# caller and the KEYS the script declared ride in the scripts' state
-# while it runs (Scr's who and ks: set by sc.make, cleared by
-# grp.sc.end). A call's changes are the caller's (trk.cur): an
-# invalidation they make for the caller waits in the tracking's pend for
-# the script's reply (sc.pend), and none comes in NOLOOP mode; one for a
-# client that redirects to the caller goes out at once (iv.lua), as Redis
-# writes it to the caller while the script runs; a key under a BCAST
-# prefix is changed by none (iv.by). A call that only reads remembers the
-# KEYS for the caller (sc.trk.read), under its OPTIN, OPTOUT and CACHING,
-# which holds for the script's calls (trk.kt.held) and is cleared at the
-# script's end (sc.pend). A caller that tracks, or that a tracking client
-# redirects to, gets its replies before its script at once (sc.hold), as
-# a subscribed one does.
+# caller rides in the scripts' state while it runs (Scr's who: set by
+# sc.make, cleared by grp.sc.end). A call's changes are the caller's
+# (trk.cur): an invalidation they make for the caller waits in the
+# tracking's pend for the script's reply (sc.pend), and none comes in
+# NOLOOP mode; one for a client that redirects to the caller waits for
+# it too, with the caller's other pushes (Own pushes); a key under a
+# BCAST prefix is changed by none (iv.by). A call that only reads
+# remembers its own keys for the caller (sc.trk.read), under its OPTIN,
+# OPTOUT and CACHING, which holds for the script's calls (trk.kt.held)
+# and is cleared at the script's end (sc.pend). A caller that tracks, or
+# that a tracking client redirects to, gets its replies before its script
+# at once (sc.hold), as a subscribed one does.
 
-# after a script, or an EXEC the driver ran, the invalidations its calls
-# kept for its client (the tracking's pend: Tracking, above), to
-# go after its reply, as Redis sends them once the call is over; and the
-# client's CLIENT CACHING cleared, which held for the script's calls
-# (trk.kt.held)
+# after a script, or an EXEC the driver ran, the pushes its calls made
+# for its client (Own pushes) and the invalidations they kept for it (the
+# tracking's pend: Tracking, above), to go after its reply in that order
+# (newest first: the invalidations on top), as Redis sends them once the
+# call is over; and the client's CLIENT CACHING cleared, which held for
+# the script's calls (trk.kt.held)
 def sc.pend.of(hot: Bool, +id: Nat, pb: Ps) -> List<&2, R.Reply> & Ps:
   match hot:
     case True{}:
@@ -13974,9 +14014,17 @@ def sc.pend.of(hot: Bool, +id: Nat, pb: Ps) -> List<&2, R.Reply> & Ps:
     case False{}:
       (Nil{}, pb)
 
+def sc.pend.on(p: List<&2, R.Reply> & Ps, own: List<&2, R.Reply>) -> List<&2, R.Reply> & Ps:
+  (xs, pb) = p
+  (List.append(&2, R.Reply, xs, own), pb)
+
+def sc.pend.mk(p: List<&2, R.Reply> & Ps, +id: Nat) -> List<&2, R.Reply> & Ps:
+  (own, pb) = p
+  +q = pb
+  sc.pend.on(sc.pend.of(ps.trk.hot(q), id, q), own)
+
 def sc.pend(+id: Nat, pb: Ps) -> List<&2, R.Reply> & Ps:
-  +p = pb
-  sc.pend.of(ps.trk.hot(p), id, p)
+  sc.pend.mk(ps.own.take(pb), id)
 
 # the update of a client the driver answered (Up: its replies, rs, and
 # the rest of its batch), with the invalidations kept for it after them
@@ -14252,31 +14300,31 @@ def sc.sort(c: R.Cmd, +d: R.Ds) -> R.Cmd:
   sc.sort.at(c, R.ds.focused(d))
 
 # after a call of a script that only reads, of a caller that tracks keys
-# (Scr's who), the KEYS the script declared remembered for the caller, as
-# Redis's call() remembers its script caller's (trackingRememberKeys of
-# the caller's command, under the caller's OPTIN, OPTOUT and CACHING:
-# trk.wants); a key the script reads without declaring it is not
-def sc.trk.read.at(on: Bool, +id: Nat, pb: Ps) -> Ps:
+# (Scr's who), the keys the call read (its own arguments, raw) remembered
+# for the caller, as Redis 7.2's call() remembers them
+# (trackingRememberKeys of the current client, the caller, and of the
+# command that runs, the call), under the caller's OPTIN, OPTOUT and
+# CACHING (trk.wants): a key the script reads without declaring it too
+def sc.trk.read.at(on: Bool, +id: Nat, +code: Nat, +raw: String, pb: Ps) -> Ps:
   match on:
     case True{}:
-      +p = pb
-      ps.trk.read(id, ps.scr.ks(p), p)
+      ps.trk.read(id, M.keys.read(R.code.key(code), av.first(P.argvs(raw))), pb)
     case False{}:
       pb
 
-def sc.trk.read.if(on: Bool, +code: Nat, pb: Ps) -> Ps:
+def sc.trk.read.if(on: Bool, +code: Nat, +raw: String, pb: Ps) -> Ps:
   match on:
     case True{}:
       +p = pb
       +id = ps.scr.who(p)
-      sc.trk.read.at(trk.wants(ps.tk(id, p), code, True{}), id, p)
+      sc.trk.read.at(trk.wants(ps.tk(id, p), code, True{}), id, code, raw, p)
     case False{}:
       pb
 
-def sc.trk.read(+code: Nat, l: LRun) -> LRun:
+def sc.trk.read(+code: Nat, +raw: String, l: LRun) -> LRun:
   match l:
     case LRun{rs, es, conn, srv, ds, ws, up, tx, +pb}:
-      LRun{rs, es, conn, srv, ds, ws, up, tx, sc.trk.read.if(ps.trk.hot(pb), code, pb)}
+      LRun{rs, es, conn, srv, ds, ws, up, tx, sc.trk.read.if(ps.trk.hot(pb), code, raw, pb)}
     case LHeld{h}:
       LHeld{h}
 
@@ -14285,7 +14333,7 @@ def sc.batch(+c: R.Cmd, +code: Nat, +r3: Bool, +raw: String, sc: Sc, g: Grp) -> 
     case Sc{w, +back, cn, es0, t0, cf, ro, aoom, sha, ex} Grp{outs, es, srv, ds, ws, up, tx, pb}:
       +c0 = sc.conn.r3(r3, cn)
       +fd = R.ds.focus(S.conn.db(c0), ds)
-      sc.batch.of(sc.trk.read(code, sc.run.call(sc.sort(c, fd), code, back, raw, LRun{Nil{}, es, c0, srv, fd, ws, up, tx.front(0n, tx), pb})), outs, w, back, es0, t0, cf, ro, aoom, sha, ex)
+      sc.batch.of(sc.trk.read(code, raw, sc.run.call(sc.sort(c, fd), code, back, raw, LRun{Nil{}, es, c0, srv, fd, ws, up, tx.front(0n, tx), pb})), outs, w, back, es0, t0, cf, ro, aoom, sha, ex)
     case ScOf{x} g0:
       sc.batch(c, code, r3, raw, x, g0)
 
@@ -14307,11 +14355,26 @@ def sc.noticks(qs: List<&1, Req>) -> List<&1, Req>:
 type Bz is Data:
   Bz{outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, ws: Waits, up: List<&2, Up>, g: Grp}
 
+def grp.aside.back(own: List<&2, R.Reply>, pend: List<&2, R.Reply>, g: Grp) -> Grp:
+  match g:
+    case Grp{outs, es, srv, ds, ws, up, tx, pb}:
+      Grp{outs, es, srv, ds, ws, up, tx, ps.own.put(own, ps.pend.put(pend, pb))}
+
+def sc.busy.of(p: List<&2, R.Reply> & Ps, own: List<&2, R.Reply>, qs: List<&1, Req>, +s0: U32, +u0: U32, +aof: Bool, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, srv: S.Srv, ds: R.Ds, ws: Waits, up: List<&2, Up>, tx: Tx) -> Bz:
+  (pend, pb) = p
+  Bz{outs, ws, up, grp.aside.back(own, pend, group_at(aof, sc.noticks(qs), s0, u0, Grp{Nil{}, es, srv, ds, WaitNone{}, Nil{}, tx, pb}))}
+
+def sc.busy.aside(p: List<&2, R.Reply> & Ps, qs: List<&1, Req>, +s0: U32, +u0: U32, +aof: Bool, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, srv: S.Srv, ds: R.Ds, ws: Waits, up: List<&2, Up>, tx: Tx) -> Bz:
+  (own, pb) = p
+  sc.busy.of(ps.pend.take(pb), own, qs, s0, u0, aof, outs, es, srv, ds, ws, up, tx)
+
+# (the script's caller's own pushes and pending invalidations wait aside
+# meanwhile: Own pushes)
 def sc.busy.group(qs: List<&1, Req>, t: U32 & U32, +aof: Bool, g: Grp) -> Bz:
   (s0, u0) = t
   match g:
     case Grp{outs, es, srv, ds, ws, up, tx, pb}:
-      Bz{outs, ws, up, group_at(aof, sc.noticks(qs), s0, u0, Grp{Nil{}, es, srv, ds, WaitNone{}, Nil{}, tx, pb})}
+      sc.busy.aside(ps.own.take(pb), qs, s0, u0, aof, outs, es, srv, ds, ws, up, tx)
 
 # whether the command of an ACL check is known (redis.acl_check_cmd),
 # and then whether its number of words passes its arity ("!" when not:
@@ -14735,9 +14798,9 @@ def sc.make.of(p: List<&2, A.Ent> & Grp, w: Waits, +back: Chan(Ans), +db: Nat, t
   (Sc{w, back, conn.lua(db), es0, t0, ScfNone{}, ro, aoom, sha, ex}, g)
 
 # (its start: its command's, the driver's last reading, sc.mark; its
-# caller, the wait's client, and its KEYS kept for the tracking)
-def sc.make(+w: Waits, +back: Chan(Ans), +db: Nat, +ro: Bool, +f: U32, +sha: String, ex: Exm, ks: List<&2, String>, g: Grp) -> Sc & Grp:
-  +x = grp.sc.run(waits.id(w), ks, g)
+# caller, the wait's client, kept for the tracking)
+def sc.make(+w: Waits, +back: Chan(Ans), +db: Nat, +ro: Bool, +f: U32, +sha: String, ex: Exm, g: Grp) -> Sc & Grp:
+  +x = grp.sc.run(waits.id(w), g)
   sc.make.of(grp.es.take(x), w, back, db, grp.at(x), Bool.or(ro, U32.is_eq(U32.and(f, 17), 1)), U32.is_eq(U32.and(f, 18), 2), sha, ex)
 
 @unsafe
@@ -14765,7 +14828,7 @@ def sc.start.run(m: Maybe<&2, Chan(Ans)>, +fn: Bool, +sha: String, +f: U32, +ro:
     case Some{+back}:
       do IO<Grp>:
         st : L.Step <- L.Engine.start(sha, sc.array(ks), sc.array(xs), U32.or(Bool.pick(U32, r3, 3, 2), U32.or(Bool.pick(U32, ro, 16, 0), Bool.pick(U32, fn, 0, 32))))
-        sc.begin(st, sc.make(w, back, db, ro, f, sha, ex, ks, grp.fn.on(fn, sha, w, g)), aof, pid, reqs)
+        sc.begin(st, sc.make(w, back, db, ro, f, sha, ex, grp.fn.on(fn, sha, w, g)), aof, pid, reqs)
 
 @unsafe
 def sc.start.go(+fn: Bool, +sha: String, +f: U32, +ro: Bool, +aof: Bool, +pid: U32, ks: List<&2, String>, xs: List<&2, String>, ex: Exm, +r3: Bool, +db: Nat, +w: Waits, g: Grp, +reqs: Chan(Req)) -> IO(Grp):
