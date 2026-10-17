@@ -46,8 +46,9 @@ The scenarios:
    EXEC's array), WATCH, FUNCTION refused in a script, and INFO's
    number_of_functions and number_of_libraries as libraries come and go.
 6. INFO's statistics after functions: commandstats (FCALL's, FUNCTION's
-   subcommands', and the calls functions make), errorstats and the
-   totals, compared as maps, usec left out.
+   subcommands', and the calls functions make, XREAD refused its BLOCK
+   among them), errorstats and the totals, compared as maps, usec left
+   out.
 7. A function past busy-reply-threshold (100 ms on both): another
    client's commands answered BUSY, FUNCTION STATS while it runs (its
    name and command; its time by whether it is past the threshold),
@@ -396,8 +397,10 @@ def statistics(port, log):
     log("6 resetstat", r.cmd("CONFIG", "RESETSTAT"))
     code = ("#!lua name=st\nredis.register_function('s', function(keys, args) redis.call('set', keys[1], 'v') return redis.call('get', keys[1]) end)\n"
             "redis.register_function('e', function(keys, args) return redis.call('nosuch') end)\n"
-            "redis.register_function('p', function(keys, args) return redis.pcall('incr', keys[1]) end)\n")
+            "redis.register_function('p', function(keys, args) return redis.pcall('incr', keys[1]) end)\n"
+            "redis.register_function('x', function(keys, args) return redis.pcall('XREAD', 'BLOCK', 0, 'STREAMS', keys[1], '0') end)\n")
     log("6 calls", r.cmd("FUNCTION", "LOAD", code), fcall(r, "s", [k("a")]), fcall(r, "e"), fcall(r, "p", [k("a")]),
+        fcall(r, "x", [k("x")]),
         fcall(r, "nosuch"), r.cmd("FCALL", "s", "x"), fcall(r, "s", [k("a")], cmd="FCALL_RO"), listing(r),
         r.cmd("FUNCTION", "LOAD", code), r.cmd("FUNCTION", "DELETE", "nosuch"), r.cmd("FUNCTION", "STATS"),
         r.cmd("FUNCTION", "RESTORE", b"x"))

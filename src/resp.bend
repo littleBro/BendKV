@@ -1314,9 +1314,9 @@ def agg_into(+m: String, +n: Nat, out: String) -> String:
 
 # RESP2: replies before out; an array's items come before the replies
 # after it. A double and a verbatim text go out as bulks, a map, a set,
-# pairs and a push as arrays (pairs with their items flat). A switch of
-# protocol goes out as its reply: the switch itself is the batch's
-# (encode_as).
+# pairs and a push as arrays (pairs with their items flat), a map of keys
+# as an array of its pairs, each an array of two. A switch of protocol
+# goes out as its reply: the switch itself is the batch's (encode_as).
 def encode_onto(rs: List<&2, R.Reply>, out: String) -> String:
   match rs:
     case Nil{}:
@@ -1353,13 +1353,19 @@ def encode_onto(rs: List<&2, R.Reply>, out: String) -> String:
       agg_into("*", List.length(&2, R.Reply, xs), encode_onto(xs, encode_onto(rest, out)))
     case Con{R.RSw{r3, xs}, rest}:
       encode_onto(xs, encode_onto(rest, out))
+    case Con{R.RKMap{+xs}, rest}:
+      agg_into("*", List.length(&2, R.Reply, xs), encode_onto(xs, encode_onto(rest, out)))
+    case Con{R.RKPair{+xs}, rest}:
+      agg_into("*", List.length(&2, R.Reply, xs), encode_onto(xs, encode_onto(rest, out)))
     case Con{R.RRaw{s}, rest}:
       s ++ encode_onto(rest, out)
 
 # RESP3 (Redis's networking.c): a null, and a null array, as _; a double
 # after a comma; a map's pairs counted after %, a set's items after ~, a
 # push's after >; pairs as an array of arrays of two; a verbatim text as
-# = with its length and txt: before it. The rest as RESP2.
+# = with its length and txt: before it; a map of keys as a map, its
+# pairs counted after % and each pair's two items flat. The rest as
+# RESP2.
 def encode3_onto(rs: List<&2, R.Reply>, out: String) -> String:
   match rs:
     case Nil{}:
@@ -1395,6 +1401,10 @@ def encode3_onto(rs: List<&2, R.Reply>, out: String) -> String:
     case Con{R.RPush{+xs}, rest}:
       agg_into(">", List.length(&2, R.Reply, xs), encode3_onto(xs, encode3_onto(rest, out)))
     case Con{R.RSw{r3, xs}, rest}:
+      encode3_onto(xs, encode3_onto(rest, out))
+    case Con{R.RKMap{+xs}, rest}:
+      agg_into("%", List.length(&2, R.Reply, xs), encode3_onto(xs, encode3_onto(rest, out)))
+    case Con{R.RKPair{xs}, rest}:
       encode3_onto(xs, encode3_onto(rest, out))
     case Con{R.RRaw{s}, rest}:
       s ++ encode3_onto(rest, out)

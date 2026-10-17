@@ -95,7 +95,9 @@ COMMANDS = {
     "dump": [], "restore": [], "slowlog": ["get", "help", "len", "reset"],
     "latency": ["doctor", "graph", "help", "histogram", "history", "latest", "reset"], "save": [],
     "acl": ["cat", "deluser", "dryrun", "genpass", "getuser", "help", "list", "load", "log",
-            "save", "setuser", "users", "whoami"], "bgsave": []}
+            "save", "setuser", "users", "whoami"], "bgsave": [], "xlen": [], "xrange": [],
+    "xrevrange": [], "xread": [], "xinfo": ["consumers", "groups", "help", "stream"],
+    "xpending": []}
 
 # Step 1: redis-server -> facts
 # -----------------------------
@@ -455,8 +457,11 @@ SBEGIN, SEND = "# BEGIN gen_commands: stats\n", "# END gen_commands: stats\n"
 # are invalid (INVALIDOBJ), PFDEBUG on a key not there or on a
 # subcommand read once the key is found, PFSELFTEST on a check it fails,
 # the commands of GEO on a key of another kind (WRONGTYPE), the
-# searches on arguments read once their key is found, and RESTORE on a
-# key there (BUSYKEY), a time or a payload read once the key is found.
+# searches on arguments read once their key is found, RESTORE on a key
+# there (BUSYKEY), a time or a payload read once the key is found, and
+# the reads of a stream on a key of another kind (WRONGTYPE), XREAD's IDs
+# read once their key is found, XINFO on a key not there and on options
+# read once it is found, and XPENDING on a group not there (NOGROUP).
 # (SET's time
 # can overflow too, past 9 * 10^18 ms only: SET is left out, so that a
 # batch of SETs needs no look at its replies.)
@@ -475,7 +480,8 @@ RISKY = {"incr", "decr", "incrby", "decrby", "expire", "pexpire", "setex", "pset
          "zintercard", "zunionstore", "zinterstore", "zdiffstore", "zrangestore", "zmpop",
          "zrandmember", "sort", "sort_ro", "pfadd", "pfcount", "pfmerge", "pfdebug", "pfselftest",
          "geoadd", "geodist", "geohash", "geopos", "georadius", "georadius_ro", "georadiusbymember",
-         "georadiusbymember_ro", "geosearch", "geosearchstore", "restore"}
+         "georadiusbymember_ro", "geosearch", "geosearchstore", "restore", "xlen", "xrange",
+         "xrevrange", "xread", "xinfo|consumers", "xinfo|groups", "xinfo|stream", "xpending"}
 
 # BendKV's commands that may be replicated (MAY_REPLICATE in Redis's
 # src/commands/*.json), a flag COMMAND INFO hides: a monitor may not run
@@ -545,7 +551,7 @@ DIRTY = {
 CONTAINERS = {"client": "client_id", "function": "function_id", "config": "config_id",
               "command": "command_id", "object": "object_id", "memory": "memory_id",
               "pubsub": "pubsub_id", "slowlog": "slowlog_id", "latency": "latency_id",
-              "script": "script_id", "acl": "acl_id"}
+              "script": "script_id", "acl": "acl_id", "xinfo": "xinfo_id"}
 
 # the names a numbering def of redis.bend gives its numbers
 def numbering(src, fn):

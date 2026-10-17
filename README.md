@@ -79,7 +79,7 @@ well), what HyperLogLogs, GEO and LOLWUT compute (`src/hll.bend`, `src/geo.bend`
 `src/lolwut.bend`) and DUMP's payloads (`src/rdb.bend`), all tested against
 `redis-server`; the Lua engine of scripts: Redis 7.0.15's own Lua 5.1.5 and its libraries
 (`deps/redis`, C, as Redis ships them but for their casts of numbers to integers, which
-give Redis's results defined in C, and two fixes of CVEs that the reference carries: NOTICE) and the glue that drives it (`src/lua/engine.c`,
+give Redis's results defined in C, two fixes of CVEs that the reference carries, and Redis 7.2's test of a table's index, defined in C: NOTICE) and the glue that drives it (`src/lua/engine.c`,
 ported from Redis's `script_lua.c`, `eval.c` and `script.c`, behind the effects of
 `src/script.bend`); clang, libc and the OS. This is not
 end-to-end verification in the sense of CompCert or seL4; see
@@ -281,19 +281,31 @@ translation stays in the trusted base.
   takes 3 to 38 times Redis's time to dump or restore, less than the commands that make
   it (section 3zzu of [docs/FINDINGS.md](docs/FINDINGS.md), section 62 of
   [docs/PERFORMANCE.md](docs/PERFORMANCE.md)).
-- **Streams, as values:** a stream as Redis 7.0.15 keeps one, its entries in nodes that
-  are Redis's listpacks byte for byte, its groups with their pending entries and their
+- **Streams:** a stream as Redis 7.0.15 keeps one, its entries in nodes that are
+  Redis's listpacks byte for byte, its groups with their pending entries and their
   consumers, from RESTORE and the RDB file (types 19 and 15, what 15 lacks estimated as
   Redis estimates it); DUMP and SAVE write it as Redis does, a stream Redis made
   byte for byte; TYPE, OBJECT ENCODING, SCAN's TYPE, COPY, RENAME, the times to live
-  and MEMORY USAGE take it, and the other kinds' commands answer WRONGTYPE. The stream
-  commands (XADD, XRANGE, XREAD, the groups') are not there yet. Where BendKV differs:
-  RESTORE and the start refuse payloads Redis takes but never writes (a node with no
-  entry, or whose counts or master entry are not its entries', live entries out of
-  order, a pending entry no consumer holds or two hold, a time past 2^47, ...); the
-  rewrite of the append-only file writes a stream as a RESTORE of its payload, where
-  Redis writes XADD, XSETID, XGROUP and XCLAIM; MEMORY USAGE estimates otherwise
-  (section 3zzzu of [docs/FINDINGS.md](docs/FINDINGS.md)).
+  and MEMORY USAGE take it, and the other kinds' commands answer WRONGTYPE. The
+  commands that read a stream answer as Redis's: XLEN; XRANGE and XREVRANGE, their IDs
+  read as Redis reads them (`-`, `+`, an ID without its sequence, `(` for an end left
+  out), with COUNT; XREAD of one key or several, with COUNT and `$`, and with BLOCK when
+  an entry is there to serve; XINFO STREAM (FULL, with COUNT), GROUPS, CONSUMERS and
+  HELP, their lag, entries read and count of the radix tree's nodes as Redis counts
+  them; XPENDING, its summary and its entries (IDLE, a consumer). The commands that
+  write one (XADD, XDEL, XTRIM, XSETID, XGROUP, XREADGROUP, XACK, XCLAIM, XAUTOCLAIM)
+  are not there yet. Where BendKV differs: XREAD with BLOCK answers an error where
+  Redis would make its client wait (in MULTI, where Redis does not wait, it answers a
+  null array, as Redis does); RESTORE and the start refuse payloads Redis takes but
+  never writes (a node with no entry, or whose counts or master entry are not its
+  entries', live entries out of order, a pending entry no consumer holds or two hold,
+  a time past 2^47, ...); the rewrite of the append-only file writes a stream as a
+  RESTORE of its payload, where Redis writes XADD, XSETID, XGROUP and XCLAIM; MEMORY
+  USAGE estimates otherwise (sections 3zzzu and 3zzzy of
+  [docs/FINDINGS.md](docs/FINDINGS.md)); XINFO STREAM takes time with the stream's
+  nodes, as it counts the radix tree's nodes where Redis keeps the count, and the
+  ranges take 3 to 7 times Redis's time (section 82 of
+  [docs/PERFORMANCE.md](docs/PERFORMANCE.md)).
 - **Clients that wait:** BLPOP, BRPOP, BLMOVE, BRPOPLPUSH, BLMPOP, BZPOPMIN, BZPOPMAX
   and BZMPOP, their timeouts (seconds, a double; 0 waits for ever) read as Redis reads
   them, with its errors. A command that finds nothing to pop makes its client wait, and
@@ -705,7 +717,7 @@ translation stays in the trusted base.
   background save takes longer than Redis's, and so does the start from a large file
   (PERFORMANCE.md, sections 72 and 78; FINDINGS.md, sections 3zzzk and 3zzzt).
 
-Not yet: the stream commands, CONFIG REWRITE (it answers as Redis does without a configuration file).
+Not yet: the commands that write a stream and XREAD's wait, CONFIG REWRITE (it answers as Redis does without a configuration file).
 Times in ms are limited to 14 digits.
 
 ## Performance
@@ -817,7 +829,11 @@ searches, each reply compared byte for byte in RESP2 and RESP3, and each write's
 set read back), DUMP and RESTORE (`tests/dump_test.py`: values of every kind and
 encoding, their payloads compared byte for byte and restored on both servers, payloads of
 the encodings Redis no longer writes, 1,500 payloads cut, grown and changed at random,
-RESTORE's options, errors, times and keyspace events, IDLETIME and FREQ),
+RESTORE's options, errors, times and keyspace events, IDLETIME and FREQ), streams
+(`tests/stream_dump_test.py`: streams of 27 shapes Redis made, restored and dumped back
+byte for byte, and 2,000 payloads changed at random; `tests/stream_read_test.py`: the
+reads of those streams, each reply compared whole in RESP2 and RESP3, over the
+streams' IDs, their neighbours and the edges, counts, groups, consumers and errors),
 robustness and concurrency checks, a client that stops reading while the others are
 served (`tests/writer_test.py`), clients that wait (`tests/blocking_test.py`: 18 scenarios
 of the blocking commands on BendKV and on Redis, their transcripts compared line by line,
@@ -968,11 +984,12 @@ away.
 | `src/server.bend` | 13,000 |  | no |
 | `src/sha.bend` | 120 |  | no |
 | `src/startup.bend` | 460 |  | no |
+| `src/stream.bend` | 600 |  | no |
 | `proof/LAWS.bend` | 920 | 20 |  |
 | `proof/SPEC.bend` | 370 |  |  |
 | `proof/PROOF.bend` | 16,000 | 2,800 |  |
-| `src/`, the 6 files the laws import | 28,000 | 9,000 |  |
-| `src/`, the 13 others | 30,000 | 2,700 |  |
+| `src/`, the 6 files the laws import | 30,000 | 10,000 |  |
+| `src/`, the 14 others | 30,000 | 2,700 |  |
 | `proof/` | 18,000 | 2,800 |  |
 <!-- END gen_counts: numbers -->
 
