@@ -2499,6 +2499,12 @@ def info.rdb(+i: Info) -> Rdb:
     case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, +rf}:
       rf
 
+# whether the writes are refused (rdb.misconf), read in place
+def info.misconf(+i: Info) -> Bool:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, +rf}:
+      rdb.misconf(rf)
+
 def info.dirtied(i: Info, +d: Nat) -> Info:
   match i:
     case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:

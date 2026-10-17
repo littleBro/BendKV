@@ -1003,7 +1003,7 @@ away.
 | `src/redis.bend` | 18,000 | 6,000 | yes |
 | `src/batch.bend` | 84 |  | yes |
 | `src/aof.bend` | 1,300 |  | yes |
-| `src/session.bend` | 2,700 |  | yes |
+| `src/session.bend` | 3,000 |  | yes |
 | `src/config.bend` | 1,200 | 180 | yes |
 | `src/acl.bend` | 2,200 | 670 | no |
 | `src/command.bend` | 2,800 | 2,100 | no |

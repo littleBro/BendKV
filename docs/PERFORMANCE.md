@@ -8675,6 +8675,35 @@ per request, +0.8% to +0.9% from the baseline (3,452, 4,214 and 4,552), as #114'
 counted alike on this machine (3,480, 4,243 and 4,593); last-level misses 2.84, 3.15 and
 3.29; with 100 clients in BLPOP, +3.1% and +3.7%.
 
+## 83. The general way reads the server in place
+
+FINDINGS 3zzzz. Callgrind's instructions per request (`tools/callgrind_req.sh`: 20
+clients, pipelines of 16, 20,000 requests counted after 300,000), on main's build and on
+this change's, one after the other on the same machine. Two loads run every batch the
+general way: a client subscribed to keyspace events with `notify-keyspace-events KEA`
+(`IDLE="events 1"`: a command at a time), and redis-benchmark logged in as a restricted
+user (`IDLE="acluser 1"`, `RB_FLAGS="--user bench -a pw"`: each call checked).
+
+| load | main 7048b7d | this change | |
+|---|---:|---:|---:|
+| GET, a client subscribed to events | 34,528 | 33,956 | −572 |
+| INCR, a client subscribed to events | 68,770 | 67,887 | −883 |
+| GET, a restricted user | 38,909 | 38,247 | −662 |
+| INCR, a restricted user | 45,433 | 44,513 | −920 |
+
+The profiles' `ctr_own_slow` (a copy of a shared node) no longer has the four callers of
+these reads: three at each batch's end, 0.06 calls a request each (a batch is a
+pipeline's 16 requests), about 590 instructions a call, and MISCONF's read, 1.07 calls a
+request (each command, and each batch's end), 371 instructions a call; their drops come
+off too. Before MISCONF (main 8b0993e), the batch's copies alone cost GET 217
+instructions a request with a subscriber (33,419, 33,202 with the first form of this
+change) and 210 as a restricted user (37,753, 37,543). A script command of #99 is a batch
+of its own, so each EVAL pays the batch's copies whole.
+
+`make perfcheck` (the fast way, which reads neither): GET 3,499, SET 4,307 and INCR 4,600
+instructions per request, 3.1% and 3.1% more with 100 clients in BLPOP; main 7048b7d
+gives 3,516, 4,307 and 4,601, and 3.2% and 3.0%.
+
 ## 84. The writes of a stream
 
 **What changed** (FINDINGS 3zzzza). XADD, XTRIM, XDEL and XSETID write the stream of

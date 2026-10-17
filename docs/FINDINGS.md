@@ -9213,6 +9213,53 @@ time grows with the nodes: 3.5 times Redis's on 1 node, 19 times on 100, 100 tim
 - A walk of a node's entries that steps over their bytes without copying them (the
   ranges from the middle of a node), as section 3zzzu says for RESTORE.
 
+## 3zzzz. The general way reads the server in place
+
+**What was wrong.** At the end of each batch of the general way (`bg.out`), the actor sets
+the bits of its state that follow the server (`ps.tune`): maxmemory set (28), an LFU
+policy (27), a CONFIG SET of maxmemory to see to (26), restricted clients (20, since ACL:
+3zzzh) and the writes refused (19, since MISCONF: 3zzzk). It read them with readers of one
+field each, and four of the reads copied a node of the server:
+- `S.mm.max` and `S.mm.kick` give back a field of their parameter, so they own it (section
+  8). The `Mm` that `mem.bits` took from the server with `S.srv.mm`, which the server
+  still holds, was copied for each: 26 words and the counts of their children, about 590
+  instructions a copy.
+- `acl.on` owns its server, since its other callers (a client's join and end, a change of
+  a client's user) pass one they made. The `Mm` that `mm.acl.any` then owned in it was
+  copied too.
+- `srv.misconf` read the server through `S.srv.rdb`, which gives back a field of the
+  server's INFO and so owns it: INFO's node was copied. The general way reads it for each
+  command (`bg.go`, as Redis's `processCommand` asks `writeCommandsDeniedByDiskError`),
+  not only at the batch's end.
+
+So a batch of the general way paid three copies of `Mm` and their drops at its end, about
+3,500 instructions, and each of its commands a copy of INFO's node since MISCONF. Every
+batch runs the general way while a client is subscribed to keyspace events or monitors,
+while some client is restricted for that client's batches, for a transaction, and for a
+script of #99, which is a batch of its own. INFO's batches (`facts.held`) copied `Mm` twice
+more, the same way.
+
+**The change** (`src/session.bend`: `srv.tune`, `srv.misconf`; `src/info.bend`:
+`info.misconf`; `src/server.bend`: `mem.bits`, `ps.tune`, `srv.misconf`, `facts.held`).
+`S.srv.tune` reads the five facts in one match of `Srv` and one each of `Mm` and INFO, and
+computes its answer inside them, as section 3p reads the password: five bits of a U32,
+which `mem.bits` places among Ps's. `S.srv.misconf` reads MISCONF the same way for the
+commands of the general way. Nothing passes them a server it made, so they own nothing and
+copy nothing. `acl.bit` is gone, and `ps.tune` no longer calls `misconf.bit`, which the
+actor's steps and saves still call; `acl.on` stays for its other callers, which run once
+per client's join, end or change of user.
+
+**What it gives** (PERFORMANCE 83). Pipelined 16 deep, with a client subscribed to
+keyspace events, so that every batch runs the general way, GET costs 572 instructions a
+request fewer (34,528 on main, 33,956) and INCR 883 fewer; with redis-benchmark's clients
+restricted, GET 662 fewer (38,909, 38,247) and INCR 920 fewer. The fast way runs neither
+read: `make perfcheck` gives GET 3,499, SET 4,307 and INCR 4,600 instructions a request,
+where main gives 3,516, 4,307 and 4,601.
+
+**What is left.** Each command of the general way still copies a node of the server twice
+(two `ctr_own_slow` of 364 instructions a request in the same profiles, there before
+MISCONF and ACL alike), with their drops: the next place to look.
+
 ## 3zzzza. Streams: the commands that write one
 
 **What there is** (`src/stream.bend`, Writes; `src/redis.bend`, Stream writes). XADD,

@@ -973,6 +973,36 @@ def srv.acl.sort(+s: Srv, +n: String, +k: Nat, +argv: List<&2, String>) -> Maybe
     case Srv{pass, cfg, info, +mm}:
       mm.acl.sort(mm, n, k, argv)
 
+# what the actor keeps of the server in its state after each batch of the
+# general way (server.bend: ps.tune), and for INFO (facts.held), read in
+# place, in one match each of Srv, Mm and INFO: 1 maxmemory set, 2 an LFU
+# policy, 4 a CONFIG SET changed maxmemory (kick), 8 some client
+# restricted, 16 the writes refused (MISCONF: info.bend's rdb.misconf).
+# Read with the readers of one field each, it cost a batch three copies
+# of Mm, 26 words and their children, about 590 instructions each
+# (PERFORMANCE 83): mm.max, mm.kick and mm.acl.any (by way of server.bend's
+# acl.on) own the Mm they are given, since some of their callers pass them
+# one they made, and an Mm the server still holds is copied to be owned;
+# and MISCONF's read through srv.rdb copied INFO's node.
+def mm.tune(+m: Mm) -> U32:
+  match m:
+    case Mm{rng, +max, +pol, smp, ten, lfl, lfd, +kick, pool, next, h0, k0, per, +acl}:
+      U32.or(U32.or(Bool.pick(U32, Nat.is_lt(0n, max), 1, 0), Bool.pick(U32, Bool.or(Nat.is_eq(pol, 3n), Nat.is_eq(pol, 4n)), 2, 0)), U32.or(Bool.pick(U32, kick, 4, 0), Bool.pick(U32, U.acl.any(acl), 8, 0)))
+    case MmOf{+n}:
+      mm.tune(n)
+
+def srv.tune(+s: Srv) -> U32:
+  match s:
+    case Srv{pass, cfg, +info, +mm}:
+      U32.or(mm.tune(mm), Bool.pick(U32, I.info.misconf(info), 16, 0))
+
+# whether a background save that failed refuses the writes, read in place
+# (I.info.rdb gives back a field, and so owns the INFO it is lent)
+def srv.misconf(+s: Srv) -> Bool:
+  match s:
+    case Srv{pass, cfg, +info, mm}:
+      I.info.misconf(info)
+
 # the client of id now the user of name n, among the restricted clients or
 # not (acl.bend: Restricted clients), and the client of id gone
 def srv.acl.client(s: Srv, +id: Nat, +n: String) -> Srv:
