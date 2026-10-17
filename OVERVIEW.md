@@ -1001,7 +1001,7 @@ The translation the kernel reads can be dumped with
   through a window of one chunk (the GEOADD takes 0.19 s; section 3zzn of
   docs/FINDINGS.md).
 - **The test suites of client libraries** (`tools/client_suite.py`, `make clients`; and in
-  CI on every pull request): redis-py 8.1.0's tests of its sync and asyncio clients, in
+  CI's heavy tier, before a pull request merges): redis-py 8.1.0's tests of its sync and asyncio clients, in
   RESP2 and in RESP3, and go-redis v9.23.0's specs, in RESP3, each against Redis 7.0.15
   and against BendKV, each on a server started for it, without their tests of modules,
   clusters, sentinels and TLS. Of the tests Redis passes, BendKV passes 2,708 of 2,753 in

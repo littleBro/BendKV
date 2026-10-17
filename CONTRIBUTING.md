@@ -28,13 +28,18 @@ make test      BEND="$B"   # byte-for-byte against Redis
 make perfcheck BEND="$B"   # instructions per request within 3% of the baseline, misses and prefetches too
 ```
 
-CI runs the same on every pull request and on every push to `main`
-([`.github/workflows/ci.yml`](.github/workflows/ci.yml)): the proofs, `make gencheck` and
-`make smoke` in one job; the server built once, then `make test` against the Redis 7.0.15
-that Ubuntu 24.04 ships and `make perfcheck` in two jobs side by side; and the server built
+CI runs them in two tiers ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)). The
+light tier runs on every push to a pull request and to `main`: `make gencheck`, the
+proofs and `make smoke`, the server built (kept in the cache while what it is built from
+stays the same) and `make perfcheck`; a change of documents alone runs `make gencheck`
+alone. The heavy tier runs only when it is started by hand, on a branch: the branch merged
+with `main`, `make test` against the Redis 7.0.15 that Ubuntu 24.04 ships (in three parts
+side by side, `tests/run_tests.sh`'s `PARTS`), the client suites, and the server built
 with AddressSanitizer and UndefinedBehaviorSanitizer and with ThreadSanitizer, the tests
 that stress its memory and its writer thread run under each (`sh tools/sanitize.sh`, which
-runs the same here; it needs clang 19's sanitizer runtimes). Its toolchain is
+runs the same here; it needs clang 19's sanitizer runtimes). Its result is the commit
+status "CI heavy" on the branch's head, and a pull request merges once it is success there
+(AGENTS.md, Merging). Its toolchain is
 the one above: bun 1.3.14, clang 19, the patched Bend (kept in the cache while
 `bend-patches/` stays the same) and, for `make verdict`, Lean 4.34.0, which builds the
 BendTT kernel once (cached too). A change goes in through a pull request whose checks
@@ -87,3 +92,23 @@ sends about a million of them to main's server.
 - Comments say what a definition means and why, in plain sentences, as the existing code
   does.
 - Commits are small and say what changed and why.
+
+## License
+
+BendKV is licensed under the Apache License, Version 2.0 ([LICENSE](LICENSE)). A
+contribution you submit comes under that license, as its section 5 says, unless you state
+otherwise in writing.
+
+Code, text or data from elsewhere comes in only under a license compatible with Apache 2.0
+(MIT, BSD, Apache 2.0, Boost, CC0, public domain), and the pull request that brings it in
+adds its entry to [NOTICE](NOTICE): what it is, from which file of which version, and under
+which license.
+
+- **Redis 7.2.x and earlier** are under the BSD 3-Clause License: their code, tables and
+  tests may be ported, with their notice. Security fixes come from Redis's 7.2 branch.
+- **Redis 7.4 and later** are under RSALv2 and SSPLv1, and Redis 8 adds AGPLv3. Do not read
+  their sources: no file of those trees, their tests and their commands' JSON included. A
+  behavior of theirs may be written from what a running server answers and from what the
+  documentation describes, in our own words; the text of their documentation, on redis.io
+  (CC BY-NC-SA 4.0) or in COMMAND DOCS, is not copied.
+- **Valkey** is under the BSD 3-Clause License and may be ported, with its notice.

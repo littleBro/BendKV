@@ -443,8 +443,8 @@ themselves (go-redis is told the server is 7.0), and of the rest what counts is 
 Redis 7.0.15 passes. A test that fails runs again up to twice before it counts as
 failed, in both suites; one that passes on BendKV only after such a rerun, where Redis
 passes it at the first attempt, is reported (a race in BendKV passes so), and from
-2026-11-15 on it counts as failed. CI runs the three suites on every pull request,
-in three jobs
+2026-11-15 on it counts as failed. CI's heavy tier runs the three suites before a pull
+request merges, in three jobs
 after `build`: a test Redis passes that BendKV fails, and that is not among the known
 failures of `tools/data/clients.json`, fails the job; a known failure that passes is
 reported, to be taken off the list.
