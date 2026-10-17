@@ -322,15 +322,16 @@ Where performance and proof meet: **batched execution under proved laws.**
    the latency monitor (done, section 3zzz), the RDB file with SAVE, the saves of
    SHUTDOWN and FLUSHALL and its load at the start (done, section 3zzzc), CLIENT TRACKING
    (done, section 3zzzb), ACL users (done, section 3zzzh), BGSAVE and the save points
-   (done, section 3zzzk), measured by Redis's
+   (done, section 3zzzk) and Lua scripts on Redis's own Lua (done, section 3zzzd; Lua's
+   functions, FUNCTION and FCALL, next, on the same engine), measured by Redis's
    own test suite run against BendKV and by client libraries' test suites (redis-py's and
    go-redis's, in CI: done, section 3zy).
    Streams are under way: a stream is a value BendKV holds (section 3zzzu), its reads
    and writes answer as Redis's (sections 3zzzy and 3zzzza), its groups and XREAD's wait
-   next. Lua, cluster, replication and modules are out of scope. The suite's count: of the 1,677 tests
-   Redis 7.0.15 passes against a server it did not start, BendKV passes 1,348, 1,306 of
-   the 1,365 in what it has ([COMPATIBILITY.md](COMPATIBILITY.md)); most of the other 59
-   need commands BendKV does not have (replication's SYNC, Lua, streams' groups) or run
+   next. Cluster, replication and modules are out of scope. The suite's count: of the 1,677 tests
+   Redis 7.0.15 passes against a server it did not start, BendKV passes 1,361, 1,320 of
+   the 1,365 in what it has ([COMPATIBILITY.md](COMPATIBILITY.md)); most of the other 45
+   need commands BendKV does not have (replication's SYNC, functions, streams' groups) or run
    after a test that left its client in MULTI on one of them.
    What maxmemory left to do (section 3zw): a delete takes the nodes it empties now
    (section 3zz), so the eviction gets within a limit with the keys Redis keeps, but its

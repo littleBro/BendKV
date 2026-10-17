@@ -39,25 +39,49 @@ make suite REDIS_SRC=../redis      # both runs and the table, in build/suite/
 ## The result
 
 Redis 7.0.15, October 2026. Of the 1,677 tests Redis passes in this mode, BendKV passes
-**1,348 (80.4%)**; of the 1,365 in the units of what BendKV has, 1,306 (96%), and 40 of
+**1,361 (81.2%)**; of the 1,365 in the units of what BendKV has, 1,320 (97%), and 40 of
 the 110 of streams'. Streams' values, reads and writes (sections 3zzzu, 3zzzy and 3zzzza
 of [FINDINGS.md](FINDINGS.md)) brought 41: unit/type/stream passes 39 of the 63 tests
 Redis passes (none before), XADD's IDs, options and errors, its trims, XRANGE and
 XREVRANGE, XREAD without BLOCK, XDEL, XTRIM and XSETID; of its other 24, 8 wait in XREAD,
 2 set `stream-node-max-entries`, and 14 never run, as the unit stops at `CONFIG SET
 appendonly yes`. unit/keyspace's COPY of a stream passes too, and unit/introspection-2's
-test that XREAD is marked movablekeys. The RDB file (section 3zzzc) brought unit/other's
-two tests of SAVE.
+test that XREAD is marked movablekeys.
 ACL users (section 3zzzh of [FINDINGS.md](FINDINGS.md)) brought 2: unit/other's test of
-RESET making its client the default user again, and unit/slowlog's of the redaction of
-ACL SETUSER's rules (8 of its 9; the ninth uses MIGRATE). Redis's unit/acl and
-unit/acl-v2 are tagged `external:skip` as a whole, though most of their tests need no
-server of their own. Run in this mode with the tag taken off the blocks that need none,
-BendKV passes 64 of the 70 tests of unit/acl that Redis passes, and 27 of the 29 of
-unit/acl-v2: the others use commands BendKV does not have (streams', MIGRATE, Lua's) or
-Redis 7.0's description of a selector's commands, and section 3zzzh lists them. unit/auth,
-run so too, stops at its test of the limits Redis puts on the requests of a client that
-must authenticate, which BendKV does not have yet.
+RESET making its client the default user again (all 19 of its tests that Redis passes),
+and unit/slowlog's of the redaction of ACL SETUSER's rules (8 of its 9; the ninth uses
+MIGRATE). Redis's unit/acl and unit/acl-v2 are tagged `external:skip` as a whole, though
+most of their tests need no server of their own. Run in this mode with the tag taken off
+the blocks that need none, BendKV passes 67 of the 70 tests of unit/acl that Redis
+passes, and 27 of the 29 of unit/acl-v2: the others use commands BendKV does not have
+(streams', MIGRATE, FCALL_RO) or Redis 7.0's description of a selector's commands, and
+section 3zzzh lists them. Lua scripts brought three of unit/acl's (64 of the 70 on
+main): its test of SCRIPT HELP refused, its test of a script's call in the log, and the
+test after the first, which that one's failure left logged in as a user that may run
+nothing; its test of EVAL_RO and EVALSHA_RO goes on to FCALL_RO. unit/auth, run so too,
+stops at its test of the limits Redis puts on the requests of a client that must
+authenticate, which BendKV does not have yet.
+The RDB file (section 3zzzc of [FINDINGS.md](FINDINGS.md)) brought 2: unit/other's SAVE
+of a database with a value of every type, and its final SAVE (18 of its 19 then; its BGSAVE
+and its reload with DEBUG RELOAD need what BendKV does not have yet).
+Lua scripts (section 3zzzd of [FINDINGS.md](FINDINGS.md)) brought 13, each a test of
+another unit that runs a script: unit/pause passes 13 of its 14 tests (its four of
+scripts under a pause, by their flags and in transactions; the fourteenth loads a
+function), unit/multi 32 of its 53 (its four of a transaction and a script past
+`lua-time-limit`: MULTI, EXEC, the body of a transaction and EXEC alone while the script
+runs), unit/latency-monitor all 13 (the expire-cycle event of a set a script fills, and
+LATENCY RESET of the events), unit/introspection-2 40 of its 43 (the statistics of
+scripts' commands, and COMMAND LIST FILTERBY ACLCAT, which lists the scripting
+category's commands), unit/introspection 26 of its 28 (a monitor's lines of a script's
+calls), and unit/sort all 52 (SORT BY nosort from a script). unit/functions passes one
+test fewer (1 of its 90): its test of FUNCTION KILL against EVAL leaves the script it
+starts looping, which FUNCTION KILL would have ended, and the rest of the unit meets
+BUSY. unit/scripting passes none in this run, as before: it runs its tests twice,
+functions first, and stops in that half (below). Its tests of EVAL, run alone (its loop
+`foreach is_eval {0 1}` cut to `{1}`), pass 104 of the 110 that Redis passes, its test
+of `redis.acl_check_cmd` among them since ACL users; each of the other six needs what
+BendKV does not have: replication (three read the replication stream, one counts good
+replicas), streams' groups (XGROUP) and CLUSTER.
 CLIENT TRACKING (section 3zzzb of [FINDINGS.md](FINDINGS.md)) brought 11: unit/tracking
 passes the 10 of its 13 tests that Redis passes in this mode, and unit/other its test of
 RESET clearing a client's state (16 of its 19). The other three of unit/tracking fail on
@@ -231,15 +255,15 @@ source): 9 of the 17. The other 7 need MULTI and WATCH, Lua or lists (then).
 
 | area | units | Redis passes | BendKV passes |
 |---|---|---:|---:|
-| what BendKV has: the protocol, connections and clients and their pause, the keyspace and its databases, strings and their ranges, bits and fields, counters and floats, hashes, lists, sets, sorted sets and the commands that wait on them, SORT, HyperLogLogs, GEO, DUMP and RESTORE, times to live, lazy freeing, transactions, pub/sub and keyspace notifications, introspection, the slow log and the latency monitor, client-side caching, ACL users | protocol, quit, keyspace, type/string, type/incr, type/hash, type/list, list-2, list-3, type/set, type/zset, sort, hyperloglog, geo, dump, scan, bitops, bitfield, expire, lazyfree, violations, multi, pubsub, pause, introspection, introspection-2, other, info-command, latency-monitor, slowlog, tracking | 1365 | **1306** |
+| what BendKV has: the protocol, connections and clients and their pause, the keyspace and its databases, strings and their ranges, bits and fields, counters and floats, hashes, lists, sets, sorted sets and the commands that wait on them, SORT, HyperLogLogs, GEO, DUMP and RESTORE, times to live, lazy freeing, transactions, pub/sub and keyspace notifications, introspection, the slow log and the latency monitor, client-side caching, ACL users, and the scripts these units run | protocol, quit, keyspace, type/string, type/incr, type/hash, type/list, list-2, list-3, type/set, type/zset, sort, hyperloglog, geo, dump, scan, bitops, bitfield, expire, lazyfree, violations, multi, pubsub, pause, introspection, introspection-2, other, info-command, latency-monitor, slowlog, tracking | 1365 | **1320** |
 | streams: their values, reads and writes; their groups and XREAD's wait not yet | type/stream, type/stream-cgroups | 110 | **40** |
+| Lua: scripts (EVAL and its kin) done, functions (FUNCTION, FCALL) not yet; unit/scripting runs its tests of functions first and stops there | scripting, functions | 200 | 1 |
 | the query buffer, not yet | querybuf | 2 | 0 |
-| out of scope: Lua scripts, functions | scripting, functions | 200 | 2 |
 
-The 2 passes of the last row, and unit/type/stream-cgroups's one, pass without the
-feature they test: they expect an error and take BendKV's "unknown command" for one. Of the first row's, the two of
-unit/lazyfree pass on BendKV's account of its heap (its other two free streams), and
-unit/violations's one is a SORT.
+The pass of the Lua row, and unit/type/stream-cgroups's one, pass without the feature
+they test: they expect an error, and BendKV's answer to what it does not have matches it.
+Of the first row's, the two of unit/lazyfree pass on BendKV's account of its heap (its
+other two free streams), and unit/violations's one is a SORT.
 
 By unit (units where every test needs a server of its own are left out: acl, acl-v2,
 aofrw, auth, client-eviction, cluster, cluster-scripting, info, limits, maxmemory,
@@ -252,18 +276,18 @@ pubsubshard, shutdown, tls, type/list-common, wait):
 | unit/bitops | 45 | 45 | 44 |
 | unit/dump | 12 | 11 | 11 |
 | unit/expire | 65 | 59 | 57 |
-| unit/functions | 94 | 90 | 2 |
+| unit/functions | 94 | 90 | 1 |
 | unit/geo | 59 | 59 | 59 |
 | unit/hyperloglog | 20 | 20 | 20 |
 | unit/info-command | 3 | 3 | 3 |
-| unit/introspection | 28 | 28 | 25 |
-| unit/introspection-2 | 43 | 43 | 38 |
+| unit/introspection | 28 | 28 | 26 |
+| unit/introspection-2 | 43 | 43 | 40 |
 | unit/keyspace | 53 | 52 | 50 |
-| unit/latency-monitor | 14 | 13 | 11 |
+| unit/latency-monitor | 14 | 13 | 13 |
 | unit/lazyfree | 4 | 4 | 2 |
-| unit/multi | 60 | 53 | 28 |
+| unit/multi | 60 | 53 | 32 |
 | unit/other | 22 | 19 | 19 |
-| unit/pause | 14 | 14 | 9 |
+| unit/pause | 14 | 14 | 13 |
 | unit/protocol | 25 | 17 | 17 |
 | unit/pubsub | 30 | 30 | 29 |
 | unit/querybuf | 2 | 2 | 0 |
@@ -272,7 +296,7 @@ pubsubshard, shutdown, tls, type/list-common, wait):
 | unit/scan | 17 | 17 | 17 |
 | unit/scripting | 111 | 110 | 0 |
 | unit/slowlog | 16 | 9 | 8 |
-| unit/sort | 52 | 52 | 51 |
+| unit/sort | 52 | 52 | 52 |
 | unit/tracking | 13 | 10 | 10 |
 | unit/type/hash | 73 | 72 | 70 |
 | unit/type/incr | 25 | 24 | 24 |
@@ -285,27 +309,30 @@ pubsubshard, shutdown, tls, type/list-common, wait):
 | unit/type/string | 77 | 77 | 74 |
 | unit/type/zset | 291 | 289 | 287 |
 | unit/violations | 1 | 1 | 1 |
-| **all** | **1757** | **1677** | **1348 (80.4%)** |
+| **all** | **1757** | **1677** | **1361 (81.2%)** |
 
-## Why the other 329 fail
+## Why the other 316 fail
 
-- **207 stop on a command BendKV does not have.** By the number of tests each one stops:
-  FUNCTION LOAD 125, XGROUP 34, SYNC 20 (tests that read the replication stream, 12 of them
-  unit/multi's of what a transaction propagates), and 13 more below five (28 tests).
-- **72 never ran**: their unit ended before them, on a command outside any test:
-  `CONFIG SET appendonly yes` (type/stream; BendKV turns its append-only file on only at
-  its start); or on a test that waits for a reply that never comes, because the command
-  before it is missing (scripting: the second line of FUNCTION LOAD's reply, read raw).
-  One test runs only on a server that names jemalloc as its allocator.
-- **50 fail with another error.** 20 are streams': XREAD with BLOCK, which BendKV answers
+- **149 stop on a command BendKV does not have.** By the number of tests each one stops:
+  FUNCTION LOAD 77, XGROUP 34, SYNC 20 (tests that read the replication stream, 12 of them
+  unit/multi's of what a transaction propagates), and 9 more below five (18 tests).
+- **128 never ran**: their unit ended before them, on a command outside any test:
+  `CONFIG SET appendonly yes` (type/stream and type/stream-cgroups; BendKV turns its
+  append-only file on only at its start); on a test that waits for a reply that never
+  comes, because the command before it is missing (scripting: in its half of functions, a
+  test reads a script's reply raw, line by line, for a line that FUNCTION LOAD's error
+  never gives, so its half of EVAL does not run, 53 tests); or on a server that answers
+  BUSY to the end (functions: the script its test of FUNCTION KILL leaves looping, 56
+  tests). One test runs only on a server that names jemalloc as its allocator.
+- **39 fail with another error.** 20 are streams': XREAD with BLOCK, which BendKV answers
   with an error (10), XACK and XPENDING on a group XGROUP did not make (8), and the two
   tests that set `stream-node-max-entries`. 6 fail on a client left in MULTI by a test
   before them that failed inside a transaction on what BendKV does not have, REPLICAOF in
-  unit/multi; and the others fail for what BendKV does not have yet: COMMAND's entries of commands it does not have (GETKEYS, LIST, movablekeys), Lua (a script's BUSY, the statistics of EVAL, a script's calls in a monitor, a
-  SORT a script calls, scripts under a pause, a set a script fills for the latency
-  monitor's expire-cycle event, and LATENCY RESET of the events it would have given),
-  the order of a hash Redis keeps in a listpack past the parameters' defaults (above),
-  replication (`min-replicas-to-write`, EXEC's NOREPLICAS),
+  unit/multi; and the others fail for what BendKV does not have yet: COMMAND's entries of
+  commands it does not have (GETKEYS of XGROUP, FCALL and FCALL_RO; LIST's subcommands of
+  CLUSTER; MIGRATE marked movablekeys), FUNCTION KILL (the script it would have ended
+  answers BUSY), the order of a hash Redis keeps in a listpack past the parameters'
+  defaults (above), replication (`min-replicas-to-write`, EXEC's NOREPLICAS),
   `rdb_changes_since_last_save` (counted otherwise than Redis for a SETBIT or BITFIELD
   that leaves its value as it was), the size of a client's query buffer (CLIENT LIST's
   qbuf, 0), and MOVE's basic usage (above). (Before
@@ -314,9 +341,9 @@ pubsubshard, shutdown, tls, type/list-common, wait):
   SCAN and RANDOMKEY pass all their tests on keys: SCAN's basic iteration, COUNT, MATCH,
   TYPE, and its guarantee under a load of writes, and RANDOMKEY's three.)
 
-So what the suite counts next is streams' groups and XREAD's wait (70 tests), then the
-query buffer (2). Scripts and functions (200 tests) are the Lua pull requests' (#99,
-#110).
+So what the suite counts next is FUNCTION and FCALL: the 200 tests of the Lua row,
+unit/scripting's half of EVAL among them, which runs once its half of functions does.
+Then streams' groups and XREAD's wait (70 tests), and the query buffer (2 tests).
 
 ## What it found
 
@@ -406,26 +433,30 @@ make clients                       # the three suites, against Redis and build/b
 
 | suite | Redis 7.0.15 passes | BendKV passes |
 |---|---:|---:|
-| redis-py 8.1.0, RESP2 | 2,753 | **2,593 (94.2%)** |
-| redis-py 8.1.0, RESP3 | 2,753 | **2,593 (94.2%)** |
-| go-redis v9.23.0, RESP3 | 460 | **432 (93.9%)** |
+| redis-py 8.1.0, RESP2 | 2,753 | **2,700 (98.1%)** |
+| redis-py 8.1.0, RESP3 | 2,753 | **2,700 (98.1%)** |
+| go-redis v9.23.0, RESP3 | 460 | **441 (95.9%)** |
 
 redis-py's tests give in RESP3 what they give in RESP2, test by test, against Redis and
-against BendKV: the same tests pass, and the same fail.
+against BendKV: the same tests pass, and the same fail. (Its three tests of subscribing
+to a server that is down pass or fail from one run to the next, against both servers
+alike.)
 
 Every test BendKV fails of those Redis passes fails on what BendKV does not have:
 
-- **A command it does not have:** in redis-py, Lua's (EVALSHA 74, SCRIPT 30, FUNCTION
-  7), streams' groups (XGROUP 36, XACK 3, XREADGROUP 2), MODULE 2 and REPLICAOF 1 (155
-  tests in each protocol); in go-redis, streams' groups (XGROUP 12) and Lua's (12): 24
-  tests. redis-py's 32 tests of streams that need no group, and go-redis's 13, pass
-  since streams' reads and writes (sections 3zzzy and 3zzzza of
-  [FINDINGS.md](FINDINGS.md)), and redis-py's test of BGSAVE since the background saves
-  (section 3zzzk). SORT's tests, 37 in
-  redis-py and 2 in go-redis, pass since SORT (section 3zzh of
-  [FINDINGS.md](FINDINGS.md)), and so does go-redis's test of COMMAND GETKEYS, which
-  asks for SORT's keys; redis-py's 9 tests of PFADD, PFCOUNT and PFMERGE pass since
-  HyperLogLogs (section 3zzj), its 5 of CLIENT PAUSE and UNPAUSE since the pause
+- **A command it does not have:** in redis-py, streams' groups (XGROUP 36, XACK 3,
+  XREADGROUP 2), FUNCTION LOAD 7, MODULE 2 and REPLICAOF 1 (51 tests in each protocol);
+  in go-redis, streams' groups (XGROUP 12) and FUNCTION LOAD and KILL (6): 18 tests. Lua
+  scripts (section 3zzzd of [FINDINGS.md](FINDINGS.md)) brought redis-py's 107 tests in
+  each protocol that stopped on EVALSHA, SCRIPT or a script BendKV did not run (its
+  locks, which are scripts, its scripting tests and MONITOR's test of a script) and
+  go-redis's 9 of EVAL, EVAL_RO and a hook's error. redis-py's 32 tests of streams that
+  need no group, and go-redis's 13, pass since streams' reads and writes (sections 3zzzy
+  and 3zzzza of [FINDINGS.md](FINDINGS.md)), and redis-py's test of BGSAVE since the
+  background saves (section 3zzzk). SORT's tests, 37 in redis-py and 2 in go-redis, pass
+  since SORT (section 3zzh of [FINDINGS.md](FINDINGS.md)), and so does go-redis's test of
+  COMMAND GETKEYS, which asks for SORT's keys; redis-py's 9 tests of PFADD, PFCOUNT and
+  PFMERGE pass since HyperLogLogs (section 3zzj), its 5 of CLIENT PAUSE and UNPAUSE since the pause
   (section 3zzk), and its 9 of LASTSAVE, LOLWUT, MEMORY STATS, MEMORY MALLOC-STATS and
   ROLE, and go-redis's of WAIT and its filter of commands by the ACL category admin (it
   wants more than 10; BendKV has 37), since the administrative commands (section 3zzl);
@@ -436,11 +467,10 @@ Every test BendKV fails of those Redis passes fails on what BendKV does not have
   TRACKING and go-redis's 9 specs of its client-side cache since CLIENT TRACKING
   (section 3zzzb), and redis-py's 34 tests of ACL, of AUTH with a user and of CLIENT
   KILL USER, and go-redis's of ACL CAT, since ACL users (section 3zzzh).
-- **Another error, on the same ground:** Lua (a script's calls in MONITOR, EVAL's
-  replies), XREAD with BLOCK (go-redis's test of XRead waits, which BendKV answers with
-  an error), and COMMAND, which lists only BendKV's commands: COMMAND LIST counts 290
-  where redis-py waits for more than 300, and redis-py's parser of commands asks for
-  MIGRATE's keys.
+- **Another error, on the same ground:** XREAD with BLOCK (go-redis's test of XRead
+  waits, which BendKV answers with an error), and COMMAND, which lists only BendKV's
+  commands: COMMAND LIST counts 299 where redis-py waits for more than 300, and
+  redis-py's parser of commands asks for MIGRATE's keys.
 
 So no test of these suites finds a command BendKV has answering otherwise than Redis, but
 XREAD's BLOCK, which it does not have yet.

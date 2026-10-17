@@ -19,7 +19,9 @@
 # and checks under load), CLIENT TRACKING (scenarios against Redis),
 # MONITOR (scenarios against Redis, and a check
 # under load), CLIENT PAUSE and UNPAUSE (scenarios against Redis, and
-# checks of BendKV alone and under load), the administrative commands
+# checks of BendKV alone and under load), Lua scripts (EVAL, EVALSHA,
+# SCRIPT, scripts in transactions, BUSY and SCRIPT KILL: scenarios
+# against Redis), the administrative commands
 # (LASTSAVE, ROLE, WAIT, MEMORY, LOLWUT and SHUTDOWN: scenarios against
 # Redis, and, with the defaults, SHUTDOWN on servers of their own), AUTH
 # (scenarios against Redis:
@@ -144,6 +146,7 @@ for n in "" post send "post build/test.aof everysec"; do
   python3 tests/tracking_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
   python3 tests/monitor_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
   python3 tests/pause_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
+  python3 tests/script_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
   if [ -z "$n" ]; then
     python3 tests/admin_test.py --bendkv "$PORT" --redis "$REDIS_PORT" --bin build/bendkv
   else

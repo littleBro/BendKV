@@ -23,7 +23,8 @@ what both must agree on, as the part's comment says.
   Saving...").
 - A background save that fails (dump.rdb is a directory, so the rename
   fails): MISCONF for writes and PING, not for reads, in MULTI and at
-  EXEC; errorstats and rejected calls; a save that ends well, or
+  EXEC; for a script's writes, and a script that may write; errorstats
+  and rejected calls; a save that ends well, or
   stop-writes-on-bgsave-error no, lifts it, for the commands after it in
   the same pipeline too (a CONFIG SET alone or in MULTI). The cron tries
   again 5 seconds after the failure, not before.
@@ -576,8 +577,11 @@ def misconf_on(exe, d, log):
     """a background save that fails, and the writes refused after it"""
     s = Srv(exe, d, "--save", "3600 1")
     c, held, sub, mon = s.conn(), s.conn(), s.conn(), s.conn()
+    lua = s.conn()
     run(c, "SET", "a", "1")
     log("1 queued before", run(held, "MULTI"), run(held, "SET", "q", "1"), run(held, "GET", "a"))
+    # a script with a shebang that may write, queued before the failure
+    log("1 script queued before", run(lua, "MULTI"), run(lua, "EVAL", "#!lua\nreturn 1", "0"))
     # the rename onto dump.rdb fails: a directory, not empty, is there
     os.makedirs(os.path.join(d, "dump.rdb", "x"))
     log("1 bgsave", run(c, "BGSAVE"), until(lambda: not running(c)))
@@ -595,6 +599,25 @@ def misconf_on(exe, d, log):
     log("2 stats", info(c, "errorstats", "errorstat_MISCONF"),
         re.sub(r"usec=\d+,usec_per_call=[0-9.]+,", "", info(c, "commandstats", "cmdstat_set") or ""),
         re.sub(r"usec=\d+,usec_per_call=[0-9.]+,", "", info(c, "commandstats", "cmdstat_ping") or ""))
+    # scripts (FINDINGS 3zzzd): a write a script without a shebang calls is
+    # refused in it (scriptVerifyWriteCommandAllow), reads and PING are not;
+    # a script whose shebang lets it write is refused before it runs, in
+    # MULTI flagging the transaction, and EXEC of one queued before the
+    # failure is aborted (its queued flags hold CMD_WRITE)
+    log("2 scripts", run(c, "EVAL", "return redis.call('set','k','v')", "0"),
+        run(c, "EVAL", "return redis.call('get','a')", "0"),
+        run(c, "EVAL", "return redis.pcall('set','k','v')", "0"),
+        run(c, "EVAL", "local r = redis.pcall('incr','n') return type(r)", "0"),
+        run(c, "EVAL", "return redis.call('ping')", "0"),
+        run(c, "EVAL", "#!lua\nreturn 1", "0"),
+        run(c, "EVAL", "#!lua flags=no-writes\nreturn redis.call('get','a')", "0"),
+        run(c, "EVAL_RO", "return redis.call('set','k','v')", "0"))
+    log("2 scripts in MULTI", run(c, "MULTI"), run(c, "EVAL", "return redis.call('set','k','v')", "0"),
+        run(c, "EXEC"), run(c, "MULTI"), run(c, "EVAL", "#!lua\nreturn 1", "0"), run(c, "EXEC"),
+        run(lua, "EXEC"), run(c, "EXISTS", "k"))
+    log("2 scripts stats", info(c, "errorstats", "errorstat_MISCONF"),
+        re.sub(r"usec=\d+,usec_per_call=[0-9.]+,", "", info(c, "commandstats", "cmdstat_eval") or ""),
+        re.sub(r"usec=\d+,usec_per_call=[0-9.]+,", "", info(c, "commandstats", "cmdstat_set") or ""))
     # a CONFIG SET that lifts it or sets it again counts for the commands
     # after it in its own pipeline, alone or in MULTI, as Redis checks
     # each command (writeCommandsDeniedByDiskError in processCommand); and
@@ -624,7 +647,7 @@ def misconf_on(exe, d, log):
     log("4 fails", run(c, "BGSAVE"), until(lambda: not running(c)), run(c, "SET", "b", "8"))
     shutil.rmtree(os.path.join(d, "dump.rdb"))
     log("4 SAVE ends well", run(c, "SAVE"), field(c, "rdb_last_bgsave_status"), run(c, "SET", "b", "9"))
-    for x in (c, held, sub, mon):
+    for x in (c, held, sub, mon, lua):
         x.sock.close()
     talk(s.port, [["SHUTDOWN", "NOSAVE"]])
     log("4 exit", s.exit())

@@ -19,7 +19,9 @@
 # command (commands run with their replies held back by CLIENT REPLY OFF,
 # then the statistics read: the crash patch 26 fixed), RESP3 (a client
 # subscribed to keyspace events that runs commands: without patch 26 ASan
-# reports a node used after its free there), the differential test (three
+# reports a node used after its free there), Lua scripts (the engine's C
+# stack, switched to and from at each call and tick, with the fiber
+# annotations the sanitizers follow), the differential test (three
 # seeds), the concurrency checks, and a load from redis-benchmark like
 # tools/pgo_build.sh's (50 clients pipelined, then 100 not), under which
 # the loop falls behind and posts to its writer; connections that end come
@@ -36,6 +38,8 @@
 # conventions ("Stack realignment in presence of dynamic allocas is not
 # supported with this calling convention"). UBSan and TSan run whole, with
 # no check left out and nothing suppressed: neither reports anything here.
+# A line of ASan's that is no report, its note that it does not fully
+# support swapcontext, is set aside (reports, below).
 #
 #   BEND="bun ../bend-patched/bend2/main.ts" PORT=6380 REDIS_PORT=6390 sh tools/sanitize.sh
 #
@@ -84,8 +88,22 @@ stop() {
     BKV=
   fi
 }
-# fails if a sanitizer reported, and shows what it reported
+# fails if a sanitizer reported, and shows what it reported. ASan writes
+# one line to each process's file the first time the process switches
+# stacks with swapcontext, as the engine of scripts does
+# (src/lua/engine.c): that it "doesn't fully support makecontext/
+# swapcontext functions and may produce false positives". The switches
+# carry the fiber annotations it asks for instead, and the line is no
+# report: a file that holds it alone is set aside (warned/), and a file
+# with any other line fails the run, as an empty one does
+WARN="^==[0-9]*==WARNING: ASan doesn't fully support makecontext/swapcontext functions and may produce false positives in some cases!\$"
 reports() {
+  for f in "$REP"/*; do
+    if [ -s "$f" ] && ! grep -qv "$WARN" "$f"; then
+      mkdir -p "$OUT/warned"
+      mv "$f" "$OUT/warned/"
+    fi
+  done
   if [ -n "$(ls "$REP")" ]; then
     for f in "$REP"/*; do
       echo "== $f"
@@ -117,13 +135,18 @@ t() {
 }
 
 FLAGS="-std=c11 -O1 -gline-tables-only -fno-omit-frame-pointer"
+# the Lua engine's sources and flags beside the emitted C (as the
+# Makefile builds it); the engine's stack switches carry the sanitizers'
+# fiber annotations (src/lua/engine.c)
+DEPS_SRC="deps/redis/deps/lua/src/*.c deps/redis/src/*.c"
+DEPS_FLAGS="-I deps/redis/deps/lua/src -I deps/redis/src -DENABLE_CJSON_GLOBAL -DREDIS_STATIC= -DLUA_USE_MKSTEMP -D_GNU_SOURCE"
 for san in asan tsan; do
   echo "== $san: the build"
   if [ "$san" = asan ]; then
     $CC $FLAGS -fsanitize=address,undefined -fsanitize-address-use-after-return=never \
-      build/bendkv.c -lpthread -lm -o "$OUT/bendkv-$san"
+      build/bendkv.c $DEPS_SRC $DEPS_FLAGS -lpthread -lm -o "$OUT/bendkv-$san"
   else
-    $CC $FLAGS -fsanitize=thread build/bendkv.c -lpthread -lm -o "$OUT/bendkv-$san"
+    $CC $FLAGS -fsanitize=thread build/bendkv.c $DEPS_SRC $DEPS_FLAGS -lpthread -lm -o "$OUT/bendkv-$san"
   fi
   echo "== $san: connections that end"
   python3 tests/conn_test.py --bin "$OUT/bendkv-$san" --port "$PORT"
@@ -143,6 +166,7 @@ for san in asan tsan; do
     t python3 tests/protocol_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
     t python3 tests/stats_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
     t python3 tests/resp3_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
+    t python3 tests/script_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
     for seed in 1 2 3; do
       redis-cli -p "$REDIS_PORT" flushall > /dev/null
       redis-cli -p "$PORT" flushall > /dev/null
@@ -156,4 +180,4 @@ for san in asan tsan; do
 done
 trap - EXIT
 finish
-echo "OK: no sanitizer reported"
+echo "OK: no sanitizer reported ($(ls "$OUT/warned" 2> /dev/null | wc -l) processes with ASan's line of swapcontext alone, in $OUT/warned)"
