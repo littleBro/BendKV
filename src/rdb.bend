@@ -3744,10 +3744,12 @@ type FLib is Data:
 # what a load came to: the databases, in order, the keys loaded, those
 # dropped as their time had passed and those skipped as empty, the
 # libraries of functions (in the file's order), the lines to log (newest
-# first), the CRC64 to check; or the lines that say why it stopped
-# (newest first)
+# first), the CRC64 to check, and the byte the file's RDB part ends at
+# (after EOF and its CRC64: what an append-only file holds after an RDB
+# preamble starts there); or the lines that say why it stopped (newest
+# first)
 type FLd is Data:
-  FOk{dbs: List<&2, FDb>, loaded: Nat, expired: Nat, empty: Nat, libs: List<&2, FLib>, logs: List<&2, FLine>, sum: FSum}
+  FOk{dbs: List<&2, FDb>, loaded: Nat, expired: Nat, empty: Nat, libs: List<&2, FLib>, logs: List<&2, FLine>, sum: FSum, end: Nat}
   FFail{logs: List<&2, FLine>}
 
 # The text of numbers in a file's lines
@@ -4154,10 +4156,10 @@ def fl.key(m: Maybe<&1, String & String>, +op: Nat, +at: FAt, k: FK, dbs: FDs, e
 
 # EOF: the load is done; from version 5 on, the CRC64 after it is read,
 # to be checked (fl.checked) over the bytes up to EOF, with it
-def fl.done(dbs: FDs, n: FN, ls: List<&2, FLine>, sm: FSum) -> FLd:
+def fl.done(dbs: FDs, n: FN, ls: List<&2, FLine>, sm: FSum, +end: Nat) -> FLd:
   match n:
     case FN{ld, ex, em, libs}:
-      FOk{fds.list(dbs), ld, ex, em, List.reverse(&2, FLib, libs), ls, sm}
+      FOk{fds.list(dbs), ld, ex, em, List.reverse(&2, FLib, libs), ls, sm, end}
 
 def fl.sum(sum: Bool, +n: Nat, +hi: Nat, +lo: Nat) -> FSum:
   match sum:
@@ -4180,7 +4182,7 @@ def fl.crc.hi(+lo: Nat, m: Maybe<&1, Nat & String>, +at: FAt, +k: FK, dbs: FDs, 
   match m:
     case Some{p}:
       (+hi, t) = p
-      FEnd{fl.done(dbs, n, ls, fl.sum(fk.sum(k), Nat.add(fat.n(at), 1n), hi, lo))}
+      FEnd{fl.done(dbs, n, ls, fl.sum(fk.sum(k), Nat.add(fat.n(at), 1n), hi, lo), Nat.add(fat.n(at), 9n))}
     case None{}:
       fl.more(at, k, dbs, exp, n, ls, fl.short(Nat.add(fat.n(at), 1n), ls))
 
@@ -4195,7 +4197,7 @@ def fl.crc(m: Maybe<&1, Nat & String>, +at: FAt, k: FK, dbs: FDs, exp: FT, n: FN
 def fl.eof.v(old: Bool, t: String, +at: FAt, k: FK, dbs: FDs, exp: FT, n: FN, ls: List<&2, FLine>) -> FS:
   match old:
     case True{}:
-      FEnd{fl.done(dbs, n, ls, FSumNone{})}
+      FEnd{fl.done(dbs, n, ls, FSumNone{}, Nat.add(fat.n(at), 1n))}
     case False{}:
       fl.crc(rd.le(4n, t, 1n, 0n), at, k, dbs, exp, n, ls)
 
@@ -4299,32 +4301,32 @@ def fl.magic(c: Nat, +s: String, +len: Nat, dbs: FDs, +now: Nat, +sum: Bool) -> 
 
 # the end of a load: its last line (Done loading RDB), or the CRC64 found
 # wrong
-def fl.fin(dbs: List<&2, FDb>, +ld: Nat, +ex: Nat, +em: Nat, libs: List<&2, FLib>, ls: List<&2, FLine>) -> FLd:
-  FOk{dbs, ld, ex, em, libs, fl.line(Bool.pick(U32, Nat.is_eq(em, 0n), 2, 3), "Done loading RDB, keys loaded: " ++ Nat.show(ld) ++ ", keys expired: " ++ Nat.show(ex) ++ Bool.pick(String, Nat.is_eq(em, 0n), ".", ", empty keys skipped: " ++ Nat.show(em) ++ "."), ls), FSumNone{}}
+def fl.fin(dbs: List<&2, FDb>, +ld: Nat, +ex: Nat, +em: Nat, libs: List<&2, FLib>, ls: List<&2, FLine>, +end: Nat) -> FLd:
+  FOk{dbs, ld, ex, em, libs, fl.line(Bool.pick(U32, Nat.is_eq(em, 0n), 2, 3), "Done loading RDB, keys loaded: " ++ Nat.show(ld) ++ ", keys expired: " ++ Nat.show(ex) ++ Bool.pick(String, Nat.is_eq(em, 0n), ".", ", empty keys skipped: " ++ Nat.show(em) ++ "."), ls), FSumNone{}, end}
 
-def fl.crc.ok(same: Bool, +want: String, +got: String, +n: Nat, dbs: List<&2, FDb>, +ld: Nat, +ex: Nat, +em: Nat, libs: List<&2, FLib>, ls: List<&2, FLine>) -> FLd:
+def fl.crc.ok(same: Bool, +want: String, +got: String, +n: Nat, dbs: List<&2, FDb>, +ld: Nat, +ex: Nat, +em: Nat, libs: List<&2, FLib>, ls: List<&2, FLine>, +end: Nat) -> FLd:
   match same:
     case True{}:
-      fl.fin(dbs, ld, ex, em, libs, ls)
+      fl.fin(dbs, ld, ex, em, libs, ls, end)
     case False{}:
       FFail{fl.line(3, "Internal error in RDB reading offset " ++ Nat.show(n) ++ " -> RDB CRC error", fl.line(3, "Wrong RDB checksum expected: (" ++ want ++ ") but got (" ++ got ++ "). Aborting now.", ls))}
 
-def fl.crc.cmp(c: C, +n: Nat, +hi: Nat, +lo: Nat, dbs: List<&2, FDb>, +ld: Nat, +ex: Nat, +em: Nat, libs: List<&2, FLib>, ls: List<&2, FLine>) -> FLd:
+def fl.crc.cmp(c: C, +n: Nat, +hi: Nat, +lo: Nat, dbs: List<&2, FDb>, +ld: Nat, +ex: Nat, +em: Nat, libs: List<&2, FLib>, ls: List<&2, FLine>, +end: Nat) -> FLd:
   match c:
     case C{+ch, +cl}:
-      fl.crc.ok(Bool.and(Nat.is_eq(U32.to_nat(ch), hi), Nat.is_eq(U32.to_nat(cl), lo)), hex.q(U32.to_nat(ch), U32.to_nat(cl)), hex.q(hi, lo), n, dbs, ld, ex, em, libs, ls)
+      fl.crc.ok(Bool.and(Nat.is_eq(U32.to_nat(ch), hi), Nat.is_eq(U32.to_nat(cl), lo)), hex.q(U32.to_nat(ch), U32.to_nat(cl)), hex.q(hi, lo), n, dbs, ld, ex, em, libs, ls, end)
 
 # a load's end checked against its CRC64: c the CRC of the bytes before w,
 # which starts at the file's offset base (0 for a whole file, as SAVE's
 # reads it; the start's last window otherwise)
 def file.checked(d: FLd, c: C, +w: String, +base: Nat) -> FLd:
   match d:
-    case FOk{dbs, +ld, +ex, +em, libs, ls, FSumAt{+n, +hi, +lo}}:
-      fl.crc.cmp(crc.k(Nat.sub(n, base), w, c), n, hi, lo, dbs, ld, ex, em, libs, ls)
-    case FOk{dbs, +ld, +ex, +em, libs, ls, FSumZero{}}:
-      fl.fin(dbs, ld, ex, em, libs, fl.line(3, "RDB file was saved with checksum disabled: no check performed.", ls))
-    case FOk{dbs, +ld, +ex, +em, libs, ls, FSumNone{}}:
-      fl.fin(dbs, ld, ex, em, libs, ls)
+    case FOk{dbs, +ld, +ex, +em, libs, ls, FSumAt{+n, +hi, +lo}, +end}:
+      fl.crc.cmp(crc.k(Nat.sub(n, base), w, c), n, hi, lo, dbs, ld, ex, em, libs, ls, end)
+    case FOk{dbs, +ld, +ex, +em, libs, ls, FSumZero{}, +end}:
+      fl.fin(dbs, ld, ex, em, libs, fl.line(3, "RDB file was saved with checksum disabled: no check performed.", ls), end)
+    case FOk{dbs, +ld, +ex, +em, libs, ls, FSumNone{}, +end}:
+      fl.fin(dbs, ld, ex, em, libs, ls, end)
     case FFail{ls}:
       FFail{ls}
 

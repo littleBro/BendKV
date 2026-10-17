@@ -411,6 +411,16 @@ rewrite (`tests/rewrite_test.py`: BGREWRITEAOF's replies
 and INFO's fields against Redis's, the rewritten file against Redis's base, writes during a
 rewrite, BendKV and Redis started from the new file; Redis's unit/aofrw is tagged
 `external:skip`, and most of it needs `DEBUG LOADAOF` and `CONFIG SET appendonly yes`).
+Redis 7's directory of files, `appendonlydir`, has `tests/aofdir_test.py`: BendKV and
+Redis each started on a copy of the same directory, and rewriting in it, with the same
+databases, manifests and lines logged. Where BendKV differs: without the directory,
+which the runtime cannot make, BendKV keeps Redis 6's single file; it writes its bases as
+commands whatever `aof-use-rdb-preamble` says; an RDB base followed by commands stops
+its start, where Redis loads both; a base or history line whose sequence number is
+below 1, or 10^13 or more, is refused; only a base is read as an RDB file, and one that
+does not load stops the start, the file left as it was, where Redis may cut it to
+nothing; a BGREWRITEAOF whose new incremental file cannot be made is answered as
+started, then fails, where Redis answers with an error (FINDINGS 3zzzq).
 
 ## Client libraries' test suites
 
