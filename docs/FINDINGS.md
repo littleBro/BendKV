@@ -10082,10 +10082,15 @@ too.
   CLUSTER's;
 - `hll_test`, on three seeds, and on 7.0.15 too.
 
-**What it costs.** Nothing more while no client has NO-TOUCH on. A request costs a few
-instructions more under callgrind here: GET 3,509 (3,500 before), SET 4,301 (4,293), INCR
-4,621 (4,610). Among them, each request's statistics key now tests CLUSTER with the other
-containers (`stat.key`).
+**What it costs.** Nothing more while no client has NO-TOUCH on. Under callgrind here, a
+request costs 8 to 11 instructions more than before: GET 3,509 (3,500), SET 4,301 (4,293),
+INCR 4,621 (4,610); with the branch's head merged in (526b434), 3,507, 4,298 and 4,616.
+- They are all in the entry of the runtime's work loop and in its application of closures
+  (`WL_FID_ENTER`, `WL_FID_CLO_APPLY`): 10 and 12 instructions more at each of the loop's
+  steps, with as many steps as before, which reload more registers from the stack.
+- The loop is one C function for every function of the program, whose registers clang
+  allocates anew with the code added to it. The requests' own functions cost within an
+  instruction of what they cost before.
 
 ## 4. Where a request's time goes, and hiding the memory waits
 
