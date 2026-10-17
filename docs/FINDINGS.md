@@ -6534,6 +6534,170 @@ of their own, each in a fresh directory, 124 checks:
 `tests/admin_test.py` compares SHUTDOWN SAVE and a save that fails with Redis's;
 `tests/start_test.py` starts both servers on a dump.rdb, which BendKV refused before.
 
+## 3zzzg. The start reads its file in windows
+
+**What was left** (issue #32). The start read its append-only file whole: `read_all`
+read it 16 MB at a time and glued the pieces into one string, `A.load` made the list of
+all its entries, and `A.untx`, `A.checked` (the entries' marks and acts, the check) and
+the replay ran over that list. The runtime's heap never gives memory back to the system
+(the twenty-ninth patch's account: what the heap "has taken from the corpus"), so the
+start's peak, the file, its entries and their acts at once beside the databases, stayed
+the process's resident memory for good: four times what the server held before the
+restart, on a file of a million SETs. A container sized at twice the data was killed at
+the restart. A file the start refused was read whole once more, for the byte its bad
+entry starts at.
+
+**What the start does** (`src/aof.bend`: The start, Reading in windows;
+`src/server.bend`: Restoring).
+
+- It reads the file 1 MiB at a time (`restore_win`), each window after what the window
+  before left: the start of an entry that window ends inside. `A.load` gives a window's
+  whole entries and what follows the last of them, which the next window starts with
+  (`A.wins.step`). After a window that holds no whole entry (an entry longer than a
+  window), the next read is as long as what it left (`win.want`, 1 GiB at most), so the
+  window at least doubles until it holds the entry, and an entry of any length is read
+  again a few times at most.
+- Each entry runs as it comes (`A.win.ent`): its act on the databases, and its mark and
+  act through the check, one step of `check.go` kept as a value (`A.Ck`: on at entry i,
+  with the MULTI still open if there is one, or stopped at entry i, with why). From a
+  MULTI on, the entries are held until its EXEC runs them (`A.WinTx`), since a
+  transaction the file ends inside is reverted (`A.untx`). So the start holds a window,
+  its entries, those of a transaction still open, and the databases it builds.
+- After the last window, it makes of what it holds what it made of the whole file
+  (`A.Start`): the check's verdict on the entries it keeps, their number, the entries of
+  a transaction the file ends inside, and what follows the last whole entry. The shell
+  does with them what it did: it cuts an entry cut short, reverts a transaction left
+  open or refuses the file, with the same messages.
+- Two bytes are found by reading the file again a window at a time, as the start read
+  it, counting the entries of each window until the one that holds the entry wanted
+  (`offset_win`). One is the byte a refused entry starts at, which the refusal names.
+  The other is the byte a reverted transaction's MULTI starts at, where the file is cut,
+  as Redis cuts it (`valid_before_multi`). That byte is the file's own, however its
+  entries are written: Redis reads `*01` and a bulk with no length (`$`) as it reads
+  `*1` and `$0`, and written again these would be shorter or longer. Main computed the
+  cut from the kept entries written again, and cut one byte into an entry written
+  `$01` before the MULTI. The first version of this branch computed it from the
+  transaction's entries written again, and cut whole entries away when those held
+  bulks with no length (the review of #78).
+
+**The law** (`load_windows`, LAWS.bend: Persistence). Its statement waits for a
+person's approval in the pull request:
+
+```
+law load_windows:
+  for +ws: List<&2, String>
+  for +n: Nat
+  {A.windows(ws, n) == A.start(A.cat(ws), n) : A.Start}
+```
+
+`A.windows(ws, n)` is what the start makes of the windows `ws`, with 1 + n databases,
+entry by entry as the shell runs it. `A.start(s, n)` is what it makes of the file `s`
+read whole, from `A.load`, `A.untx` and `A.checked`, the functions the laws `aof_load`,
+`recover`, `recover_cut`, `load_cut` and `checked_replay` are about. The law holds for
+any windows, so for those the reads give, whatever their lengths: the laws about the
+whole file are about the start that reads it in windows. With `checked_replay`, when
+the check refuses no entry, the databases the start builds are those `A.restore` gives
+of the file, the function `recover` and `recover_cut` are about, and the entries it
+reverts, written again, then what follows them, are what `A.restore` leaves. The law is
+stated of the start's verdict, its count and what it leaves, not of its databases
+alone. It says nothing of the read loop itself, of the byte a cut is made at, or of
+`offset_win`: those the window test checks against Redis.
+
+**The proof** (PROOF.bend: Windows, 1,045 lines).
+
+- An entry read with more bytes after it reads the same and leaves them after what it
+  left (`ps_entry`), each part of the parser in turn: a number line, a bulk's bytes and
+  its `\r\n`, the bulks of an entry. The parser had to change for it. It matched literal
+  chars (`SCon{'\r', t}`), which compile to a tree of 32 levels on the char's bits that a
+  proof cannot step through for a char it does not know; it now compares the char's code
+  (`U32.is_eq(x, 13)`) in `num.lf`, `bulk.lf`, `bulk.end`, `bulk` and `entry`. The proofs
+  before it check unchanged.
+- An entry takes a byte at least, so the loader's fuel, a string's length, lasts on any
+  string, and more fuel reads the same (`lg_fuel`). So the loader reads a ++ b as a's
+  entries, then those of what a left with b after it (`load_cat`).
+- The check entry by entry is `A.checked`'s (`ck_all`): why it stops at an entry is why
+  for that entry's act alone (`why_at`).
+- What the start holds after the entries P is what `A.untx`, `A.checked` and the replay
+  make of P (`WInv`). One more entry keeps it (`inv_step`: a MULTI moves untx's cut to
+  itself, an EXEC takes the cut away, any other entry leaves it), and at the end what it
+  holds gives what the start makes of the whole file (`inv_done`). The windows, one
+  after another, put `load_cat` and that together (`wins_inv`).
+
+Eight mutations of the start in windows break the proof where they spoil the start:
+
+| mutation | where the proof fails |
+|---|---|
+| an entry run without its step of the check | `inv_all` |
+| an EXEC that forgets the entries held before it | `inv_tx` |
+| a second MULTI that keeps the first one's cut | `inv_tx` |
+| a MULTI inside another that goes on | `ck_con` |
+| the entries of a transaction left open given newest first | `inv_done` |
+| a window read before what the last one left | `wins_inv` |
+| a bulk whose window ends before its `\r\n` read as whole | `ps_bulkend` |
+| a number line whose window ends after its `\r` read as whole | `ps_numlf` |
+
+**What it gives** (section 69 of PERFORMANCE.md). RSS after a restart is what it was
+before it, where it was four times that, with the same `used_memory`, and the start
+takes half the time it took: the file is no longer copied whole, nor its entries
+listed. `make perfcheck`'s counts are main's to within half a percent: no request runs
+the start's code.
+
+**Tests.**
+
+- `tests/aof_check.bend` (`make smoke`) reads its files in windows of 1, 2, 3, 7, 64 and
+  4,096 bytes, and compares what the start makes of each with what it makes of the file
+  read whole (`A.windows` against `A.start`): its stream's file, whole and cut inside
+  its last entry, its file of several databases, and seven more: a transaction left
+  open, one left open and then an entry cut short, a refusal inside a transaction left
+  open and inside one closed, a MULTI inside one left open and inside one closed after
+  it, and transactions and a long value followed by bytes that are no entry.
+  `make smoke` also runs it given a wrong expectation (`win`), which must fail it.
+- `tests/aof_window_test.py` (`make test`) starts BendKV and redis-server 7.0.15 on files
+  of 11 to 16 MB whose entries, transactions and values straddle the windows: a
+  transaction across the first window's end, an entry whose count's line the second's
+  end cuts, a value the third's end cuts, values of 1.5 and 5 MiB, a transaction that
+  holds one of 1.25 MiB, SELECTs; then that file with its last entry cut short inside a
+  long value, with a transaction left open (an entry longer than a window in it), with
+  one left open and then an entry cut short, and with an unknown command after it. Then
+  two small files whose transaction left open holds entries Redis reads but does not
+  write (bulks with no length, a MULTI written `*01`), and one whose entry ends exactly
+  at the first window's end. Each with aof-load-truncated yes and no: both servers start
+  or both refuse, and say why; every database reads back the same on both, and the file
+  is cut to the same length.
+- `make test` runs `tools/restore_mem.sh`, which fails when RSS after the restart is
+  more than 1.3 times RSS before it. It fails too when a start or the load fails, when a
+  server is gone before its RSS is read, or when the restart does not hold the keys the
+  load left: a guard that cannot read what it compares does not pass.
+
+**Where BendKV differs.** The window test found a difference that was there before the
+windows: a file that ends inside a transaction and then in an entry cut short. BendKV
+cuts it back to before the MULTI and reverts the transaction at once; Redis cuts the
+entry and leaves the MULTI and the entries it queued for its next start, which reverts
+them. The databases are the same. README.md and COMPATIBILITY.md list it.
+
+**What is left.**
+
+- A transaction is held whole until its EXEC, as Redis queues a transaction's commands
+  in its loading client until its EXEC.
+- The rewrite. Its peak during a load is what it was (section 69 of PERFORMANCE.md): its
+  snapshot keeps the databases as they were when it started while the writes make new
+  nodes, and it keeps the entries appended meanwhile, and the heap keeps that peak as
+  the process's memory. To give free memory back to the system is the runtime's work, a
+  patch that would `madvise` away the pages of free nodes past a threshold, which the
+  start no longer needs.
+- An RDB file loaded at the start (pull request #72) is read whole, and its checksum is
+  computed over all of it at the end. Its loader already goes from one opcode to the
+  next on a state (`fl.step`: what is left of the file, the databases, the counts). To
+  read the file in windows, a step that runs out of bytes would ask for the next window
+  where it now ends the load as a short read, the CRC64 would be carried from one
+  window to the next (Redis's `rdbLoad` updates it as it reads), a window would grow
+  for a value longer than one (a string or a listpack of any length), and a test would
+  read files in windows of many sizes against the whole, as `tests/aof_check.bend` does
+  here.
+
+**What it costs.** 238 lines more in `src/aof.bend` and 77 in `src/server.bend`; with
+the proof, `make check` takes 14 s here and `make verdict` 1 min 40 s.
+
 ## 3zzzh. ACL: users, what they may run, and the log
 
 **What was left.** ACL was an unknown command. AUTH took the one password, and a client
@@ -7776,6 +7940,228 @@ no more at the end than at 3 s. With the fix: 238,325, 238,453 and
 **What it costs.** Nothing on a request's path: the eviction's loop compares one more
 number at each reading of the heap. `make perfcheck`: GET 3,440, SET 4,208 and INCR 4,562
 instructions a request, within 0.3% of the baseline.
+
+## 3zzzs. Small sets in one string, as a listpack and an intset
+
+**What was left** (sections 3zj, 3zzy). A set that is not an intset (a hashtable to
+Redis) was a trie of its members, the keyspace's own 16-way trie of fixed depth: a member
+whose hash shares no digit with another's took a path of four nodes of 17 words below the
+root's. 50,000 sets of 10 members of 8 bytes (`m0000000` to `m0000009`, each on a path of
+its own) took 6,025.6 bytes a key, 602.6 a member, where Redis 7.0.15 takes 809.6 in its
+hashtable. An intset was a weight-balanced tree of its members' strings (section 3zzy):
+537.5 bytes a key for 10 small integers (Redis 105.6), 16,733.2 for 512 (Redis 1,361.2).
+
+**Small sets of strings** (`src/map.bend`, Sets). `MSmall{n, b}`: a hashtable of at most
+128 members of at most 64 bytes (Redis 7.2's `set-max-listpack-entries` and `-value`;
+Redis 7.0.15 has no listpack of a set, so these limits are BendKV's own) is the string of
+its members in the order they came, each its length in one byte, then its bytes.
+
+- A read walks the lengths and compares a member of the right length by its last byte,
+  then whole (`pk.hit.of`, as a small hash compares a field: `String.eq` of a slice, not
+  `str_eq`, section 3zzzm's first trap). A write makes the string anew in one buffer
+  (`pk.flat`).
+- The string holds at most a buffer, 2,048 bytes. Past that the members are in pieces
+  (`MLong{n, ps}`, `MPc{k, s}`), each the members that fill one buffer, as a small hash's
+  pairs are past one (section 3zzzm, *Past one buffer*): a read finds in one piece after
+  another, a new member goes in the last piece while it has room, else in a piece of its
+  own, a delete cuts one piece and a piece it empties goes, and one piece left is a
+  string again (`ml.set`). 128 members of 64 bytes take 8,320 bytes, five pieces.
+- Past either limit the set is a trie for good, as before. An intset that takes a string
+  becomes a small set (its members in increasing order, then the string) while the
+  limits hold, a trie else; whether a set is an intset is Redis 7.0.15's choice, as
+  before (512 integers at most).
+- SRANDMEMBER and SPOP pick a member by its rank, as an intset's are; k different members
+  are picked and dropped in turn from the list of them.
+- RESTORE and the start read a set of at most 128 members of at most 64 bytes into a
+  small one, in the payload's order (`val.set.table`, `ms.make`).
+
+**Intsets** (`src/map.bend`, Sets). `MInts{n, b}`: b holds the members as Redis's intset
+holds them, without its header of 8 bytes: each a two's complement integer of w bytes,
+the low byte first, in increasing order, w (2, 4 or 8) the width the widest member
+needed.
+
+- A member wider than the others makes them all as wide (Redis's `intsetUpgradeAndAdd`:
+  it is then the least or the greatest); a member taken out leaves the width as it was.
+- A member is found by halves (`is.find`), each step a compare of two keys: an integer's
+  bits with its sign's turned over, so that keys compare as the integers do, 64 bits in
+  two halves of 32 (a `Nat` stops at 2^48). A member's text is read into its halves once
+  (`iv.of`: up to 14 digits at once, more in two parts) and written back from them
+  (`is.text`, 19 digits through 16-bit limbs divided by 10^9).
+- A write makes the string anew in one buffer, or two past 2,048 bytes (more than 256
+  members of 8 bytes): the C runtime fills the last buffer and leaves the rest to the
+  first.
+- A String of two buffers is read through them from the first at each byte
+  (`str_code_at_far`), where a String of one buffer is read where the byte lies: a find
+  in 511 members of 8 bytes ran 14,824 instructions, against 4,667 in 200 of them (one
+  buffer), the text of a member 1,987 against 1,046. A command that reads several
+  members of a string of two buffers reads them through a view of the two (`IView`,
+  `iw.view`: the drop of the first takes the last buffer as it is, the take of the first
+  copies it): the find runs 7,367, a member's text 1,098. The view's reads call copies of
+  the readers of one buffer (`iw.key.w`, `iw.text.w`), so that the reads of one buffer
+  keep their callers (section 7); a request on an intset of one buffer runs at most 3%
+  more instructions than before the view (SREM, SADD of a new member), most within 1%.
+- DUMP and the RDB file write the header and the string: Redis's own bytes, whatever the
+  history. Before, DUMP made the width anew from the members, narrower than Redis's
+  after its widest member was taken out: `dump_test`'s new case "set shrunk from 64
+  bits" differs on main's build. RESTORE keeps the payload's string as it came, once
+  read and checked as before.
+
+**SADD takes no set kept in a string.** SADD of a member a set lacks took an intset and a
+trie of members out of the keyspace (`upd.takes`, sections 3zze and 3zzy), so that the
+write would not copy the path it changes. A write to a set kept in a string makes the
+string anew whatever holds it, so the take saves nothing, and its test is a find before
+the write's own. Neither an intset nor a small set is taken now: on 100,000 sets of 10
+strings, the take cost SADD of a member there 9,327 instructions against 8,128 without
+it, and SADD of a new member 11,763 against 10,348.
+
+**SSCAN.** A small set answers SSCAN's cursors and pages as the trie of its members
+would, as main's set did: the buckets from the cursor on, by their indices, each read
+whole, until COUNT members are read. A first version made that trie at each call: 150,647
+instructions an SSCAN of a set of 10 members, against main's 110,611. `ss.scan` reads
+the same pages from the string, in one walk: each member's bucket index from its hash,
+taken where the member lies (`String.hash_at`), the COUNT lowest keys (bucket, piece,
+index) from the cursor on, and the members of the keys up to the end of the last one's
+bucket, sliced out in order. A check of `map.bend` alone against `KV.scan` of the
+members' trie (17 sets of 1 to 128 members, in one string and in pieces, with members
+taken out, and members that share a bucket; COUNT 1 to 200; 13 cursors besides the
+walks) found the same cursors and pages, and main's build and this one answer the same
+to 134,444 pages of SSCAN on 514 sets.
+
+**What a client sees does not change.** OBJECT ENCODING answers `hashtable` and `intset`
+(`src/session.bend`); DUMP and the RDB file write `RDB_TYPE_SET` (never 20, which Redis
+7.0.15 cannot read: RESTORE refuses it, as before) and `RDB_TYPE_SET_INTSET`. SMEMBERS,
+SINTER, SUNION, SDIFF and DUMP answer a small set's members in the order they came, where
+the trie answered its own order; a hashtable's order is each server's own, and the tests
+compare such replies as sets. README says so.
+
+**The proofs.** `proof/LAWS.bend` and `proof/SPEC.bend` do not change. The lemmas of
+SADD's sizes take the new forms: a member a small set lacks leaves it no smaller, whether
+it stays a string, goes in a piece or makes a trie (`le_small_*`, `le_push`,
+`le_long_*`), and so does an intset that grows into a hashtable, as a string, as pieces
+or as a trie (`le_grow`, `le_set`). The intset lemmas take a string where they took a
+tree, and their member and string live, as the test of the limits reads them. No set
+kept in a string is taken, so those cases of `takes_madd_s` are absurd, and the lemmas
+that made an intset one larger (`le_ints_new`, `le_ints_putn`, `sadd_adds_ints`,
+`takes_madd_ints`) go. `has_none` holds as it did: the empty set is the empty intset,
+whose string is empty. `make check` and `make verdict` pass.
+
+**What it gives.** `used_memory` a key, less what the server held before, after N sets
+were made by one SADD each (members `m0000000`, `m0000001`, ... of 8 bytes, or those
+eight times, 64 bytes; integers `0`, `7`, `14`, ..., or multiples of 36,028,797,018,963,
+8 bytes each); main is a92597d, whose sets are main 8b0993e's:
+
+| sets, members a set | Redis 7.0.15 | main | this change |
+|---|---:|---:|---:|
+| 50,000, 1 | 217.6 | 913.5 | 233.5 |
+| 50,000, 10 | 809.6 | 6,025.6 | 345.5 |
+| 5,000, 100 | 6,475.9 | 44,173.3 | 1,325.0 |
+| 5,000, 128 | 7,307.9 | 54,957.4 | 2,349.1 |
+| 20,000, 10 of 64 bytes | 1,450.8 | 4,743.5 | 1,271.5 |
+| 2,000, 128 of 64 bytes (five pieces) | 15,505.2 | 43,229.9 | 9,213.5 |
+| 50,000 intsets, 10 (2 bytes each) | 105.6 | 537.5 | 249.5 |
+| 2,000 intsets, 512 (2 bytes each) | 1,361.2 | 16,733.4 | 1,372.9 |
+| 2,000 intsets, 512 of 8 bytes | 5,201.2 | 32,746.3 | 4,461.2 |
+
+The string takes the power of two above its length: 100 members of 8 bytes are 900 bytes
+in a buffer of 1,024, 128 of them 1,152 in one of 2,048, 10 integers of 2 bytes 20 in one
+of 32, and 512 of them 1,024 in one of 1,024. The rest of a key (its name, its entry in
+the trie, the value's nodes) is about 218 bytes among 50,000 keys, more among 2,000, which
+share fewer of the trie's nodes.
+
+**What it costs.** Instructions and last-level data read misses per request (callgrind, a
+last level of 2 MiB, 20 clients at a pipeline depth of 16, keys at random; 20,000
+requests counted after 20,000 more, 2,000 after 2,000 on the sets of 128 members) on
+100,000 sets of 10 members of 8 bytes, and on 100 sets of 128 members of 15 bytes (one
+string of 2,048 bytes) and of 64 bytes (five pieces); main is a92597d. The sets of
+strings were counted before the last change (the view of an intset past one buffer,
+above), which leaves their code as it was: the sets of 10 count within 3% of these after
+it.
+
+| request | 10 of 8 bytes: main | this | 128 of 15: main | this | 128 of 64: main | this |
+|---|---:|---:|---:|---:|---:|---:|
+| SISMEMBER, a member in the middle | 6,968 (14.3) | 7,733 (7.7) | 7,479 | 15,365 | 7,628 | 16,168 |
+| SISMEMBER, the last | 6,935 (14.4) | 8,090 (8.2) | 7,488 | 26,030 | 7,686 | 24,587 |
+| SISMEMBER, none | 6,718 (8.7) | 8,079 (8.4) | 7,285 | 14,345 | 7,229 | 14,742 |
+| SMEMBERS | 39,270 (110.4) | 17,464 (8.6) | 352,204 (661.2) | 154,878 (6.6) | 290,859 (589.9) | 176,866 (180.2) |
+| SINTER of two | 49,652 (185.5) | 34,894 (17.6) | 455,838 (960.8) | 1,399,659 (15.0) | 416,133 (881.4) | 1,443,866 (207.9) |
+| SSCAN from 0 | 110,927 (111.5) | 26,364 (8.9) | 92,507 | 81,328 | 60,537 | 108,119 (2.6) |
+| SRANDMEMBER of -5 | 534,735 (108.0) | 29,438 (8.9) | 634,821 (295.4) | 34,456 (0.0) | 390,243 (17.8) | 36,493 (0.7) |
+| SADD of a member there | 8,266 (15.5) | 8,470 (8.9) | 8,894 | 16,258 | 9,443 | 17,451 |
+| SADD of a new member | 10,190 (9.9) | 10,760 (8.6) | | | | |
+
+(Misses in parentheses where either side has more than one a request.) On sets of 10, a
+find runs 10% to 20% more instructions than the trie's, and about half its misses when
+the member is there; the reads of the whole set (SMEMBERS, SINTER, SSCAN, SRANDMEMBER)
+run 30% to 95% fewer instructions with a tenth of the misses or less. On intsets
+(100,000 of 10 small integers, 2,000 of 511, and 2,000 of 511 of 8 bytes; the SADDs of new
+members and the SREMs of them one client's, 2,000 counted after 2,000 more; main's first):
+
+| request | 10: main | this | 511: main | this | 511 of 8 bytes: main | this |
+|---|---:|---:|---:|---:|---:|---:|
+| SISMEMBER, a member | 7,320 | 7,887 | 7,431 (1.4) | 9,346 (2.7) | 8,298 (2.3) | 15,595 (27.3) |
+| SISMEMBER, none | 7,186 | 7,960 | 8,371 (3.6) | 9,246 (3.0) | 8,524 (17.5) | 14,472 (27.7) |
+| SMEMBERS | 14,609 | 16,551 | 467,531 (325.9) | 581,451 (78.7) | 543,307 (1,184.0) | 1,521,564 (688.8) |
+| SRANDMEMBER | 21,037 | 21,175 | 21,818 (11.1) | 21,785 (1.8) | 21,912 (14.5) | 24,910 (2.1) |
+| SADD of a member there | 8,961 | 8,702 | 8,872 | 10,292 (2.5) | 10,198 (2.1) | 16,490 (28.9) |
+| SADD of a new member | 12,732 | 16,581 | 15,702 (12.1) | 19,012 (33.3) | 112,756 (186.4) | 243,751 (31.0) |
+| SREM | 13,563 | 13,986 | 19,515 (17.3) | 17,218 (36.5) | 18,444 (23.0) | 19,155 (22.9) |
+
+An intset's write makes its string anew, up to 4,096 bytes, where the tree's wrote a path:
+SADD of a new member to 511 small integers runs 21% more instructions and misses more. On
+511 integers of 8 bytes, a read takes the view's copy of the first buffer (27 misses a
+request, its lines), and each member is written as text through 16-bit limbs (`is.dec`):
+SISMEMBER runs 1.9 times main's instructions, SMEMBERS 2.8 times, and SADD of a new
+member, which here often makes the set a hashtable (most of the new integers pass 2^63),
+2.2 times. Before the view they ran 2.6, 3.5 and 2.8 times.
+
+**Where it loses.** A find walks the members, so its cost grows with the set, where the
+trie's did not: on 128 members, SISMEMBER runs twice main's instructions, three times
+and more for the last member, and SINTER of two sets of 64 bytes 3.5 times, a find in one
+for each member of the other. Members of one length whose last bytes are alike, as here,
+are each sliced out and compared whole; members that differ in length or in their last
+byte are passed by two reads. The pieces read each byte where they lie, and the misses
+stay low: a set's members are a few lines where the trie's were a path of nodes each.
+In time a find of the middle member of 128 still serves more requests than main's, and of
+the last fewer; SINTER serves more than main's, and far fewer than Redis 7.0.15's, whose
+hashtable finds a member at once (PERFORMANCE 77). Redis 7.2's listpack walks its entries
+the same way, with fewer instructions a step (`lpFind`). The limits are Redis 7.2's, which
+Redis 8 keeps; lower ones would make the worst find shorter and the memory less of a gain.
+
+**SADD of many members.** Each member walks the members before it and makes the string
+anew, so an SADD of k new members runs about k² steps where the trie's ran k paths.
+Instructions an SADD of members to a key not there (callgrind, 2,000 counted after 2,000
+more):
+
+| members | main | this change |
+|---|---:|---:|
+| 10 of 8 bytes | 25,272 | 38,909 |
+| 100 of 8 bytes | 213,318 | 940,198 |
+| 128 of 8 bytes | 247,838 | 1,409,013 |
+| 128 of 64 bytes | 346,207 | 1,541,027 |
+
+Redis 7.2's listpack walks its entries for each member too, but appends in place. The C
+runtime fills a buffer from its end and keeps room below its bytes, so a new member could
+go before the first, in that room, without a copy; it would need the set owned from the
+keyspace down to `ms.push`, and SADD's proofs of sizes with it. Issue #119 says so.
+
+**Hashes do not move**, though the helpers they share (`pk.hit.of`, `pk.byte`, section
+3zzzn's Packed strings) have new callers (section 7): HGET of 10 pairs ran 7,830
+instructions on main and 7,814 here, HSET 14,777 and 14,736.
+
+**`make perfcheck`**: GET 3,481, SET 4,242 and INCR 4,587 instructions a request (the
+baseline's 3,452, 4,214 and 4,552), within its bounds.
+
+**Throughput** is in PERFORMANCE.md, section 77.
+
+**Tests.** `tests/set_test.py` makes sets of strings on both sides of the limits (1 to
+130 members, of 1 to 65 bytes, made at once and a member at a time), reads them every
+way, takes their members out down to none, moves members between sets of each kind,
+combines them, pops and picks from them and restores each server's payload on the other:
+22,854 commands, each answered as Redis answers it. Its intsets compare their DUMP byte
+for byte. `tests/dump_test.py` has 8,585 checks. Five intsets have their payloads
+compared byte for byte (shrunk from 64 bits, grown from 16 bits to 32 and to 64, 512 of
+64 bits, 512 emptied but one), and small sets on both sides of the limits are restored
+on both servers.
 
 ## 3zzzt. The start reads its RDB file in windows
 

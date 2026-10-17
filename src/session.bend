@@ -2094,9 +2094,13 @@ def obj.hash.enc(+h: KV.Hash, +cfg: List<&2, C.CItem>) -> String:
 
 def obj.mems.enc(+m: KV.Mems, +cfg: List<&2, C.CItem>) -> String:
   match m:
-    case KV.MInts{+n, xs}:
+    case KV.MInts{+n, b}:
       Bool.pick(String, Nat.is_le(n, cfg.nat(cfg, "set-max-intset-entries")), "intset", "hashtable")
     case KV.MBig{n, t}:
+      "hashtable"
+    case KV.MSmall{n, b}:
+      "hashtable"
+    case KV.MLong{n, ps}:
       "hashtable"
 
 # a sorted set is a listpack while it is small (KV.Zset: as Redis turns

@@ -346,10 +346,15 @@ BendKV starts as `redis-server` starts, with the same command line and configura
 file, so the next step is the suite's own mode with BendKV in place of
 `src/redis-server`. Until then BendKV's own tests cover part of that ground: the start
 (`tests/start_test.py`, against `redis-server`), restarts from the append-only file
-(`tests/aof_test.py`, and after kills under load: `tests/crash_test.py`), the RDB
-file (`tests/rdb_test.py`: files of Redis's and of BendKV's, each loaded by both, SAVE and
-the saves of SHUTDOWN and FLUSHALL; `tests/bgsave_test.py`: BGSAVE, the save points,
-MISCONF and the count of changes), and the append-only file's
+(`tests/aof_test.py`, and after kills under load: `tests/crash_test.py`), starts from
+files that straddle the windows the start reads them in, cut short or with a transaction
+left open, against `redis-server` (`tests/aof_window_test.py`; where BendKV differs: a
+file that ends inside a transaction, then in an entry cut short, BendKV cuts back to
+before the MULTI and Redis after the transaction's last whole entry, which its next
+start reverts, the databases the same), the RDB file (`tests/rdb_test.py`: files of
+Redis's and of BendKV's, each loaded by both, SAVE and the saves of SHUTDOWN and
+FLUSHALL; `tests/bgsave_test.py`: BGSAVE, the save points, MISCONF and the count of
+changes), and the append-only file's
 rewrite (`tests/rewrite_test.py`: BGREWRITEAOF's replies
 and INFO's fields against Redis's, the rewritten file against Redis's base, writes during a
 rewrite, BendKV and Redis started from the new file; Redis's unit/aofrw is tagged
