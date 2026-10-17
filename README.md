@@ -43,9 +43,10 @@ AddressSanitizer check the heap).
 
 ## What is proved
 
-The laws are stated by hand in [`proof/LAWS.bend`](proof/LAWS.bend) and proved in
-[`proof/PROOF.bend`](proof/PROOF.bend). A database is a record: the trie, whose
-entries hold each key's value (a string, or a collection) and the time it expires at; how many keys it holds (which
+The laws are stated in [`proof/LAWS.bend`](proof/LAWS.bend), where a human approves
+every change, and proved in [`proof/PROOF.bend`](proof/PROOF.bend). A database is a
+record: the trie, whose entries hold each key's value (a string, or a collection) and
+the time it expires at; how many keys it holds (which
 DBSIZE answers) and how many of them have a time; and the time its batch runs at. The
 server holds several (16, as Redis), with the one a connection selected in focus while
 its batch runs. A key whose time has passed is there for no command. The laws about what keys read and what

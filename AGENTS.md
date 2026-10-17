@@ -20,7 +20,7 @@ Claude Code reads this file only while the repository has no `CLAUDE.md`,
         float.bend, hll.bend, geo.bend, lolwut.bend, rdb.bend    tested only
     src/server.bend    the shell: actor, connections, AOF I/O, waits,
                        transactions, pub/sub, eviction, rewrite     tested only
-    proof/LAWS.bend    the laws: stated by people
+    proof/LAWS.bend    the laws: a human approves every change
     proof/SPEC.bend    the commands on the bare trie (the bridge's other side)
     proof/PROOF.bend   the proofs: written by machine, checked by Bend and BendTT
     tests/             tests against redis-server, run by tests/run_tests.sh
@@ -58,21 +58,21 @@ Every pull request passes all of these; CI runs the same.
 
 ## Rules
 
-1. **Laws are stated by people.** Do not add, remove or change the statement of a
-   law in `proof/LAWS.bend`, or what `proof/SPEC.bend` means, without a human's
-   approval in the issue or the pull request. When a change needs a new or
-   different law, write the exact statement in the pull request and wait. Proofs
-   in `proof/PROOF.bend` are yours to write.
+1. **A human approves every change to the laws.** Do not add, remove or change the
+   statement of a law in `proof/LAWS.bend`, or what `proof/SPEC.bend` means,
+   without a human's approval in the issue or the pull request. When a change
+   needs a new or different law, write the exact statement in the pull request
+   and wait. Proofs in `proof/PROOF.bend` are yours to write.
 2. **Do not weaken a check to make it pass.** No skipped or loosened tests, no new
    entries in `tools/data/clients.json`, no edit of `tools/perf_baseline.txt`, no
-   higher tolerance, unless the issue asks for it; when one is justified, the
-   commit message says why.
+   higher tolerance, unless the issue asks for it or the owner approves it in the
+   pull request; when one is justified, the commit message says why.
 3. **Generated blocks** (`BEGIN gen_trie` … `END gen_trie`, the tables of parameters
    and commands) come from `tools/gen_*.py`: change the generator and rerun it.
 4. **English everywhere**: code, comments, documents, commits, issues.
 5. **No stub intrinsics in verified files.** `Mem.cell`, `Mem.touch`, `Chan.mark`,
-   `Chan.marked` and `IO.heap` have Bend bodies that are constants; only
-   `src/server.bend` may call them, or the proofs are about the constant.
+   `Chan.marked`, `IO.heap` and `Clock.us` have Bend bodies that are constants;
+   only `src/server.bend` may call them, or the proofs are about the constant.
 6. **Bend's constraints.** Define before use (except `@unsafe`), no mutual
    recursion, structural recursion (fuel otherwise), `match` on parameters only.
    `Bool.pick` evaluates both arms, and a `Nat` past 2^48 − 1 aborts the process:
@@ -100,3 +100,28 @@ Every pull request passes all of these; CI runs the same.
   why, what it cost), `docs/PERFORMANCE.md` when counts or throughput change,
   README and `docs/COMPATIBILITY.md` when behavior changes. Put a number in one
   document and link to it from the others rather than copying it.
+
+## Merging
+
+While BendKV is pre-release, several sessions work on it at once.
+
+- **Who merges.** A pull request merges into `main` once CI is green on its head
+  and nothing in it waits for the owner (below). Its author merges it. For now,
+  at the owner's word, the sessions do not wait for each other's reviews; a
+  session may still ask another for one. All sessions post from the owner's
+  account, so GitHub's own approval is not available.
+- **When the owner decides.** Some pull requests merge only once the owner has
+  approved them. That is a pull request that does any of these:
+  - adds, removes or changes the statement of a law, or changes what
+    `proof/SPEC.bend` means (rule 1);
+  - skips or loosens a test, adds an entry to `tools/data/clients.json`, edits
+    `tools/perf_baseline.txt` or raises a tolerance (rule 2);
+  - adds or changes a patch in `bend-patches/`, which is part of the trusted base;
+  - changes this file, or what CI runs (`.github/workflows/`).
+
+  Such a pull request describes that change in a section of its own: for a law,
+  its old and new statement; for the baseline, the old and new counts. Its author
+  also asks the owner in the session's own conversation. The owner approves in the
+  pull request, or in that conversation; then the author records the approval in
+  the pull request, in the owner's words, before merging. If you are not sure
+  whether a change is one of these, ask the owner.
