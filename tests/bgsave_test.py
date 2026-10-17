@@ -98,6 +98,7 @@ LIB = ("#!lua name=bglib\n"
        "redis.register_function{function_name='rd', callback=function(keys, args) return redis.call('get', 'a') end, "
        "flags={'no-writes'}}")
 SMOVE = "redis.call('del',KEYS[2]) return redis.call('smove',KEYS[1],KEYS[2],ARGV[1])"
+XNEW = "redis.call('del',KEYS[1]) return redis.call('xadd',KEYS[1],unpack(ARGV))"
 CASES = [
     # strings
     ("set", [], ["SET", "a", "1"], 1, None),
@@ -299,6 +300,24 @@ CASES = [
     ("sort store", [["RPUSH", "l", "3", "1", "2"]], ["SORT", "l", "STORE", "d"], 3, None),
     ("sort store empty over a key", [["SET", "d", "x"]], ["SORT", "l", "STORE", "d"], 1, None),
     ("sort", [["RPUSH", "l", "3", "1", "2"]], ["SORT", "l"], 0, None),
+    # streams: XADD one for the entry it adds (none for the entries its
+    # trim deletes), XTRIM and XDEL the entries they delete, XSETID one
+    ("xadd", [], ["XADD", "x", "1-1", "f", "v"], 1, None),
+    ("xadd star", [["XADD", "x", "1-1", "f", "v"]], ["XADD", "x", "*", "f", "v"], 1, None),
+    ("xadd nomkstream missing", [], ["XADD", "x", "NOMKSTREAM", "*", "f", "v"], 0, None),
+    ("xadd small id", [["XADD", "x", "5-1", "f", "v"]], ["XADD", "x", "1-1", "f", "v"], 0, None),
+    ("xadd that trims", [["XADD", "x", "1-1", "f", "v"], ["XADD", "x", "1-2", "f", "v"]],
+     ["XADD", "x", "MAXLEN", "1", "1-3", "f", "v"], 1, None),
+    ("xadd over a string", [["SET", "x", "s"]], ["XADD", "x", "1-1", "f", "v"], 0, None),
+    ("xtrim", [["XADD", "x", "1-1", "f", "v"], ["XADD", "x", "1-2", "f", "v"], ["XADD", "x", "1-3", "f", "v"]],
+     ["XTRIM", "x", "MAXLEN", "1"], 2, None),
+    ("xtrim nothing", [["XADD", "x", "1-1", "f", "v"]], ["XTRIM", "x", "MAXLEN", "5"], 0, None),
+    ("xdel", [["XADD", "x", "1-1", "f", "v"], ["XADD", "x", "1-2", "f", "v"]], ["XDEL", "x", "1-1", "1-2", "9-9"], 2, None),
+    ("xdel nothing", [["XADD", "x", "1-1", "f", "v"]], ["XDEL", "x", "9-9"], 0, None),
+    ("xsetid", [["XADD", "x", "1-1", "f", "v"]], ["XSETID", "x", "5-0"], 1, None),
+    ("xsetid small", [["XADD", "x", "5-1", "f", "v"]], ["XSETID", "x", "1-0"], 0, None),
+    ("xsetid missing", [], ["XSETID", "x", "1-0"], 0, None),
+    ("xlen", [["XADD", "x", "1-1", "f", "v"]], ["XLEN", "x"], 0, None),
     # BendKV's own scripts (the append-only file's: a new collection
     # where a key whose time had passed lay, a move to one), which Redis
     # runs as Lua: the DEL, then the command's changes
@@ -312,6 +331,8 @@ CASES = [
     ("eval lmove to itself", [["RPUSH", "l", "a", "b"]], ["EVAL", LMOVE, "2", "l", "l", "LEFT", "RIGHT"], 1, None),
     ("eval smove", [["SADD", "s", "a", "b"], ["SET", "t", "x"]], ["EVAL", SMOVE, "2", "s", "t", "a"], 3, None),
     ("eval smove missing", [["SADD", "s", "a", "b"]], ["EVAL", SMOVE, "2", "s", "t", "z"], 0, None),
+    ("eval new stream", [["SET", "x", "old"]], ["EVAL", XNEW, "1", "x", "1-1", "f", "v"], 2, None),
+    ("eval new stream missing", [], ["EVAL", XNEW, "1", "x", "MAXLEN", "0", "1-1", "f", "v"], 1, None),
     # others
     ("function flush", [], ["FUNCTION", "FLUSH"], 1, None),
     ("publish", [], ["PUBLISH", "c", "m"], 0, None),

@@ -353,6 +353,21 @@ type XRead is Data:
   XRInfo{i: XInf}
   XRPend{q: XPq}
 
+# A write of a stream (UStream, below), each with its arguments as they
+# came (the words after the key), which the file logs: XADD's (options,
+# ID, fields and values), XTRIM's (options), XDEL's IDs, XSETID's (ID
+# and options), and XWNew: XADD on a key not there, made where the key
+# was whatever it held (the script the file logs for a new stream where
+# a key whose time had passed lay, as for a new hash). The parser reads
+# them as Redis reads them before it looks the key up (their errors
+# first); the write reads them again (Stream writes, below).
+type XWrite is Data:
+  XWAdd{ws: List<&2, String>}
+  XWTrim{ws: List<&2, String>}
+  XWDel{ids: List<&2, String>}
+  XWSetId{ws: List<&2, String>}
+  XWNew{ws: List<&2, String>}
+
 # A read of one key whose reply depends on what the key holds at now
 # alone (its value and the time it expires at, when it is there): its
 # type (TYPE), its length (STRLEN), its time to live in s or ms (TTL,
@@ -433,7 +448,7 @@ type ExpIf is Data:
 # RESTORE (URestore: its payload, its time as it read it, REPLACE, and
 # IDLETIME or FREQ, which the server sets in the key's access cell; the
 # time's errors come once the key is looked up, as Redis checks the key
-# first). The laws
+# first), and a write of a stream (UStream). The laws
 # see them as one command, Upd, so one more needs no more proof. UGet holds an update, so the compiler makes an update a
 # node of its own: a command travels in registers as wide as its widest
 # form, and an update's options are many.
@@ -465,6 +480,7 @@ type UpdOp is Data:
   UZset{op: ZWrite}
   UHll{op: HllOp}
   URestore{p: String, t: TmR, rep: Bool, ac: Nat}
+  UStream{op: XWrite}
 
 # A command of Pub/Sub: SUBSCRIBE, PSUBSCRIBE and SSUBSCRIBE of their
 # channels, patterns or shard channels (kind 0, 1, 2: PSub), UNSUBSCRIBE
@@ -4626,28 +4642,6 @@ def eval.op(mode: Nat, +s: String, +nk: String, rest: List<&2, String>) -> Cmd:
     case _:
       eval.count(mode, s, ll.read(nk), rest)
 
-# which script: 1 a new hash's, list's or set's, 2 a list's move, 3 a
-# set's move, 4 a new sorted set's, 0 another, the engine's
-def parse_eval.which(w: Nat, s: String, +nk: String, rest: List<&2, String>) -> Cmd:
-  match w:
-    case 1n:
-      parse_eval.one(String.eq(nk, "1"), rest)
-    case 2n:
-      parse_eval.move(String.eq(nk, "2"), rest)
-    case 3n:
-      parse_eval.smove(String.eq(nk, "2"), rest)
-    case 4n:
-      parse_eval.znew(String.eq(nk, "1"), rest)
-    case _:
-      eval.op(0n, s, nk, rest)
-
-def parse_eval(args: List<&2, String>) -> Cmd:
-  match args:
-    case Con{+s, Con{+nk, rest}}:
-      parse_eval.which(Bool.pick(Nat, String.eq(s, hnew.script()), 1n, Bool.pick(Nat, String.eq(s, lmove.script()), 2n, Bool.pick(Nat, String.eq(s, smove.script()), 3n, Bool.pick(Nat, String.eq(s, znew.script()), 4n, 0n)))), s, nk, rest)
-    case _:
-      e_arity("eval")
-
 # EVALSHA, EVAL_RO and EVALSHA_RO (modes 1, 2 and 3), the engine's
 def parse_evalx(mode: Nat, +name: String, args: List<&2, String>) -> Cmd:
   match args:
@@ -6847,7 +6841,9 @@ def cmd_id.l4(+n: String, c: Nat) -> Nat:
     case 23n:  # W
       Bool.pick(Nat, String.eq(n, "WAIT"), 186n, 0n)
     case 24n:  # X
-      Bool.pick(Nat, String.eq(n, "XLEN"), 211n, 0n)
+      Bool.pick(Nat, String.eq(n, "XLEN"), 211n,
+      Bool.pick(Nat, String.eq(n, "XADD"), 217n,
+      Bool.pick(Nat, String.eq(n, "XDEL"), 219n, 0n)))
     case 26n:  # Z
       Bool.pick(Nat, String.eq(n, "ZADD"), 121n,
       Bool.pick(Nat, String.eq(n, "ZREM"), 123n, 0n))
@@ -6896,7 +6892,8 @@ def cmd_id.l5(+n: String, c: Nat) -> Nat:
       Bool.pick(Nat, String.eq(n, "WATCH"), 164n, 0n)
     case 24n:  # X
       Bool.pick(Nat, String.eq(n, "XREAD"), 214n,
-      Bool.pick(Nat, String.eq(n, "XINFO"), 215n, 0n))
+      Bool.pick(Nat, String.eq(n, "XINFO"), 215n,
+      Bool.pick(Nat, String.eq(n, "XTRIM"), 218n, 0n)))
     case 26n:  # Z
       Bool.pick(Nat, String.eq(n, "ZCARD"), 124n,
       Bool.pick(Nat, String.eq(n, "ZRANK"), 127n,
@@ -6963,7 +6960,8 @@ def cmd_id.l6(+n: String, c: Nat) -> Nat:
     case 21n:  # U
       Bool.pick(Nat, String.eq(n, "UNLINK"), 8n, 0n)
     case 24n:  # X
-      Bool.pick(Nat, String.eq(n, "XRANGE"), 212n, 0n)
+      Bool.pick(Nat, String.eq(n, "XRANGE"), 212n,
+      Bool.pick(Nat, String.eq(n, "XSETID"), 220n, 0n))
     case 26n:  # Z
       Bool.pick(Nat, String.eq(n, "ZSCORE"), 125n,
       Bool.pick(Nat, String.eq(n, "ZCOUNT"), 129n,
@@ -7586,6 +7584,509 @@ def xpending.of(+n: Nat, +k: String, +g: String, +xs: List<&2, String>) -> Cmd:
 
 def xpending.parse(+k: String, +g: String, +xs: List<&2, String>) -> Cmd:
   xpending.of(List.length(&2, String, xs), k, g, xs)
+
+# XADD key [NOMKSTREAM] [MAXLEN|MINID [=|~] threshold [LIMIT count]]
+# *|id field value [field value ...] and XTRIM key MAXLEN|MINID [=|~]
+# threshold [LIMIT count], read as streamParseAddOrTrimArgsOrReply reads
+# them: a word at a time from the one after the key, the last of a kind
+# holding; XADD's "*" its ID at once; MAXLEN or MINID and its threshold
+# when a word follows it, with ~ or = before the threshold when two do
+# (a count, a long long not below 0; an ID, read strictly), MAXLEN or
+# MINID a second time a syntax error; LIMIT and its count when a word
+# follows it (a long long not below 0); XADD's NOMKSTREAM; any other word
+# XADD's ID (read strictly, or <ms>-*), XTRIM's syntax error. Then a
+# LIMIT but 0 without a strategy, XTRIM without one, and LIMIT without ~
+# are each a syntax error; ~ without LIMIT takes 10000, 100 times
+# Redis's default node of 100 entries. XADD's fields and values follow
+# its ID, two words at least and an even number of them, and its ID is
+# not 0-0.
+
+def e_xmaxlen() -> Reply:
+  RError{"ERR The MAXLEN argument must be >= 0."}
+
+def e_xlimit() -> Reply:
+  RError{"ERR The LIMIT argument must be >= 0."}
+
+def e_xboth() -> Reply:
+  RError{"ERR syntax error, MAXLEN and MINID options at the same time are not compatible"}
+
+def e_xnostrat() -> Reply:
+  RError{"ERR syntax error, LIMIT cannot be used without specifying a trimming strategy"}
+
+def e_xtrimstrat() -> Reply:
+  RError{"ERR syntax error, XTRIM must be called with a trimming strategy"}
+
+def e_xnotilde() -> Reply:
+  RError{"ERR syntax error, LIMIT cannot be used without the special ~ option"}
+
+def e_xzero() -> Reply:
+  RError{"ERR The ID specified in XADD must be greater than 0-0"}
+
+def e_xadd_arity() -> Reply:
+  RError{"ERR wrong number of arguments for 'xadd' command"}
+
+# a trim as XADD and XTRIM read it: none, or its strategy, its
+# threshold's word as it came, whether by whole nodes (~), and its limit
+# (0 for none)
+type XTo is Data:
+  XTNo{}
+  XTo{s: X.XTs, v: String, ap: Bool, lim: Nat}
+
+def xto.is(+t: XTo) -> Bool:
+  match t:
+    case XTNo{}:
+      False{}
+    case XTo{s, v, ap, lim}:
+      True{}
+
+def xto.ap(+t: XTo) -> Bool:
+  match t:
+    case XTNo{}:
+      False{}
+    case XTo{s, v, +ap, lim}:
+      ap
+
+# the options read so far: the trim (its limit not set yet), LIMIT's
+# count and whether it came, NOMKSTREAM
+type XOp is Data:
+  XOp{tr: XTo, lim: Nat, limg: Bool, nomk: Bool}
+
+def xop.none() -> XOp:
+  XOp{XTNo{}, 0n, False{}, False{}}
+
+def xop.has(+st: XOp) -> Bool:
+  match st:
+    case XOp{+tr, lim, limg, nomk}:
+      xto.is(tr)
+
+def xop.trim(st: XOp, +s: X.XTs, +v: String, +ap: Bool) -> XOp:
+  match st:
+    case XOp{tr, lim, limg, nomk}:
+      XOp{XTo{s, v, ap, 0n}, lim, limg, nomk}
+
+def xop.limit(st: XOp, +n: Nat) -> XOp:
+  match st:
+    case XOp{tr, lim, limg, nomk}:
+      XOp{tr, n, True{}, nomk}
+
+def xop.nomk(st: XOp) -> XOp:
+  match st:
+    case XOp{tr, lim, limg, nomk}:
+      XOp{tr, lim, limg, True{}}
+
+# XADD's ID: "*", <ms>-* (its ms), or an ID
+type XAId is Data:
+  XAAuto{}
+  XASeq{ms: KV.XN}
+  XAAt{id: KV.XId}
+
+# a step of the option loop: the options so far and the words left; an
+# error; XADD's ID (its word, the ID, the words after it); or the end of
+# the words
+type XOs is Data:
+  XOsGo{st: XOp, ws: List<&2, String>}
+  XOsBad{r: Reply}
+  XOsId{st: XOp, w: String, id: XAId, fv: List<&2, String>}
+  XOsEnd{st: XOp}
+
+# what the word w is to the loop (more: a word follows it): 0 XADD's
+# "*", 1 MAXLEN, 2 MINID, 3 LIMIT, 4 NOMKSTREAM, 5 XADD's ID, 6 XTRIM's
+# syntax error
+def xo.kind(+xadd: Bool, +w: String, +more: Bool) -> Nat:
+  +star = Bool.and(xadd, Bool.and(U32.is_eq(String.code_at(w, 0n), 42), X.su.cend(w, 1n)))
+  Bool.pick(Nat, star, 0n, Bool.pick(Nat, Bool.and(more, is_word(w, "MAXLEN")), 1n, Bool.pick(Nat, Bool.and(more, is_word(w, "MINID")), 2n, Bool.pick(Nat, Bool.and(more, is_word(w, "LIMIT")), 3n, Bool.pick(Nat, Bool.and(xadd, is_word(w, "NOMKSTREAM")), 4n, Bool.pick(Nat, xadd, 5n, 6n))))))
+
+# a trim's operator: ~ (1), = (2), or none (0), each a C string of it
+def xo.opw(+w: String) -> Nat:
+  +c = String.code_at(w, 0n)
+  Bool.pick(Nat, X.su.cend(w, 1n), Bool.pick(Nat, U32.is_eq(c, 126), 1n, Bool.pick(Nat, U32.is_eq(c, 61), 2n, 0n)), 0n)
+
+# a count (MAXLEN's, LIMIT's): a long long not below 0 (neg: the error
+# of one below), past any stream's as xc.inf()
+def xo.count(l: LL, neg: Reply) -> XCnt:
+  match l:
+    case LL{+n, +hi, +lo}:
+      Bool.pick(XCnt, n, XCBad{neg}, XCOk{xc.of.big(Nat.is_le(140737n, hi), hi, lo)})
+    case LLBad{}:
+      XCBad{e_int()}
+
+def xo.thr.max(c: XCnt, +v: String, +ap: Bool, more: List<&2, String>, st: XOp) -> XOs:
+  match c:
+    case XCOk{+n}:
+      XOsGo{xop.trim(st, X.XTMax{n}, v, ap), more}
+    case XCBad{r}:
+      XOsBad{r}
+
+def xo.thr.min(m: Maybe<&2, KV.XId>, +v: String, +ap: Bool, more: List<&2, String>, st: XOp) -> XOs:
+  match m:
+    case Some{+id}:
+      XOsGo{xop.trim(st, X.XTMin{id}, v, ap), more}
+    case None{}:
+      XOsBad{e_xid()}
+
+# MAXLEN's (max) or MINID's threshold v (ap: after ~), the words more
+# after it
+def xo.thr(max: Bool, +v: String, +ap: Bool, more: List<&2, String>, st: XOp) -> XOs:
+  match max:
+    case True{}:
+      xo.thr.max(xo.count(ll.read(v), e_xmaxlen()), v, ap, more, st)
+    case False{}:
+      xo.thr.min(X.xid.parse(v, True{}, X.xn.zero()), v, ap, more, st)
+
+def xo.trim.two(c: Nat, +max: Bool, +a: String, +v: String, more: List<&2, String>, st: XOp) -> XOs:
+  match c:
+    case 0n:
+      xo.thr(max, a, False{}, v <> more, st)
+    case 1n:
+      xo.thr(max, v, True{}, more, st)
+    case _:
+      xo.thr(max, v, False{}, more, st)
+
+def xo.trim.at(+max: Bool, rest: List<&2, String>, st: XOp) -> XOs:
+  match rest:
+    case Con{+a, Con{+v, more}}:
+      xo.trim.two(xo.opw(a), max, a, v, more, st)
+    case Con{+v, Nil{}}:
+      xo.thr(max, v, False{}, Nil{}, st)
+    case Nil{}:
+      XOsBad{e_syntax_r()}
+
+def xo.trim(both: Bool, +max: Bool, rest: List<&2, String>, st: XOp) -> XOs:
+  match both:
+    case True{}:
+      XOsBad{e_xboth()}
+    case False{}:
+      xo.trim.at(max, rest, st)
+
+def xo.limit.of(c: XCnt, more: List<&2, String>, st: XOp) -> XOs:
+  match c:
+    case XCOk{+n}:
+      XOsGo{xop.limit(st, n), more}
+    case XCBad{r}:
+      XOsBad{r}
+
+def xo.limit(rest: List<&2, String>, st: XOp) -> XOs:
+  match rest:
+    case Con{+v, more}:
+      xo.limit.of(xo.count(ll.read(v), e_xlimit()), more, st)
+    case Nil{}:
+      XOsBad{e_syntax_r()}
+
+def xo.id(p: X.XIdP, +w: String, rest: List<&2, String>, st: XOp) -> XOs:
+  match p:
+    case X.XIdPSeq{ms}:
+      XOsId{st, w, XASeq{ms}, rest}
+    case X.XIdPAt{id}:
+      XOsId{st, w, XAAt{id}, rest}
+    case X.XIdPBad{}:
+      XOsBad{e_xid()}
+
+def xo.word(+c: Nat, +w: String, rest: List<&2, String>, +st: XOp) -> XOs:
+  match c:
+    case 0n:
+      XOsId{st, w, XAAuto{}, rest}
+    case 1n:
+      xo.trim(xop.has(st), True{}, rest, st)
+    case 2n:
+      xo.trim(xop.has(st), False{}, rest, st)
+    case 3n:
+      xo.limit(rest, st)
+    case 4n:
+      XOsGo{xop.nomk(st), rest}
+    case 5n:
+      xo.id(X.xid.parse.add(w), w, rest, st)
+    case _:
+      XOsBad{e_syntax_r()}
+
+def xo.step(+xadd: Bool, ws: List<&2, String>, +st: XOp) -> XOs:
+  match ws:
+    case Nil{}:
+      XOsEnd{st}
+    case Con{+w, +rest}:
+      xo.word(xo.kind(xadd, w, Bool.not(List.is_empty(&2, String, rest))), w, rest, st)
+
+# the loop, k more steps at most
+def xo.loop(k: Nat, +xadd: Bool, s: XOs) -> XOs:
+  match k s:
+    case 1n+j XOsGo{+st, ws}:
+      xo.loop(j, xadd, xo.step(xadd, ws, st))
+    case _ other:
+      other
+
+def xo.run(+xadd: Bool, +ws: List<&2, String>) -> XOs:
+  xo.loop(Nat.add(List.length(&2, String, ws), 1n), xadd, XOsGo{xop.none(), ws})
+
+# the checks after the options (xadd: XADD's), and the trim with its
+# limit, and NOMKSTREAM
+type XTq is Data:
+  XTqOk{tr: XTo, nomk: Bool}
+  XTqBad{r: Reply}
+
+def xo.post.tr(tr: XTo, +lim: Nat, +limg: Bool) -> XTo:
+  match tr:
+    case XTo{+s, +v, +ap, l}:
+      XTo{s, v, ap, Bool.pick(Nat, ap, Bool.pick(Nat, limg, lim, 10000n), 0n)}
+    case XTNo{}:
+      XTNo{}
+
+def xo.post(st: XOp, +xadd: Bool) -> XTq:
+  match st:
+    case XOp{+tr, +lim, +limg, +nomk}:
+      +has = xto.is(tr)
+      Bool.pick(XTq, Bool.and(Nat.is_lt(0n, lim), Bool.not(has)), XTqBad{e_xnostrat()}, Bool.pick(XTq, Bool.and(Bool.not(xadd), Bool.not(has)), XTqBad{e_xtrimstrat()}, Bool.pick(XTq, Bool.and(limg, Bool.not(xto.ap(tr))), XTqBad{e_xnotilde()}, XTqOk{xo.post.tr(tr, lim, limg), nomk})))
+
+# XADD's arguments read: NOMKSTREAM, the trim, the ID and its word, the
+# fields and values and how many pairs; or the error
+type XA is Data:
+  XA{nomk: Bool, tr: XTo, id: XAId, w: String, fv: List<&2, String>, nf: Nat}
+  XABad{r: Reply}
+
+def xaid.zero(+id: XAId) -> Bool:
+  match id:
+    case XAAt{+x}:
+      X.xid.is_zero(x)
+    case _:
+      False{}
+
+def xadd.zero(z: Bool, tr: XTo, +nomk: Bool, +id: XAId, +w: String, fv: List<&2, String>, +n: Nat) -> XA:
+  match z:
+    case True{}:
+      XABad{e_xzero()}
+    case False{}:
+      XA{nomk, tr, id, w, fv, Nat.div(n, 2n)}
+
+def xadd.fv.of(bad: Bool, tr: XTo, +nomk: Bool, +id: XAId, +w: String, fv: List<&2, String>, +n: Nat) -> XA:
+  match bad:
+    case True{}:
+      XABad{e_xadd_arity()}
+    case False{}:
+      xadd.zero(xaid.zero(id), tr, nomk, id, w, fv, n)
+
+def xadd.fv(q: XTq, +w: String, +id: XAId, +fv: List<&2, String>) -> XA:
+  match q:
+    case XTqBad{r}:
+      XABad{r}
+    case XTqOk{tr, +nomk}:
+      +n = List.length(&2, String, fv)
+      xadd.fv.of(Bool.or(Nat.is_lt(n, 2n), Nat.is_eq(Nat.mod(n, 2n), 1n)), tr, nomk, id, w, fv, n)
+
+def xadd.end(q: XTq) -> XA:
+  match q:
+    case XTqBad{r}:
+      XABad{r}
+    case XTqOk{tr, nomk}:
+      XABad{e_xadd_arity()}
+
+def xadd.of(s: XOs) -> XA:
+  match s:
+    case XOsBad{r}:
+      XABad{r}
+    case XOsId{st, +w, +id, +fv}:
+      xadd.fv(xo.post(st, True{}), w, id, fv)
+    case XOsEnd{st}:
+      xadd.end(xo.post(st, True{}))
+    case XOsGo{st, ws}:
+      xadd.end(xo.post(st, True{}))
+
+# XADD's arguments after its key, as they read
+def xadd.read(+ws: List<&2, String>) -> XA:
+  xadd.of(xo.run(True{}, ws))
+
+# XTRIM's arguments read: the trim; or the error
+type XT is Data:
+  XT{tr: XTo}
+  XTBad{r: Reply}
+
+def xtrim.q(q: XTq) -> XT:
+  match q:
+    case XTqOk{tr, nomk}:
+      XT{tr}
+    case XTqBad{r}:
+      XTBad{r}
+
+def xtrim.of(s: XOs) -> XT:
+  match s:
+    case XOsBad{r}:
+      XTBad{r}
+    case XOsEnd{st}:
+      xtrim.q(xo.post(st, False{}))
+    case _:
+      XTBad{e_syntax_r()}
+
+def xtrim.read(+ws: List<&2, String>) -> XT:
+  xtrim.of(xo.run(False{}, ws))
+
+# XSETID key last-id [ENTRIESADDED entries-added] [MAXDELETEDID
+# max-deleted-id], read as xsetidCommand reads it before the key: the ID
+# (read strictly), then its options in any order, each with a word after
+# it (a long long not below 0; an ID read strictly, not past the first),
+# any other word a syntax error
+type XS is Data:
+  XS{id: KV.XId, added: Maybe<&2, KV.XN>, maxdel: KV.XId}
+  XSBad{r: Reply}
+
+type XSs is Data:
+  XSsGo{s: XS, ws: List<&2, String>}
+  XSsEnd{s: XS}
+
+# an option's word (more: a word follows it): 1 ENTRIESADDED, 2
+# MAXDELETEDID, 0 another
+def xsetid.opt(+w: String, +more: Bool) -> Nat:
+  Bool.pick(Nat, Bool.and(more, is_word(w, "ENTRIESADDED")), 1n, Bool.pick(Nat, Bool.and(more, is_word(w, "MAXDELETEDID")), 2n, 0n))
+
+def xsetid.added(l: LL, +v: String, s: XS, more: List<&2, String>) -> XSs:
+  match l s:
+    case LL{+neg, hi, lo} XS{+id, a, +md}:
+      Bool.pick(XSs, neg, XSsEnd{XSBad{RError{"ERR entries_added must be positive"}}}, XSsGo{XS{id, Some{KV.xn.of_int(v)}, md}, more})
+    case LLBad{} x:
+      XSsEnd{XSBad{e_int()}}
+    case _ bad:
+      XSsEnd{bad}
+
+def xsetid.maxdel(m: Maybe<&2, KV.XId>, s: XS, more: List<&2, String>) -> XSs:
+  match m s:
+    case Some{+md} XS{+id, +a, old}:
+      Bool.pick(XSs, Cmp.is_lt(KV.xid.cmp(id, md)), XSsEnd{XSBad{RError{"ERR The ID specified in XSETID is smaller than the provided max_deleted_entry_id"}}}, XSsGo{XS{id, a, md}, more})
+    case None{} x:
+      XSsEnd{XSBad{e_xid()}}
+    case _ bad:
+      XSsEnd{bad}
+
+def xsetid.word(c: Nat, rest: List<&2, String>, s: XS) -> XSs:
+  match c rest:
+    case 1n Con{+v, more}:
+      xsetid.added(ll.read(v), v, s, more)
+    case 2n Con{+v, more}:
+      xsetid.maxdel(X.xid.parse(v, True{}, X.xn.zero()), s, more)
+    case _ _:
+      XSsEnd{XSBad{e_syntax_r()}}
+
+def xsetid.step(ws: List<&2, String>, s: XS) -> XSs:
+  match ws:
+    case Nil{}:
+      XSsEnd{s}
+    case Con{+w, +rest}:
+      xsetid.word(xsetid.opt(w, Bool.not(List.is_empty(&2, String, rest))), rest, s)
+
+def xsetid.loop(k: Nat, s: XSs) -> XS:
+  match k s:
+    case 1n+j XSsGo{x, ws}:
+      xsetid.loop(j, xsetid.step(ws, x))
+    case _ XSsEnd{x}:
+      x
+    case _ XSsGo{x, ws}:
+      x
+
+def xsetid.id(m: Maybe<&2, KV.XId>, +rest: List<&2, String>) -> XS:
+  match m:
+    case Some{id}:
+      xsetid.loop(Nat.add(List.length(&2, String, rest), 1n), XSsGo{XS{id, None{}, X.xid.zero()}, rest})
+    case None{}:
+      XSBad{e_xid()}
+
+# XSETID's arguments after its key, as they read
+def xsetid.read(ws: List<&2, String>) -> XS:
+  match ws:
+    case Con{+i, rest}:
+      xsetid.id(X.xid.parse(i, True{}, X.xn.zero()), rest)
+    case Nil{}:
+      XSBad{RError{"ERR wrong number of arguments for 'xsetid' command"}}
+
+# the errors of the words of each, none when they read: the parser's
+# checks, which the writes run again (and PROOF.bend's log_args reads
+# the effects back with)
+def xadd.err.of(a: XA) -> Maybe<&2, Reply>:
+  match a:
+    case XA{nomk, tr, id, w, fv, nf}:
+      None{}
+    case XABad{r}:
+      Some{r}
+
+def xadd.err(+ws: List<&2, String>) -> Maybe<&2, Reply>:
+  xadd.err.of(xadd.read(ws))
+
+def xtrim.err.of(t: XT) -> Maybe<&2, Reply>:
+  match t:
+    case XT{tr}:
+      None{}
+    case XTBad{r}:
+      Some{r}
+
+def xtrim.err(+ws: List<&2, String>) -> Maybe<&2, Reply>:
+  xtrim.err.of(xtrim.read(ws))
+
+def xsetid.err.of(s: XS) -> Maybe<&2, Reply>:
+  match s:
+    case XS{id, a, md}:
+      None{}
+    case XSBad{r}:
+      Some{r}
+
+def xsetid.err(+ws: List<&2, String>) -> Maybe<&2, Reply>:
+  xsetid.err.of(xsetid.read(ws))
+
+# a write of a stream, or its error
+def xwr.cmd(m: Maybe<&2, Reply>, +k: String, op: XWrite) -> Cmd:
+  match m:
+    case None{}:
+      Upd{k, UStream{op}}
+    case Some{r}:
+      Bad{r}
+
+def xadd.parse(+k: String, +ws: List<&2, String>) -> Cmd:
+  xwr.cmd(xadd.err(ws), k, XWAdd{ws})
+
+def xtrim.parse(+k: String, +ws: List<&2, String>) -> Cmd:
+  xwr.cmd(xtrim.err(ws), k, XWTrim{ws})
+
+def xsetid.parse(+k: String, +ws: List<&2, String>) -> Cmd:
+  xwr.cmd(xsetid.err(ws), k, XWSetId{ws})
+
+# The script of a new stream: its key deleted, then XADD of its
+# arguments, as the file logs an XADD where a key whose time had passed
+# lay (as for a new hash: one entry). BendKV reads it as XWNew when its
+# arguments read as XADD's.
+def xnew.script() -> String:
+  "redis.call('del',KEYS[1]) return redis.call('xadd',KEYS[1],unpack(ARGV))"
+
+def parse_eval.xnew.of(m: Maybe<&2, Reply>, +k: String, ws: List<&2, String>) -> Cmd:
+  match m:
+    case None{}:
+      Upd{k, UStream{XWNew{ws}}}
+    case Some{r}:
+      e_lua()
+
+def parse_eval.xnew(ok: Bool, rest: List<&2, String>) -> Cmd:
+  match ok rest:
+    case True{} Con{+k, +ws}:
+      parse_eval.xnew.of(xadd.err(ws), k, ws)
+    case _ _:
+      e_lua()
+
+# which script: 1 a new hash's, list's or set's, 2 a list's move, 3 a
+# set's move, 4 a new sorted set's, 5 a new stream's, 0 another, the
+# engine's
+def parse_eval.which(w: Nat, s: String, +nk: String, rest: List<&2, String>) -> Cmd:
+  match w:
+    case 1n:
+      parse_eval.one(String.eq(nk, "1"), rest)
+    case 2n:
+      parse_eval.move(String.eq(nk, "2"), rest)
+    case 3n:
+      parse_eval.smove(String.eq(nk, "2"), rest)
+    case 4n:
+      parse_eval.znew(String.eq(nk, "1"), rest)
+    case 5n:
+      parse_eval.xnew(String.eq(nk, "1"), rest)
+    case _:
+      eval.op(0n, s, nk, rest)
+
+def parse_eval(args: List<&2, String>) -> Cmd:
+  match args:
+    case Con{+s, Con{+nk, rest}}:
+      parse_eval.which(Bool.pick(Nat, String.eq(s, hnew.script()), 1n, Bool.pick(Nat, String.eq(s, lmove.script()), 2n, Bool.pick(Nat, String.eq(s, smove.script()), 3n, Bool.pick(Nat, String.eq(s, znew.script()), 4n, Bool.pick(Nat, String.eq(s, xnew.script()), 5n, 0n))))), s, nk, rest)
+    case _:
+      e_arity("eval")
 
 # Dump and restore
 # ----------------
@@ -8484,6 +8985,30 @@ def parse_id(id: Nat, name: String, args: List<&2, String>) -> Cmd:
           xpending.parse(k, g, rest)
         case _:
           e_arity("xpending")
+    case 217n:  # XADD
+      match args:
+        case Con{+k, Con{+a, Con{+b, Con{+c, rest}}}}:
+          xadd.parse(k, Con{a, Con{b, Con{c, rest}}})
+        case _:
+          e_arity("xadd")
+    case 218n:  # XTRIM
+      match args:
+        case Con{+k, Con{+a, Con{+b, rest}}}:
+          xtrim.parse(k, Con{a, Con{b, rest}})
+        case _:
+          e_arity("xtrim")
+    case 219n:  # XDEL
+      match args:
+        case Con{k, Con{i, rest}}:
+          Upd{k, UStream{XWDel{Con{i, rest}}}}
+        case _:
+          e_arity("xdel")
+    case 220n:  # XSETID
+      match args:
+        case Con{+k, Con{+i, rest}}:
+          xsetid.parse(k, Con{i, rest})
+        case _:
+          e_arity("xsetid")
     case 226n:  # BGSAVE
       bgsave.of(args)
     case _:
@@ -9276,8 +9801,16 @@ def stat.top(+id: Nat) -> Nat:
       215n
     case 216n:
       216n
-    case 226n:
+    case 217n:
       217n
+    case 218n:
+      218n
+    case 219n:
+      219n
+    case 220n:
+      220n
+    case 226n:
+      221n
     case _:
       0n
 
@@ -9285,37 +9818,37 @@ def stat.top(+id: Nat) -> Nat:
 def stat.sub.client(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      218n
-    case 2n:
-      219n
-    case 3n:
-      220n
-    case 4n:
-      221n
-    case 5n:
       222n
-    case 6n:
+    case 2n:
       223n
-    case 7n:
+    case 3n:
       224n
-    case 8n:
+    case 4n:
       225n
-    case 9n:
+    case 5n:
       226n
-    case 10n:
+    case 6n:
       227n
-    case 11n:
+    case 7n:
       228n
-    case 12n:
+    case 8n:
       229n
-    case 13n:
+    case 9n:
       230n
-    case 14n:
+    case 10n:
       231n
-    case 15n:
+    case 11n:
       232n
-    case 16n:
+    case 12n:
       233n
+    case 13n:
+      234n
+    case 14n:
+      235n
+    case 15n:
+      236n
+    case 16n:
+      237n
     case _:
       0n
 
@@ -9323,23 +9856,23 @@ def stat.sub.client(+sub: Nat) -> Nat:
 def stat.sub.function(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      234n
-    case 2n:
-      235n
-    case 3n:
-      236n
-    case 4n:
-      237n
-    case 5n:
       238n
-    case 6n:
+    case 2n:
       239n
-    case 7n:
+    case 3n:
       240n
-    case 8n:
+    case 4n:
       241n
-    case 9n:
+    case 5n:
       242n
+    case 6n:
+      243n
+    case 7n:
+      244n
+    case 8n:
+      245n
+    case 9n:
+      246n
     case _:
       0n
 
@@ -9347,15 +9880,15 @@ def stat.sub.function(+sub: Nat) -> Nat:
 def stat.sub.config(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      243n
-    case 2n:
-      244n
-    case 3n:
-      245n
-    case 4n:
-      246n
-    case 5n:
       247n
+    case 2n:
+      248n
+    case 3n:
+      249n
+    case 4n:
+      250n
+    case 5n:
+      251n
     case _:
       0n
 
@@ -9363,19 +9896,19 @@ def stat.sub.config(+sub: Nat) -> Nat:
 def stat.sub.command(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      248n
-    case 2n:
-      249n
-    case 3n:
-      250n
-    case 4n:
-      251n
-    case 5n:
       252n
-    case 6n:
+    case 2n:
       253n
-    case 7n:
+    case 3n:
       254n
+    case 4n:
+      255n
+    case 5n:
+      256n
+    case 6n:
+      257n
+    case 7n:
+      258n
     case _:
       0n
 
@@ -9383,15 +9916,15 @@ def stat.sub.command(+sub: Nat) -> Nat:
 def stat.sub.object(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      255n
-    case 2n:
-      256n
-    case 3n:
-      257n
-    case 4n:
-      258n
-    case 5n:
       259n
+    case 2n:
+      260n
+    case 3n:
+      261n
+    case 4n:
+      262n
+    case 5n:
+      263n
     case _:
       0n
 
@@ -9399,17 +9932,17 @@ def stat.sub.object(+sub: Nat) -> Nat:
 def stat.sub.memory(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      260n
-    case 2n:
-      261n
-    case 3n:
-      262n
-    case 4n:
-      263n
-    case 5n:
       264n
-    case 6n:
+    case 2n:
       265n
+    case 3n:
+      266n
+    case 4n:
+      267n
+    case 5n:
+      268n
+    case 6n:
+      269n
     case _:
       0n
 
@@ -9417,36 +9950,22 @@ def stat.sub.memory(+sub: Nat) -> Nat:
 def stat.sub.pubsub(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      266n
-    case 2n:
-      267n
-    case 3n:
-      268n
-    case 4n:
-      269n
-    case 5n:
       270n
-    case 6n:
+    case 2n:
       271n
+    case 3n:
+      272n
+    case 4n:
+      273n
+    case 5n:
+      274n
+    case 6n:
+      275n
     case _:
       0n
 
 # a subcommand of SLOWLOG's key, by its number; 0 for none
 def stat.sub.slowlog(+sub: Nat) -> Nat:
-  match sub:
-    case 1n:
-      272n
-    case 2n:
-      273n
-    case 3n:
-      274n
-    case 4n:
-      275n
-    case _:
-      0n
-
-# a subcommand of LATENCY's key, by its number; 0 for none
-def stat.sub.latency(+sub: Nat) -> Nat:
   match sub:
     case 1n:
       276n
@@ -9456,12 +9975,26 @@ def stat.sub.latency(+sub: Nat) -> Nat:
       278n
     case 4n:
       279n
-    case 5n:
+    case _:
+      0n
+
+# a subcommand of LATENCY's key, by its number; 0 for none
+def stat.sub.latency(+sub: Nat) -> Nat:
+  match sub:
+    case 1n:
       280n
-    case 6n:
+    case 2n:
       281n
-    case 7n:
+    case 3n:
       282n
+    case 4n:
+      283n
+    case 5n:
+      284n
+    case 6n:
+      285n
+    case 7n:
+      286n
     case _:
       0n
 
@@ -9469,15 +10002,15 @@ def stat.sub.latency(+sub: Nat) -> Nat:
 def stat.sub.script(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      283n
-    case 2n:
-      284n
-    case 3n:
-      285n
-    case 4n:
-      286n
-    case 5n:
       287n
+    case 2n:
+      288n
+    case 3n:
+      289n
+    case 4n:
+      290n
+    case 5n:
+      291n
     case _:
       0n
 
@@ -9485,31 +10018,31 @@ def stat.sub.script(+sub: Nat) -> Nat:
 def stat.sub.acl(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      288n
-    case 2n:
-      289n
-    case 3n:
-      290n
-    case 4n:
-      291n
-    case 5n:
       292n
-    case 6n:
+    case 2n:
       293n
-    case 7n:
+    case 3n:
       294n
-    case 8n:
+    case 4n:
       295n
-    case 9n:
+    case 5n:
       296n
-    case 10n:
+    case 6n:
       297n
-    case 11n:
+    case 7n:
       298n
-    case 12n:
+    case 8n:
       299n
-    case 13n:
+    case 9n:
       300n
+    case 10n:
+      301n
+    case 11n:
+      302n
+    case 12n:
+      303n
+    case 13n:
+      304n
     case _:
       0n
 
@@ -9517,13 +10050,13 @@ def stat.sub.acl(+sub: Nat) -> Nat:
 def stat.sub.xinfo(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      301n
+      305n
     case 2n:
-      302n
+      306n
     case 3n:
-      303n
+      307n
     case 4n:
-      304n
+      308n
     case _:
       0n
 
@@ -9963,180 +10496,188 @@ def stat.name(+key: Nat) -> String:
     case 216n:
       "xpending"
     case 217n:
-      "bgsave"
+      "xadd"
     case 218n:
-      "client|id"
+      "xtrim"
     case 219n:
-      "client|help"
+      "xdel"
     case 220n:
-      "client|reply"
+      "xsetid"
     case 221n:
-      "client|getname"
+      "bgsave"
     case 222n:
-      "client|setname"
+      "client|id"
     case 223n:
-      "client|caching"
+      "client|help"
     case 224n:
-      "client|unblock"
+      "client|reply"
     case 225n:
-      "client|getredir"
+      "client|getname"
     case 226n:
-      "client|no-evict"
+      "client|setname"
     case 227n:
-      "client|trackinginfo"
+      "client|caching"
     case 228n:
-      "client|list"
+      "client|unblock"
     case 229n:
-      "client|info"
+      "client|getredir"
     case 230n:
-      "client|kill"
+      "client|no-evict"
     case 231n:
-      "client|pause"
+      "client|trackinginfo"
     case 232n:
-      "client|unpause"
+      "client|list"
     case 233n:
-      "client|tracking"
+      "client|info"
     case 234n:
-      "function|flush"
+      "client|kill"
     case 235n:
-      "function|help"
+      "client|pause"
     case 236n:
-      "function|load"
+      "client|unpause"
     case 237n:
-      "function|delete"
+      "client|tracking"
     case 238n:
-      "function|list"
+      "function|flush"
     case 239n:
-      "function|stats"
+      "function|help"
     case 240n:
-      "function|kill"
+      "function|load"
     case 241n:
-      "function|dump"
+      "function|delete"
     case 242n:
-      "function|restore"
+      "function|list"
     case 243n:
-      "config|get"
+      "function|stats"
     case 244n:
-      "config|set"
+      "function|kill"
     case 245n:
-      "config|resetstat"
+      "function|dump"
     case 246n:
-      "config|rewrite"
+      "function|restore"
     case 247n:
-      "config|help"
+      "config|get"
     case 248n:
-      "command|info"
+      "config|set"
     case 249n:
-      "command|docs"
+      "config|resetstat"
     case 250n:
-      "command|list"
+      "config|rewrite"
     case 251n:
-      "command|help"
+      "config|help"
     case 252n:
-      "command|count"
+      "command|info"
     case 253n:
-      "command|getkeys"
+      "command|docs"
     case 254n:
-      "command|getkeysandflags"
+      "command|list"
     case 255n:
-      "object|help"
+      "command|help"
     case 256n:
-      "object|freq"
+      "command|count"
     case 257n:
-      "object|encoding"
+      "command|getkeys"
     case 258n:
-      "object|refcount"
+      "command|getkeysandflags"
     case 259n:
-      "object|idletime"
+      "object|help"
     case 260n:
-      "memory|help"
+      "object|freq"
     case 261n:
-      "memory|usage"
+      "object|encoding"
     case 262n:
-      "memory|stats"
+      "object|refcount"
     case 263n:
-      "memory|doctor"
+      "object|idletime"
     case 264n:
-      "memory|purge"
+      "memory|help"
     case 265n:
-      "memory|malloc-stats"
+      "memory|usage"
     case 266n:
-      "pubsub|channels"
+      "memory|stats"
     case 267n:
-      "pubsub|help"
+      "memory|doctor"
     case 268n:
-      "pubsub|numpat"
+      "memory|purge"
     case 269n:
-      "pubsub|numsub"
+      "memory|malloc-stats"
     case 270n:
-      "pubsub|shardchannels"
+      "pubsub|channels"
     case 271n:
-      "pubsub|shardnumsub"
+      "pubsub|help"
     case 272n:
-      "slowlog|get"
+      "pubsub|numpat"
     case 273n:
-      "slowlog|len"
+      "pubsub|numsub"
     case 274n:
-      "slowlog|reset"
+      "pubsub|shardchannels"
     case 275n:
-      "slowlog|help"
+      "pubsub|shardnumsub"
     case 276n:
-      "latency|doctor"
+      "slowlog|get"
     case 277n:
-      "latency|graph"
+      "slowlog|len"
     case 278n:
-      "latency|help"
+      "slowlog|reset"
     case 279n:
-      "latency|histogram"
+      "slowlog|help"
     case 280n:
-      "latency|history"
+      "latency|doctor"
     case 281n:
-      "latency|latest"
+      "latency|graph"
     case 282n:
-      "latency|reset"
+      "latency|help"
     case 283n:
-      "script|load"
+      "latency|histogram"
     case 284n:
-      "script|exists"
+      "latency|history"
     case 285n:
-      "script|flush"
+      "latency|latest"
     case 286n:
-      "script|kill"
+      "latency|reset"
     case 287n:
-      "script|help"
+      "script|load"
     case 288n:
-      "acl|cat"
+      "script|exists"
     case 289n:
-      "acl|deluser"
+      "script|flush"
     case 290n:
-      "acl|dryrun"
+      "script|kill"
     case 291n:
-      "acl|genpass"
+      "script|help"
     case 292n:
-      "acl|getuser"
+      "acl|cat"
     case 293n:
-      "acl|help"
+      "acl|deluser"
     case 294n:
-      "acl|list"
+      "acl|dryrun"
     case 295n:
-      "acl|load"
+      "acl|genpass"
     case 296n:
-      "acl|log"
+      "acl|getuser"
     case 297n:
-      "acl|save"
+      "acl|help"
     case 298n:
-      "acl|setuser"
+      "acl|list"
     case 299n:
-      "acl|users"
+      "acl|load"
     case 300n:
-      "acl|whoami"
+      "acl|log"
     case 301n:
-      "xinfo|help"
+      "acl|save"
     case 302n:
-      "xinfo|stream"
+      "acl|setuser"
     case 303n:
-      "xinfo|groups"
+      "acl|users"
     case 304n:
+      "acl|whoami"
+    case 305n:
+      "xinfo|help"
+    case 306n:
+      "xinfo|stream"
+    case 307n:
+      "xinfo|groups"
+    case 308n:
       "xinfo|consumers"
     case _:
       ""
@@ -10578,180 +11119,188 @@ def stat.arity(+key: Nat) -> Nat:
     case 216n:
       7n
     case 217n:
-      3n
+      11n
     case 218n:
-      4n
+      9n
     case 219n:
-      4n
-    case 220n:
-      6n
-    case 221n:
-      4n
-    case 222n:
-      6n
-    case 223n:
-      6n
-    case 224n:
       7n
+    case 220n:
+      7n
+    case 221n:
+      3n
+    case 222n:
+      4n
+    case 223n:
+      4n
+    case 224n:
+      6n
     case 225n:
       4n
     case 226n:
       6n
     case 227n:
-      4n
+      6n
     case 228n:
-      5n
+      7n
     case 229n:
       4n
     case 230n:
-      7n
-    case 231n:
-      7n
-    case 232n:
-      4n
-    case 233n:
-      7n
-    case 234n:
-      5n
-    case 235n:
-      4n
-    case 236n:
-      7n
-    case 237n:
       6n
+    case 231n:
+      4n
+    case 232n:
+      5n
+    case 233n:
+      4n
+    case 234n:
+      7n
+    case 235n:
+      7n
+    case 236n:
+      4n
+    case 237n:
+      7n
     case 238n:
       5n
     case 239n:
       4n
     case 240n:
-      4n
+      7n
     case 241n:
-      4n
+      6n
     case 242n:
-      7n
+      5n
     case 243n:
-      7n
+      4n
     case 244n:
-      9n
+      4n
     case 245n:
       4n
     case 246n:
-      4n
+      7n
     case 247n:
-      4n
+      7n
     case 248n:
-      5n
+      9n
     case 249n:
-      5n
+      4n
     case 250n:
-      5n
+      4n
     case 251n:
       4n
     case 252n:
-      4n
+      5n
     case 253n:
-      9n
+      5n
     case 254n:
-      9n
+      5n
     case 255n:
       4n
     case 256n:
-      6n
+      4n
     case 257n:
-      6n
+      9n
     case 258n:
-      6n
+      9n
     case 259n:
-      6n
+      4n
     case 260n:
-      4n
+      6n
     case 261n:
-      7n
+      6n
     case 262n:
-      4n
+      6n
     case 263n:
-      4n
+      6n
     case 264n:
       4n
     case 265n:
-      4n
+      7n
     case 266n:
-      5n
+      4n
     case 267n:
       4n
     case 268n:
       4n
     case 269n:
-      5n
+      4n
     case 270n:
       5n
     case 271n:
-      5n
+      4n
     case 272n:
-      5n
+      4n
     case 273n:
-      4n
+      5n
     case 274n:
-      4n
+      5n
     case 275n:
-      4n
+      5n
     case 276n:
-      4n
+      5n
     case 277n:
-      6n
+      4n
     case 278n:
       4n
     case 279n:
-      5n
+      4n
     case 280n:
-      6n
+      4n
     case 281n:
-      4n
+      6n
     case 282n:
-      5n
+      4n
     case 283n:
-      6n
+      5n
     case 284n:
-      7n
-    case 285n:
-      5n
-    case 286n:
-      4n
-    case 287n:
-      4n
-    case 288n:
-      5n
-    case 289n:
-      7n
-    case 290n:
-      9n
-    case 291n:
-      5n
-    case 292n:
       6n
-    case 293n:
+    case 285n:
       4n
-    case 294n:
-      4n
-    case 295n:
-      4n
-    case 296n:
+    case 286n:
       5n
+    case 287n:
+      6n
+    case 288n:
+      7n
+    case 289n:
+      5n
+    case 290n:
+      4n
+    case 291n:
+      4n
+    case 292n:
+      5n
+    case 293n:
+      7n
+    case 294n:
+      9n
+    case 295n:
+      5n
+    case 296n:
+      6n
     case 297n:
       4n
     case 298n:
-      7n
+      4n
     case 299n:
       4n
     case 300n:
-      4n
+      5n
     case 301n:
       4n
     case 302n:
       7n
     case 303n:
-      6n
+      4n
     case 304n:
+      4n
+    case 305n:
+      4n
+    case 306n:
+      7n
+    case 307n:
+      6n
+    case 308n:
       8n
     case _:
       1n
@@ -11003,17 +11552,25 @@ def stat.risky(+key: Nat) -> Bool:
       True{}
     case 216n:
       True{}
-    case 256n:
+    case 217n:
       True{}
-    case 259n:
+    case 218n:
       True{}
-    case 261n:
+    case 219n:
       True{}
-    case 302n:
+    case 220n:
       True{}
-    case 303n:
+    case 260n:
       True{}
-    case 304n:
+    case 263n:
+      True{}
+    case 265n:
+      True{}
+    case 306n:
+      True{}
+    case 307n:
+      True{}
+    case 308n:
       True{}
     case _:
       False{}
@@ -11034,25 +11591,25 @@ def stat.engine(+key: Nat) -> Bool:
       True{}
     case 209n:
       True{}
-    case 234n:
-      True{}
-    case 236n:
-      True{}
-    case 237n:
-      True{}
     case 238n:
       True{}
-    case 239n:
+    case 240n:
       True{}
     case 241n:
       True{}
     case 242n:
       True{}
-    case 283n:
+    case 243n:
       True{}
-    case 284n:
+    case 245n:
       True{}
-    case 285n:
+    case 246n:
+      True{}
+    case 287n:
+      True{}
+    case 288n:
+      True{}
+    case 289n:
       True{}
     case _:
       False{}
@@ -11076,63 +11633,63 @@ def stat.unseen(+key: Nat) -> Bool:
       True{}
     case 203n:
       True{}
-    case 217n:
-      True{}
-    case 224n:
-      True{}
-    case 226n:
+    case 221n:
       True{}
     case 228n:
       True{}
     case 230n:
       True{}
-    case 231n:
-      True{}
     case 232n:
       True{}
-    case 243n:
+    case 234n:
       True{}
-    case 244n:
+    case 235n:
       True{}
-    case 245n:
+    case 236n:
       True{}
-    case 246n:
+    case 247n:
       True{}
-    case 272n:
+    case 248n:
       True{}
-    case 273n:
+    case 249n:
       True{}
-    case 274n:
+    case 250n:
       True{}
     case 276n:
       True{}
     case 277n:
       True{}
-    case 279n:
+    case 278n:
       True{}
     case 280n:
       True{}
     case 281n:
       True{}
-    case 282n:
+    case 283n:
       True{}
-    case 289n:
+    case 284n:
       True{}
-    case 290n:
+    case 285n:
       True{}
-    case 292n:
+    case 286n:
+      True{}
+    case 293n:
       True{}
     case 294n:
       True{}
-    case 295n:
-      True{}
     case 296n:
-      True{}
-    case 297n:
       True{}
     case 298n:
       True{}
     case 299n:
+      True{}
+    case 300n:
+      True{}
+    case 301n:
+      True{}
+    case 302n:
+      True{}
+    case 303n:
       True{}
     case _:
       False{}
@@ -11493,29 +12050,37 @@ def stat.keyspace(+key: Nat) -> Bool:
       True{}
     case 216n:
       True{}
-    case 234n:
+    case 217n:
       True{}
-    case 236n:
+    case 218n:
       True{}
-    case 237n:
+    case 219n:
       True{}
-    case 242n:
+    case 220n:
       True{}
-    case 256n:
+    case 238n:
       True{}
-    case 257n:
+    case 240n:
       True{}
-    case 258n:
+    case 241n:
       True{}
-    case 259n:
+    case 246n:
+      True{}
+    case 260n:
       True{}
     case 261n:
       True{}
-    case 302n:
+    case 262n:
       True{}
-    case 303n:
+    case 263n:
       True{}
-    case 304n:
+    case 265n:
+      True{}
+    case 306n:
+      True{}
+    case 307n:
+      True{}
+    case 308n:
       True{}
     case _:
       False{}
@@ -11714,13 +12279,21 @@ def stat.pausable(+key: Nat) -> Bool:
       True{}
     case 208n:
       True{}
-    case 234n:
+    case 217n:
       True{}
-    case 236n:
+    case 218n:
       True{}
-    case 237n:
+    case 219n:
       True{}
-    case 242n:
+    case 220n:
+      True{}
+    case 238n:
+      True{}
+    case 240n:
+      True{}
+    case 241n:
+      True{}
+    case 246n:
       True{}
     case _:
       False{}
@@ -11909,13 +12482,21 @@ def stat.write(+key: Nat) -> Bool:
       True{}
     case 200n:
       True{}
-    case 234n:
+    case 217n:
       True{}
-    case 236n:
+    case 218n:
       True{}
-    case 237n:
+    case 219n:
       True{}
-    case 242n:
+    case 220n:
+      True{}
+    case 238n:
+      True{}
+    case 240n:
+      True{}
+    case 241n:
+      True{}
+    case 246n:
       True{}
     case _:
       False{}
@@ -11989,17 +12570,9 @@ def stat.noscript(+key: Nat) -> Bool:
       True{}
     case 209n:
       True{}
-    case 217n:
-      True{}
-    case 218n:
-      True{}
-    case 220n:
-      True{}
     case 221n:
       True{}
     case 222n:
-      True{}
-    case 223n:
       True{}
     case 224n:
       True{}
@@ -12023,13 +12596,13 @@ def stat.noscript(+key: Nat) -> Bool:
       True{}
     case 234n:
       True{}
+    case 235n:
+      True{}
     case 236n:
       True{}
     case 237n:
       True{}
     case 238n:
-      True{}
-    case 239n:
       True{}
     case 240n:
       True{}
@@ -12045,17 +12618,17 @@ def stat.noscript(+key: Nat) -> Bool:
       True{}
     case 246n:
       True{}
-    case 276n:
+    case 247n:
       True{}
-    case 277n:
+    case 248n:
       True{}
-    case 279n:
+    case 249n:
+      True{}
+    case 250n:
       True{}
     case 280n:
       True{}
     case 281n:
-      True{}
-    case 282n:
       True{}
     case 283n:
       True{}
@@ -12065,15 +12638,17 @@ def stat.noscript(+key: Nat) -> Bool:
       True{}
     case 286n:
       True{}
+    case 287n:
+      True{}
     case 288n:
       True{}
     case 289n:
       True{}
     case 290n:
       True{}
-    case 291n:
-      True{}
     case 292n:
+      True{}
+    case 293n:
       True{}
     case 294n:
       True{}
@@ -12081,13 +12656,19 @@ def stat.noscript(+key: Nat) -> Bool:
       True{}
     case 296n:
       True{}
-    case 297n:
-      True{}
     case 298n:
       True{}
     case 299n:
       True{}
     case 300n:
+      True{}
+    case 301n:
+      True{}
+    case 302n:
+      True{}
+    case 303n:
+      True{}
+    case 304n:
       True{}
     case _:
       False{}
@@ -12114,11 +12695,11 @@ def stat.allow_busy(+key: Nat) -> Bool:
       True{}
     case 187n:
       True{}
-    case 239n:
+    case 243n:
       True{}
-    case 240n:
+    case 244n:
       True{}
-    case 286n:
+    case 290n:
       True{}
     case _:
       False{}
@@ -12231,9 +12812,13 @@ def stat.denyoom(+key: Nat) -> Bool:
       True{}
     case 200n:
       True{}
-    case 236n:
+    case 217n:
       True{}
-    case 242n:
+    case 220n:
+      True{}
+    case 240n:
+      True{}
+    case 246n:
       True{}
     case _:
       False{}
@@ -12422,13 +13007,21 @@ def stat.dirty(+key: Nat) -> Nat:
       13n
     case 200n:
       10n
-    case 234n:
+    case 217n:
+      4n
+    case 218n:
+      2n
+    case 219n:
+      2n
+    case 220n:
       1n
-    case 236n:
+    case 238n:
       1n
-    case 237n:
+    case 240n:
       1n
-    case 242n:
+    case 241n:
+      1n
+    case 246n:
       1n
     case _:
       0n
@@ -12628,6 +13221,12 @@ def stat.fast(+key: Nat) -> Bool:
       True{}
     case 211n:
       True{}
+    case 217n:
+      True{}
+    case 219n:
+      True{}
+    case 220n:
+      True{}
     case _:
       False{}
 
@@ -12808,21 +13407,21 @@ def stat.ro(+key: Nat) -> Bool:
       True{}
     case 216n:
       True{}
-    case 256n:
-      True{}
-    case 257n:
-      True{}
-    case 258n:
-      True{}
-    case 259n:
+    case 260n:
       True{}
     case 261n:
       True{}
-    case 302n:
+    case 262n:
       True{}
-    case 303n:
+    case 263n:
       True{}
-    case 304n:
+    case 265n:
+      True{}
+    case 306n:
+      True{}
+    case 307n:
+      True{}
+    case 308n:
       True{}
     case _:
       False{}
@@ -13123,6 +13722,14 @@ def stat.touch(+key: Nat) -> Bool:
     case 213n:
       True{}
     case 216n:
+      True{}
+    case 217n:
+      True{}
+    case 218n:
+      True{}
+    case 219n:
+      True{}
+    case 220n:
       True{}
     case _:
       False{}
@@ -13740,6 +14347,14 @@ def stat.kw(+key: Nat) -> U32:
       1421
     case 304n:
       1422
+    case 305n:
+      1427
+    case 306n:
+      1429
+    case 307n:
+      1430
+    case 308n:
+      1433
     case _:
       63
 
@@ -14465,6 +15080,14 @@ def stat.key.lo22(+lo: Nat) -> Nat:
       303n
     case 14n:
       304n
+    case 19n:
+      305n
+    case 21n:
+      306n
+    case 22n:
+      307n
+    case 25n:
+      308n
     case _:
       0n
 
@@ -17381,8 +18004,12 @@ def peek.v(c: PeekOp, +now: Nat, m: Maybe<&2, KV.Item<KV.Val>>) -> Reply:
 # (CMems), or a new one, with no time, made of members where the key was
 # not there at now (CMemsNew: the members ms added in turn); or set it
 # to the value v of a payload p, with its time e (CRestore: RESTORE's,
-# which the append-only file logs as the RESTORE of p); each keeps
-# the write the append-only file logs. An
+# which the append-only file logs as the RESTORE of p); or set it to a
+# stream: one the key held, changed by a write of a stream, its time kept
+# (CStream), or a new one, with no time, made by XADD where the key was
+# not there at now (CStreamNew: the XADD's words ws); each keeps the
+# write resolved (Stream writes, below). Each keeps the write the
+# append-only file logs. An
 # Upd's reply and change come from the key's entry there at now alone. A
 # time a change gives a key is one the key may keep (KV.clamp: a time at
 # or past the year 5138 is none), and a key without a time is never given
@@ -17405,6 +18032,8 @@ type Change is Data:
   CZset{op: ZWrite, z: KV.Zset}
   CZsetNew{o: ZOpts, ps: List<&2, ZPair>, z: KV.Zset}
   CRestore{p: String, v: KV.Val, e: Nat}
+  CStream{op: XWrite, x: KV.XStream}
+  CStreamNew{ws: List<&2, String>, x: KV.XStream}
 
 type Out is Data:
   Out{r: Reply, ch: Change}
@@ -19049,6 +19678,442 @@ def zwrite.coll(op: ZWrite, +cl: KV.Coll) -> Out:
     case _:
       zwrite.wrong(op)
 
+# Stream writes
+# -------------
+# XADD, XTRIM, XDEL and XSETID on a stream x (an empty one for a key not
+# there: fresh), each read again from the words it keeps, as Redis reads
+# them (Stream.bend changes the stream). A write whose change depends on
+# the clock or on what the stream holds (XADD's * and <ms>-*, a trim by
+# ~, and NOMKSTREAM, which a key there makes no matter) is resolved
+# first: its words become those of the exact write it makes (the ID it
+# adds; the exact trim at the threshold it reaches, X.xs.approx), which
+# the write then runs and the change keeps, and the file logs. Resolved
+# words resolve to themselves, so the file's write makes the same change
+# at time 0 (PROOF.bend: log_replay).
+
+def e_xexhausted() -> Reply:
+  RError{"ERR The stream has exhausted the last possible ID, unable to add more items"}
+
+def e_xsmall() -> Reply:
+  RError{"ERR The ID specified in XADD is equal or smaller than the target stream top item"}
+
+def e_xlarge() -> Reply:
+  RError{"ERR Elements are too large to be stored"}
+
+def e_xres() -> Reply:
+  RError{"ERR the stream write does not resolve"}
+
+# XADD's words resolved, or the error its ID or its elements meet
+type XRs is Data:
+  XRsOk{ws: List<&2, String>}
+  XRsBad{r: Reply}
+
+# the ID XADD adds after the stream's last ID: an ID's own; for * the
+# next one at now (now's with sequence 0 when now is past the last's ms,
+# else the one after the last: streamNextID); for <ms>-* the last's
+# sequence + 1 when the last is of ms (none past the last sequence), else
+# sequence 0
+def xa.seq(same: Bool, +ms: KV.XN, +lsq: KV.XN) -> Maybe<&2, KV.XId>:
+  match same:
+    case True{}:
+      Bool.pick(Maybe<&2, KV.XId>, X.xn.is_max(lsq), None{}, Some{KV.XId{ms, KV.xn.add(lsq, X.xn.one())}})
+    case False{}:
+      Some{KV.XId{ms, X.xn.zero()}}
+
+def xa.auto(+now: KV.XN, +lms: KV.XN, +lsq: KV.XN) -> Maybe<&2, KV.XId>:
+  Bool.pick(Maybe<&2, KV.XId>, Cmp.is_gt(KV.xn.cmp(now, lms)), Some{KV.XId{now, X.xn.zero()}}, X.xid.incr(KV.XId{lms, lsq}))
+
+def xa.newid.at(id: XAId, +lms: KV.XN, +lsq: KV.XN, +now: Nat) -> Maybe<&2, KV.XId>:
+  match id:
+    case XAAt{x}:
+      Some{x}
+    case XAAuto{}:
+      xa.auto(KV.xn.of(now), lms, lsq)
+    case XASeq{+ms}:
+      xa.seq(KV.xn.is_eq(ms, lms), ms, lsq)
+
+def xa.newid(id: XAId, +last: KV.XId, +now: Nat) -> Maybe<&2, KV.XId>:
+  match last:
+    case KV.XId{+lms, +lsq}:
+      xa.newid.at(id, lms, lsq, now)
+
+# a trim's words resolved: an exact one's threshold word as it came, a ~'s
+# threshold as the exact trim that runs it (X.xs.approx), on x1, the
+# stream it trims
+def xts.kind(+s: X.XTs) -> String:
+  match s:
+    case X.XTMax{n}:
+      "MAXLEN"
+    case X.XTMin{id}:
+      "MINID"
+
+def xts.words(+s: X.XTs, rest: List<&2, String>) -> List<&2, String>:
+  match s:
+    case X.XTMax{+n}:
+      "MAXLEN" <> "=" <> Nat.show(n) <> rest
+    case X.XTMin{+id}:
+      "MINID" <> "=" <> X.xid.show(id) <> rest
+
+def xadd.trw.of(ap: Bool, +s: X.XTs, +v: String, +lim: Nat, +x: KV.XStream, +nid: KV.XId, +fv: List<&2, String>, +nf: Nat, +tot: Nat, rest: List<&2, String>) -> List<&2, String>:
+  match ap:
+    case True{}:
+      xts.words(X.xs.approx(X.xs.add(x, nid, fv, nf, tot), s, lim), rest)
+    case False{}:
+      xts.kind(s) <> "=" <> v <> rest
+
+def xadd.trw(t: XTo, +x: KV.XStream, +nid: KV.XId, +fv: List<&2, String>, +nf: Nat, +tot: Nat, rest: List<&2, String>) -> List<&2, String>:
+  match t:
+    case XTNo{}:
+      rest
+    case XTo{+s, +v, ap, +lim}:
+      xadd.trw.of(ap, s, v, lim, x, nid, fv, nf, tot, rest)
+
+def xaid.at(+id: XAId) -> Bool:
+  match id:
+    case XAAt{x}:
+      True{}
+    case _:
+      False{}
+
+# XADD's checks of the ID it adds and of its elements (streamAppendItem):
+# the ID past the stream's last (gt), its fields and values within 1 GiB
+# (big: past it)
+def xadd.res.chk(gt: Bool, big: Bool, +nid: KV.XId, tr: XTo, +id: XAId, +w: String, +fv: List<&2, String>, +nf: Nat, +tot: Nat, +x: KV.XStream) -> XRs:
+  match gt big:
+    case False{} _:
+      XRsBad{e_xsmall()}
+    case True{} True{}:
+      XRsBad{e_xlarge()}
+    case True{} False{}:
+      XRsOk{xadd.trw(tr, x, nid, fv, nf, tot, Bool.pick(String, xaid.at(id), w, X.xid.show(nid)) <> fv)}
+
+def xadd.res.at(m: Maybe<&2, KV.XId>, a: XA, +x: KV.XStream) -> XRs:
+  match m a:
+    case Some{+nid} XA{nomk, tr, +id, +w, +fv, +nf}:
+      +tot = X.xe.tot(fv, 0n)
+      xadd.res.chk(Cmp.is_gt(KV.xid.cmp(nid, X.xstream.last(x))), Nat.is_lt(1073741824n, tot), nid, tr, id, w, fv, nf, tot, x)
+    case None{} XA{nomk, tr, id, w, fv, nf}:
+      XRsBad{e_xlarge()}
+    case _ XABad{r}:
+      XRsBad{r}
+
+def xa.newid.of(+a: XA, +x: KV.XStream, +now: Nat) -> Maybe<&2, KV.XId>:
+  match a:
+    case XA{nomk, tr, +id, w, fv, nf}:
+      xa.newid(id, X.xstream.last(x), now)
+    case XABad{r}:
+      None{}
+
+# XADD's words ws (a: as they read) resolved on x at now: as they are
+# when they are resolved (an ID, no NOMKSTREAM, an exact trim or none)
+def xto.exact(tr: XTo) -> Bool:
+  match tr:
+    case XTNo{}:
+      True{}
+    case XTo{s, v, ap, lim}:
+      Bool.not(ap)
+
+def xa.fixed(a: XA) -> Bool:
+  match a:
+    case XA{nomk, tr, id, w, fv, nf}:
+      Bool.and(Bool.not(nomk), Bool.and(xto.exact(tr), xaid.at(id)))
+    case XABad{r}:
+      False{}
+
+def xadd.res.if(c: Bool, +ws: List<&2, String>, +a: XA, +x: KV.XStream, +now: Nat) -> XRs:
+  match c:
+    case True{}:
+      XRsOk{ws}
+    case False{}:
+      xadd.res.at(xa.newid.of(a, x, now), a, x)
+
+def xadd.resolve(+ws: List<&2, String>, +a: XA, +x: KV.XStream, +now: Nat) -> XRs:
+  xadd.res.if(xa.fixed(a), ws, a, x, now)
+
+# the stream x1 trimmed by a resolved XADD (exactly), or as it is
+def xs.trimmed(r: X.XTrd) -> KV.XStream:
+  match r:
+    case X.XTrd{x, del}:
+      x
+
+def xadd.trim(t: XTo, +x1: KV.XStream) -> KV.XStream:
+  match t:
+    case XTNo{}:
+      x1
+    case XTo{+s, v, +ap, +lim}:
+      xs.trimmed(X.xs.trim(x1, s, ap, lim))
+
+def xadd.out(fresh: Bool, +ws: List<&2, String>, r: Reply, x2: KV.XStream) -> Out:
+  match fresh:
+    case True{}:
+      Out{r, CStreamNew{ws, x2}}
+    case False{}:
+      Out{r, CStream{XWAdd{ws}, x2}}
+
+def xadd.apply.chk(gt: Bool, big: Bool, +id: KV.XId, tr: XTo, +fv: List<&2, String>, +nf: Nat, +tot: Nat, +ws: List<&2, String>, +fresh: Bool, +x: KV.XStream) -> Out:
+  match gt big:
+    case False{} _:
+      Out{e_xsmall(), CKeep{}}
+    case True{} True{}:
+      Out{e_xlarge(), CKeep{}}
+    case True{} False{}:
+      xadd.out(fresh, ws, RBulk{X.xid.show(id)}, xadd.trim(tr, X.xs.add(x, id, fv, nf, tot)))
+
+# a resolved XADD run: its entry added, then its exact trim
+def xadd.apply(tr: XTo, +id: KV.XId, +fv: List<&2, String>, +nf: Nat, +ws: List<&2, String>, +fresh: Bool, +x: KV.XStream) -> Out:
+  +tot = X.xe.tot(fv, 0n)
+  xadd.apply.chk(Cmp.is_gt(KV.xid.cmp(id, X.xstream.last(x))), Nat.is_lt(1073741824n, tot), id, tr, fv, nf, tot, ws, fresh, x)
+
+# the resolved words ws (a1: as they read again) run; words that do not
+# resolve are no write, nor fewer than XADD's three (which the parser
+# answers first, and the file's command needs)
+def xadd.fin.of(a1: XA, +ws: List<&2, String>, +fresh: Bool, +x: KV.XStream) -> Out:
+  match a1:
+    case XA{False{}, XTNo{}, XAAt{+id}, w, +fv, +nf}:
+      xadd.apply(XTNo{}, id, fv, nf, ws, fresh, x)
+    case XA{False{}, XTo{+s, +v, False{}, +lim}, XAAt{+id}, w, +fv, +nf}:
+      xadd.apply(XTo{s, v, False{}, lim}, id, fv, nf, ws, fresh, x)
+    case _:
+      Out{e_xres(), CKeep{}}
+
+def xadd.fin(a1: XA, +ws: List<&2, String>, +fresh: Bool, +x: KV.XStream) -> Out:
+  match ws:
+    case Con{+a, Con{+b, Con{+c, +rest}}}:
+      xadd.fin.of(a1, Con{a, Con{b, Con{c, rest}}}, fresh, x)
+    case _:
+      Out{e_xres(), CKeep{}}
+
+def xadd.go(r: XRs, +fresh: Bool, +x: KV.XStream) -> Out:
+  match r:
+    case XRsOk{+ws1}:
+      xadd.fin(xadd.read(ws1), ws1, fresh, x)
+    case XRsBad{e}:
+      Out{e, CKeep{}}
+
+def xa.err(+a: XA) -> Reply:
+  match a:
+    case XABad{+r}:
+      r
+    case _:
+      e_xres()
+
+# what XADD meets first: 0 nothing, 1 a key not there with NOMKSTREAM (a
+# null), 2 an error of its words; then (ex) a stream at the last ID
+def xa.code(+a: XA, +fresh: Bool) -> Nat:
+  match a:
+    case XABad{r}:
+      2n
+    case XA{+nomk, tr, id, w, fv, nf}:
+      Bool.pick(Nat, Bool.and(fresh, nomk), 1n, 0n)
+
+def xadd.run.of(c: Nat, ex: Bool, +ws: List<&2, String>, +a: XA, +fresh: Bool, +x: KV.XStream, +now: Nat) -> Out:
+  match c ex:
+    case 0n False{}:
+      xadd.go(xadd.resolve(ws, a, x, now), fresh, x)
+    case 0n True{}:
+      Out{e_xexhausted(), CKeep{}}
+    case 1n _:
+      Out{RNull{}, CKeep{}}
+    case _ _:
+      Out{xa.err(a), CKeep{}}
+
+# XADD of the words ws (a: as they read) on x at now
+def xadd.run(+ws: List<&2, String>, +a: XA, +fresh: Bool, +x: KV.XStream, +now: Nat) -> Out:
+  xadd.run.of(xa.code(a, fresh), X.xs.exhausted(x), ws, a, fresh, x, now)
+
+# XTRIM: by ~, resolved to the exact trim that runs it; the reply the
+# entries deleted, no change for none
+def xtrim.resolve(+ws: List<&2, String>, tr: XTo, +x: KV.XStream) -> List<&2, String>:
+  match tr:
+    case XTo{+s, v, True{}, +lim}:
+      xts.words(X.xs.approx(x, s, lim), Nil{})
+    case _:
+      ws
+
+def xtrim.out.of(none: Bool, +del: Nat, x2: KV.XStream, +ws: List<&2, String>) -> Out:
+  match none:
+    case True{}:
+      Out{r_int(0n), CKeep{}}
+    case False{}:
+      Out{r_int(del), CStream{XWTrim{ws}, x2}}
+
+def xtrim.out(r: X.XTrd, +ws: List<&2, String>) -> Out:
+  match r:
+    case X.XTrd{x2, +del}:
+      xtrim.out.of(Nat.is_eq(del, 0n), del, x2, ws)
+
+def xtrim.fin.of(t: XT, +ws: List<&2, String>, +x: KV.XStream) -> Out:
+  match t:
+    case XT{XTo{+s, v, False{}, lim}}:
+      xtrim.out(X.xs.trim(x, s, False{}, 0n), ws)
+    case _:
+      Out{e_xres(), CKeep{}}
+
+# (nor fewer words than XTRIM's two)
+def xtrim.fin(t: XT, +ws: List<&2, String>, +x: KV.XStream) -> Out:
+  match ws:
+    case Con{+a, Con{+b, +rest}}:
+      xtrim.fin.of(t, Con{a, Con{b, rest}}, x)
+    case _:
+      Out{e_xres(), CKeep{}}
+
+def xtrim.run(+ws: List<&2, String>, t: XT, +x: KV.XStream) -> Out:
+  match t:
+    case XTBad{r}:
+      Out{r, CKeep{}}
+    case XT{tr}:
+      +ws1 = xtrim.resolve(ws, tr, x)
+      xtrim.fin(xtrim.read(ws1), ws1, x)
+
+# XDEL: its IDs read (strictly), then each live entry of them deleted;
+# the reply how many, no change for none
+def xdel.out.of(none: Bool, +n: Nat, x2: KV.XStream, +ids: List<&2, String>) -> Out:
+  match none:
+    case True{}:
+      Out{r_int(0n), CKeep{}}
+    case False{}:
+      Out{r_int(n), CStream{XWDel{ids}, x2}}
+
+def xdel.out(r: X.XDr, +ids: List<&2, String>) -> Out:
+  match r:
+    case X.XDr{x2, +n}:
+      xdel.out.of(Nat.is_eq(n, 0n), n, x2, ids)
+
+def xdel.of(m: Maybe<&2, List<&2, KV.XId>>, +ids: List<&2, String>, +x: KV.XStream) -> Out:
+  match m:
+    case Some{xl}:
+      xdel.out(X.xs.del(x, xl), ids)
+    case None{}:
+      Out{e_xid(), CKeep{}}
+
+def xdel.run(+ids: List<&2, String>, +x: KV.XStream) -> Out:
+  match ids:
+    case Con{+i, +rest}:
+      xdel.of(X.xids.parse(Con{i, rest}), Con{i, rest}, x)
+    case Nil{}:
+      Out{r_int(0n), CKeep{}}
+
+# XSETID: on a stream with entries, an ID below its last live one or an
+# entries-added below its length is an error; else the last ID, the
+# entries added (when given) and the greatest ID deleted (when given, but
+# 0-0) set. Redis 7.0 does not check the ID against the greatest deleted
+# one the stream holds (7.2 does)
+def xsetid.top.of(m: Maybe<&2, KV.XId>) -> KV.XId:
+  match m:
+    case Some{t}:
+      t
+    case None{}:
+      X.xid.zero()
+
+def xsetid.few(+added: Maybe<&2, KV.XN>, +n: Nat) -> Bool:
+  match added:
+    case Some{+a}:
+      Cmp.is_gt(KV.xn.cmp(KV.xn.of(n), a))
+    case None{}:
+      False{}
+
+def xsetid.code(+id: KV.XId, +added: Maybe<&2, KV.XN>, +x: KV.XStream) -> Nat:
+  +n = KV.xstream.len(x)
+  +some = Nat.is_lt(0n, n)
+  Bool.pick(Nat, Bool.and(some, Cmp.is_lt(KV.xid.cmp(id, xsetid.top.of(X.xs.top(x))))), 1n, Bool.pick(Nat, Bool.and(some, xsetid.few(added, n)), 2n, 0n))
+
+def xsetid.added.or(m: Maybe<&2, KV.XN>, +d: KV.XN) -> KV.XN:
+  match m:
+    case Some{a}:
+      a
+    case None{}:
+      d
+
+def xsetid.set(+x: KV.XStream, +id: KV.XId, +added: Maybe<&2, KV.XN>, +md: KV.XId) -> KV.XStream:
+  match x:
+    case KV.XStr{n, last, first, +maxdel, +ad, nodes, groups}:
+      KV.XStr{n, id, first, Bool.pick(KV.XId, X.xid.is_zero(md), maxdel, md), xsetid.added.or(added, ad), nodes, groups}
+    case KV.XStrOf{+y}:
+      xsetid.set(y, id, added, md)
+
+def xsetid.chk(c: Nat, +id: KV.XId, +added: Maybe<&2, KV.XN>, +md: KV.XId, +ws: List<&2, String>, +x: KV.XStream) -> Out:
+  match c:
+    case 0n:
+      Out{r_ok(), CStream{XWSetId{ws}, xsetid.set(x, id, added, md)}}
+    case 1n:
+      Out{RError{"ERR The ID specified in XSETID is smaller than the target stream top item"}, CKeep{}}
+    case _:
+      Out{RError{"ERR The entries_added specified in XSETID is smaller than the target stream length"}, CKeep{}}
+
+def xsetid.run.of(+ws: List<&2, String>, s: XS, +x: KV.XStream) -> Out:
+  match s:
+    case XSBad{r}:
+      Out{r, CKeep{}}
+    case XS{+id, +added, +md}:
+      xsetid.chk(xsetid.code(id, added, x), id, added, md, ws, x)
+
+# (an XSETID has its ID word, as the parser has it)
+def xsetid.run(+ws: List<&2, String>, s: XS, +x: KV.XStream) -> Out:
+  match ws:
+    case Con{+i, +rest}:
+      xsetid.run.of(Con{i, rest}, s, x)
+    case Nil{}:
+      Out{e_xres(), CKeep{}}
+
+def xsetid.none(s: XS) -> Out:
+  match s:
+    case XSBad{r}:
+      Out{r, CKeep{}}
+    case XS{id, a, md}:
+      Out{RError{"ERR no such key"}, CKeep{}}
+
+# a write of a stream to the stream x (an empty one for a key not there:
+# fresh) at now; XWNew makes a new stream whatever x is
+def xwrite(op: XWrite, +fresh: Bool, +x: KV.XStream, +now: Nat) -> Out:
+  match op:
+    case XWAdd{+ws}:
+      xadd.run(ws, xadd.read(ws), fresh, x, now)
+    case XWTrim{+ws}:
+      xtrim.run(ws, xtrim.read(ws), x)
+    case XWDel{+ids}:
+      xdel.run(ids, x)
+    case XWSetId{+ws}:
+      xsetid.run(ws, xsetid.read(ws), x)
+    case XWNew{+ws}:
+      xadd.run(ws, xadd.read(ws), True{}, X.xs.empty(), now)
+
+# of a key not there: XADD makes it (with NOMKSTREAM a null), XTRIM and
+# XDEL answer 0, XSETID an error (after its words' errors)
+def xwrite.none(op: XWrite, +now: Nat) -> Out:
+  match op:
+    case XWTrim{ws}:
+      Out{r_int(0n), CKeep{}}
+    case XWDel{ids}:
+      Out{r_int(0n), CKeep{}}
+    case XWSetId{+ws}:
+      xsetid.none(xsetid.read(ws))
+    case other:
+      xwrite(other, True{}, X.xs.empty(), now)
+
+# of a key that holds another kind: WRONGTYPE, but for XWNew
+def xwrite.wrong(op: XWrite, +now: Nat) -> Out:
+  match op:
+    case XWNew{+ws}:
+      xwrite(XWNew{ws}, True{}, X.xs.empty(), now)
+    case _:
+      Out{e_wrongtype(), CKeep{}}
+
+# of a key that holds a string (m: the string's entry, or none)
+def xwrite.str(op: XWrite, +now: Nat, m: Maybe<&2, KV.Item<String>>) -> Out:
+  match m:
+    case Some{x}:
+      xwrite.wrong(op, now)
+    case None{}:
+      xwrite.none(op, now)
+
+# of a key that holds a collection
+def xwrite.coll(op: XWrite, +now: Nat, +cl: KV.Coll) -> Out:
+  match cl:
+    case KV.CStream{x}:
+      xwrite(op, False{}, x, now)
+    case _:
+      xwrite.wrong(op, now)
+
 # HyperLogLog
 # -----------
 # PFADD, PFCOUNT, PFMERGE, PFDEBUG and PFSELFTEST as Redis 7.0.15 runs
@@ -19430,6 +20495,8 @@ def upd(op: UpdOp, +now: Nat, m: Maybe<&2, KV.Item<String>>) -> Out:
       hll.upd(op, m)
     case URestore{p, t, +rep, ac}:
       restore.of(p, t, rep, now, m)
+    case UStream{op}:
+      xwrite.str(op, now, m)
 
 # An update of a key that holds a collection: SET (and SETEX, PSETEX)
 # replaces it, SETNX finds it there, EXPIRE and its kin and PERSIST set
@@ -19477,6 +20544,8 @@ def upd.only(op: UpdOp, +now: Nat, +cl: KV.Coll) -> Out:
       swrite.coll(sop, cl)
     case UZset{zop}:
       zwrite.coll(zop, cl)
+    case UStream{xop}:
+      xwrite.coll(xop, now, cl)
     case UGet{o}:
       get.wrong(o, now)
     case _:
@@ -19537,6 +20606,10 @@ def upd.ch(t: KV.Trie<KV.Val>, +k: String, +h: U32, +n: Nat, +x: Nat, now: Nat, 
       (r, Db{KV.setx.at(KV.Val, t, k, KV.VColl{KV.CZset{zv}}, 0n, h), cnt.n(c, n), cnt.x(c, 0n, x), now, rr})
     case CRestore{p, v, +e}:
       (r, Db{KV.setx.at(KV.Val, t, k, v, e, h), cnt.n(c, n), cnt.x(c, e, x), now, rr})
+    case CStream{op, xv}:
+      (r, Db{KV.keep.at(KV.Val, t, k, KV.VColl{KV.CStream{xv}}, h), n, x, now, rr})
+    case CStreamNew{ws, xv}:
+      (r, Db{KV.setx.at(KV.Val, t, k, KV.VColl{KV.CStream{xv}}, 0n, h), cnt.n(c, n), cnt.x(c, 0n, x), now, rr})
 
 def upd.put(t: KV.Trie<KV.Val>, +k: String, +h: U32, +n: Nat, +x: Nat, now: Nat, rr: Maybe<&2, Db>, +c: Nat, o: Out) -> Reply & Db:
   match o:
