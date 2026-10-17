@@ -1303,8 +1303,10 @@ def is.read(+b: String) -> Maybe<&2, List<&2, String>>:
 # came as a listpack, ziplist or zipmap of at most 512 pairs (a zipmap's
 # fields and values of at most 64 bytes too), or as a hashtable of at
 # most 512 pairs of at most 64 bytes; a set an intset (MInts) when it
-# holds at most 512 members, all integers as Redis writes them; a sorted
-# set small (ZSmall) when it came as a listpack or ziplist of at most 128
+# holds at most 512 members, all integers as Redis writes them, else a
+# hashtable, small (MSmall or MLong, its members in the payload's order)
+# when it holds at most 128 members of at most 64 bytes; a sorted set
+# small (ZSmall) when it came as a listpack or ziplist of at most 128
 # elements, or as a skiplist of at most 128 whose members are of at most
 # 64 bytes. A collection with no element, or a member, field or element
 # of a sorted set twice, or a score that is no number (a NaN), is no
@@ -1331,14 +1333,6 @@ def mems.trie(xs: List<&2, String>, t: KV.Trie<Unit>) -> KV.Trie<Unit>:
     case Con{x, rest}:
       mems.trie(rest, KV.set(Unit, t, x, Unit{}))
 
-# the tree of the integers xs, each added in its place
-def ints.tree(xs: List<&2, String>, t: KV.ITree) -> KV.ITree:
-  match xs:
-    case Nil{}:
-      t
-    case Con{x, rest}:
-      ints.tree(rest, KV.ints.put(x, t))
-
 def all.ints(xs: List<&2, String>) -> Bool:
   match xs:
     case Nil{}:
@@ -1362,31 +1356,40 @@ def val.list(+xs: List<&2, String>) -> Maybe<&2, KV.Val>:
   +n = List.length(&2, String, xs)
   Bool.pick(Maybe<&2, KV.Val>, Nat.is_lt(0n, n), Some{KV.VColl{KV.CList{KV.deq.of(n, xs)}}}, None{})
 
-def val.set.of(ints: Bool, +n: Nat, xs: List<&2, String>, t: KV.Trie<Unit>) -> KV.Val:
-  match ints:
+# a hashtable of the n members xs (small: as a small one, in their order)
+def val.set.table(small: Bool, +n: Nat, xs: List<&2, String>, t: KV.Trie<Unit>) -> KV.Val:
+  match small:
     case True{}:
-      KV.VColl{KV.CMems{KV.MInts{n, ints.tree(xs, KV.ITip{})}}}
+      KV.VColl{KV.CMems{KV.ms.make(n, xs)}}
     case False{}:
       KV.VColl{KV.CMems{KV.MBig{n, t}}}
+
+def val.set.of(ints: Bool, +n: Nat, +xs: List<&2, String>, t: KV.Trie<Unit>) -> KV.Val:
+  match ints:
+    case True{}:
+      KV.VColl{KV.CMems{KV.MInts{n, KV.ints.of(xs, "", 0n)}}}
+    case False{}:
+      val.set.table(Bool.and(Nat.is_le(n, 128n), Bool.not(len.gt(xs, 64n))), n, xs, t)
 
 # a set of the n members xs, the trie of which finds a member twice
 def val.set.any(+n: Nat, +xs: List<&2, String>) -> Maybe<&2, KV.Val>:
   +t = mems.trie(xs, KV.empty(Unit))
   Bool.pick(Maybe<&2, KV.Val>, Bool.and(Nat.is_lt(0n, n), Nat.is_eq(KV.size(Unit, t), n)), Some{val.set.of(Bool.and(Nat.is_le(n, 512n), all.ints(xs)), n, xs, t)}, None{})
 
-def val.set.go(ints: Bool, +n: Nat, +xs: List<&2, String>) -> Maybe<&2, KV.Val>:
+def val.set.go(ints: Bool, +n: Nat, +xs: List<&2, String>, +b: String) -> Maybe<&2, KV.Val>:
   match ints:
     case True{}:
-      Some{KV.VColl{KV.CMems{KV.MInts{n, KV.ints.build(n, xs)}}}}
+      Some{KV.VColl{KV.CMems{KV.MInts{n, KV.pk.flat(String.drop(b, 8n), Nat.sub(String.length(b), 8n))}}}}
     case False{}:
       val.set.any(n, xs)
 
-# a set of the members xs (sorted: integers in increasing order, from an
-# intset, which are an intset at once when they are 512 at most: each is
-# there once, so no trie of them is made)
-def val.set(+sorted: Bool, +xs: List<&2, String>) -> Maybe<&2, KV.Val>:
+# a set of the members xs (sorted: integers in increasing order, from the
+# intset b, which are an intset at once when they are 512 at most, its
+# string as Redis wrote it, whatever its width: each is there once, so no
+# trie of them is made)
+def val.set(+sorted: Bool, +xs: List<&2, String>, +b: String) -> Maybe<&2, KV.Val>:
   +n = List.length(&2, String, xs)
-  val.set.go(Bool.and(sorted, Bool.and(Nat.is_lt(0n, n), Nat.is_le(n, 512n))), n, xs)
+  val.set.go(Bool.and(sorted, Bool.and(Nat.is_lt(0n, n), Nat.is_le(n, 512n))), n, xs, b)
 
 def zel.trie(es: List<&2, KV.ZEl>, t: KV.Trie<F.F64>) -> KV.Trie<F.F64>:
   match es:
@@ -2879,25 +2882,26 @@ def obj.list.b(m: Maybe<&2, List<&2, String>>, t: String) -> Vr:
     case None{}:
       VrBad{}
 
-def obj.set.of(+sorted: Bool, xs: List<&2, String>, t: String) -> Vr:
+def obj.set.of(+sorted: Bool, xs: List<&2, String>, +b: String, t: String) -> Vr:
   match xs:
     case Nil{}:
       VrEmpty{t}
     case Con{x, more}:
-      vr.of(val.set(sorted, x <> more), t)
+      vr.of(val.set(sorted, x <> more, b), t)
 
 def obj.set(m: Maybe<&1, List<&2, String> & String>) -> Vr:
   match m:
     case Some{p}:
       (xs, t) = p
-      obj.set.of(False{}, xs, t)
+      obj.set.of(False{}, xs, "", t)
     case None{}:
       VrBad{}
 
-def obj.set.b(m: Maybe<&2, List<&2, String>>, t: String) -> Vr:
+# the intset b, its members xs (is.read)
+def obj.set.b(m: Maybe<&2, List<&2, String>>, +b: String, t: String) -> Vr:
   match m:
     case Some{xs}:
-      obj.set.of(True{}, xs, t)
+      obj.set.of(True{}, xs, b, t)
     case None{}:
       VrBad{}
 
@@ -2975,7 +2979,7 @@ def obj.blob.of(k: Nat, +b: String, t: String) -> Vr:
     case 10n:
       obj.list.b(zl.read(b), t)
     case 11n:
-      obj.set.b(is.read(b), t)
+      obj.set.b(is.read(b), b, t)
     case 12n:
       obj.zlp(zl.read(b), t)
     case 13n:
@@ -3064,13 +3068,14 @@ def obj(+k: Nat, s: String) -> Maybe<&2, KV.Val>:
 # nodes RPUSH makes of its elements (at list-max-listpack-size -2: a node
 # takes an element while its listpack's bytes, the element's and 8 stay
 # within 8192), each packed (2) as a listpack; an intset (SET_INTSET) of
-# the narrowest width that holds its members, a large set as its count and
-# members (SET); a small sorted set as one listpack (ZSET_LISTPACK) of its
-# members and scores (a score as a listpack keeps it: F.f64.show_lp), a
-# large one as its count, then its members and their scores' bits from
-# the greatest down (ZSET_2). The value's type (rdbSaveObjectType) comes
-# before it: in a payload right before it (put.val), in a file before the
-# key (The file, below).
+# the narrowest width that holds its members, any other set as its count
+# and members (SET: Redis 7.0 has no listpack of a set, and cannot read
+# Redis 7.2's, SET_LISTPACK); a small sorted set as one listpack
+# (ZSET_LISTPACK) of its members and scores (a score as a listpack keeps
+# it: F.f64.show_lp), a large one as its count, then its members and
+# their scores' bits from the greatest down (ZSET_2). The value's type
+# (rdbSaveObjectType) comes before it: in a payload right before it
+# (put.val), in a file before the key (The file, below).
 
 def put.blob(+b: String, rest: String) -> String:
   len.put(String.length(b), b ++ rest)
@@ -3138,52 +3143,19 @@ def put.list(+d: KV.Deq, rest: String) -> String:
   +ns = ql.part(KV.deq.all(d), QlS{Nil{}, 0n, 7n, Nil{}})
   len.put(List.length(&2, List<&2, String>, ns), put.nodes(ns, rest))
 
-# Sets: an intset's width (2, 4 or 8 bytes) is the widest its members need
-def is.w.of(v: IV) -> Nat:
-  match v:
-    case IN{+neg, +m}:
-      +b = Bool.pick(Nat, neg, 1n, 0n)
-      Bool.pick(Nat, Nat.is_lt(m, Nat.add(32768n, b)), 2n, Bool.pick(Nat, Nat.is_lt(m, Nat.add(2147483648n, b)), 4n, 8n))
-    case _:
-      8n
-
-def is.w(xs: List<&2, String>, +w: Nat) -> Nat:
-  match xs:
-    case Nil{}:
-      w
-    case Con{+x, rest}:
-      is.w(rest, Nat.max(w, is.w.of(iv(x))))
-
-def is.put.of(w: Nat, v: IV, rest: String) -> String:
-  match w v:
-    case 2n IN{+neg, +m}:
-      le(2n, twos(neg, 65536n, m), rest)
-    case 4n IN{+neg, +m}:
-      le(4n, twos(neg, two32(), m), rest)
-    case _ IN{+neg, +m}:
-      q.le(q.of_nat(neg, m), rest)
-    case _ IQ{q}:
-      q.le(q, rest)
-    case _ INo{}:
-      le(8n, 0n, rest)
-
-def is.puts(+w: Nat, xs: List<&2, String>, rest: String) -> String:
-  match xs:
-    case Nil{}:
-      rest
-    case Con{+x, more}:
-      is.put.of(w, iv(x), is.puts(w, more, rest))
-
-def is.blob(+n: Nat, +xs: List<&2, String>) -> String:
-  +w = is.w(xs, 2n)
-  le(4n, w, le(4n, n, is.puts(w, xs, "")))
-
+# Sets: an intset as Redis writes one, its header (its members' width
+# and their count, 4 bytes each, the low first) before its string
+# (map.bend: the same bytes)
 def put.mems(m: KV.Mems, rest: String) -> String:
   match m:
-    case KV.MInts{+n, xs}:
-      put.blob(is.blob(n, KV.ints.list(xs)), rest)
+    case KV.MInts{+n, +b}:
+      put.blob(le(4n, KV.ints.w(b, n), le(4n, n, b)), rest)
     case KV.MBig{+n, +t}:
       len.put(n, put.strs(KV.keys(Unit, t, 0n), rest))
+    case KV.MSmall{+n, +b}:
+      len.put(n, put.strs(KV.ms.all(n, b), rest))
+    case KV.MLong{+n, +ps}:
+      len.put(n, put.strs(KV.ml.all(ps), rest))
 
 # Sorted sets
 def zel.words(es: List<&2, KV.ZEl>) -> List<&2, String>:
@@ -3356,6 +3328,10 @@ def put.mems.kind(+m: KV.Mems) -> U32:
     case KV.MInts{n, xs}:
       11
     case KV.MBig{n, t}:
+      2
+    case KV.MSmall{n, b}:
+      2
+    case KV.MLong{n, ps}:
       2
 
 def put.zset.kind(+z: KV.Zset) -> U32:

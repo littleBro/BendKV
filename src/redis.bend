@@ -18911,7 +18911,9 @@ def sscan.rep(+next: Nat, xs: List<&2, String>, pat: Maybe<&2, String>) -> Reply
 
 # SSCAN: an intset answers all its members at once, with cursor 0, as
 # Redis answers one; a hashtable scans its trie as HSCAN scans a hash's
-# (the options as HSCAN reads them)
+# (the options as HSCAN reads them), and a small one (KV.Mems) answers
+# the cursors, and the members a call, that a trie of its members
+# answers (KV.ss.scan, which makes none)
 def sscan.big(sc: KV.Scan, pat: Maybe<&2, String>) -> Reply:
   match sc:
     case KV.Stop{+at, acc}:
@@ -18919,12 +18921,24 @@ def sscan.big(sc: KV.Scan, pat: Maybe<&2, String>) -> Reply:
     case KV.Scan{w, acc}:
       sscan.rep(0n, List.reverse(&2, String, acc), pat)
 
+# a small set's scan, its members in the order read
+def sscan.small(sc: KV.Scan, pat: Maybe<&2, String>) -> Reply:
+  match sc:
+    case KV.Stop{+at, xs}:
+      sscan.rep(Bool.pick(Nat, Nat.is_lt(at, 1048576n), at, 0n), xs, pat)
+    case KV.Scan{w, xs}:
+      sscan.rep(0n, xs, pat)
+
 def sscan.go(+s: KV.Mems, +cur: Nat, +n: Nat, pat: Maybe<&2, String>) -> Reply:
   match s:
-    case KV.MInts{m, +xs}:
-      sscan.rep(0n, KV.ints.list(xs), pat)
+    case KV.MInts{+m, +b}:
+      sscan.rep(0n, KV.ints.list(b, m), pat)
     case KV.MBig{m, +t}:
       sscan.big(KV.scan(Unit, t, cur, n, 0n), pat)
+    case KV.MSmall{+m, +b}:
+      sscan.small(KV.ss.scan(m, b, cur, n), pat)
+    case KV.MLong{m, +ps}:
+      sscan.small(KV.ss.scan.ps(ps, cur, n), pat)
 
 def sscan.of(a: ScanArgs, +s: KV.Mems) -> Reply:
   match a:
@@ -21091,12 +21105,13 @@ def lwrite.coll(op: LWrite, +cl: KV.Coll) -> Out:
 
 # Members at random, by r (the server's random number, and the numbers of
 # its Weyl sequence after it, each scrambled by KV.mix): a member of an
-# intset by its index, of a hashtable as RANDOMKEY picks a key (KV.pick).
-# k different members of a set of n, k below n: an intset's picked and
-# dropped in turn; a hashtable's, when k is more than a third of n, by
-# n - k members dropped from it at random (Redis's third way), else
-# picked until k different ones come, at most 16k + 64 picks (Redis's
-# fourth way), as SRANDMEMBER and SPOP pick them.
+# intset or of a small hashtable by its index, of a trie as RANDOMKEY
+# picks a key (KV.pick). k different members of a set of n, k below n:
+# an intset's or a small hashtable's picked and dropped in turn; a
+# trie's, when k is more than a third of n, by n - k members dropped
+# from it at random (Redis's third way), else picked until k different
+# ones come, at most 16k + 64 picks (Redis's fourth way), as SRANDMEMBER
+# and SPOP pick them.
 def srand.next(+r: U32) -> U32:
   U32.add(r, 2654435769)
 
@@ -21105,10 +21120,14 @@ def srand.at(+r: U32, +n: Nat) -> Nat:
 
 def srand.pick(+s: KV.Mems, +r: U32) -> Maybe<&2, String>:
   match s:
-    case KV.MInts{+n, +xs}:
-      KV.ints.nth(xs, srand.at(r, n))
+    case KV.MInts{+n, +b}:
+      KV.ints.nth(b, n, srand.at(r, n))
     case KV.MBig{n, +t}:
       KV.pick(Unit, t, KV.mix(r), 0n)
+    case KV.MSmall{+n, +b}:
+      KV.ms.nth(n, b, srand.at(r, n))
+    case KV.MLong{+n, +ps}:
+      KV.ml.nth(ps, srand.at(r, n), None{})
 
 def srand.cons(m: Maybe<&2, String>, rest: List<&2, String>) -> List<&2, String>:
   match m:
@@ -21210,10 +21229,14 @@ def srand.big(thin: Bool, +k: Nat, +n: Nat, +t: KV.Trie<Unit>, +r: U32) -> List<
 # k different members of s, k below its size
 def srand.uniq(+k: Nat, +s: KV.Mems, +r: U32) -> List<&2, String>:
   match s:
-    case KV.MInts{+n, +xs}:
-      srand.ints(k, KV.ints.list(xs), n, r)
+    case KV.MInts{+n, +b}:
+      srand.ints(k, KV.ints.list(b, n), n, r)
     case KV.MBig{+n, +t}:
       srand.big(Nat.is_lt(n, Nat.mul(k, 3n)), k, n, t, r)
+    case KV.MSmall{+n, +b}:
+      srand.ints(k, KV.ms.all(n, b), n, r)
+    case KV.MLong{+n, +ps}:
+      srand.ints(k, KV.ml.all(ps), n, r)
 
 # c different members of s, all of them when c is at least its size
 def srand.many.of(all: Bool, +c: Nat, +s: KV.Mems, +r: U32) -> List<&2, String>:
@@ -22171,18 +22194,20 @@ def upd.put(t: KV.Trie<KV.Val>, +k: String, +h: U32, +n: Nat, +x: Nat, now: Nat,
 
 # whether an update of a key whose entry there at now is m takes the key's
 # value out of the keyspace while it changes it: an HSET of pairs to a
-# hash, or an SADD to a set that lacks its first member, which write the
-# collection over for sure (PROOF.bend: takes_over). The keyspace holding
-# the collection meanwhile would make the write copy the path it changes
-# in it, and the keyspace drop the old path after.
+# hash, or an SADD to a trie of members that lacks its first member,
+# which write the collection over for sure (PROOF.bend: takes_over). The
+# keyspace holding the collection meanwhile would make the write copy the
+# path it changes in it, and the keyspace drop the old path after. A set
+# kept in a string (an intset, KV.MInts; a small set of strings, KV.MSmall
+# and KV.MLong) is not taken: its write makes its string anew whatever
+# holds it, so the take would save nothing and its test cost a find
+# (FINDINGS.md, section 3zzzs).
 def upd.takes(+op: UpdOp, +m: Maybe<&2, KV.Item<KV.Val>>) -> Bool:
   match op m:
     case UHash{HWSet{Con{p, rest}, mset}} Some{KV.Item{KV.VColl{KV.CHash{h}}, e}}:
       True{}
     case UMems{SWAdd{Con{+x, rest}}} Some{KV.Item{KV.VColl{KV.CMems{KV.MBig{n, +t}}}, e}}:
       Bool.not(KV.has(Unit, t, x))
-    case UMems{SWAdd{Con{+x, rest}}} Some{KV.Item{KV.VColl{KV.CMems{KV.MInts{n, +xs}}}, e}}:
-      Bool.not(KV.mems.ints.has(KV.ints.ok(x), x, xs))
     case _ _:
       False{}
 

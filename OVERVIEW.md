@@ -835,7 +835,19 @@ would need the invariant "a bucket holds no key twice".
   refused no entry, gives the same databases as the replay `A.replay` the laws above are
   about: the check only decides whether to replay. It is not proved that the check
   passes every file BendKV writes (the tests show it); a refusal of its own file could
-  only stop a start, not change the databases.
+  only stop a start, not change the databases;
+- `load_windows` — **the start reads its file a window at a time, and makes of any
+  windows what it made of the whole file**: the check's verdict on the entries the
+  loader keeps, their number, the entries of a transaction it reverts, and what follows
+  the last whole entry. An entry read with more bytes after it reads the same and
+  leaves them after what it left (each part of the parser, for strings it does not
+  know: the chars it expects are compared by their code, `U32.is_eq`, so that a proof
+  can follow it), and it takes a byte at least, so the loader's fuel lasts on any
+  string; so the loader reads two strings one after the other as the entries of the
+  first, then those of what the first left with the second after it. The start holds,
+  after each entry, what `untx`, `checked` and `replay` make of the entries so far,
+  a transaction held from its MULTI until its EXEC. So the laws above, stated of the
+  whole file, are about the start that reads it in windows.
 
 Mutations of the log (not writing APPEND, writing the wrong number for INCR, shifting a
 digit, taking fuel from the loader, writing an extra element into an array's count,
@@ -843,7 +855,12 @@ losing a pair of MSET, not cutting off a bulk string's body) break the proof exa
 the place they spoil. Two more mutations of the loader pass all the laws about a whole
 file, and only the laws about a cut catch them: a bulk cut in the middle of its bytes
 reads as a shorter string (a value nobody wrote), and an entry cut between its
-arguments reads as what had arrived (DEL a b c would run as DEL a b).
+arguments reads as what had arrived (DEL a b c would run as DEL a b). Eight mutations
+of the start in windows (an entry run without its check, an EXEC that forgets the
+entries held before it, a window read before what the last one left, the reverted
+entries written in the wrong order, a MULTI inside another that goes on, a second MULTI
+that keeps the first's cut, a bulk or a number line taken without its line's end at
+the end of a window) break the proof of `load_windows` where they spoil the start.
 
 **Databases:** laws about the acts that change whole databases (`R.Act`), at time 0:
 - `focus_keeps` and `focus_on` — SELECT changes no database and puts in focus the one
