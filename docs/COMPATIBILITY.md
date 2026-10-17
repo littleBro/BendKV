@@ -389,6 +389,12 @@ request are read through a window of one chunk now, moved on as the parse goes, 
 its parse takes time in proportion to its length: the GEOADD takes 194 ms, the EXISTS
 29 ms (section 3zzn of [FINDINGS.md](FINDINGS.md)).
 
+Bugs in Redis and Valkey. Comparing BendKV with Redis 7.2.16, 8.10.2 and Valkey 9.1.2
+found three bugs in them: LSET takes its index modulo 2^32, a failed AUTH in a pipeline
+gets no reply, and CONFIG SET tls-port crashes a server built without TLS. BendKV does not
+copy them. [UPSTREAM.md](UPSTREAM.md) has how to see each, where it is in the code, and
+where it is to be reported.
+
 ## What this mode does not test
 
 Tests that need a server of their own do not run in this mode: the units above with no
