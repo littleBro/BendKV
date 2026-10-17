@@ -1102,7 +1102,7 @@ def statuses(xs: List<&2, String>) -> List<&2, Reply>:
 
 # a HELP reply: a header, the subcommands, and HELP itself
 def help(cmd: String, lines: List<&2, String>) -> SessOp:
-  SReply{RArray{statuses(Con{cmd ++ " <subcommand> [<arg> [value] [opt] ...]. Subcommands are:", List.append(&2, String, lines, ["HELP", "    Prints this help."])})}}
+  SReply{RArray{statuses(Con{cmd ++ " <subcommand> [<arg> [value] [opt] ...]. Subcommands are:", List.append(&2, String, lines, ["HELP", "    Print this help."])})}}
 
 def client_help() -> List<&2, String>:
   ["CACHING (YES|NO)",
@@ -1141,6 +1141,10 @@ def client_help() -> List<&2, String>:
    "    Control the replies sent to the current connection.",
    "SETNAME <name>",
    "    Assign the name <name> to the current connection.",
+   "SETINFO <option> <value>",
+   "    Set client meta attr. Options are:",
+   "    * LIB-NAME: the client lib name.",
+   "    * LIB-VER: the client lib version.",
    "UNBLOCK <clientid> [TIMEOUT|ERROR]",
    "    Unblock the specified blocked client.",
    "TRACKING (ON|OFF) [REDIRECT <id>] [BCAST] [PREFIX <prefix> [...]]",
@@ -1149,7 +1153,9 @@ def client_help() -> List<&2, String>:
    "TRACKINGINFO",
    "    Report tracking status for the current connection.",
    "NO-EVICT (ON|OFF)",
-   "    Protect current client connection from eviction."]
+   "    Protect current client connection from eviction.",
+   "NO-TOUCH (ON|OFF)",
+   "    Will not touch LRU/LFU stats when this mode is on."]
 
 def function_help() -> List<&2, String>:
   ["LOAD [REPLACE] <FUNCTION CODE>",
@@ -1663,14 +1669,15 @@ def no_evict.of(args: List<&2, String>) -> ClOp:
     case _:
       e_client_syntax()
 
-# A client's line in CLIENT LIST and CLIENT INFO, as Redis 7.0.15 writes
+# A client's line in CLIENT LIST and CLIENT INFO, as Redis 7.2.16 writes
 # it (catClientInfoString): its id, its peer's address and its own, its
 # socket's fd, name, age and idle time (s), flags, database, the counts of
 # its channels, patterns and shard channels, the commands queued in its
 # MULTI (none: -1), the bytes of the batch it runs (qbuf) and of the
 # command's arguments (argv-mem), its last command (cmd), its user (ACL),
 # the client its invalidations go to (redir: -1 when it does not track, 0 itself), and
-# whether it speaks RESP3 (resp). BendKV keeps no buffer of a client's own, so
+# whether it speaks RESP3 (resp), then the library CLIENT SETINFO names
+# (lib-name, lib-ver: none yet). BendKV keeps no buffer of a client's own, so
 # qbuf-free, multi-mem, the reply buffer's size and peak, the output
 # lists and the memory are 0.
 type ClLine is Data:
@@ -1690,7 +1697,7 @@ def client.line(l: ClLine) -> String:
       b = " age=" ++ Nat.show(age) ++ " idle=" ++ Nat.show(idle) ++ " flags=" ++ flags ++ " db=" ++ Nat.show(db)
       c = " sub=" ++ Nat.show(sub) ++ " psub=" ++ Nat.show(psub) ++ " ssub=" ++ Nat.show(ssub) ++ " multi=" ++ line.multi(multi)
       d = " qbuf=" ++ Nat.show(qbuf) ++ " qbuf-free=0 argv-mem=" ++ Nat.show(argv) ++ " multi-mem=0 rbs=0 rbp=0 obl=0 oll=0 omem=0 tot-mem=0"
-      a ++ b ++ c ++ d ++ " events=r cmd=" ++ cmd ++ " user=" ++ user ++ " redir=" ++ redir ++ " resp=" ++ Bool.pick(String, r3, "3", "2")
+      a ++ b ++ c ++ d ++ " events=r cmd=" ++ cmd ++ " user=" ++ user ++ " redir=" ++ redir ++ " resp=" ++ Bool.pick(String, r3, "3", "2") ++ " lib-name= lib-ver="
 
 def parse_client(id: Nat, sub: String, args: List<&2, String>) -> SessOp:
   match id:
@@ -2061,12 +2068,14 @@ def command_help() -> List<&2, String>:
    "GETKEYSANDFLAGS <full-command>",
    "    Return the keys and the access flags from a full Redis command."]
 
-# GETKEYS and GETKEYSANDFLAGS take a command and at least one argument
+# GETKEYS and GETKEYSANDFLAGS take a command and its arguments, if any
+# (Redis 7.2: their arity is -3; the command's own arity is checked with
+# its keys, command.bend)
 def command_keys(+sub: String, args: List<&2, String>, name: String) -> SessOp:
   match args:
-    case Con{c, Con{a, rest}}:
-      SCommand{sub <> (c <> (a <> rest))}
-    case _:
+    case Con{c, rest}:
+      SCommand{sub <> (c <> rest)}
+    case Nil{}:
       s_arity(name)
 
 # the subcommands with a wrong number of arguments, the unknown ones and
@@ -6670,14 +6679,14 @@ def shutdown.of(s: Sd, +args: List<&2, String>) -> Cmd:
 def shutdown.cmd(+args: List<&2, String>) -> Cmd:
   shutdown.of(sd.flags(args), args)
 
-# LOLWUT [VERSION v ...]: 7.0.15's own LOLWUT writes Redis's version;
+# LOLWUT [VERSION v ...]: 7.2.16's own LOLWUT writes Redis's version;
 # VERSION 5 and VERSION 6 draw the art of Redis 5 and Redis 6, as
 # lolwutCommand picks them by the version as an unsigned int ("%u.0.0"),
 # the arguments after it longs, clamped as lolwut5Command and
-# lolwut6Command clamp them; any other version is 7.0.15's, which takes
+# lolwut6Command clamp them; any other version is 7.2.16's, which takes
 # no argument
 def lolwut.text() -> Reply:
-  RVerb{"Redis ver. 7.0.15\n"}
+  RVerb{"Redis ver. 7.2.16\n"}
 
 # a long clamped to 1..hi (None: no long)
 def lw.clamp(l: LL, +hi: Nat) -> Maybe<&2, Nat>:
@@ -10939,9 +10948,9 @@ def stat.arity(+key: Nat) -> Nat:
     case 126n:
       7n
     case 127n:
-      6n
+      7n
     case 128n:
-      6n
+      7n
     case 129n:
       8n
     case 130n:
@@ -11199,9 +11208,9 @@ def stat.arity(+key: Nat) -> Nat:
     case 256n:
       4n
     case 257n:
-      9n
+      7n
     case 258n:
-      9n
+      7n
     case 259n:
       4n
     case 260n:
@@ -12514,18 +12523,6 @@ def stat.noscript(+key: Nat) -> Bool:
       True{}
     case 104n:
       True{}
-    case 153n:
-      True{}
-    case 154n:
-      True{}
-    case 155n:
-      True{}
-    case 156n:
-      True{}
-    case 158n:
-      True{}
-    case 159n:
-      True{}
     case 161n:
       True{}
     case 162n:
@@ -12553,8 +12550,6 @@ def stat.noscript(+key: Nat) -> Bool:
     case 176n:
       True{}
     case 185n:
-      True{}
-    case 186n:
       True{}
     case 187n:
       True{}
@@ -12793,6 +12788,12 @@ def stat.denyoom(+key: Nat) -> Bool:
     case 155n:
       True{}
     case 156n:
+      True{}
+    case 166n:
+      True{}
+    case 168n:
+      True{}
+    case 170n:
       True{}
     case 177n:
       True{}

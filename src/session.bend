@@ -845,6 +845,12 @@ def srv.blocked(s: Srv, +n: Nat, +t: Nat) -> Srv:
     case Srv{pass, cfg, info, mm}:
       Srv{pass, cfg, I.info.blocked(info, n, t), mm}
 
+# the keys that clients wait on, k of them (server.bend: waits.bkeys)
+def srv.bkeys(s: Srv, +k: Nat) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.bkeys(info, k), mm}
+
 # the engine's facts of scripts (server.bend, Scripts): n scripts cached,
 # the Lua state's bytes (m), the cache's (c)
 def srv.scripts(s: Srv, +n: Nat, +m: Nat, +c: Nat) -> Srv:
@@ -1200,7 +1206,7 @@ def hello.opts(+s: Srv, +opts: List<&2, String>, h: Hel) -> Hel:
 # HELLO's reply: the server, as Redis 7.0.15 describes itself, in the
 # protocol it switched to
 def hello.map(id: Nat, r3: Bool) -> R.Reply:
-  R.RMap{[R.RBulk{"server"}, R.RBulk{"redis"}, R.RBulk{"version"}, R.RBulk{"7.0.15"}, R.RBulk{"proto"}, R.r_int(Bool.pick(Nat, r3, 3n, 2n)), R.RBulk{"id"}, R.r_int(id), R.RBulk{"mode"}, R.RBulk{"standalone"}, R.RBulk{"role"}, R.RBulk{"master"}, R.RBulk{"modules"}, R.RArray{Nil{}}]}
+  R.RMap{[R.RBulk{"server"}, R.RBulk{"redis"}, R.RBulk{"version"}, R.RBulk{"7.2.16"}, R.RBulk{"proto"}, R.r_int(Bool.pick(Nat, r3, 3n, 2n)), R.RBulk{"id"}, R.r_int(id), R.RBulk{"mode"}, R.RBulk{"standalone"}, R.RBulk{"role"}, R.RBulk{"master"}, R.RBulk{"modules"}, R.RArray{Nil{}}]}
 
 def hello.fin(h: Hel, id: Nat, nopass: Bool) -> R.Reply:
   match h:
@@ -2130,11 +2136,19 @@ def cfg.nat.of(l: R.LL) -> Nat:
 def cfg.nat(+cfg: List<&2, C.CItem>, +name: String) -> Nat:
   cfg.nat.of(R.ll.read(C.config.get_value(cfg, name)))
 
+# a call ACL refused, counted by the reason w of its entry (INFO's
+# acl_access_denied_*)
+def srv.denied(s: Srv, +w: String) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.denied(info, w), mm}
+
 # the ACL LOG with an entry the server makes (a call it refused, an AUTH
 # that failed: server.bend, ACL), as many kept as acllog-max-len says
 def srv.acl.log(s: Srv, e: U.Ent) -> Srv:
   +s0 = s
-  srv.acl.set(s0, U.acl.log.add(srv.acl(s0), e, cfg.nat(srv.cfg(s0), "acllog-max-len")))
+  +e0 = e
+  srv.denied(srv.acl.set(s0, U.acl.log.add(srv.acl(s0), e0, cfg.nat(srv.cfg(s0), "acllog-max-len"))), U.ent.why(e0))
 
 # whether a listpack's longest element w is within the limit l: any is,
 # with l at its default of 64 or more

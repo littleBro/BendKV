@@ -256,8 +256,10 @@ def held_replies(c, port):
 def noauth(c, port):
     out = [c.ask("CONFIG", "SET", "requirepass", "secret")]
     o = Client(port)
-    out += o.pipe([["GET", "k"], ["SET", "k", "v"], ["PING"], ["CLIENT", "ID"], ["NOSUCH"], ["AUTH", "wrong"],
-                   ["AUTH", "secret"], ["GET", "k"]])
+    out += o.pipe([["GET", "k"], ["SET", "k", "v"], ["PING"], ["CLIENT", "ID"], ["NOSUCH"]])
+    # the failed AUTH first in its pipeline: Redis 7.2.16 drops the reply
+    # of one that comes after replies not yet written (docs/UPSTREAM.md, 2)
+    out += o.pipe([["AUTH", "wrong"], ["AUTH", "secret"], ["GET", "k"]])
     o.close()
     out.append(c.ask("CONFIG", "SET", "requirepass", ""))
     return [x if not (isinstance(x, bytes) and x.isdigit()) else "id" for x in out]

@@ -111,6 +111,15 @@ parts of it are written from 7.2.16's sources:
 
 - Tools: tools/redis_ref.sh, which builds Redis 7.2.16 from its tarball
   for the tests to compare with (nothing of Redis is kept here).
+- Tables: tools/data/redis-commands.json, COMMAND INFO and COMMAND DOCS of
+  Redis 7.2.16's commands (from src/commands/*.json, as a running server
+  answers them), and the tables tools/gen_commands.py writes from it into
+  src/command.bend, src/acl.bend and src/redis.bend.
+- Texts and fields: the HELP replies, CLIENT LIST's fields (networking.c),
+  INFO's fields and their order, its listeners and its debug section
+  (server.c, connection.c), LOLWUT's line, and the version HELLO, INFO and
+  Lua's redis.REDIS_VERSION give (src/redis.bend, src/info.bend,
+  src/session.bend, src/lua/engine.c).
 
 Bend (bend-patches/): patches to the Bend compiler and its runtime
 (github.com/bendlang/bend at 1cce499, Bend 2.0.35), Copyright 2026

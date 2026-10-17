@@ -1146,6 +1146,27 @@ def waits.put(p: Nat & Nat, srv: S.Srv) -> S.Srv:
 def waits.count(+ws: Waits, srv: S.Srv) -> S.Srv:
   waits.put(waits.len(ws, 0n, 0n), srv)
 
+# the keys the clients of ws wait on, each with its database once (the
+# database's number and a ':' before the key), for INFO's
+# total_blocking_keys: counted only for a batch that asks for INFO
+# (Facts), not each time a client starts or stops to wait
+def bkeys.put(+d: String, +ks: List<&2, String>, h: KV.Trie<Nat>) -> KV.Trie<Nat>:
+  match ks:
+    case Nil{}:
+      h
+    case Con{+k, +rest}:
+      bkeys.put(d, rest, KV.set(Nat, h, d ++ k, 0n))
+
+def bkeys.waits(+ws: Waits, h: KV.Trie<Nat>) -> KV.Trie<Nat>:
+  match ws:
+    case WaitNone{}:
+      h
+    case WaitOn{id, back, c0, c1, +b, argv, code, +db, until, cmds, codes, av, +rest}:
+      bkeys.waits(rest, bkeys.put(Nat.show(db) ++ ":", S.blk.keys(b), h))
+
+def waits.bkeys(+ws: Waits, srv: S.Srv) -> S.Srv:
+  S.srv.bkeys(srv, KV.size(Nat, bkeys.waits(ws, KV.empty(Nat))))
+
 def waits.length(ws: Waits, +n: Nat) -> Nat:
   match ws:
     case WaitNone{}:
@@ -7702,6 +7723,14 @@ def bg.noev(+id: Nat, on: Bool, +code: Nat, g: LRun) -> LRun:
     case LHeld{h}:
       LHeld{h}
 
+# NO-EVICT off, as RESET turns it off in Redis 7.2 (clearClientConnectionState)
+def bg.noev.off(+id: Nat, g: LRun) -> LRun:
+  match g:
+    case LRun{rs, es, conn, srv, ds, ws, up, tx, pb}:
+      LRun{rs, es, conn, srv, ds, ws, up, tx, ps.noev(id, False{}, pb)}
+    case LHeld{h}:
+      LHeld{h}
+
 # the client's name, database and protocol written to the registry,
 # after a command that may set them (CLIENT SETNAME, HELLO, SELECT, RESET)
 def bg.conned(g: LRun) -> LRun:
@@ -10083,7 +10112,7 @@ def bg.cmd(+id: Nat, +back: Chan(Ans), +inb: Nat, sh: Sh, +c: R.Cmd, +code: Nat,
     case ShUnwatch{}:
       bg.one(c, code, bg.unwatch(id, g))
     case ShReset{}:
-      bg.user(id, "default", bg.conned(bg.one(c, code, bg.trk.off(id, bg.unsub.all(id, bg.close(id, g))))))
+      bg.user(id, "default", bg.conned(bg.one(c, code, bg.noev.off(id, bg.trk.off(id, bg.unsub.all(id, bg.close(id, g)))))))
     case ShQueue{}:
       bg.queue(c, code, a, g)
     case ShRefuse{}:
@@ -11620,8 +11649,8 @@ def group_req(+log: Bool, q: Req, g: Grp) -> Grp:
       grp.req(log, cn, job, back, tl, inb, raw, g0)
     case SubReq{+cn, job, back, tl, +inb, raw} g0:
       grp.sub(cn, job, back, inb, raw, g0)
-    case Facts{live} Grp{outs, es, +srv, ds, ws, up, tx, +pb}:
-      Grp{outs, es, srv.facts(facts.held(pb, srv), srv, live), ds, ws, up, tx, pb}
+    case Facts{live} Grp{outs, es, +srv, ds, +ws, up, tx, +pb}:
+      Grp{outs, es, waits.bkeys(ws, srv.facts(facts.held(pb, srv), srv, live)), ds, ws, up, tx, pb}
     case Tick{+ms} Grp{outs, es, srv, +ds, ws, up, tx, +pb}:
       +p = ps.pz(pb)
       grp.heed(grp.limit(ms, group.tick.if(Nat.is_le(2n, ps.down(pb)), pz.on(p), pz.over(p, R.ds.now(ds)), outs, es, srv, ms, ds, ws, up, tx, pb)))
@@ -19892,7 +19921,7 @@ def run(+items: List<&2, C.CItem>, +post: Bool, +aof: Maybe<&2, String>, +sync: 
     +sup : Bool <- start.sup.env(items, lg)
     Unit <- start.refused(String.is_empty(T.refusal(items, sup)), T.refusal(items, sup), lg)
     Unit <- log(lg, 3, "oO0OoO0OoO0Oo BendKV is starting oO0OoO0OoO0Oo")
-    Unit <- log(lg, 3, "BendKV version=" ++ T.version() ++ ", Redis 7.0.15 commands, bits=64, pid=" ++ U32.show(pid) ++ ", just started")
+    Unit <- log(lg, 3, "BendKV version=" ++ T.version() ++ ", Redis 7.2.16 commands, bits=64, pid=" ++ U32.show(pid) ++ ", just started")
     Unit <- log(lg, 3, Bool.pick(String, bare, "Warning: no config file specified, using the default config. In order to specify a config file use " ++ prog ++ " /path/to/redis.conf", "Configuration loaded"))
     Unit <- log.lines(lm, 3, T.warnings(items))
     tcp : List<&1, Listener> <- listen.start(U32.is_eq(port, 0), T.addrs(items), port, lm)
