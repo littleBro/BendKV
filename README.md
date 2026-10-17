@@ -1029,5 +1029,12 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
-Not decided yet. Until a license is added, all rights are reserved by the authors. The
-third-party software in `deps/` keeps its own licenses ([NOTICE](NOTICE)).
+BendKV is licensed under the [Apache License, Version 2.0](LICENSE). It includes, and
+ports code from, software under other licenses: Redis 7.0.15 (BSD 3-Clause), Lua 5.1.5
+and its libraries (MIT), and Bend, which `bend-patches/` changes (Apache 2.0).
+[NOTICE](NOTICE) lists them file by file. Contributions come under BendKV's license
+([CONTRIBUTING.md](CONTRIBUTING.md#license)).
+
+Redis is a registered trademark of Redis Ltd. BendKV names Redis to say what it is
+compatible with and what it is measured against; it is not affiliated with, or endorsed
+by, Redis Ltd.
