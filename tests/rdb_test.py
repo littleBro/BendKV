@@ -54,9 +54,14 @@ the same commands.
   -1, a wrong signature, a database past the server's, a type that is
   none, an empty file, a directory, a module's data and a module's value:
   both servers refuse to start, with the same reason in their logs. A
-  library of functions, which Redis loads: BendKV refuses it, saying
-  why. A file of a stream loads on both. A checksum of 0, and a wrong
-  one with rdbchecksum no, load on both.
+  file of a stream loads on both. A checksum of 0, and a wrong one with
+  rdbchecksum no, load on both.
+- Libraries of functions in the file: Redis's (with LZF and without) and
+  BendKV's, both ways, and one of 7.0's release candidates (FUNCTION):
+  both start from each with the same libraries (FUNCTION LIST WITHCODE,
+  FCALL, INFO's counts); files whose library does not load (Lua that does
+  not compile, a library twice, a function twice, a library cut short, a
+  library with no metadata): both stop, with the same lines.
 - BendKV alone: the short form loads no RDB file.
 
     python3 tests/rdb_test.py --bendkv build/bendkv [--redis redis-server] [--dir build/rdb]
@@ -464,6 +469,11 @@ def file_keys(data):
 
     def rstrat(i):
         k, i, enc = rlenat(i)
+        if enc and k == 3:
+            # LZF (Redis's library code): skipped, its bytes not read
+            clen, i, _ = rlenat(i)
+            _, i, _ = rlenat(i)
+            return b"<lzf>", i + clen
         if enc:
             w = [1, 2, 4][k]
             return str(int.from_bytes(data[i:i + w], "little", signed=True)).encode(), i + w
@@ -484,6 +494,9 @@ def file_keys(data):
             _, i, _ = rlenat(i)
         elif op == 0xfc:
             i += 8
+        elif op == 0xf5:
+            # a library of functions (RDB_OPCODE_FUNCTION2): its code
+            _, i = rstrat(i)
         elif op == 0:
             k, i = rstrat(i)
             v, i = rstrat(i)
@@ -1123,10 +1136,6 @@ def corrupt(a, root):
     run(c, "XADD", "st", "1-1", "f", "v")
     run(c, "SAVE")
     stream = read(os.path.join(d, "dump.rdb"))
-    run(c, "DEL", "st")
-    run(c, "FUNCTION", "LOAD", "#!lua name=lib\nredis.register_function('f', function() return 1 end)")
-    run(c, "SAVE")
-    func = read(os.path.join(d, "dump.rdb"))
     shut(c, "SHUTDOWN", "NOSAVE")
     r.exit()
     sel = good.index(b"\xfe")
@@ -1214,18 +1223,114 @@ def corrupt(a, root):
         xs.append((s.code, None if s.code is not None else run(s.conn(), "DUMP", "st")))
         s.kill()
     same("a file of a stream: both load it, and DUMP the same", xs[0], xs[1])
-    # a library: Redis loads it, BendKV says why it cannot
-    for name, data, line in (("a library of functions", func, "BendKV runs no functions: the RDB file holds a library of functions, which it cannot load"),):
-        codes = []
+
+
+# Libraries of functions
+# ----------------------
+
+LIB_A = ("#!lua name=liba\n"
+         "redis.register_function('fa', function(keys, args) return 'a' .. #args end)\n"
+         "-- " + "the same words again and again " * 8 + "\n")
+LIB_B = ("#!lua name=libb\n"
+         "redis.register_function{function_name='fb', callback=function(keys, args) return redis.call('get', keys[1]) end,"
+         " flags={'no-writes'}, description='reads a key'}\n")
+OLD_CODE = b"\nredis.register_function('fo', function() return 'o' end)\n"
+
+
+def flist(c):
+    """FUNCTION LIST WITHCODE, its libraries in the order of their names
+    (each server walks its dictionary in an order of its own)"""
+    r = run(c, "FUNCTION", "LIST", "WITHCODE")
+    return sorted(r[1], key=repr) if r[0] == b"*" else r
+
+
+def fn_state(c):
+    """what a server holds of functions: the list, each function run, and
+    INFO's counts"""
+    return (flist(c), run(c, "FCALL", "fa", 0, "x"), run(c, "FCALL", "fb", 1, "k"), run(c, "FCALL", "fo", 0),
+            info(c, "memory", "number_of_functions"), info(c, "memory", "number_of_libraries"), run(c, "GET", "k"))
+
+
+def last_line(log, part):
+    """the text of the log's last line that holds part (after Redis's
+    pid, role, time and level)"""
+    xs = [l for l in log.splitlines() if part in l]
+    return xs[-1][xs[-1].index(part):] if xs else None
+
+
+def functions(a, root):
+    """libraries of functions in the file: Redis's (with LZF and without)
+    and BendKV's, both ways, and one of 7.0's release candidates
+    (FUNCTION): both start from each with the same libraries; files whose
+    library does not load (Lua that does not compile, a library twice, a
+    function twice, a library cut short): both stop, with the same lines
+    and exit codes (Redis's check of the file, which it runs then, exits
+    0 for a file whose library only fails to be made)"""
+    d = os.path.join(root, "fn")
+    cmds = [("FUNCTION", "LOAD", LIB_A), ("FUNCTION", "LOAD", LIB_B), ("SET", "k", "v")]
+    files = {}
+    want = None
+    for comp in ("yes", "no"):
+        r = Srv(a.redis, os.path.join(d, "redis-" + comp), "--save", "", "--rdbcompression", comp)
+        c = r.conn()
+        for x in cmds:
+            run(c, *x)
+        same("SAVE (Redis, with functions, rdbcompression %s)" % comp, run(c, "SAVE"), (b"+", b"OK"))
+        want = flist(c)
+        shut(c, "SHUTDOWN", "NOSAVE")
+        r.exit()
+        files["Redis's (rdbcompression %s)" % comp] = read(os.path.join(d, "redis-" + comp, "dump.rdb"))
+    b = Srv(a.bin, os.path.join(d, "bendkv"), "--save", "")
+    c = b.conn()
+    for x in cmds:
+        run(c, *x)
+    same("FUNCTION LIST WITHCODE before the save", flist(c), want)
+    same("SAVE (BendKV, with functions)", run(c, "SAVE"), (b"+", b"OK"))
+    shut(c, "SHUTDOWN", "NOSAVE")
+    b.exit()
+    mine = os.path.join(d, "bendkv", "dump.rdb")
+    files["BendKV's"] = read(mine)
+    if shutil.which("redis-check-rdb"):
+        out = subprocess.run(["redis-check-rdb", mine], capture_output=True, text=True).stdout
+        check("redis-check-rdb finds BendKV's file with functions whole", "RDB looks OK!" in out and "Checksum OK" in out, out[-800:])
+    files["7.0's release candidates' (FUNCTION)"] = file(
+        [b"\xf6" + rstr(b"libo") + rstr(b"LUA") + rlen(1) + rstr(b"a description") + rstr(OLD_CODE),
+         b"\xf5" + rstr(LIB_A.encode()), select(0), key(b"k", b"\x00" + rstr(b"v"))])
+    for i, (name, data) in enumerate(sorted(files.items())):
+        got = []
         for who, exe in (("bendkv", a.bin), ("redis", a.redis)):
-            dd = os.path.join(root, "bad", name.replace(" ", "-"), who)
+            dd = os.path.join(d, "from-%d" % i, who)
             os.makedirs(dd)
             with open(os.path.join(dd, "dump.rdb"), "wb") as f:
                 f.write(data)
             s = Srv(exe, dd, "--save", "")
-            codes.append((s.code, s.has(line)))
+            if s.code is not None:
+                got.append(("exited", s.code, s.log()[-1500:]))
+                continue
+            got.append(fn_state(s.conn()))
             s.kill()
-        same("%s: BendKV refuses it, Redis loads it" % name, codes, [(1, True), (None, False)])
+        same("%s file: both start from it with the same libraries" % name, got[0], got[1])
+    bad_files = [
+        ("Lua that does not compile", file([b"\xf5" + rstr(b"#!lua name=bad\nthis is not Lua\n")])),
+        ("a library twice", file([b"\xf5" + rstr(LIB_A.encode()), b"\xf5" + rstr(LIB_A.encode())])),
+        ("a function twice", file([b"\xf5" + rstr(LIB_A.encode()),
+                                   b"\xf5" + rstr(b"#!lua name=other\nredis.register_function('fa', function() return 1 end)\n")])),
+        ("a library cut short", file([b"\xf5" + rlen(4000) + b"#!lua name=cut\n"])),
+        ("a library of FUNCTION cut short", file([b"\xf6" + rstr(b"libo") + rstr(b"LUA") + rlen(1) + rlen(5000) + b"short"])),
+        ("a library with no metadata", file([b"\xf5" + rstr(b"redis.register_function('f', function() return 1 end)")])),
+    ]
+    for i, (name, data) in enumerate(bad_files):
+        got = []
+        for who, exe in (("bendkv", a.bin), ("redis", a.redis)):
+            dd = os.path.join(d, "bad-%d" % i, who)
+            os.makedirs(dd)
+            with open(os.path.join(dd, "dump.rdb"), "wb") as f:
+                f.write(data)
+            s = Srv(exe, dd, "--save", "")
+            got.append((s.code, last_line(s.log(), "Failed loading library"), s.has("Short read or OOM loading DB. Unrecoverable error, aborting now.")))
+            s.kill()
+        same("a file with %s: both stop, saying why" % name, got[0], got[1])
+        check("a file with %s: the line names the library's error" % name, got[0][1] is not None, got[0])
 
 
 def short_form(a, root):
@@ -1260,7 +1365,7 @@ def main():
     shutil.rmtree(root, ignore_errors=True)
     os.makedirs(root)
     try:
-        for part in (redis_writes, lzf_values, written_here, bendkv_writes, big, windows, scenarios, unchecked, shutdowns, races, corrupt, short_form):
+        for part in (redis_writes, lzf_values, written_here, bendkv_writes, big, windows, scenarios, unchecked, shutdowns, races, corrupt, functions, short_form):
             b0 = bad
             part(a, root)
             print("%s %s" % ("OK:  " if bad == b0 else "FAIL:", " ".join(part.__doc__.split())))

@@ -29,6 +29,7 @@ Claude Code reads this file only while the repository has no `CLAUDE.md`,
     bend-patches/      the patches to bendlang/bend@1cce499, in apply.sh's order:
                        the compiler and its runtime are part of the trusted base
     docs/FINDINGS.md   what each change found and cost, one section per change
+    LICENSE, NOTICE    Apache 2.0, and what comes from elsewhere (rule 10)
 
 ## Toolchain
 
@@ -88,6 +89,14 @@ by hand (Merging).
    `docs/COMPATIBILITY.md`.
 9. **Claims follow the laws.** Do not call anything "proved" or "verified" in the
    documents unless a law in `proof/LAWS.bend` states it.
+10. **Licenses.** BendKV is under the Apache License 2.0, and NOTICE lists what
+    comes from elsewhere. Do not read the sources of Redis 7.4 or later, Redis 8
+    included (RSALv2, SSPLv1, AGPLv3): no file of those trees, their tests and JSON
+    included. Port only from Redis 7.2.x or earlier, from Valkey, or from other
+    sources under a license compatible with Apache 2.0, and add their entry to
+    NOTICE in the same pull request. Redis 8 is only built and run, as a yardstick
+    of speed; the text of its documentation, on redis.io or in COMMAND DOCS, is not
+    copied. CONTRIBUTING.md (License) has the details.
 
 ## Workflow
 

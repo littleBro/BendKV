@@ -1,6 +1,6 @@
 #!/bin/sh
 # script_cost.sh NAME PORT CMD...: instructions per request of scripts
-# under callgrind (section 68 of PERFORMANCE.md). CMD (a server taking
+# and functions under callgrind (sections 68 and 76 of PERFORMANCE.md). CMD (a server taking
 # PORT, or redis-server --port PORT ...) runs under callgrind; KEYS
 # (100000) random keys are set first. Then for each test, 30000 requests
 # run, the counters are zeroed, and 20000 requests are counted and dumped
@@ -9,6 +9,8 @@
 #   evalsha1  EVALSHA of it
 #   evalget   EVAL of a script that calls GET on a random key
 #   evalset   EVAL of a script that calls SET on a random key
+#   fcall1    FCALL of a function that returns 1
+#   fcallget  FCALL of a function that calls GET on a random key
 #   get       GET of a random key, for scale
 # Prints NAME, the test and its instructions per request.
 NAME=$1; PORT=$2; shift 2
@@ -19,6 +21,7 @@ VP=$!
 for i in $(seq 1 60); do redis-cli -p "$PORT" ping > /dev/null 2>&1 && break; sleep 1; done
 redis-benchmark -p "$PORT" -t set -r "$KEYS" -n $((KEYS * 2)) -P 16 -c "$CLIENTS" -q > /dev/null 2>&1
 SHA=$(redis-cli -p "$PORT" script load "return 1")
+redis-cli -p "$PORT" function load "$(printf '#!lua name=cost\nredis.register_function("one", function() return 1 end)\nredis.register_function("get1", function(keys) return redis.call("get", keys[1]) end)')" > /dev/null
 run() {
   t=$1; shift
   redis-benchmark -p "$PORT" -r "$KEYS" -n 30000 -P "$PIPE" -c "$CLIENTS" -q "$@" > /dev/null 2>&1
@@ -30,6 +33,8 @@ run eval1 eval "return 1" 0
 run evalsha1 evalsha "$SHA" 0
 run evalget eval "return redis.call('get', KEYS[1])" 1 key:__rand_int__
 run evalset eval "return redis.call('set', KEYS[1], ARGV[1])" 1 key:__rand_int__ xyz
+run fcall1 fcall one 0
+run fcallget fcall get1 1 key:__rand_int__
 run get get key:__rand_int__
 kill $VP; wait $VP 2> /dev/null
 for f in "$NAME".cg.*; do

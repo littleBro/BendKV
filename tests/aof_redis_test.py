@@ -57,7 +57,13 @@ payloads here are of the plain types (strings, and lists, sets, hashes
 and sorted sets of types 1, 2, 4 and 5), their times absolute. A
 transaction is logged by both as the
 effects of its commands between a MULTI and an EXEC (one of a single
-effect, as that effect alone), and read by both.
+effect, as that effect alone), and read by both. FUNCTION LOAD, DELETE
+and RESTORE are logged by both as commands of their own (Redis's as the
+client sent them, BendKV's with the subcommand's words in upper case and
+RESTORE's policy named; a FUNCTION command in a transaction before the
+transaction in BendKV's file, within it in Redis's), FCALL as the effects
+of the calls its function made, and each server started from the other's
+file holds the same libraries (FUNCTION LIST WITHCODE).
 
     python3 tests/aof_redis_test.py --bin build/bendkv --bendkv 6380 --redis 6391 --dir build/aofio
 """
@@ -94,7 +100,9 @@ def payload(body):
 
 
 def rstr(s):
-    return bytes([len(s)]) + s
+    if len(s) < 64:
+        return bytes([len(s)]) + s
+    return struct.pack(">H", 0x4000 | len(s)) + s
 
 
 P_STR = payload(b"\x00" + rstr(b"hello"))
@@ -102,6 +110,11 @@ P_LIST = payload(b"\x01\x03" + rstr(b"a") + rstr(b"bb") + rstr(b"7"))
 P_SET = payload(b"\x02\x02" + rstr(b"x") + rstr(b"y"))
 P_HASH = payload(b"\x04\x02" + rstr(b"f") + rstr(b"v") + rstr(b"g") + rstr(b"w" * 60))
 P_ZSET = payload(b"\x05\x02" + rstr(b"m") + struct.pack("<d", 1.5) + rstr(b"n") + struct.pack("<d", -2.0))
+
+LIB1 = b"#!lua name=aof1\nredis.register_function('aofset', function(keys, args) return redis.call('set', keys[1], args[1]) end)\n"
+LIB2 = b"#!lua name=aof2\nredis.register_function('aofget', function(keys, args) return redis.call('get', keys[1]) end)\n"
+LIB3 = b"#!lua name=aof3\nredis.register_function('aofthree', function() return 3 end)\n"
+P_FN = payload(b"\xf5" + rstr(LIB3))
 
 CMDS = [
     [b"SET", b"a", b"1"], [b"SET", b"b", b"2", b"PXAT", b"%d" % T], [b"set", b"c", b"3"],
@@ -234,6 +247,12 @@ CMDS = [
     [b"MULTI"], [b"SET", b"tx1", b"a"], [b"INCR", b"txn"], [b"RPUSH", b"txl", b"1", b"2"], [b"SELECT", b"4"],
     [b"SET", b"tx4", b"b"], [b"EXEC"], [b"SELECT", b"0"], [b"MULTI"], [b"SET", b"tx2", b"c"], [b"EXEC"],
     [b"MULTI"], [b"SET", b"tx3", b"d"], [b"DISCARD"], [b"MULTI"], [b"GET", b"tx1"], [b"EXEC"],
+    [b"FUNCTION", b"LOAD", LIB1], [b"FCALL", b"aofset", b"1", b"fk", b"fv"], [b"function", b"load", LIB2],
+    [b"FUNCTION", b"LOAD", b"replace", LIB1.replace(b"return redis.call", b"redis.call('incr', 'fcount') return redis.call")],
+    [b"FCALL", b"aofset", b"1", b"fk2", b"fv2"], [b"FUNCTION", b"DELETE", b"aof2"], [b"FUNCTION", b"DELETE", b"nosuch"],
+    [b"FUNCTION", b"RESTORE", P_FN], [b"FUNCTION", b"RESTORE", P_FN], [b"FUNCTION", b"LOAD", b"bad"],
+    [b"MULTI"], [b"FUNCTION", b"LOAD", LIB2], [b"SET", b"ftx", b"1"], [b"FCALL", b"aofget", b"1", b"ftx"], [b"EXEC"],
+    [b"FUNCTION", b"RESTORE", P_FN, b"REPLACE"], [b"FCALL_RO", b"aofget", b"1", b"fk"],
 ]
 
 # a file with the entries BendKV logs for a hash, a list or a set made
@@ -314,6 +333,21 @@ def same(what, x, y):
     print("OK: %s (%d keys)" % (what, len(x)))
 
 
+def libraries(c):
+    """FUNCTION LIST WITHCODE, its libraries in the order of their names
+    (each server walks its dictionary in an order of its own)"""
+    c.send([[b"FUNCTION", b"LIST", b"WITHCODE"]])
+    kind, items = c.reply()
+    return sorted(items, key=repr) if kind == b"*" else [(kind, items)]
+
+
+def same_libraries(what, x, y):
+    if x != y:
+        print("FAIL: %s\n  %r\n  %r" % (what, x, y))
+        sys.exit(1)
+    print("OK: %s (%d libraries)" % (what, len(x)))
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--bin", default="build/bendkv")
@@ -343,10 +377,12 @@ def main():
                 sys.exit("FAIL: %r answered %r by Redis, %r by BendKV" % (x, r, b))
         print("OK: %d commands, the same replies" % len(CMDS))
         kr, kb = keyspace(cr), keyspace(cb)
+        lr, lb = libraries(cr), libraries(cb)
     finally:
         stop(pr)
         stop(pb)
     same("the same databases on both", kr, kb)
+    same_libraries("the same libraries on both", lr, lb)
     # BendKV from Redis's file: its base, then its increments
     parts = os.path.join(rdir, "appendonlydir")
     rfile = os.path.join(d, "load", "redis.aof")
@@ -358,9 +394,11 @@ def main():
     p, c = start([a.bin, str(a.bendkv), "send", rfile, "always"], a.bendkv, os.path.join(d, "load.log"))
     try:
         k = keyspace(c)
+        lk = libraries(c)
     finally:
         stop(p)
     same("BendKV restores the databases from Redis's file", k, kr)
+    same_libraries("BendKV restores the libraries from Redis's file", lk, lr)
     # Redis from BendKV's file, which it reads as a file of Redis 6
     if shutil.which("redis-check-aof"):
         print(subprocess.run(["redis-check-aof", bfile], capture_output=True, text=True).stdout.strip().splitlines()[-1])
@@ -370,9 +408,11 @@ def main():
     p, c = start(redis(a.redis, ldir, "--appendfilename", "appendonly.aof"), a.redis, os.path.join(d, "rload.log"))
     try:
         k = keyspace(c)
+        lk = libraries(c)
     finally:
         stop(p)
     same("Redis restores the databases from BendKV's file", k, kb)
+    same_libraries("Redis restores the libraries from BendKV's file", lk, lb)
     # the script of a new hash, read by both
     edir = os.path.join(d, "eval")
     os.makedirs(edir)

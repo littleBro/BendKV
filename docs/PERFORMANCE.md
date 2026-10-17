@@ -8331,6 +8331,74 @@ parsed as before.
 as many members 3.8 times. A key of a long MSET costs 5,900 instructions, where a whole
 pipelined SET costs 4,181; where they go is not broken down here (FINDINGS 3zzzo).
 
+## 76. Functions: FUNCTION and FCALL
+
+**What was added** (FINDINGS 3zzzp). FCALL and FCALL_RO run a function of a library on
+the engine of section 68, as EVAL runs a script: the client's batch waits, and the
+driver runs the function a step at a time. The actor keeps a mirror of the functions'
+names and flags in the scripts' state (`Fni`), for FCALL's lookup, for the pause and for
+maxmemory.
+
+**Measured** (`tools/script_cost.sh`, as in section 68: callgrind, instructions per
+request, 20 clients pipelining 16 deep, 100,000 keys; Redis 7.0.15 under the same load):
+
+| request | BendKV | with ACL users merged in (a92597d) | Redis |
+|---|---:|---:|---:|
+| `FCALL one 0`, a function that returns 1 | 50,060 | 54,425 | 7,784 |
+| `FCALL get1 1 <key>`, a function that calls GET | 78,250 | 83,820 | 13,530 |
+| `EVAL "return 1" 0` | 57,815 | 62,139 | 15,087 |
+| EVALSHA of it | 53,117 | 57,498 | 9,834 |
+| a script that calls GET | 84,867 | 90,500 | 19,133 |
+| GET, beside them | 3,495 | 3,565 | 3,538 |
+
+With ACL users merged in, a function and a script each cost about 4,400 instructions
+more, and a call of either about 1,200 more, though no client is restricted: each ends a
+run of the general way, whose end now copies the session's memory state three times
+(`ps.tune`), and the general way's ACL steps copy what they were lent (section 68).
+
+FCALL costs 3,100 instructions less than EVALSHA. A sha is 40 bytes, which the parser
+and the mirror hash and compare, and which the engine converts for its cache and makes a
+Lua string of, to find the script's function in Lua's registry (`f_<sha>`, as Redis
+does); a function's name is short. Redis's FCALL is the cheaper of its two as well, by
+2,050. A call of a function costs about 28,200 instructions (78,250 against 50,060), a
+call of a script about 27,100 (section 68).
+
+**On the way.** The first build of this change (252ef8d) cost `EVAL "return 1" 0` 67,221
+instructions, 5,510 more than #99's head then (61,711), and FCALL 63,761. The functions'
+state in the scripts' state made `Scr`'s node twice as wide, so each of the copies of it
+that section 68 found cost more, 713 instructions a copy against 402, and each script's
+end set the functions' state from a copy of it, a seventh copy. The scripts' state and
+the functions' are now read and changed in place (FINDINGS 3zzzd, 3zzzp), and FCALL
+looks its function's name up in the mirror as given first, lowered only when the mirror
+has it not as given (as EVALSHA's sha: a name lowered is a string made again, about 300
+instructions, three lookups an FCALL; 50,983 before). With main merged in to both, EVAL
+costs 57,815 here and 56,824 on #99's head: about 1,000 instructions for the way between
+scripts and functions (FCALL's early check, the flags of a script command, a wider
+state of a script to drop at its end).
+
+**In time** (`tools/script_bench.sh`, as in section 68: 50 clients, requests per
+second, BendKV and Redis 7.0.15 on the same machine, the runs of a test taking turns;
+medians of five runs, and of their ratios):
+
+| request | BendKV, one at a time | Redis | ratio | BendKV, 16 deep | Redis | ratio |
+|---|---:|---:|---:|---:|---:|---:|
+| GET | 88,496 | 99,305 | 0.91 | 1,194,030 | 809,717 | 1.40 |
+| EVALSHA of `return 1` | 86,356 | 90,992 | 0.89 | 123,077 | 740,741 | 0.17 |
+| `FCALL one 0` | 88,028 | 90,334 | 1.03 | 138,074 | 819,672 | 0.17 |
+| `FCALL get1 1 <key>` | 60,976 | 106,838 | 0.54 | 77,474 | 405,268 | 0.19 |
+
+One at a time, FCALL runs as fast as Redis's and a function that calls GET at about half
+of Redis's rate, for its call (section 68). Pipelined 16 deep, functions run at 0.17 to
+0.19 of Redis's throughput, bound by the actor's instructions as scripts are, and FCALL
+at 1.12 times EVALSHA's rate, as their instructions say.
+
+**`make perfcheck`**: GET 3,471, SET 4,236 and INCR 4,580 instructions per request,
+within 0.6% of the baseline, and 3.1% and 3.7% above those with 100 clients in BLPOP:
+#99's counts (section 68: 3,472, 4,241 and 4,583), with the work loop's bank of 49
+words. With ACL users merged in, 3,483, 4,245 and 4,585, and 3.1% and 3.6%, as #99's
+head then (3,480, 4,244 and 4,586; 3.2% and 3.6%). One run of the same build beside other work (a callgrind run of the scripts and
+a check of the proofs) gave GET 3,506 and INCR 4,607, 1% more: the counts move with the
+load of the machine, so they are compared on a quiet one.
 
 ## 77. Small sets in one string
 
@@ -8606,6 +8674,35 @@ table says; one run of each, on a shared machine). Requests a second:
 per request, +0.8% to +0.9% from the baseline (3,452, 4,214 and 4,552), as #114's build
 counted alike on this machine (3,480, 4,243 and 4,593); last-level misses 2.84, 3.15 and
 3.29; with 100 clients in BLPOP, +3.1% and +3.7%.
+
+## 83. The general way reads the server in place
+
+FINDINGS 3zzzz. Callgrind's instructions per request (`tools/callgrind_req.sh`: 20
+clients, pipelines of 16, 20,000 requests counted after 300,000), on main's build and on
+this change's, one after the other on the same machine. Two loads run every batch the
+general way: a client subscribed to keyspace events with `notify-keyspace-events KEA`
+(`IDLE="events 1"`: a command at a time), and redis-benchmark logged in as a restricted
+user (`IDLE="acluser 1"`, `RB_FLAGS="--user bench -a pw"`: each call checked).
+
+| load | main 7048b7d | this change | |
+|---|---:|---:|---:|
+| GET, a client subscribed to events | 34,528 | 33,956 | −572 |
+| INCR, a client subscribed to events | 68,770 | 67,887 | −883 |
+| GET, a restricted user | 38,909 | 38,247 | −662 |
+| INCR, a restricted user | 45,433 | 44,513 | −920 |
+
+The profiles' `ctr_own_slow` (a copy of a shared node) no longer has the four callers of
+these reads: three at each batch's end, 0.06 calls a request each (a batch is a
+pipeline's 16 requests), about 590 instructions a call, and MISCONF's read, 1.07 calls a
+request (each command, and each batch's end), 371 instructions a call; their drops come
+off too. Before MISCONF (main 8b0993e), the batch's copies alone cost GET 217
+instructions a request with a subscriber (33,419, 33,202 with the first form of this
+change) and 210 as a restricted user (37,753, 37,543). A script command of #99 is a batch
+of its own, so each EVAL pays the batch's copies whole.
+
+`make perfcheck` (the fast way, which reads neither): GET 3,499, SET 4,307 and INCR 4,600
+instructions per request, 3.1% and 3.1% more with 100 clients in BLPOP; main 7048b7d
+gives 3,516, 4,307 and 4,601, and 3.2% and 3.0%.
 
 ## 84. The writes of a stream
 

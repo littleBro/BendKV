@@ -92,3 +92,23 @@ sends about a million of them to main's server.
 - Comments say what a definition means and why, in plain sentences, as the existing code
   does.
 - Commits are small and say what changed and why.
+
+## License
+
+BendKV is licensed under the Apache License, Version 2.0 ([LICENSE](LICENSE)). A
+contribution you submit comes under that license, as its section 5 says, unless you state
+otherwise in writing.
+
+Code, text or data from elsewhere comes in only under a license compatible with Apache 2.0
+(MIT, BSD, Apache 2.0, Boost, CC0, public domain), and the pull request that brings it in
+adds its entry to [NOTICE](NOTICE): what it is, from which file of which version, and under
+which license.
+
+- **Redis 7.2.x and earlier** are under the BSD 3-Clause License: their code, tables and
+  tests may be ported, with their notice. Security fixes come from Redis's 7.2 branch.
+- **Redis 7.4 and later** are under RSALv2 and SSPLv1, and Redis 8 adds AGPLv3. Do not read
+  their sources: no file of those trees, their tests and their commands' JSON included. A
+  behavior of theirs may be written from what a running server answers and from what the
+  documentation describes, in our own words; the text of their documentation, on redis.io
+  (CC BY-NC-SA 4.0) or in COMMAND DOCS, is not copied.
+- **Valkey** is under the BSD 3-Clause License and may be ported, with its notice.

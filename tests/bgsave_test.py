@@ -23,11 +23,14 @@ what both must agree on, as the part's comment says.
   Saving...").
 - A background save that fails (dump.rdb is a directory, so the rename
   fails): MISCONF for writes and PING, not for reads, in MULTI and at
-  EXEC; for a script's writes, and a script that may write; errorstats
+  EXEC; for a script's writes, a script that may write, FCALL of a
+  function that may write and FUNCTION's writes; errorstats
   and rejected calls; a save that ends well, or
   stop-writes-on-bgsave-error no, lifts it, for the commands after it in
   the same pipeline too (a CONFIG SET alone or in MULTI). The cron tries
   again 5 seconds after the failure, not before.
+- A background save of libraries of functions, and the start from its
+  file.
 - The parameters a save keeps from its start, as Redis's child keeps
   them from its fork: dbfilename changed in BGSAVE's own pipeline, and
   rdb-key-save-delay while it runs.
@@ -89,6 +92,11 @@ ZNEW = ("redis.call('del',KEYS[1]) local o=tonumber(ARGV[1]) local n=#ARGV for i
         "for j=2,o+1 do a[#a+1]=ARGV[j] end for j=i,math.min(i+999,n) do a[#a+1]=ARGV[j] end "
         "redis.call('zadd',KEYS[1],unpack(a)) end return 0")
 LMOVE = "redis.call('del',KEYS[2]) return redis.call('lmove',KEYS[1],KEYS[2],ARGV[1],ARGV[2])"
+# a library of two functions, one that may write and one with no-writes
+LIB = ("#!lua name=bglib\n"
+       "redis.register_function('wr', function(keys, args) return redis.call('set', keys[1], args[1]) end)\n"
+       "redis.register_function{function_name='rd', callback=function(keys, args) return redis.call('get', 'a') end, "
+       "flags={'no-writes'}}")
 SMOVE = "redis.call('del',KEYS[2]) return redis.call('smove',KEYS[1],KEYS[2],ARGV[1])"
 XNEW = "redis.call('del',KEYS[1]) return redis.call('xadd',KEYS[1],unpack(ARGV))"
 CASES = [
@@ -455,6 +463,21 @@ def pipe(c, cmds):
     return [c.reply() for _ in cmds]
 
 
+def flist(c):
+    """FUNCTION LIST, each library's functions by name: Redis lists them in
+    its dictionary's order, which a random seed sets at each start"""
+    r = run(c, "FUNCTION", "LIST")
+    if r[0] != b"*":
+        return r
+    out = []
+    for lib in r[1]:
+        kv = lib[1]
+        lib = [(kv[j], (b"*", sorted(kv[j + 1][1], key=repr)) if kv[j][1] == b"functions" else kv[j + 1])
+               for j in range(0, len(kv), 2)]
+        out.append(lib)
+    return out
+
+
 def lines_in(s, *xs):
     lg = s.log()
     return [x in lg for x in xs]
@@ -582,6 +605,7 @@ def misconf_on(exe, d, log):
     log("1 queued before", run(held, "MULTI"), run(held, "SET", "q", "1"), run(held, "GET", "a"))
     # a script with a shebang that may write, queued before the failure
     log("1 script queued before", run(lua, "MULTI"), run(lua, "EVAL", "#!lua\nreturn 1", "0"))
+    log("1 library", run(c, "FUNCTION", "LOAD", LIB))
     # the rename onto dump.rdb fails: a directory, not empty, is there
     os.makedirs(os.path.join(d, "dump.rdb", "x"))
     log("1 bgsave", run(c, "BGSAVE"), until(lambda: not running(c)))
@@ -615,6 +639,12 @@ def misconf_on(exe, d, log):
     log("2 scripts in MULTI", run(c, "MULTI"), run(c, "EVAL", "return redis.call('set','k','v')", "0"),
         run(c, "EXEC"), run(c, "MULTI"), run(c, "EVAL", "#!lua\nreturn 1", "0"), run(c, "EXEC"),
         run(lua, "EXEC"), run(c, "EXISTS", "k"))
+    # functions (FINDINGS 3zzzp): FCALL and FCALL_RO of a function that may
+    # write refused before it runs (fcallGetCommandFlags), one with no-writes
+    # run; FUNCTION's writes refused, its reads run
+    log("2 functions", run(c, "FCALL", "wr", "1", "k", "v"), run(c, "FCALL_RO", "wr", "1", "k", "v"),
+        run(c, "FCALL", "rd", "0"), run(c, "FCALL_RO", "rd", "0"), run(c, "FUNCTION", "LOAD", "REPLACE", LIB),
+        run(c, "FUNCTION", "DELETE", "bglib"), run(c, "FUNCTION", "FLUSH"), flist(c))
     log("2 scripts stats", info(c, "errorstats", "errorstat_MISCONF"),
         re.sub(r"usec=\d+,usec_per_call=[0-9.]+,", "", info(c, "commandstats", "cmdstat_eval") or ""),
         re.sub(r"usec=\d+,usec_per_call=[0-9.]+,", "", info(c, "commandstats", "cmdstat_set") or ""))
@@ -651,6 +681,28 @@ def misconf_on(exe, d, log):
         x.sock.close()
     talk(s.port, [["SHUTDOWN", "NOSAVE"]])
     log("4 exit", s.exit())
+
+
+def functions_on(exe, d, log):
+    """a background save of libraries, and the start from its file"""
+    s = Srv(exe, d, "--save", "")
+    c = s.conn()
+    run(c, "SET", "a", "1")
+    log("1 load", run(c, "FUNCTION", "LOAD", LIB), dirty(c))
+    log("1 bgsave", run(c, "BGSAVE"), until(lambda: not running(c)), field(c, "rdb_last_bgsave_status"))
+    talk(s.port, [["SHUTDOWN", "NOSAVE"]])
+    log("1 exit", s.exit())
+    s = Srv(exe, d, "--save", "")
+    c = s.conn()
+    log("2 start", flist(c), run(c, "FCALL", "rd", "0"), run(c, "FCALL", "wr", "1", "b", "2"),
+        run(c, "GET", "b"))
+    talk(s.port, [["SHUTDOWN", "NOSAVE"]])
+    log("2 exit", s.exit())
+
+
+def functions(a, root):
+    """BGSAVE writes the libraries of functions, which the start reads"""
+    both(a, root, "functions", functions_on)
 
 
 def misconf(a, root):
@@ -847,7 +899,7 @@ def main():
     root = os.path.abspath(a.dir)
     shutil.rmtree(root, ignore_errors=True)
     os.makedirs(root)
-    parts = [counts, bgsave, rewrite, points, misconf, retry, kept, gone, kills, defaults]
+    parts = [counts, bgsave, rewrite, points, misconf, functions, retry, kept, gone, kills, defaults]
     try:
         for part in parts:
             if a.only and part.__name__ not in a.only.split(","):
