@@ -17760,7 +17760,7 @@ def e_xnogroup(+k: String, +g: String) -> Reply:
 
 def xv.pend.con(c: KV.XCon) -> Reply:
   match c:
-    case KV.XCon{+name, seen, +ids}:
+    case KV.XCon{+name, seen, active, +ids}:
       RArray{[RBulk{name}, RBulk{Nat.show(KV.xis.size(ids))}]}
 
 def xv.pend.cons(cs: List<&2, KV.XCon>) -> List<&2, Reply>:

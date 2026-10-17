@@ -2819,7 +2819,7 @@ def mem.xcons(cs: List<&2, KV.XCon>, +acc: Nat) -> Nat:
   match cs:
     case Nil{}:
       acc
-    case Con{KV.XCon{+name, seen, +ids}, rest}:
+    case Con{KV.XCon{+name, seen, active, +ids}, rest}:
       mem.xcons(rest, Nat.add(acc, Nat.add(Nat.add(48n, String.length(name)), Nat.mul(32n, KV.xis.size(ids)))))
 
 def mem.xgroup(+g: KV.XGroup) -> Nat:

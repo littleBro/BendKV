@@ -18038,16 +18038,20 @@ def rdb.write(f: File, sl: D.FSl, +sum: Bool, c: D.C) -> IO(File & RdbW):
 @unsafe
 def rdb.werr(m: Maybe<&1, File>, +lg: Log, +tmp: String, +op: String, +msg: String) -> IO(Bool):
   do IO<Bool>:
-    Unit <- log(lg, 3, "Write error saving DB on disk(" ++ op ++ "): " ++ msg)
+    Unit <- log(lg, 3, "Write error while saving DB to the disk(" ++ op ++ "): " ++ msg)
     Unit <- file.end(m)
     r : Result<&1, &1, U32 & String, Unit> <- File.unlink(tmp)
     IO.pure(Bool, False{})
 
+# the directory synced after the rename, or Redis 7.2.16's line for a
+# sync that failed (rdbSave: the file is in place, the save failed)
 @unsafe
-def rdb.dir.synced(r: Result<&1, &1, U32 & String, Unit>, +lg: Log, +tmp: String) -> IO(Bool):
+def rdb.dir.synced(r: Result<&1, &1, U32 & String, Unit>, +lg: Log) -> IO(Bool):
   match r:
     case Fail{e}:
-      rdb.werr(None{}, lg, tmp, "fsyncFileDir", err.msg(e))
+      do IO<Bool>:
+        Unit <- log(lg, 3, "Failed to fsync directory while saving DB: " ++ err.msg(e))
+        IO.pure(Bool, False{})
     case Done{u}:
       do IO<Bool>:
         Unit <- log(lg, 2, "DB saved on disk")
@@ -18065,7 +18069,7 @@ def rdb.renamed(r: Result<&1, &1, U32 & String, Unit>, +lg: Log, +tmp: String, +
     case Done{u}:
       do IO<Bool>:
         d : Result<&1, &1, U32 & String, Unit> <- File.sync_dir(name)
-        rdb.dir.synced(d, lg, tmp)
+        rdb.dir.synced(d, lg)
 
 @unsafe
 def rdb.synced(p: File & Result<&1, &1, U32 & String, Unit>, +lg: Log, +tmp: String, +name: String) -> IO(Bool):
@@ -18353,20 +18357,24 @@ def rdb.w.first(p: File & Result<&1, &1, U32 & String, String>, +t0: Nat, +lg: L
         t : U32 & U32 <- IO.clock()
         rdb.w.went(D.file.first(x, xlen, 1n+more, clock.ms(t), sum), f, D.C{0, 0}, x, 0n, xlen, sum, t0, lg, info, more)
 
+# a file that is not there starts empty; one that does not open stops the
+# start, as rdbLoad and loadDataFromDisk say it
 @unsafe
-def rdb.start.none(none: Bool, +msg: String, +lg: Log, info: I.Info, +more: Nat) -> IO(R.Ds & I.Info):
+def rdb.start.none(none: Bool, +name: String, +msg: String, +lg: Log, info: I.Info, +more: Nat) -> IO(R.Ds & I.Info):
   match none:
     case True{}:
       IO.pure(R.Ds & I.Info, (R.ds.empty(more), info))
     case False{}:
-      log.die(R.Ds & I.Info, lg, "Fatal error loading the DB: " ++ msg ++ ". Exiting.")
+      do IO<R.Ds & I.Info>:
+        Unit <- log(lg, 3, "Fatal error: can't open the RDB file " ++ name ++ " for reading: " ++ msg)
+        log.die(R.Ds & I.Info, lg, "Fatal error loading the DB, check server logs. Exiting.")
 
 @unsafe
 def rdb.start.open(m: Result<&1, &1, U32 & String, File>, +lg: Log, +items: List<&2, C.CItem>, info: I.Info, +more: Nat) -> IO(R.Ds & I.Info):
   match m:
     case Fail{e}:
       (code, msg) = e
-      rdb.start.none(U32.is_eq(code, enoent()), msg, lg, info, more)
+      rdb.start.none(U32.is_eq(code, enoent()), T.cfg(items, "dbfilename"), msg, lg, info, more)
     case Done{f}:
       do IO<R.Ds & I.Info>:
         t0 : Nat <- IO.now()
@@ -18804,7 +18812,7 @@ def step.bfail(+x: Rx, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx):
 @unsafe
 def step.bwerr(+x: Rx, f: Maybe<&1, File>, +tmp: String, +op: String, +msg: String) -> IO(Maybe<&1, File> & Rx):
   do IO<Maybe<&1, File> & Rx>:
-    Unit <- step.child(x, 3, "Write error saving DB on disk(" ++ op ++ "): " ++ msg)
+    Unit <- step.child(x, 3, "Write error while saving DB to the disk(" ++ op ++ "): " ++ msg)
     r : Result<&1, &1, U32 & String, Unit> <- File.unlink(tmp)
     step.bfail(x, f)
 
@@ -18890,13 +18898,15 @@ def step.bfin.renamed(r: Result<&1, &1, U32 & String, Unit>, +tmp: String, +name
     case Done{u}:
       do IO<Maybe<&1, File> & Rx>:
         d : Result<&1, &1, U32 & String, Unit> <- File.sync_dir(name)
-        step.bfin.dir(d, tmp, x, f)
+        step.bfin.dir(d, x, f)
 
 @unsafe
-def step.bfin.dir(d: Result<&1, &1, U32 & String, Unit>, +tmp: String, +x: Rx, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx):
+def step.bfin.dir(d: Result<&1, &1, U32 & String, Unit>, +x: Rx, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx):
   match d:
     case Fail{e}:
-      step.bwerr(x, f, tmp, "fsyncFileDir", err.msg(e))
+      do IO<Maybe<&1, File> & Rx>:
+        Unit <- step.child(x, 3, "Failed to fsync directory while saving DB: " ++ err.msg(e))
+        step.bfail(x, f)
     case Done{u}:
       do IO<Maybe<&1, File> & Rx>:
         t : U32 & U32 <- IO.clock()

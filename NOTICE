@@ -129,6 +129,13 @@ parts of it are written from 7.2.16's sources:
   never when its client goes while it waits but in WAIT (blocked.c's
   updateStatsOnUnblock, server.c's call() and replication.c), in
   src/info.bend and src/server.bend.
+- Persistence: src/rdb.bend, from rdb.c, t_set.c and t_stream.c (RDB
+  version 11: sets as SET_LISTPACK, the order an intset's members take
+  when a set read from a file becomes a listpack, streams as
+  STREAM_LISTPACKS_3 with each consumer's active time, the formats of
+  7.0's and 4.0's release candidates refused); src/server.bend, from
+  rdb.c and server.c (the lines of a file that does not load or open, of
+  a save's write error and of a directory's sync).
 - Texts and checks: HELLO's order (networking.c's helloCommand: every
   option read before any is done, then the last AUTH, NOAUTH's text, the
   name and the protocol), NOPERM's texts and ACL DRYRUN's (acl.c's

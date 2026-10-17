@@ -50,18 +50,19 @@ the same commands.
   client's requests reaching the append-only file; another client's
   FLUSHALL in the group of a SHUTDOWN that saves, which never runs (the
   files keep the key) unless the save fails.
-- Files that do not load: cut short, a wrong checksum, version 11, 0 and
+- Files that do not load: cut short, a wrong checksum, version 12, 0 and
   -1, a wrong signature, a database past the server's, a type that is
   none, an empty file, a directory, a module's data and a module's value:
   both servers refuse to start, with the same reason in their logs. A
   file of a stream loads on both. A checksum of 0, and a wrong one with
   rdbchecksum no, load on both.
 - Libraries of functions in the file: Redis's (with LZF and without) and
-  BendKV's, both ways, and one of 7.0's release candidates (FUNCTION):
-  both start from each with the same libraries (FUNCTION LIST WITHCODE,
-  FCALL, INFO's counts); files whose library does not load (Lua that does
-  not compile, a library twice, a function twice, a library cut short, a
-  library with no metadata): both stop, with the same lines.
+  BendKV's, both ways: both start from each with the same libraries
+  (FUNCTION LIST WITHCODE, FCALL, INFO's counts); files whose library does
+  not load (Lua that does not compile, a library twice, a function twice,
+  a library cut short, a library with no metadata): both stop, with the
+  same lines; a library of 7.0's release candidates (FUNCTION), whole or
+  cut short: both stop, as Redis 7.2.16 reads that format no more.
 - BendKV alone: the short form loads no RDB file.
 
     python3 tests/rdb_test.py --bendkv build/bendkv [--redis redis-server] [--dir build/rdb]
@@ -550,7 +551,7 @@ def redis_writes(a, root):
             same_dbs("BendKV and Redis from Redis's file (rdbcompression %s)" % comp, xb, xr)
             same_dbs("Redis from its file holds what it saved (rdbcompression %s)" % comp, unenc(xr), live)
             same("the keys loaded and expired (rdbcompression %s)" % comp, loads(cb), loads(cr))
-            for line in ("Loading RDB produced by version 7.0.15", "Done loading RDB, keys loaded: ",
+            for line in ("Loading RDB produced by version 7.2.16", "Done loading RDB, keys loaded: ",
                          "DB loaded from disk: "):
                 check("BendKV's log: %s" % line, b.has(line), b.log()[-1500:])
         finally:
@@ -682,7 +683,7 @@ def bendkv_writes(a, root):
         same_dbs("BendKV and Redis from BendKV's file", xb, xr)
         same("the keys loaded and expired from BendKV's file", loads(cb), loads(cr))
         check("BendKV counted no load before", lives == ("0", "0"), lives)
-        for line in ("Loading RDB produced by version 7.0.15", "RDB age ", "Done loading RDB, keys loaded: "):
+        for line in ("Loading RDB produced by version 7.2.16", "RDB age ", "Done loading RDB, keys loaded: "):
             check("Redis's log of BendKV's file: %s" % line, r.has(line), r.log()[-1500:])
     finally:
         r.kill()
@@ -1240,10 +1241,10 @@ def corrupt(a, root):
         ("cut in its magic", good[:7], 1, ["Short read or OOM loading DB. Unrecoverable error, aborting now."]),
         ("empty", b"", 1, ["Short read or OOM loading DB. Unrecoverable error, aborting now."]),
         ("a wrong checksum", good[:-1] + bytes([good[-1] ^ 0x10]), 1, ["Wrong RDB checksum expected: (", ") but got (", "). Aborting now."]),
-        ("version 11", b"REDIS0011" + good[9:], 1, ["Can't handle RDB format version 11", "Fatal error loading the DB: Invalid argument. Exiting."]),
+        ("version 12", b"REDIS0012" + good[9:], 1, ["Can't handle RDB format version 12", "Fatal error loading the DB, check server logs. Exiting."]),
         ("version 0", b"REDIS0000" + good[9:], 1, ["Can't handle RDB format version 0"]),
         ("version -1", b"REDIS-001" + good[9:], 1, ["Can't handle RDB format version -1"]),
-        ("a wrong signature", b"RODIS" + good[5:], 1, ["Wrong signature trying to load DB from file", "Fatal error loading the DB: Invalid argument. Exiting."]),
+        ("a wrong signature", b"RODIS" + good[5:], 1, ["Wrong signature trying to load DB from file", "Fatal error loading the DB, check server logs. Exiting."]),
         ("database 16", good[:sel + 1] + b"\x10" + good[sel + 2:], 1, ["FATAL: Data file was created with a Redis server configured to handle more than 16 databases. Exiting"]),
         ("a type that is none", good[:sel + 5] + b"\x16" + good[sel + 6:], 1, ["Unknown RDB encoding type 22"]),
         ("a checksum of 0", good[:-8] + bytes(8), "running", ["RDB file was saved with checksum disabled: no check performed."]),
@@ -1282,19 +1283,20 @@ def corrupt(a, root):
         got.append(s.code)
         s.kill()
     same("a directory where the file is", got[0], got[1])
-    # a module's data (MODULE_AUX) and a module's value (of types 6 and
-    # 7): neither server has the module, both stop, saying why. Redis
-    # then checks the file (redis-check-rdb), and exits 0 when the check
-    # finds it whole: so it does for a value of type 7, which the check
-    # can skip; BendKV exits 1
+    # a module's data (MODULE_AUX) and a module's value (of type 7):
+    # neither server has the module, both stop, saying why. Redis then
+    # checks the file (redis-check-rdb), and exits 0 when the check finds
+    # it whole: so it does for a value of type 7, which the check can
+    # skip; BendKV exits 1. A value of type 6 (4.0's release candidates)
+    # is a format Redis 7.2.16 reads no more: both stop, saying so
     mid = b"\x81" + struct.pack(">Q", 0x0123456789abcdef)
     for name, data, rline, bline, codes in (
             ("a module's data", file([b"\xf7" + mid + b"\x02\x02", select(0), key(b"a", b"\x00" + rstr(b"1"))]),
              "The RDB file contains AUX module data I can't load: no matching module",
              "BendKV has no modules: the RDB file holds a module's data (MODULE_AUX), which it cannot load", (1, 1)),
             ("a module's value of type 6", file([select(0), key(b"m", b"\x06" + mid + b"\x00")]),
-             "The RDB file contains module data I can't load: no matching module type",
-             "BendKV has no modules: the RDB file holds a module's value (key 'm'), which it cannot load", (1, 1)),
+             "Pre-release module format not supported",
+             "Pre-release module format not supported", (1, 1)),
             ("a module's value of type 7", file([select(0), key(b"m", b"\x07" + mid + b"\x00")]),
              "The RDB file contains module data I can't load: no matching module type",
              "BendKV has no modules: the RDB file holds a module's value (key 'm'), which it cannot load", (1, 0))):
@@ -1356,12 +1358,14 @@ def last_line(log, part):
 
 def functions(a, root):
     """libraries of functions in the file: Redis's (with LZF and without)
-    and BendKV's, both ways, and one of 7.0's release candidates
-    (FUNCTION): both start from each with the same libraries; files whose
-    library does not load (Lua that does not compile, a library twice, a
-    function twice, a library cut short): both stop, with the same lines
-    and exit codes (Redis's check of the file, which it runs then, exits
-    0 for a file whose library only fails to be made)"""
+    and BendKV's, both ways: both start from each with the same
+    libraries; files whose library does not load (Lua that does not
+    compile, a library twice, a function twice, a library cut short):
+    both stop, with the same lines and exit codes (Redis's check of the
+    file, which it runs then, exits 0 for a file whose library only fails
+    to be made); a library of 7.0's release candidates (FUNCTION), whole
+    or cut short: both stop, saying that Redis 7.2.16 reads the format no
+    more"""
     d = os.path.join(root, "fn")
     cmds = [("FUNCTION", "LOAD", LIB_A), ("FUNCTION", "LOAD", LIB_B), ("SET", "k", "v")]
     files = {}
@@ -1389,9 +1393,6 @@ def functions(a, root):
     if shutil.which("redis-check-rdb"):
         out = subprocess.run(["redis-check-rdb", mine], capture_output=True, text=True).stdout
         check("redis-check-rdb finds BendKV's file with functions whole", "RDB looks OK!" in out and "Checksum OK" in out, out[-800:])
-    files["7.0's release candidates' (FUNCTION)"] = file(
-        [b"\xf6" + rstr(b"libo") + rstr(b"LUA") + rlen(1) + rstr(b"a description") + rstr(OLD_CODE),
-         b"\xf5" + rstr(LIB_A.encode()), select(0), key(b"k", b"\x00" + rstr(b"v"))])
     for i, (name, data) in enumerate(sorted(files.items())):
         got = []
         for who, exe in (("bendkv", a.bin), ("redis", a.redis)):
@@ -1412,7 +1413,6 @@ def functions(a, root):
         ("a function twice", file([b"\xf5" + rstr(LIB_A.encode()),
                                    b"\xf5" + rstr(b"#!lua name=other\nredis.register_function('fa', function() return 1 end)\n")])),
         ("a library cut short", file([b"\xf5" + rlen(4000) + b"#!lua name=cut\n"])),
-        ("a library of FUNCTION cut short", file([b"\xf6" + rstr(b"libo") + rstr(b"LUA") + rlen(1) + rlen(5000) + b"short"])),
         ("a library with no metadata", file([b"\xf5" + rstr(b"redis.register_function('f', function() return 1 end)")])),
     ]
     for i, (name, data) in enumerate(bad_files):
@@ -1427,6 +1427,23 @@ def functions(a, root):
             s.kill()
         same("a file with %s: both stop, saying why" % name, got[0], got[1])
         check("a file with %s: the line names the library's error" % name, got[0][1] is not None, got[0])
+    old_files = [
+        ("7.0's release candidates' (FUNCTION)", file(
+            [b"\xf6" + rstr(b"libo") + rstr(b"LUA") + rlen(1) + rstr(b"a description") + rstr(OLD_CODE),
+             b"\xf5" + rstr(LIB_A.encode()), select(0), key(b"k", b"\x00" + rstr(b"v"))])),
+        ("a library of FUNCTION cut short", file([b"\xf6" + rstr(b"libo") + rstr(b"LUA") + rlen(1) + rlen(5000) + b"short"])),
+    ]
+    for i, (name, data) in enumerate(old_files):
+        got = []
+        for who, exe in (("bendkv", a.bin), ("redis", a.redis)):
+            dd = os.path.join(d, "old-%d" % i, who)
+            os.makedirs(dd)
+            with open(os.path.join(dd, "dump.rdb"), "wb") as f:
+                f.write(data)
+            s = Srv(exe, dd, "--save", "")
+            got.append((s.code, s.has("Pre-release function format not supported.")))
+            s.kill()
+        same("%s file: both stop, saying why" % name, got, [(1, True), (1, True)])
 
 
 def short_form(a, root):
