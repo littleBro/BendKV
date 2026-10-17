@@ -390,9 +390,9 @@ its parse takes time in proportion to its length: the GEOADD takes 194 ms, the E
 29 ms (section 3zzn of [FINDINGS.md](FINDINGS.md)).
 
 Bugs in Redis and Valkey. Comparing BendKV with Redis 7.2.16, 8.10.2 and Valkey 9.1.2
-found three bugs in them: LSET takes its index modulo 2^32, a failed AUTH in a pipeline
-gets no reply, and CONFIG SET tls-port crashes a server built without TLS. BendKV does not
-copy them. [UPSTREAM.md](UPSTREAM.md) has how to see each, where it is in the code, and
+found four bugs in them: LSET takes its index modulo 2^32, a failed AUTH in a pipeline
+gets no reply, CONFIG SET tls-port crashes a server built without TLS, and RESTORE with a
+time to live near 2^63 ms makes a key that 7.0.15 does not. BendKV does not copy them. [UPSTREAM.md](UPSTREAM.md) has how to see each, where it is in the code, and
 where it is to be reported.
 
 ## What this mode does not test

@@ -700,12 +700,12 @@ def xgroup.con(+g: KV.XGroup, +name: String) -> Maybe<&2, KV.XCon>:
 
 def xcon.seen(+c: KV.XCon) -> Nat:
   match c:
-    case KV.XCon{name, +seen, ids}:
+    case KV.XCon{name, +seen, active, ids}:
       seen
 
 def xcon.ids(+c: KV.XCon) -> KV.XIds:
   match c:
-    case KV.XCon{name, seen, +ids}:
+    case KV.XCon{name, seen, active, +ids}:
       ids
 
 def xnack.owner(+x: KV.XNack) -> String:

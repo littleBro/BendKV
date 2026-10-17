@@ -21,11 +21,12 @@ all four are set back after.
   DUMPed back, byte for byte, and RESTOREd on both, each server's
   DUMPed by the other; TYPE, OBJECT ENCODING, EXISTS, SCAN's TYPE, COPY,
   RENAME, EXPIRE and other kinds' commands (WRONGTYPE) on both.
-- The same streams as Redis 5 and 6 wrote them (type 15, made here from
-  the payloads: no first ID, greatest deleted ID, count of entries
+- The same streams as Redis 7.0 wrote them (type 19, made here from the
+  payloads: no consumer's active time) and as Redis 5 and 6 wrote them
+  (type 15: neither first ID, greatest deleted ID, count of entries
   added, nor any group's count of entries read): RESTOREd and DUMPed by
-  both (type 19, with what 15 lacks estimated as Redis estimates it),
-  byte for byte.
+  both (type 21, with what 19 or 15 lacks estimated as Redis estimates
+  it), byte for byte.
 - Payloads cut, grown and changed at random (their checksum made
   right), each RESTOREd on both: what Redis refuses BendKV refuses, and
   what both take both DUMP the same. BendKV refuses more than Redis
@@ -124,12 +125,10 @@ def shapes(rnd):
     add("a node with no live entry, and an entry after it below its master ID",
         [xadd("14-1", "a", "1"), xadd("14-2", "a", "2"), xadd("14-3", "a", "3"), cmd("XDEL", "s", "14-3"),
          cmd("XTRIM", "s", "MINID", "14-3")])
-    add("an entry added below a node's master ID",
-        [xadd("14-1", "a", "1"), xadd("14-2", "a", "2"), xadd("14-3", "a", "3"), cmd("XDEL", "s", "14-3"),
-         cmd("XTRIM", "s", "MINID", "14-3"), cmd("XSETID", "s", "0-1"), xadd("0-2", "a", "4"), xadd("0-3", "b", "5")])
-    add("an entry added after a deleted one with a greater ID",
-        [xadd("15-1", "a", "1"), xadd("15-9", "a", "2"), cmd("XDEL", "s", "15-9"), cmd("XSETID", "s", "15-2"),
-         xadd("15-3", "a", "3")])
+    # Redis 7.0's XSETID could set the last ID below the greatest deleted
+    # one, so that entries came after a deleted one with a greater ID, or
+    # below a node's master ID; Redis 7.2 refuses it ("smaller than current
+    # max_deleted_entry_id"), so commands make no such shape
     add("IDs near 2^64", [xadd("%d-%d" % (U64 - 1, U64 - 1), "f", "1"), xadd("%d-0" % U64, "f", "2"),
                           xadd("%d-%d" % (U64, U64 - 1), "f", "3"), xadd("%d-%d" % (U64, U64), "f", "4")])
     add("sequences that go down from the master's",
@@ -185,7 +184,7 @@ def make(r, shape):
     return run(r, cmd("DUMP", "s"))[1]
 
 
-# Type 15: a payload of 19 without what 15 lacks
+# Types 19 and 15: a payload of 21 without what they lack
 
 def rd_len(p, i):
     x = p[i]
@@ -213,9 +212,11 @@ def str_end(p, i):
     return j + k
 
 
-def to15(p):
-    assert p[0] == 19
-    out = bytearray([15])
+def older(p, kind):
+    """p (type 21) as type kind writes it: 19 without the consumers' active
+    times, 15 without what 19 adds too"""
+    assert p[0] == 21
+    out = bytearray([kind])
     st = {"i": 1}
 
     def length(keep=True):
@@ -239,12 +240,12 @@ def to15(p):
     for _ in range(3):
         length()
     for _ in range(5):
-        length(False)
+        length(kind == 19)
     for _ in range(length()):
         string()
         length()
         length()
-        length(False)
+        length(kind == 19)
         for _ in range(length()):
             raw(16)
             raw(8)
@@ -252,14 +253,15 @@ def to15(p):
         for _ in range(length()):
             string()
             raw(8)
+            st["i"] += 8
             raw(16 * length())
     assert len(p) - st["i"] == 10, (len(p), st["i"])
-    body = bytes(out) + b"\x09\x00"
+    body = bytes(out) + (b"\x0a\x00" if kind == 19 else b"\x09\x00")
     return body + struct.pack("<Q", crc64(body))
 
 
 def fix(body):
-    body = bytes(body) + b"\x0a\x00"
+    body = bytes(body) + b"\x0b\x00"
     return body + struct.pack("<Q", crc64(body))
 
 
@@ -301,11 +303,12 @@ def shape_checks(b, r, shape):
     x = run(b, cmd("DUMP", "s"))
     check(name + ": BendKV's DUMP of it, byte for byte", x, (b"$", p))
     generic(b, r, name, p)
-    q = to15(p)
-    x, y = both(b, r, cmd("RESTORE", "o", 0, q, "REPLACE"))
-    check(name + ": RESTORE of type 15", x, y)
-    x, y = both(b, r, cmd("DUMP", "o"))
-    check(name + ": DUMP of type 15, byte for byte", x, y)
+    for kind in (19, 15):
+        q = older(p, kind)
+        x, y = both(b, r, cmd("RESTORE", "o", 0, q, "REPLACE"))
+        check(name + ": RESTORE of type %d" % kind, x, y)
+        x, y = both(b, r, cmd("DUMP", "o"))
+        check(name + ": DUMP of type %d, byte for byte" % kind, x, y)
     both(b, r, cmd("DEL", "s", "o"))
     return p
 

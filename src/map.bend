@@ -225,9 +225,16 @@ type XIds is Data:
   XITip{}
   XIBin{n: Nat, x: XId, l: XIds, r: XIds}
 
-# a consumer: its name, the time it was last seen (ms), its pending IDs
+# a consumer's active time (Redis 7.2's active_time): none yet (-1, as a
+# consumer is made), or the time (ms) it last read or claimed an entry
+type XAct is Data:
+  XActNone{}
+  XActAt{ms: Nat}
+
+# a consumer: its name, the time it was last seen (ms), its active time,
+# its pending IDs
 type XCon is Data:
-  XCon{name: String, seen: Nat, ids: XIds}
+  XCon{name: String, seen: Nat, active: XAct, ids: XIds}
 
 # a group's consumers by name (bytes, as memcmp orders them, a prefix
 # first), as a weight-balanced tree
@@ -6094,7 +6101,7 @@ def xid.self(+x: XId) -> XId:
 
 def xcon.name(+x: XCon) -> String:
   match x:
-    case XCon{+name, seen, ids}:
+    case XCon{+name, seen, active, ids}:
       name
 
 def xgroup.name(+x: XGroup) -> String:
