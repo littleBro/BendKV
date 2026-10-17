@@ -104,6 +104,14 @@ License unless said otherwise:
 - MurmurHash64A: Austin Appleby's MurmurHash2, 64-bit version, in the
   public domain, made endian-neutral by Redis.
 
+Ported from Redis 7.2.16: BSD 3-Clause License, Copyright (c) 2006-2020,
+Salvatore Sanfilippo, and the authors named in its files. Where Redis 7.2
+answers otherwise than 7.0, BendKV answers as Redis 7.2.16 does, and these
+parts of it are written from 7.2.16's sources:
+
+- Tools: tools/redis_ref.sh, which builds Redis 7.2.16 from its tarball
+  for the tests to compare with (nothing of Redis is kept here).
+
 Bend (bend-patches/): patches to the Bend compiler and its runtime
 (github.com/bendlang/bend at 1cce499, Bend 2.0.35), Copyright 2026
 HigherOrderCO, under the Apache License, Version 2.0: bend-patches/LICENSE.

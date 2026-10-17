@@ -1,0 +1,21 @@
+# Redis 7.2.16, the reference the tests compare with: built from its
+# tarball by tools/redis_ref.sh (its sha256 checked), kept in the cache
+# under the script's hash and the runner's image, and put first on the PATH
+# for the steps after it (redis-server, redis-cli, redis-benchmark)
+name: The reference Redis
+description: Redis 7.2.16 built from its tarball, cached, first on the PATH
+runs:
+  using: composite
+  steps:
+    - id: key
+      shell: bash
+      run: echo "key=redis-ref-$ImageOS-$ImageVersion-${{ hashFiles('tools/redis_ref.sh') }}" >> "$GITHUB_OUTPUT"
+    - uses: actions/cache@v4
+      with:
+        path: ~/redis-7.2.16
+        key: ${{ steps.key.outputs.key }}
+    - shell: bash
+      run: |
+        dir=$(sh tools/redis_ref.sh "$HOME/redis-7.2.16")
+        echo "$dir" >> "$GITHUB_PATH"
+        "$dir/redis-server" --version

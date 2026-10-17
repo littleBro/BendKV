@@ -13,9 +13,11 @@ sh bend-patches/apply.sh ../bend-patched
 export B="bun ../bend-patched/bend2/main.ts"
 ```
 
-For the tests you also need `redis-server`, `redis-cli` and `redis-benchmark` (Redis
-7.0.15 is the reference), Python 3 and a C compiler; for `make perfcheck`, `valgrind`
-too.
+For the tests you also need Redis 7.2.16, the reference they compare with, first on the
+`PATH`: `sh tools/redis_ref.sh` builds it from its tarball (once, into `~/redis-7.2.16`)
+and prints the directory to put there, as in `PATH="$(sh tools/redis_ref.sh):$PATH" make
+test`. You also need Python 3 and a C compiler, and for `make perfcheck`, `valgrind` and
+`redis-benchmark`.
 
 ## Before you open a pull request
 
@@ -33,7 +35,7 @@ light tier runs on every push to a pull request and to `main`: `make gencheck`, 
 proofs and `make smoke`, the server built (kept in the cache while what it is built from
 stays the same) and `make perfcheck`; a change of documents alone runs `make gencheck`
 alone. The heavy tier runs only when it is started by hand, on a branch: the branch merged
-with `main`, `make test` against the Redis 7.0.15 that Ubuntu 24.04 ships (in three parts
+with `main`, `make test` against Redis 7.2.16, built from its tarball and cached (in three parts
 side by side, `tests/run_tests.sh`'s `PARTS`), the client suites, and the server built
 with AddressSanitizer and UndefinedBehaviorSanitizer and with ThreadSanitizer, the tests
 that stress its memory and its writer thread run under each (`sh tools/sanitize.sh`, which

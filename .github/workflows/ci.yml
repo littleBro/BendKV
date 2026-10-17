@@ -15,15 +15,15 @@
 # on a branch (GitHub's "Run workflow", or the API), with the parts to run
 # (all by default). Such a run tests the branch merged with main as main
 # is when it starts (.github/actions/merge-main), every job the same tree:
-# the light tier; make test against Redis 7.0.15, in three parts side by
+# the light tier; make test against Redis 7.2.16, in three parts side by
 # side; the test suites of client libraries (redis-py in RESP2 and in
-# RESP3, go-redis) against Redis 7.0.15 and the server built
+# RESP3, go-redis) against Redis 7.2.16 and the server built
 # (tools/client_suite.py: a test Redis passes that BendKV fails, and that
 # is not among the known failures of tools/data/clients.json, fails its
 # job); and the server built with the sanitizers (tools/sanitize.sh), ASan
 # with UBSan in one job and TSan in another: a report fails it. Redis
-# 7.0.15 is the one Ubuntu 24.04 ships, the reference the tests compare
-# with.
+# 7.2.16, the reference the tests compare with, is built from its tarball
+# and kept in the cache (.github/actions/redis-ref, tools/redis_ref.sh).
 #
 # The commit status "CI heavy" says whether the heavy tier passed on a
 # commit. A run of all the heavy parts sets it on its branch's head as it
@@ -293,13 +293,7 @@ jobs:
       # the float test compiles its checks with Bend, and the tests build
       # a shim and a reference with the C compiler
       - uses: ./.github/actions/setup
-      - name: Redis 7.0.15
-        run: |
-          sudo apt-get update -q
-          sudo apt-get install -yq redis-server redis-tools
-          sudo systemctl stop redis-server || true
-          redis-server --version
-          redis-server --version | grep -q 'v=7\.0\.15 '
+      - uses: ./.github/actions/redis-ref
       - uses: actions/download-artifact@v4
         with:
           name: bendkv
@@ -342,12 +336,7 @@ jobs:
       - uses: ./.github/actions/merge-main
         with:
           main: ${{ needs.changes.outputs.main }}
-      - name: Redis 7.0.15
-        run: |
-          sudo apt-get update -q
-          sudo apt-get install -yq redis-server redis-tools
-          sudo systemctl stop redis-server || true
-          redis-server --version | grep -q 'v=7\.0\.15 '
+      - uses: ./.github/actions/redis-ref
       - if: matrix.client == 'redis-py'
         uses: actions/setup-python@v5
         with:
@@ -362,7 +351,7 @@ jobs:
           name: bendkv
           path: build
       - run: chmod +x build/bendkv
-      - name: the suite against Redis 7.0.15 and BendKV
+      - name: the suite against Redis 7.2.16 and BendKV
         run: >-
           python3 tools/client_suite.py ci --client ${{ matrix.client }}
           --protocol ${{ matrix.protocol }} --server build/bendkv --out build/clients
@@ -399,17 +388,16 @@ jobs:
           main: ${{ needs.changes.outputs.main }}
       - uses: ./.github/actions/setup
       # clang 19's sanitizer runtimes and llvm-symbolizer, which Ubuntu
-      # ships apart from clang-19, and Redis 7.0.15 for the tests that
-      # compare; the sanitizers' shadow memory needs mappings placed with
-      # at most 28 random bits (vm.mmap_rnd_bits), which a runner's kernel
-      # may set higher
-      - name: the sanitizers and Redis 7.0.15
+      # ships apart from clang-19; the sanitizers' shadow memory needs
+      # mappings placed with at most 28 random bits (vm.mmap_rnd_bits),
+      # which a runner's kernel may set higher
+      - name: the sanitizers
         run: |
           sudo apt-get update -q
-          sudo apt-get install -yq libclang-rt-19-dev llvm-19 redis-server redis-tools
-          sudo systemctl stop redis-server || true
-          redis-server --version | grep -q 'v=7\.0\.15 '
+          sudo apt-get install -yq libclang-rt-19-dev llvm-19
           sudo sysctl -w vm.mmap_rnd_bits=28
+      # Redis 7.2.16 for the tests that compare
+      - uses: ./.github/actions/redis-ref
       - name: tools/sanitize.sh (${{ matrix.san }})
         env:
           SANS: ${{ matrix.san }}
