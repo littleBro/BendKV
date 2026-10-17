@@ -12335,7 +12335,7 @@ def db_shut(p: S.Srv & Bool, +force: Bool, outs: List<&2, Sigma<&2, &2, Chan(Ans
   (+srv, +ok1) = p
   +lg = down.lg(srv, rw)
   do IO<Unit>:
-    Unit <- log(lg, 3, "User requested shutdown...")
+    Unit <- log(lg, 2, "User requested shutdown...")
     Unit <- down.sd(S.srv.cfg(srv))
     Unit <- down.bgsave(bg.on(srv), bgr.ch(rw.bg(rw)), lg, rw.pid(rw))
     Unit <- down.rewrite(rw.runs(rw), lg, rw.tmp(rw))
@@ -15971,7 +15971,7 @@ def aof_shut.go(p: S.Srv & Bool, +force: Bool, outs: List<&2, Sigma<&2, &2, Chan
   (+srv, +ok1) = p
   +lg = down.lg(srv, rw)
   do IO<Unit>:
-    Unit <- log(lg, 3, "User requested shutdown...")
+    Unit <- log(lg, 2, "User requested shutdown...")
     Unit <- down.sd(S.srv.cfg(srv))
     Unit <- down.bgsave(bg.on(srv), bgr.ch(rw.bg(rw)), lg, rw.pid(rw))
     Unit <- down.rewrite(rw.runs(rw), lg, rw.tmp(rw))
@@ -16509,7 +16509,7 @@ def down.exit(+srv: S.Srv, +lg: Log) -> IO(Unit):
 def down.stop(+srv: S.Srv, +rw: Rw, m: Maybe<&1, File>) -> IO(Unit):
   +lg = down.lg(srv, rw)
   do IO<Unit>:
-    Unit <- log(lg, 3, "User requested shutdown...")
+    Unit <- log(lg, 2, "User requested shutdown...")
     Unit <- down.sd(S.srv.cfg(srv))
     Unit <- down.bgsave(bg.on(srv), bgr.ch(rw.bg(rw)), lg, rw.pid(rw))
     Unit <- down.rewrite(rw.runs(rw), lg, rw.tmp(rw))
@@ -19664,10 +19664,10 @@ def mm.warn.if(on: Bool, +lg: Log, +max: Nat) -> IO(Unit):
 def mm.warn(+lg: Log, +max: Nat) -> IO(Unit):
   mm.warn.if(Bool.and(Nat.is_lt(0n, max), Nat.is_lt(max, 1048576n)), lg, max)
 
-# the server serves: Redis's lines that it is ready (on TCP when some TCP
-# listener is up, the pair's first; at the unix socket's path when it has
-# one), and systemd told when it supervises the server (sup), as Redis's
-# main ends its start
+# the server serves: Redis 7.2.16's lines that it is ready, one for each
+# kind of listener (tcp when some TCP listener is up, the pair's first;
+# unix when it has a socket), and systemd told when it supervises the
+# server (sup), as Redis's main ends its start
 @unsafe
 def accept_all(p: Bool & List<&1, Listener>, +sup: Bool, +reqs: Chan(Req), +post: Bool, +lg: Log, +tl: Chan(Tally), +items: List<&2, C.CItem>) -> IO(Unit):
   (tcp, ls) = p
@@ -19677,8 +19677,8 @@ def accept_all(p: Bool & List<&1, Listener>, +sup: Bool, +reqs: Chan(Req), +post
     n : U32 <- IO.signal(lf, 0)
     Unit <- IO.spawn(Unit, cron(reqs, lf))
     Unit <- accept_each(ls, reqs, post, tl)
-    Unit <- log.if(tcp, lg, 2, "Ready to accept connections")
-    Unit <- log.if(Bool.not(String.is_empty(path)), lg, 2, "The server is now ready to accept connections at " ++ path)
+    Unit <- log.if(tcp, lg, 2, "Ready to accept connections tcp")
+    Unit <- log.if(Bool.not(String.is_empty(path)), lg, 2, "Ready to accept connections unix")
     Unit <- sd.ready(sup)
     mm.warn(lg, S.mm.get(items, "maxmemory"))
 
@@ -19794,7 +19794,7 @@ def listen.fail(skip: Bool, +port: U32, +lg: Log, ls: List<&1, Listener>) -> IO(
     case True{}:
       IO.pure(List<&1, Listener>, ls)
     case False{}:
-      log.die(List<&1, Listener>, lg, "Failed listening on port " ++ U32.show(port) ++ " (TCP), aborting.")
+      log.die(List<&1, Listener>, lg, "Failed listening on port " ++ U32.show(port) ++ " (tcp), aborting.")
 
 @unsafe
 def listen.got(m: Result<&1, &1, U32 & String, Listener>, +name: String, +port: U32, +lg: Log, ls: List<&1, Listener>) -> IO(List<&1, Listener>):
@@ -20052,9 +20052,9 @@ def run(+items: List<&2, C.CItem>, +post: Bool, +aof: Maybe<&2, String>, +sync: 
   do IO<Unit>:
     +sup : Bool <- start.sup.env(items, lg)
     Unit <- start.refused(String.is_empty(T.refusal(items, sup)), T.refusal(items, sup), lg)
-    Unit <- log(lg, 3, "oO0OoO0OoO0Oo BendKV is starting oO0OoO0OoO0Oo")
-    Unit <- log(lg, 3, "BendKV version=" ++ T.version() ++ ", Redis 7.2.16 commands, bits=64, pid=" ++ U32.show(pid) ++ ", just started")
-    Unit <- log(lg, 3, Bool.pick(String, bare, "Warning: no config file specified, using the default config. In order to specify a config file use " ++ prog ++ " /path/to/redis.conf", "Configuration loaded"))
+    Unit <- log(lg, 2, "oO0OoO0OoO0Oo BendKV is starting oO0OoO0OoO0Oo")
+    Unit <- log(lg, 2, "BendKV version=" ++ T.version() ++ ", Redis 7.2.16 commands, bits=64, pid=" ++ U32.show(pid) ++ ", just started")
+    Unit <- log(lg, Bool.pick(U32, bare, 3, 2), Bool.pick(String, bare, "Warning: no config file specified, using the default config. In order to specify a config file use " ++ prog ++ " /path/to/redis.conf", "Configuration loaded"))
     Unit <- log.lines(lm, 3, T.warnings(items))
     Unit <- start.refused(C.text.locale(T.cfg(items, "locale-collate")), "Failed to configure LOCALE for invalid locale name.", lm)
     tcp : List<&1, Listener> <- listen.start(U32.is_eq(port, 0), T.addrs(items), port, lm)
@@ -20062,7 +20062,7 @@ def run(+items: List<&2, C.CItem>, +post: Bool, +aof: Maybe<&2, String>, +sync: 
     Unit <- pidfile(String.is_empty(T.cfg(items, "pidfile")), T.cfg(items, "pidfile"), pid, lm)
     Unit <- log.raw.at(Bool.and(String.eq(T.cfg(items, "always-show-logo"), "yes"), U32.is_le(log.level(lg), 2)), lm, T.logo(T.cfg(items, "port"), pid))
     Unit <- log.if(Bool.not(String.eq(T.cfg(items, "always-show-logo"), "yes")), lm, 2, "Running mode=standalone, port=" ++ T.cfg(items, "port") ++ ".")
-    Unit <- log(lm, 3, "Server initialized")
+    Unit <- log(lm, 2, "Server initialized")
     Unit <- modules(Bool.not(String.is_empty(mod)), mcfg, mod, lm)
     +tl : Chan(Tally) <- Chan.new(Tally, 1)
     ok : Bool <- Chan.send(Tally, tl, Tally{0n, 0n})

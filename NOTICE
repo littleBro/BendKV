@@ -136,6 +136,9 @@ parts of it are written from 7.2.16's sources:
   isValidClusterAnnounceIp, cluster.c's isValidAuxChar and config.c's
   updateLocaleCollate make them (src/config.bend, src/server.bend), and
   loglevel's nothing (src/startup.bend).
+- Start and shutdown: the levels and texts of their lines in the log
+  (server.c's main and prepareForShutdown, and the listeners of socket.c
+  and unix.c), in src/server.bend.
 - Persistence: src/rdb.bend, from rdb.c, t_set.c and t_stream.c (RDB
   version 11: sets as SET_LISTPACK, the order an intset's members take
   when a set read from a file becomes a listpack, streams as
