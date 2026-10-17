@@ -20,11 +20,16 @@ difference was replayed by hand on four servers:
 The causes below are read from the sources of Redis 7.2.16 and Valkey 9.1.2, which are
 BSD-3. Redis 8.10.2 was only run; its sources were not read (AGENTS.md, rule 10).
 
+Bug 5 turned up later, when RDB 11 came in on the branch of 7.2.16, and was replayed on
+7.0.15 and 7.2.16 only.
+
 | bug | 7.0.15 | 7.2.16 | 8.10.2 | Valkey 9.1.2 |
 |---|---|---|---|---|
 | 1. LSET takes its index modulo 2^32 | refuses | **bug** | refuses | **bug** |
 | 2. A failed AUTH in a pipeline gets no reply | replies | **bug** | **bug** | replies |
 | 3. CONFIG SET tls-port crashes a server built without TLS | refuses | **bug** | refuses | **bug** |
+| 4. CLIENT UNBLOCK with ERROR counts a WAIT twice | counts once | **bug** | **bug** | **bug** |
+| 5. RESTORE with a time to live near 2^63 ms makes a key | no key | **bug** | not run | not run |
 
 ## 1. LSET takes its index modulo 2^32
 
@@ -111,3 +116,82 @@ Without TLS, `connectionTypeTls()` returns NULL. `connTypeConfigure` calls
 **To report to:** Valkey, and Redis for its 7.2 branch. Only a client allowed CONFIG SET
 (an @admin and @dangerous command) can cause it. Even so, a crash may be better sent
 through the projects' security channels than as a public issue.
+
+## 4. CLIENT UNBLOCK with ERROR counts a WAIT twice
+
+**What happens.** `CLIENT UNBLOCK <id> ERROR` unblocks a client that waits in WAIT, and the client
+gets one error reply. The server counts two calls of WAIT:
+- two calls in INFO commandstats, one of them failed;
+- two in `total_commands_processed`;
+- two entries in the slow log, and two samples in the latency histogram.
+
+Any other blocking command unblocked this way counts one call, and so does a WAIT unblocked with
+`TIMEOUT`.
+
+**How to see it.** Run each line in its own shell, against a server with no replica:
+
+```
+$ redis-cli config resetstat
+$ redis-cli wait 1 0                  # blocks: no replica will acknowledge
+$ redis-cli client list               # the waiting client's id
+$ redis-cli client unblock <id> error
+$ redis-cli info commandstats | grep wait
+```
+
+- **7.0.15** counts `calls=1`, `failed_calls=1`.
+- **7.2.16 and 8.10.2** count `calls=2`, `failed_calls=1`.
+- **Valkey 9.1.2** counts `calls=2`, `rejected_calls=1`, `failed_calls=0`.
+
+WAITAOF is unblocked through the same path.
+
+**Where.** The call is counted twice on its way out:
+- Redis 7.2.16: `unblockClientOnError` (`src/blocked.c`, line 735) counts it, failed
+  (`updateStatsOnUnblock`). Then `unblockClient` calls `unblockClientWaitingReplicas`
+  (`src/replication.c`, line 3615), which counts it again.
+- Valkey 9.1.2: `unblockClientOnError` (`src/blocked.c`, line 820) counts it, as rejected. Then
+  `unblockClientWaitingReplicas` (`src/replication.c`, line 5105) counts it again.
+
+The second count is meant for a WAIT whose time is up: `replyToBlockedClientTimedOut` counts nothing
+for one.
+
+**To report to:** Redis, for 7.2 and 8, and Valkey.
+
+## 5. RESTORE with a time to live near 2^63 ms makes a key
+
+**What happens.** RESTORE takes a time to live in milliseconds and adds the clock's time to
+it. For a time to live past 2^63 − 1 less the clock's time, `9223372036854775807` for one,
+the sum overflows 64 bits. 7.0.15 takes the sum for a time past and makes no key, as for any
+time past: it answers OK and the key is not there. 7.2.16 answers OK and makes the key: GET
+reads its value, and PTTL answers about 2^63, until the next cycle of expiries deletes the
+key, within a tenth of a second at the default `hz`. The append-only file and the replicas
+get `RESTORE k <a negative time> ... ABSTTL`, which they refuse
+(`Invalid TTL value, must be >= 0`), then a DEL of the key.
+
+**How to see it.** The GET has to come before the cycle of expiries, so in the same write:
+
+```
+python3 -c '
+import socket, time
+def req(*a):
+    return b"*%d\r\n" % len(a) + b"".join(b"$%d\r\n%s\r\n" % (len(x), x) for x in a)
+s = socket.create_connection(("127.0.0.1", 6379))
+s.sendall(req(b"SET", b"s", b"hello") + req(b"DUMP", b"s")); time.sleep(0.1)
+p = s.recv(4096).split(b"\r\n", 2)[2][:-2]
+s.sendall(req(b"RESTORE", b"k", b"9223372036854775807", p) + req(b"GET", b"k"))
+time.sleep(0.5); print(s.recv(4096))
+s.sendall(req(b"EXISTS", b"k")); time.sleep(0.1); print(s.recv(4096))'
+```
+
+- **7.2.16** prints `+OK`, then `$5 hello`; half a second later, `EXISTS k` answers 0.
+- **7.0.15** prints `+OK`, then `$-1`.
+
+**Where.** `restoreCommand` (Redis 7.2.16: `src/cluster.c`, line 6785) adds
+`commandTimeSnapshot()` to the time to live with no check for overflow, then asks
+`checkAlreadyExpired` (`src/expire.c`, line 478) whether the sum is past. C leaves a signed
+overflow undefined, so what the check makes of the sum is the compiler's: built from the
+tarball with gcc 13.3, the server takes it for not past and keeps the key with the wrapped,
+negative time, which `keyIsExpired` reads as no time to live and the cycle of expiries as a
+time past. 7.0.15 added `mstime()` where 7.2.16 adds `commandTimeSnapshot()`. SET, EXPIRE
+and their kin check the sum for overflow first (`invalid expire time`); RESTORE does not.
+
+**To report to:** Redis, for its 7.2 branch; 8.10.2 and Valkey 9.1.2 are not checked yet.

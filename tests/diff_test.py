@@ -396,6 +396,13 @@ def rnd_lnum(r):
                      b"-9223372036854775808", b"9223372036854775807"])
 
 
+# LSET's index stays within 32 bits: Redis 7.2.16 takes a larger one modulo
+# 2^32 (docs/UPSTREAM.md, bug 1), where BendKV answers that it is out of
+# range; tests/numbers_test.py checks BendKV's answer to those alone
+def rnd_lset(r):
+    return r.choice([b"0", b"1", b"2", b"-1", b"-2", b"5", b"-5", b"100", b"x", b"1.5", b""])
+
+
 def rnd_end(r):
     return r.choice([b"LEFT", b"RIGHT", b"left", b"Right", b"UP"])
 
@@ -657,7 +664,7 @@ def rnd_cmd(r):
         (0.02, lambda: [r.choice([b"LLEN", b"TYPE"]), k()]),
         (0.02, lambda: [b"LINDEX", k(), rnd_lnum(r)]),
         (0.03, lambda: [b"LRANGE", k(), rnd_lnum(r), rnd_lnum(r)]),
-        (0.01, lambda: [b"LSET", k(), rnd_lnum(r), rnd_elem(r)]),
+        (0.01, lambda: [b"LSET", k(), rnd_lset(r), rnd_elem(r)]),
         (0.01, lambda: [b"LINSERT", k(), r.choice([b"BEFORE", b"after", b"MIDDLE"]), rnd_elem(r), rnd_elem(r)]),
         (0.01, lambda: [b"LREM", k(), rnd_lnum(r), rnd_elem(r)]),
         (0.01, lambda: [b"LTRIM", k(), rnd_lnum(r), rnd_lnum(r)]),

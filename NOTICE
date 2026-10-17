@@ -108,6 +108,15 @@ parts of it are written from 7.2.16's sources:
 
 - Tools: tools/redis_ref.sh, which builds Redis 7.2.16 from its tarball
   for the tests to compare with (nothing of Redis is kept here).
+- Tables: tools/data/redis-commands.json, COMMAND INFO and COMMAND DOCS of
+  Redis 7.2.16's commands (from src/commands/*.json, as a running server
+  answers them), and the tables tools/gen_commands.py writes from it into
+  src/command.bend, src/acl.bend and src/redis.bend.
+- Texts and fields: the HELP replies, CLIENT LIST's fields (networking.c),
+  INFO's fields and their order, its listeners and its debug section
+  (server.c, connection.c), LOLWUT's line, and the version HELLO, INFO and
+  Lua's redis.REDIS_VERSION give (src/redis.bend, src/info.bend,
+  src/session.bend, src/lua/engine.c).
 - Scripts: src/lua/engine.c, from script_lua.c, eval.c and function_lua.c
   (the deprecated builtins and lua-enable-deprecated-api, the protection
   of the basic types' metatables of CVE-2025-46818, redis.set_repl()'s
@@ -115,6 +124,28 @@ parts of it are written from 7.2.16's sources:
   error's text on one line); src/server.bend, from script.c (a call's
   ACL failure) and script_lua.c (SCRIPT KILL's line in the log); and
   src/rdb.bend, from functions.c (FUNCTION RESTORE of the pre-GA format).
+- Blocked calls: a call that blocks counted when its client is unblocked
+  (served, its time up, or by CLIENT UNBLOCK), not when it blocks, and
+  never when its client goes while it waits but in WAIT (blocked.c's
+  updateStatsOnUnblock, server.c's call() and replication.c), in
+  src/info.bend and src/server.bend.
+- Persistence: src/rdb.bend, from rdb.c, t_set.c and t_stream.c (RDB
+  version 11: sets as SET_LISTPACK, the order an intset's members take
+  when a set read from a file becomes a listpack, streams as
+  STREAM_LISTPACKS_3 with each consumer's active time, the formats of
+  7.0's and 4.0's release candidates refused); src/server.bend, from
+  rdb.c and server.c (the lines of a file that does not load or open, of
+  a save's write error and of a directory's sync).
+- Texts and checks: HELLO's order (networking.c's helloCommand: every
+  option read before any is done, then the last AUTH, NOAUTH's text, the
+  name and the protocol), NOPERM's texts and ACL DRYRUN's (acl.c's
+  getAclErrorMessage), XREAD's text for unbalanced streams and XSETID's
+  check against the greatest ID deleted (t_stream.c), and LPOS's range
+  for RANK (t_list.c), in src/session.bend, src/acl.bend,
+  src/server.bend and src/redis.bend.
+- ACL LOG's entry-id, timestamp-created and timestamp-last-updated, and
+  the count of entries made, which ACL LOG RESET keeps (acl.c), in
+  src/acl.bend.
 
 Bend (bend-patches/): patches to the Bend compiler and its runtime
 (github.com/bendlang/bend at 1cce499, Bend 2.0.35), Copyright 2026

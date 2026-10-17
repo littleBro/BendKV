@@ -933,6 +933,12 @@ def gen.count(srv: S.Srv, +code: Nat, ys: List<&2, R.Erred>) -> S.Srv:
 def gen.count.d(srv: S.Srv, +code: Nat, ys: List<&2, R.Erred>, +n: Nat) -> S.Srv:
   S.srv.errs(S.srv.ran.d(srv, R.code.calls(code, 1n), R.run.of(code, 1n), Nil{}, 0n, 0n, n), ys)
 
+# a call that blocks (its client waits): not counted yet, its run (of one
+# call) kept for its share of the window's time, until its client is
+# unblocked (S.srv.served), as Redis 7.2 counts a blocked call
+def gen.count.blk(srv: S.Srv, +code: Nat) -> S.Srv:
+  S.srv.ran(S.srv.blk(srv), 0n, R.run.of(code, 1n), Nil{}, 0n, 0n)
+
 # a call's changes once it ran: by its reply, from its weight w, when its
 # error was not known before it (xs none); else w, which is the count of
 # a command of the connection or the server whose client's replies are
@@ -983,10 +989,12 @@ def gen.pre.own(+o: R.SessOp, +code: Nat, +conn: S.Conn, +srv: S.Srv, +ds: R.Ds)
 # up at the end of a group gets a null array; CLIENT UNBLOCK unblocks one
 # (a null array, or an UNBLOCKED error). An unblocked client's batch goes
 # on at the end of the group, after the group's batches, as Redis runs an
-# unblocked client's commands before it sleeps. The call counts when it
-# blocks, as Redis's call() counts it, and fails when CLIENT UNBLOCK
-# unblocks it or its reply is an error (updateStatsOnUnblock). A client
-# whose connection closes is forgotten (Gone), its batch dropped. A
+# unblocked client's commands before it sleeps. The call counts when its
+# client is unblocked, as Redis 7.2 counts it (updateStatsOnUnblock, and
+# call() on the command run again), not when it blocks: served, its time
+# up, or by CLIENT UNBLOCK, and failed when its reply is an error. A
+# client whose connection closes is forgotten (Gone), its batch dropped,
+# and its call never counted, but WAIT's (gone.count). A
 # client that a pause holds back waits in the same chain, with the
 # command held back at the head of the rest of its batch (The pause): no
 # key serves it, no time ends it, CLIENT UNBLOCK leaves it, and the end
@@ -1146,6 +1154,27 @@ def waits.put(p: Nat & Nat, srv: S.Srv) -> S.Srv:
 def waits.count(+ws: Waits, srv: S.Srv) -> S.Srv:
   waits.put(waits.len(ws, 0n, 0n), srv)
 
+# the keys the clients of ws wait on, each with its database once (the
+# database's number and a ':' before the key), for INFO's
+# total_blocking_keys: counted only for a batch that asks for INFO
+# (Facts), not each time a client starts or stops to wait
+def bkeys.put(+d: String, +ks: List<&2, String>, h: KV.Trie<Nat>) -> KV.Trie<Nat>:
+  match ks:
+    case Nil{}:
+      h
+    case Con{+k, +rest}:
+      bkeys.put(d, rest, KV.set(Nat, h, d ++ k, 0n))
+
+def bkeys.waits(+ws: Waits, h: KV.Trie<Nat>) -> KV.Trie<Nat>:
+  match ws:
+    case WaitNone{}:
+      h
+    case WaitOn{id, back, c0, c1, +b, argv, code, +db, until, cmds, codes, av, +rest}:
+      bkeys.waits(rest, bkeys.put(Nat.show(db) ++ ":", S.blk.keys(b), h))
+
+def waits.bkeys(+ws: Waits, srv: S.Srv) -> S.Srv:
+  S.srv.bkeys(srv, KV.size(Nat, bkeys.waits(ws, KV.empty(Nat))))
+
 def waits.length(ws: Waits, +n: Nat) -> Nat:
   match ws:
     case WaitNone{}:
@@ -1200,16 +1229,17 @@ def ups.drop(us: List<&2, Up>, hit: Bool, +n: Nat) -> List<&2, Up>:
       u <> ups.drop(rest, ups.is(n, rest), n)
 
 # the clients whose time is up at now unblocked (late: whether the first
-# of ws's is) with a null array, or 0 for WAIT (S.blk.late), in the order
-# they came, the others kept in order (keep: those before, newest first)
-def waits.expire(ws: Waits, late: Bool, +now: Nat, keep: Waits, up: List<&2, Up>) -> Waits & List<&2, Up>:
+# of ws's is) with a null array, or 0 for WAIT (S.blk.late), each call
+# counted (S.srv.served), in the order they came, the others kept in
+# order (keep: those before, newest first)
+def waits.expire(ws: Waits, late: Bool, +now: Nat, keep: Waits, up: List<&2, Up>, srv: S.Srv) -> Waits & (List<&2, Up> & S.Srv):
   match ws late:
     case WaitNone{} _:
-      (waits.rev(keep, WaitNone{}), up)
+      (waits.rev(keep, WaitNone{}), (up, srv))
     case WaitOn{id, back, +c0, c1, +b, argv, code, db, until, cmds, codes, av, +rest} True{}:
-      waits.expire(rest, waits.late(now, rest), now, keep, Up{back, c1, S.put(S.say(S.conn.mode(c0), S.blk.late(b)), Nil{}), cmds, codes, av} <> up)
+      waits.expire(rest, waits.late(now, rest), now, keep, Up{back, c1, S.put(S.say(S.conn.mode(c0), S.blk.late(b)), Nil{}), cmds, codes, av} <> up, S.srv.served(srv, id))
     case WaitOn{id, back, c0, c1, b, argv, code, db, until, cmds, codes, av, +rest} False{}:
-      waits.expire(rest, waits.late(now, rest), now, WaitOn{id, back, c0, c1, b, argv, code, db, until, cmds, codes, av, keep}, up)
+      waits.expire(rest, waits.late(now, rest), now, WaitOn{id, back, c0, c1, b, argv, code, db, until, cmds, codes, av, keep}, up, srv)
 
 # whether the first of ks holds what a pop waits for (z: a sorted set) in
 # the focus of d, and the first of ks that does (hit: whether the first
@@ -6116,15 +6146,18 @@ def bg.wait(+id: Nat, +back: Chan(Ans), b: S.Blk, +c: R.Cmd, +code: Nat, rest: L
       +x = b
       +u = S.blk.until(R.ds.now(ds), S.blk.ms(x))
       +ws2 = waits.add(ws, WaitOn{id, Chan.mark(Ans, back, U32.from_nat(code), R.ds.now(ds)), conn, S.next_conn(False{}, c, conn, srv), x, wait.argv(c), code, S.conn.db(conn), u, rest, more, av, WaitNone{}})
-      LHeld{LRun{rs, es, conn, waits.count(ws2, gen.count(S.srv.blk(srv), code, Nil{})), ds, ws2, up, tx, ps.heed.add(S.blk.keys(x), u, pb)}}
+      LHeld{LRun{rs, es, conn, waits.count(ws2, gen.count.blk(srv, code)), ds, ws2, up, tx, ps.heed.add(S.blk.keys(x), u, pb)}}
     case LHeld{h}:
       LHeld{h}
 
 # CLIENT UNBLOCK: the client of the id, if it waits, unblocked with a
-# null array (0 for WAIT: S.blk.late) or an UNBLOCKED error, its call
-# failed (an error reply's counted as one); the command answers 1, or 0
-# when no client of the id waits. Redis counts CLIENT UNBLOCK's own call failed when it sends the
-# error: the error reply came while it ran (incrCommandStatsOnError).
+# null array (0 for WAIT: S.blk.late), its call counted as one whose time
+# is up, or with an UNBLOCKED error, its call counted failed; the command
+# answers 1, or 0 when no client of the id waits. Redis counts CLIENT
+# UNBLOCK's own call failed when it sends the error: the error reply came
+# while it ran (incrCommandStatsOnError). Redis 7.0 counted each call that
+# CLIENT UNBLOCK unblocks failed; 7.2 counts WAIT's twice when it sends
+# the error (docs/UPSTREAM.md, bug 4), which BendKV counts once.
 def unblock.msg() -> String:
   "UNBLOCKED client unblocked via CLIENT UNBLOCK"
 
@@ -6136,7 +6169,7 @@ def unblock.stat(+err: Bool, +code: Nat, +own: Nat, srv: S.Srv) -> S.Srv:
     case True{}:
       S.srv.failed(S.srv.errs(srv, [R.Erred{code, unblock.msg()}]), own)
     case False{}:
-      S.srv.failed(srv, code)
+      srv
 
 def bg.unblocked(p: Waits & Waits, +err: Bool, +code: Nat, rs: List<&2, R.Reply>, es: List<&2, A.Ent>, conn: S.Conn, srv: S.Srv, ds: R.Ds, up: List<&2, Up>, tx: Tx, pb: Ps) -> LRun:
   (w, +ws) = p
@@ -7743,6 +7776,14 @@ def bg.noev(+id: Nat, on: Bool, +code: Nat, g: LRun) -> LRun:
     case LHeld{h}:
       LHeld{h}
 
+# NO-EVICT off, as RESET turns it off in Redis 7.2 (clearClientConnectionState)
+def bg.noev.off(+id: Nat, g: LRun) -> LRun:
+  match g:
+    case LRun{rs, es, conn, srv, ds, ws, up, tx, pb}:
+      LRun{rs, es, conn, srv, ds, ws, up, tx, ps.noev(id, False{}, pb)}
+    case LHeld{h}:
+      LHeld{h}
+
 # the client's name, database and protocol written to the registry,
 # after a command that may set them (CLIENT SETNAME, HELLO, SELECT, RESET)
 def bg.conned(g: LRun) -> LRun:
@@ -7901,14 +7942,15 @@ def save.points(+srv: S.Srv) -> Bool:
   Bool.not(String.is_empty(C.config.get_value(S.srv.cfg(srv), "save")))
 
 # a client that waits for a save: the rest of its batch kept, its call
-# counted now (its reply comes with the save: The RDB file on the disk),
+# counted with its reply, which comes with the save (The RDB file on the
+# disk),
 # its channel marked with the command, and d asked of the shell (ps.down,
 # never lowered)
 def save.hold(+d: Nat, +id: Nat, +back: Chan(Ans), +c: R.Cmd, +code: Nat, rest: List<&2, R.Cmd>, more: List<&2, Nat>, av: Av, g: LRun) -> LRun:
   match g:
     case LRun{rs, es, +conn, +srv, +ds, ws, up, tx, +pb}:
       +ws2 = waits.add(ws, WaitOn{id, Chan.mark(Ans, back, U32.from_nat(code), R.ds.now(ds)), conn, S.next_conn(False{}, c, conn, srv), S.BlkWait{Nil{}}, 0n, code, S.conn.db(conn), 0n, rest, more, av, WaitNone{}})
-      LHeld{LRun{rs, es, conn, waits.count(ws2, gen.count(S.srv.blk(srv), code, Nil{})), ds, ws2, up, tx, ps.down.set(Nat.max(d, ps.down(pb)), pb)}}
+      LHeld{LRun{rs, es, conn, waits.count(ws2, gen.count.blk(srv, code)), ds, ws2, up, tx, ps.down.set(Nat.max(d, ps.down(pb)), pb)}}
     case LHeld{h}:
       LHeld{h}
 
@@ -8521,7 +8563,7 @@ def bg.acl.log(+id: Nat, +v: U.Verdict, +inm: Bool, +x: Maybe<&2, Nat>, +inb: Na
     case LRun{rs, es, +conn, srv, +ds, +ws, up, +tx, +pb}:
       +now = R.ds.now(ds)
       +info = acl.info(id, now, acl.me(id, conn, code, inb, a, x), ws, tx, pb)
-      LRun{rs, es, conn, S.srv.acl.log(srv, U.Ent{1n, U.verdict.why(v), acl.ctx(inm), U.verdict.obj(v), ps.user(id, pb), now, info}), ds, ws, up, tx, pb}
+      LRun{rs, es, conn, S.srv.acl.log(srv, U.Ent{1n, U.verdict.why(v), acl.ctx(inm), U.verdict.obj(v), ps.user(id, pb), now, info, 0n, now}), ds, ws, up, tx, pb}
     case LHeld{h}:
       LHeld{h}
 
@@ -8533,7 +8575,7 @@ def bg.auth.log(+id: Nat, +u: String, +x: Maybe<&2, Nat>, +inb: Nat, +code: Nat,
       +now = R.ds.now(ds)
       +argv = av.now(a)
       +info = acl.info(id, now, acl.me(id, conn, code, inb, a, x), ws, tx, pb)
-      LRun{rs, es, conn, S.srv.acl.log(srv, U.Ent{1n, "auth", acl.ctx(maybe.is(x)), S.arg.first(argv), u, now, info}), ds, ws, up, tx, pb}
+      LRun{rs, es, conn, S.srv.acl.log(srv, U.Ent{1n, "auth", acl.ctx(maybe.is(x)), S.arg.first(argv), u, now, info, 0n, now}), ds, ws, up, tx, pb}
     case LHeld{h}:
       LHeld{h}
 
@@ -8548,8 +8590,16 @@ def bg.noperm.say(exec: Bool, +id: Nat, +m: String, +inm: Bool, +code: Nat, g: L
     case False{}:
       bg.one(R.Own{R.SBad{R.RError{m}}}, R.code.refused(code), bg.oom.tx(inm, g))
 
+def bg.noperm.as(+u: String, +id: Nat, +v: U.Verdict, +inm: Bool, +inb: Nat, +code: Nat, +a: Av, g: LRun) -> LRun:
+  bg.noperm.say(Nat.is_eq(R.code.key(code), R.stat.top(162n)), id, U.verdict.err(v, u), inm, code, bg.acl.log(id, v, inm, None{}, inb, code, a, g))
+
+# (NOPERM names the client's user: ps.user)
 def bg.noperm(+id: Nat, +v: U.Verdict, +inm: Bool, +inb: Nat, +code: Nat, +a: Av, g: LRun) -> LRun:
-  bg.noperm.say(Nat.is_eq(R.code.key(code), R.stat.top(162n)), id, U.verdict.err(v), inm, code, bg.acl.log(id, v, inm, None{}, inb, code, a, g))
+  match g:
+    case LRun{rs, es, conn, srv, ds, ws, up, tx, +pb}:
+      bg.noperm.as(ps.user(id, pb), id, v, inm, inb, code, a, LRun{rs, es, conn, srv, ds, ws, up, tx, pb})
+    case LHeld{h}:
+      bg.noperm.as("", id, v, inm, inb, code, a, LHeld{h})
 
 # the client of id logged in as the user of name n (AUTH, HELLO's AUTH;
 # RESET: default): in the registry, among the restricted clients or not,
@@ -10124,7 +10174,7 @@ def bg.cmd(+id: Nat, +back: Chan(Ans), +inb: Nat, sh: Sh, +c: R.Cmd, +code: Nat,
     case ShUnwatch{}:
       bg.one(c, code, bg.unwatch(id, g))
     case ShReset{}:
-      bg.user(id, "default", bg.conned(bg.one(c, code, bg.trk.off(id, bg.unsub.all(id, bg.close(id, g))))))
+      bg.user(id, "default", bg.conned(bg.one(c, code, bg.noev.off(id, bg.trk.off(id, bg.unsub.all(id, bg.close(id, g)))))))
     case ShQueue{}:
       bg.queue(c, code, a, g)
     case ShRefuse{}:
@@ -10353,9 +10403,13 @@ def bg.ups(f: Nat, g: Grp) -> Grp:
 def ups.fuel() -> Nat:
   1000000n
 
-def grp.late(p: Waits & List<&2, Up>, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, srv: S.Srv, ds: R.Ds, tx: Tx, pb: Ps) -> Grp:
-  (+ws, up) = p
+def grp.late.of(+ws: Waits, q: List<&2, Up> & S.Srv, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, ds: R.Ds, tx: Tx, pb: Ps) -> Grp:
+  (up, srv) = q
   bg.ups(ups.fuel(), Grp{outs, es, waits.count(ws, srv), ds, ws, up, tx, ps.soon.set(waits.soon(ws, 0n), pb)})
+
+def grp.late(p: Waits & (List<&2, Up> & S.Srv), outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, ds: R.Ds, tx: Tx, pb: Ps) -> Grp:
+  (ws, q) = p
+  grp.late.of(ws, q, outs, es, ds, tx, pb)
 
 # the end of a group while some client waits: the clients whose time is
 # up unblocked when one's may be (due: before now the earliest end, kept
@@ -10366,7 +10420,7 @@ def grp.end.due(due: Bool, +now: Nat, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ 
   match due up:
     case True{} u0:
       +w = ws
-      grp.late(waits.expire(w, waits.late(now, w), now, WaitNone{}, u0), outs, es, srv, ds, tx, pb)
+      grp.late(waits.expire(w, waits.late(now, w), now, WaitNone{}, u0, srv), outs, es, ds, tx, pb)
     case False{} Nil{}:
       Grp{outs, es, srv, ds, ws, Nil{}, tx, pb}
     case False{} Con{u, more}:
@@ -10420,12 +10474,34 @@ def grp.end(g: Grp) -> Grp:
   +x = g
   grp.end.if(Nat.is_le(2n, grp.down(x)), x)
 
-# a client gone (its connection closed while it waits): forgotten, its
-# batch dropped, and its connection answered Bye, after any answer before
-def grp.gone(+id: Nat, +back: Chan(Ans), outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, srv: S.Srv, ds: R.Ds, +ws: Waits, +up: List<&2, Up>, tx: Tx, pb: Ps) -> Grp:
-  +left = waits.rest(waits.take(ws, waits.is(id, ws), id, WaitNone{}))
-  +sv = S.srv.left(srv, id)
+# the call of a client gone while it waited (b: what it waited for):
+# counted when it waited in WAIT, or for a save (S.BlkWait), as Redis 7.2
+# counts WAIT's when it frees the client (unblockClientWaitingReplicas)
+# and runs SAVE to its end; any other, never counted (S.srv.dropped)
+def gone.of(b: S.Blk, srv: S.Srv, +id: Nat) -> S.Srv:
+  match b:
+    case S.BlkWait{ms}:
+      S.srv.served(srv, id)
+    case _:
+      S.srv.dropped(srv, id)
+
+def gone.count(w: Waits, srv: S.Srv, +id: Nat) -> S.Srv:
+  match w:
+    case WaitOn{i, back, c0, c1, b, argv, code, db, until, cmds, codes, av, rest}:
+      gone.of(b, srv, id)
+    case WaitNone{}:
+      S.srv.dropped(srv, id)
+
+def grp.gone.of(p: Waits & Waits, +id: Nat, +back: Chan(Ans), outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, srv: S.Srv, ds: R.Ds, +up: List<&2, Up>, tx: Tx, pb: Ps) -> Grp:
+  (w, +left) = p
+  +sv = S.srv.left(gone.count(w, srv, id), id)
   Grp{(back, Bye{}) <> outs, es, waits.count(left, sv), ds, left, ups.drop(up, ups.is(id, up), id), tx.drop(id, tx), ps.acl.at(ps.drop(id, pb), acl.on(sv))}
+
+# a client gone (its connection closed while it waits): forgotten, its
+# call counted or not (gone.count), its batch dropped, and its connection
+# answered Bye, after any answer before
+def grp.gone(+id: Nat, +back: Chan(Ans), outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, srv: S.Srv, ds: R.Ds, +ws: Waits, +up: List<&2, Up>, tx: Tx, pb: Ps) -> Grp:
+  grp.gone.of(waits.take(ws, waits.is(id, ws), id, WaitNone{}), id, back, outs, es, srv, ds, up, tx, pb)
 
 # Memory
 # ------
@@ -11661,8 +11737,8 @@ def group_req(+log: Bool, q: Req, g: Grp) -> Grp:
       grp.req(log, cn, job, back, tl, inb, raw, g0)
     case SubReq{+cn, job, back, tl, +inb, raw} g0:
       grp.sub(cn, job, back, inb, raw, g0)
-    case Facts{live} Grp{outs, es, +srv, ds, ws, up, tx, +pb}:
-      Grp{outs, es, srv.facts(facts.held(pb, srv), srv, live), ds, ws, up, tx, pb}
+    case Facts{live} Grp{outs, es, +srv, ds, +ws, up, tx, +pb}:
+      Grp{outs, es, waits.bkeys(ws, srv.facts(facts.held(pb, srv), srv, live)), ds, ws, up, tx, pb}
     case Tick{+ms} Grp{outs, es, srv, +ds, ws, up, tx, +pb}:
       +p = ps.pz(pb)
       grp.heed(grp.limit(ms, group.tick.if(Nat.is_le(2n, ps.down(pb)), pz.on(p), pz.over(p, R.ds.now(ds)), outs, es, srv, ms, ds, ws, up, tx, pb)))
@@ -14212,7 +14288,7 @@ def sc.acl.log.no(+v: U.Verdict, +me: Who, g: Grp) -> Grp:
     case Grp{outs, es, srv, +ds, +ws, up, +tx, +pb}:
       +id = ps.scr.who(pb)
       +now = R.ds.now(ds)
-      Grp{outs, es, S.srv.acl.log(srv, U.Ent{1n, U.verdict.why(v), "lua", U.verdict.obj(v), ps.user(id, pb), now, acl.info(id, now, me, ws, tx, pb)}), ds, ws, up, tx, pb}
+      Grp{outs, es, S.srv.acl.log(srv, U.Ent{1n, U.verdict.why(v), "lua", U.verdict.obj(v), ps.user(id, pb), now, acl.info(id, now, me, ws, tx, pb), 0n, now}), ds, ws, up, tx, pb}
 
 def sc.acl.log(v: U.Verdict, +sc: Sc, g: Grp) -> Grp:
   match v:
@@ -18025,16 +18101,20 @@ def rdb.write(f: File, sl: D.FSl, +sum: Bool, c: D.C) -> IO(File & RdbW):
 @unsafe
 def rdb.werr(m: Maybe<&1, File>, +lg: Log, +tmp: String, +op: String, +msg: String) -> IO(Bool):
   do IO<Bool>:
-    Unit <- log(lg, 3, "Write error saving DB on disk(" ++ op ++ "): " ++ msg)
+    Unit <- log(lg, 3, "Write error while saving DB to the disk(" ++ op ++ "): " ++ msg)
     Unit <- file.end(m)
     r : Result<&1, &1, U32 & String, Unit> <- File.unlink(tmp)
     IO.pure(Bool, False{})
 
+# the directory synced after the rename, or Redis 7.2.16's line for a
+# sync that failed (rdbSave: the file is in place, the save failed)
 @unsafe
-def rdb.dir.synced(r: Result<&1, &1, U32 & String, Unit>, +lg: Log, +tmp: String) -> IO(Bool):
+def rdb.dir.synced(r: Result<&1, &1, U32 & String, Unit>, +lg: Log) -> IO(Bool):
   match r:
     case Fail{e}:
-      rdb.werr(None{}, lg, tmp, "fsyncFileDir", err.msg(e))
+      do IO<Bool>:
+        Unit <- log(lg, 3, "Failed to fsync directory while saving DB: " ++ err.msg(e))
+        IO.pure(Bool, False{})
     case Done{u}:
       do IO<Bool>:
         Unit <- log(lg, 2, "DB saved on disk")
@@ -18052,7 +18132,7 @@ def rdb.renamed(r: Result<&1, &1, U32 & String, Unit>, +lg: Log, +tmp: String, +
     case Done{u}:
       do IO<Bool>:
         d : Result<&1, &1, U32 & String, Unit> <- File.sync_dir(name)
-        rdb.dir.synced(d, lg, tmp)
+        rdb.dir.synced(d, lg)
 
 @unsafe
 def rdb.synced(p: File & Result<&1, &1, U32 & String, Unit>, +lg: Log, +tmp: String, +name: String) -> IO(Bool):
@@ -18340,20 +18420,24 @@ def rdb.w.first(p: File & Result<&1, &1, U32 & String, String>, +t0: Nat, +lg: L
         t : U32 & U32 <- IO.clock()
         rdb.w.went(D.file.first(x, xlen, 1n+more, clock.ms(t), sum), f, D.C{0, 0}, x, 0n, xlen, sum, t0, lg, info, more)
 
+# a file that is not there starts empty; one that does not open stops the
+# start, as rdbLoad and loadDataFromDisk say it
 @unsafe
-def rdb.start.none(none: Bool, +msg: String, +lg: Log, info: I.Info, +more: Nat) -> IO(R.Ds & I.Info):
+def rdb.start.none(none: Bool, +name: String, +msg: String, +lg: Log, info: I.Info, +more: Nat) -> IO(R.Ds & I.Info):
   match none:
     case True{}:
       IO.pure(R.Ds & I.Info, (R.ds.empty(more), info))
     case False{}:
-      log.die(R.Ds & I.Info, lg, "Fatal error loading the DB: " ++ msg ++ ". Exiting.")
+      do IO<R.Ds & I.Info>:
+        Unit <- log(lg, 3, "Fatal error: can't open the RDB file " ++ name ++ " for reading: " ++ msg)
+        log.die(R.Ds & I.Info, lg, "Fatal error loading the DB, check server logs. Exiting.")
 
 @unsafe
 def rdb.start.open(m: Result<&1, &1, U32 & String, File>, +lg: Log, +items: List<&2, C.CItem>, info: I.Info, +more: Nat) -> IO(R.Ds & I.Info):
   match m:
     case Fail{e}:
       (code, msg) = e
-      rdb.start.none(U32.is_eq(code, enoent()), msg, lg, info, more)
+      rdb.start.none(U32.is_eq(code, enoent()), T.cfg(items, "dbfilename"), msg, lg, info, more)
     case Done{f}:
       do IO<R.Ds & I.Info>:
         t0 : Nat <- IO.now()
@@ -18791,7 +18875,7 @@ def step.bfail(+x: Rx, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx):
 @unsafe
 def step.bwerr(+x: Rx, f: Maybe<&1, File>, +tmp: String, +op: String, +msg: String) -> IO(Maybe<&1, File> & Rx):
   do IO<Maybe<&1, File> & Rx>:
-    Unit <- step.child(x, 3, "Write error saving DB on disk(" ++ op ++ "): " ++ msg)
+    Unit <- step.child(x, 3, "Write error while saving DB to the disk(" ++ op ++ "): " ++ msg)
     r : Result<&1, &1, U32 & String, Unit> <- File.unlink(tmp)
     step.bfail(x, f)
 
@@ -18877,13 +18961,15 @@ def step.bfin.renamed(r: Result<&1, &1, U32 & String, Unit>, +tmp: String, +name
     case Done{u}:
       do IO<Maybe<&1, File> & Rx>:
         d : Result<&1, &1, U32 & String, Unit> <- File.sync_dir(name)
-        step.bfin.dir(d, tmp, x, f)
+        step.bfin.dir(d, x, f)
 
 @unsafe
-def step.bfin.dir(d: Result<&1, &1, U32 & String, Unit>, +tmp: String, +x: Rx, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx):
+def step.bfin.dir(d: Result<&1, &1, U32 & String, Unit>, +x: Rx, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx):
   match d:
     case Fail{e}:
-      step.bwerr(x, f, tmp, "fsyncFileDir", err.msg(e))
+      do IO<Maybe<&1, File> & Rx>:
+        Unit <- step.child(x, 3, "Failed to fsync directory while saving DB: " ++ err.msg(e))
+        step.bfail(x, f)
     case Done{u}:
       do IO<Maybe<&1, File> & Rx>:
         t : U32 & U32 <- IO.clock()
@@ -19967,7 +20053,7 @@ def run(+items: List<&2, C.CItem>, +post: Bool, +aof: Maybe<&2, String>, +sync: 
     +sup : Bool <- start.sup.env(items, lg)
     Unit <- start.refused(String.is_empty(T.refusal(items, sup)), T.refusal(items, sup), lg)
     Unit <- log(lg, 3, "oO0OoO0OoO0Oo BendKV is starting oO0OoO0OoO0Oo")
-    Unit <- log(lg, 3, "BendKV version=" ++ T.version() ++ ", Redis 7.0.15 commands, bits=64, pid=" ++ U32.show(pid) ++ ", just started")
+    Unit <- log(lg, 3, "BendKV version=" ++ T.version() ++ ", Redis 7.2.16 commands, bits=64, pid=" ++ U32.show(pid) ++ ", just started")
     Unit <- log(lg, 3, Bool.pick(String, bare, "Warning: no config file specified, using the default config. In order to specify a config file use " ++ prog ++ " /path/to/redis.conf", "Configuration loaded"))
     Unit <- log.lines(lm, 3, T.warnings(items))
     tcp : List<&1, Listener> <- listen.start(U32.is_eq(port, 0), T.addrs(items), port, lm)

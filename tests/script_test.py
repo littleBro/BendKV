@@ -1150,19 +1150,33 @@ VOLATILE = (b"id", b"addr", b"laddr", b"fd", b"age", b"idle", b"qbuf", b"qbuf-fr
 
 def acl_log(c):
     """ACL LOG's entries, newest first, each as its fields: its age left
-    out, its client's line without the volatile fields"""
+    out, its client's line without the volatile fields, its times (ms since
+    1970) as whether they are such, the last update not before the
+    creation, and its entry-id less the least of the reply's (the servers
+    other tests used have made entries before)"""
     rep = c.cmd("ACL", "LOG")
     if not isinstance(rep, bytes) or rep[:1] != b"*":
         return [repr(rep)]
+    es = parse(rep)[0]
+    ids = [v for e in es for name, v in zip(e[0::2], e[1::2]) if name == b"entry-id"]
+    base = min(ids, default=0)
     out = []
-    for e in parse(rep)[0]:
+    for e in es:
         f = []
+        made = None
         for i in range(0, len(e), 2):
             name, v = e[i], e[i + 1]
             if name == b"age-seconds":
                 continue
             if name == b"client-info":
                 v = b" ".join(x for x in v.split() if x.split(b"=", 1)[0] not in VOLATILE)
+            elif name == b"entry-id":
+                v = v - base
+            elif name == b"timestamp-created":
+                made = v
+                v = isinstance(v, int) and v > 10 ** 12
+            elif name == b"timestamp-last-updated":
+                v = isinstance(v, int) and v > 10 ** 12 and made is not None and v >= made
             f.append((name, v))
         out.append(f)
     return out

@@ -585,16 +585,20 @@ translation stays in the trusted base.
   memory and choose what is evicted (below); `save`, `dbfilename` and `rdbchecksum`
   act on the RDB file (Persistence, below); the other parameters are kept and read
   back but tune nothing, since BendKV has no replication or encodings for them to tune.
-- **Introspection:** INFO with Redis 7.0.15's sections and fields, in Redis's order,
+- **Introspection:** INFO with Redis 7.2.16's sections and fields, in Redis's order,
   picked as Redis picks them (none, `default`, `all`, `everything`, any names in any
   case): server, clients, memory, persistence, stats, replication, CPU, modules,
-  errorstats, cluster, keyspace. The values are BendKV's own where it has them: its
-  process, its parameters, its connections, commands and bytes (with the instantaneous
-  rates sampled every 100 ms, as Redis's cron samples them), its memory (`used_memory` is
-  what its heap's live values hold, as Redis's is what its allocator handed out; Memory,
-  below), its keys, its evictions, its append-only file, its scripts and functions (the
-  engine's memory, the scripts cached, the functions and libraries); for what BendKV does
-  not have (replication, forks) they are what Redis shows when it has none. The
+  errorstats, cluster, keyspace, and debug when it is named. The values are BendKV's own
+  where it has them: its process, its listeners, its parameters, its connections,
+  commands and bytes (with the instantaneous rates sampled every 100 ms, as Redis's cron
+  samples them), its memory (`used_memory` is what its heap's live values hold, as Redis's
+  is what its allocator handed out; Memory, below), its keys and those clients wait on,
+  its evictions, the calls ACL refused, its append-only file, its scripts and functions
+  (the engine's memory, the scripts cached, the functions and libraries); for what BendKV
+  does not have (replication, forks) they are what Redis shows when it has none. Where
+  BendKV differs: its event loop is not timed yet, so the `eventloop_*` fields read 0;
+  `listener0` lists all of bind's addresses, where Redis lists only as many as it listens
+  on. The
   statistics per command count as Redis counts them: each command's and subcommand's
   calls, the calls refused before they run (a wrong number of arguments by Redis's arity,
   a client that must authenticate first, a command refused for memory) and the calls
@@ -1036,7 +1040,7 @@ away.
 | `src/float.bend` | 1,200 |  | no |
 | `src/geo.bend` | 870 |  | no |
 | `src/hll.bend` | 1,400 |  | no |
-| `src/info.bend` | 2,600 |  | no |
+| `src/info.bend` | 2,900 |  | no |
 | `src/lolwut.bend` | 470 |  | no |
 | `src/rdb.bend` | 3,100 |  | no |
 | `src/resp.bend` | 980 |  | no |

@@ -631,6 +631,16 @@ def truns.of(rs: List<&2, Nat>, acc: List<&2, TRun>) -> List<&2, TRun>:
     case Con{r, rest}:
       TRun{r, 0n, HT0{}} <> truns.of(rest, acc)
 
+# a call of the window as a run that took no time, before acc; none for a
+# call whose client waits (blk): it counts once its client is unblocked
+# (stats.served), as Redis 7.2 counts a blocked call (updateStatsOnUnblock)
+def truns.call(blk: Bool, +r: Nat, acc: List<&2, TRun>) -> List<&2, TRun>:
+  match blk:
+    case True{}:
+      acc
+    case False{}:
+      TRun{r, 0n, HT0{}} <> acc
+
 # the window's runs since its CONFIG RESETSTAT, newest first, before acc,
 # as runs that took no time
 def fresh.truns(fs: List<&2, Fresh>, acc: List<&2, TRun>) -> List<&2, TRun>:
@@ -642,7 +652,7 @@ def fresh.truns(fs: List<&2, Fresh>, acc: List<&2, TRun>) -> List<&2, TRun>:
     case Con{FRuns{rs}, rest}:
       truns.of(rs, fresh.truns(rest, acc))
     case Con{FCall{r, id, arg, blk}, rest}:
-      TRun{r, 0n, HT0{}} <> fresh.truns(rest, acc)
+      truns.call(blk, r, fresh.truns(rest, acc))
     case Con{FNamed{id, arg, blk}, rest}:
       fresh.truns(rest, acc)
     case Con{FSlow{id, us, code, arg}, rest}:
@@ -1371,8 +1381,9 @@ def win.job(log: Bool, +id: Nat, +us: Nat, +code: Nat, arg: Arg, js: List<&2, Sl
       js
 
 # a call of the general way (run r, of one call or of one refused) timed,
-# of client id, with arguments arg: a call that blocked (blk) has its
-# share in usec only, kept with its client
+# of client id, with arguments arg: a call that blocked (blk) counts
+# nothing yet, its share kept with its client until it is unblocked
+# (stats.served)
 def win.call(+cnt: Bool, +r: Nat, +id: Nat, +arg: Arg, +blk: Bool, +s: Nat, +trk: Bool, +son: Bool, +slt: Nat, w: Win) -> Win:
   match w:
     case Win{cur, pend, wt, js, +x, pos, fast, slow}:
@@ -1383,7 +1394,7 @@ def win.call(+cnt: Bool, +r: Nat, +id: Nat, +arg: Arg, +blk: Bool, +s: Nat, +trk
       +key = R.code.key(code)
       +fa = R.stat.fast(key)
       +log = Bool.and(Bool.and(son, Bool.not(blk)), Bool.and(Nat.is_lt(0n, k), Bool.and(Nat.is_le(slt, us), Bool.not(R.stat.noslow(key)))))
-      win.put(cnt, TRun{r, us, trun.h(Bool.and(cnt, Bool.and(trk, Bool.not(blk))), s, k, m)}, cur, pend, win.wt(blk, id, code, us, arg, wt), win.job(log, id, us, code, arg, js), Nat.sub(x, m), pos, win.fast(fa, us, fast), win.slow(fa, us, slow))
+      win.put(Bool.and(cnt, Bool.not(blk)), TRun{r, us, trun.h(Bool.and(cnt, trk), s, k, m)}, cur, pend, win.wt(blk, id, code, us, arg, wt), win.job(log, id, us, code, arg, js), Nat.sub(x, m), pos, win.fast(fa, us, fast), win.slow(fa, us, slow))
     case WinOf{w0}:
       win.call(cnt, r, id, arg, blk, s, trk, son, slt, w0)
 
@@ -1498,6 +1509,31 @@ def fresh.unblk(fs: List<&2, Fresh>, +id: Nat) -> List<&2, Fresh>:
     case Con{FReset{}, rest}:
       FReset{} <> fresh.unblk(rest, id)
 
+# the window's call of client id that blocked, as a call of none (its
+# client gone while it waited, which Redis 7.2 counts no call of)
+def fresh.drop(fs: List<&2, Fresh>, +id: Nat) -> List<&2, Fresh>:
+  match fs:
+    case Nil{}:
+      Nil{}
+    case Con{FCall{+r, +j, arg, +blk}, rest}:
+      +hit = Bool.and(blk, Nat.is_eq(j, id))
+      FCall{Bool.pick(Nat, hit, R.run.of(R.run.code(r), 0n), r), j, arg, Bool.and(blk, Bool.not(hit))} <> fresh.drop(rest, id)
+    case Con{FRun{r}, rest}:
+      FRun{r} <> fresh.drop(rest, id)
+    case Con{FNamed{j, arg, blk}, rest}:
+      FNamed{j, arg, blk} <> fresh.drop(rest, id)
+    case Con{FRuns{rs}, rest}:
+      FRuns{rs} <> fresh.drop(rest, id)
+    case Con{FSlow{j, us, code, arg}, rest}:
+      FSlow{j, us, code, arg} <> fresh.drop(rest, id)
+    case Con{FReset{}, rest}:
+      FReset{} <> fresh.drop(rest, id)
+
+def stats.drop(st: Stats, +id: Nat) -> Stats:
+  match st:
+    case Stats{es, fresh, cur, pend, errs, total}:
+      Stats{es, fresh.drop(fresh, id), cur, pend, errs, total}
+
 def served.slow(log: Bool, +id: Nat, +us: Nat, +code: Nat, arg: Arg, fs: List<&2, Fresh>) -> List<&2, Fresh>:
   match log:
     case True{}:
@@ -1510,14 +1546,16 @@ def served.of(p: TRun & List<&2, TRun>, es: List<&2, Ent>, fresh: List<&2, Fresh
   Stats{es, fresh, cur, pend, errs, total}
 
 # the statistics after client id is served (m: the call it blocked with,
-# kept: Wt): its share to usec again, and to the histogram while
-# latency-tracking is on; its entry, when the slow log takes it, in the
-# window, for the window's order; with none kept, its call blocked in the
-# window, which times it as one that did not block
+# kept: Wt): the call counted, with its share in usec, and in the
+# histogram while latency-tracking is on; its entry, when the slow log
+# takes it, in the window, for the window's order; with none kept, its
+# call blocked in the window, which times it as one that did not block.
+# Redis 7.2 counts a blocked call so, when its client is unblocked
+# (updateStatsOnUnblock), and not when it blocks, as 7.0 did
 def stats.served(m: Maybe<&2, Wt>, st: Stats, +cf: TCfg, +id: Nat) -> Stats:
   match m st:
     case Some{Wt{j, +code, +us, arg}} Stats{es, fresh, cur, pend, errs, total}:
-      served.of(timed.run(R.run.of(code, 0n), us, tcfg.trk(cf), us, 1n, 0n, (cur, pend)), es, served.slow(Bool.and(tcfg.son(cf), Bool.and(Nat.is_le(tcfg.slt(cf), us), Bool.not(R.stat.noslow(R.code.key(code))))), id, us, code, arg, fresh), errs, total)
+      served.of(timed.run(R.run.of(code, 1n), us, tcfg.trk(cf), us, 1n, 0n, (cur, pend)), es, served.slow(Bool.and(tcfg.son(cf), Bool.and(Nat.is_le(tcfg.slt(cf), us), Bool.not(R.stat.noslow(R.code.key(code))))), id, us, code, arg, fresh), errs, total)
     case None{} Stats{es, fresh, cur, pend, errs, total}:
       Stats{es, fresh.unblk(fresh, id), cur, pend, errs, total}
 
@@ -1546,56 +1584,83 @@ def boot.start(+b: Boot) -> U32:
 # cache's (scc); and of functions, as the actor read them after the last
 # change of the libraries (FUNCTION LOAD, DELETE, FLUSH, RESTORE, or the
 # start): how many functions (fnn) and libraries (fnl), the bytes of the
-# functions' Lua state (fvm) and of their records (fmo). CnOf, a count
-# that holds a count, is never built: it makes Cn a node of its own, one
-# word of Info.
+# functions' Lua state (fvm) and of their records (fmo); and the keys
+# that clients wait on, each with its database once (bk: Redis 7.2's
+# total_blocking_keys), as the actor counted them for the last INFO; and
+# the calls ACL refused since the start, as Redis 7.2 counts them by the
+# reason of their ACL LOG entry (acl_access_denied_*: an AUTH that failed,
+# da; a command, dc; a key, dk; a channel, dh), which CONFIG RESETSTAT
+# leaves as they are. CnOf, a count that holds a count, is never built:
+# it makes Cn a node of its own, one word of Info.
 type Cn is Data:
-  Cn{blk: Nat, tmo: Nat, tc: Nat, tk: Nat, ti: Nat, tp: Nat, scn: Nat, scm: Nat, scc: Nat, fnn: Nat, fnl: Nat, fvm: Nat, fmo: Nat}
+  Cn{blk: Nat, tmo: Nat, tc: Nat, tk: Nat, ti: Nat, tp: Nat, scn: Nat, scm: Nat, scc: Nat, fnn: Nat, fnl: Nat, fvm: Nat, fmo: Nat, bk: Nat, da: Nat, dc: Nat, dk: Nat, dh: Nat}
   CnOf{c: Cn}
 
 def cn.zero() -> Cn:
-  Cn{0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n}
+  Cn{0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n}
 
 def cn.waits(c: Cn, +n: Nat, +t: Nat) -> Cn:
   match c:
-    case Cn{b, o, tc, tk, ti, tp, sn, sm, sc, fn, fl, fv, fm}:
-      Cn{n, t, tc, tk, ti, tp, sn, sm, sc, fn, fl, fv, fm}
+    case Cn{b, o, tc, tk, ti, tp, sn, sm, sc, fn, fl, fv, fm, bk, da, dc, dk, dh}:
+      Cn{n, t, tc, tk, ti, tp, sn, sm, sc, fn, fl, fv, fm, bk, da, dc, dk, dh}
     case CnOf{x}:
       cn.waits(x, n, t)
 
 def cn.trk(c: Cn, +a: Nat, +b: Nat, +d: Nat, +e: Nat) -> Cn:
   match c:
-    case Cn{n, t, tc, tk, ti, tp, sn, sm, sc, fn, fl, fv, fm}:
-      Cn{n, t, a, b, d, e, sn, sm, sc, fn, fl, fv, fm}
+    case Cn{n, t, tc, tk, ti, tp, sn, sm, sc, fn, fl, fv, fm, bk, da, dc, dk, dh}:
+      Cn{n, t, a, b, d, e, sn, sm, sc, fn, fl, fv, fm, bk, da, dc, dk, dh}
     case CnOf{x}:
       cn.trk(x, a, b, d, e)
 
 def cn.scripts(c: Cn, +k: Nat, +m: Nat, +e: Nat) -> Cn:
   match c:
-    case Cn{n, t, tc, tk, ti, tp, sn, sm, sc, fn, fl, fv, fm}:
-      Cn{n, t, tc, tk, ti, tp, k, m, e, fn, fl, fv, fm}
+    case Cn{n, t, tc, tk, ti, tp, sn, sm, sc, fn, fl, fv, fm, bk, da, dc, dk, dh}:
+      Cn{n, t, tc, tk, ti, tp, k, m, e, fn, fl, fv, fm, bk, da, dc, dk, dh}
     case CnOf{x}:
       cn.scripts(x, k, m, e)
 
 def cn.funcs(c: Cn, +a: Nat, +b: Nat, +d: Nat, +e: Nat) -> Cn:
   match c:
-    case Cn{n, t, tc, tk, ti, tp, sn, sm, sc, fn, fl, fv, fm}:
-      Cn{n, t, tc, tk, ti, tp, sn, sm, sc, a, b, d, e}
+    case Cn{n, t, tc, tk, ti, tp, sn, sm, sc, fn, fl, fv, fm, bk, da, dc, dk, dh}:
+      Cn{n, t, tc, tk, ti, tp, sn, sm, sc, a, b, d, e, bk, da, dc, dk, dh}
     case CnOf{x}:
       cn.funcs(x, a, b, d, e)
+
+def cn.bkeys(c: Cn, +k: Nat) -> Cn:
+  match c:
+    case Cn{n, t, tc, tk, ti, tp, sn, sm, sc, fn, fl, fv, fm, bk, da, dc, dk, dh}:
+      Cn{n, t, tc, tk, ti, tp, sn, sm, sc, fn, fl, fv, fm, k, da, dc, dk, dh}
+    case CnOf{x}:
+      cn.bkeys(x, k)
+
+# one more call refused for the reason w of its ACL LOG entry ("auth",
+# "command", "key" or "channel")
+def cn.denied(c: Cn, +w: String) -> Cn:
+  match c:
+    case Cn{n, t, tc, tk, ti, tp, sn, sm, sc, fn, fl, fv, fm, bk, +da, +dc, +dk, +dh}:
+      +a = String.eq(w, "auth")
+      +b = String.eq(w, "command")
+      +k = String.eq(w, "key")
+      Cn{n, t, tc, tk, ti, tp, sn, sm, sc, fn, fl, fv, fm, bk, Bool.pick(Nat, a, 1n+da, da), Bool.pick(Nat, b, 1n+dc, dc), Bool.pick(Nat, k, 1n+dk, dk),
+        Bool.pick(Nat, Bool.or(Bool.or(a, b), k), dh, 1n+dh)}
+    case CnOf{x}:
+      cn.denied(x, w)
 
 # a count of c: 0 the clients that wait, 1 those with a time, 2 those
 # that track, 3 the table's keys, 4 its ids, 5 the prefixes, 6 the
 # scripts cached, 7 the Lua state's bytes, 8 the cache's, 9 the
 # functions, 10 the libraries, 11 the functions' Lua state's bytes, 12
-# their records'
+# their records', 13 the keys that clients wait on, 14 to 17 the calls
+# ACL refused (an AUTH, a command, a key, a channel)
 def cn.at(+c: Cn, +i: Nat) -> Nat:
   match c:
-    case Cn{+n, +t, +tc, +tk, +ti, +tp, +sn, +sm, +sc, +fn, +fl, +fv, +fm}:
+    case Cn{+n, +t, +tc, +tk, +ti, +tp, +sn, +sm, +sc, +fn, +fl, +fv, +fm, +bk, +da, +dc, +dk, +dh}:
       Bool.pick(Nat, Nat.is_eq(i, 0n), n, Bool.pick(Nat, Nat.is_eq(i, 1n), t, Bool.pick(Nat, Nat.is_eq(i, 2n), tc,
       Bool.pick(Nat, Nat.is_eq(i, 3n), tk, Bool.pick(Nat, Nat.is_eq(i, 4n), ti, Bool.pick(Nat, Nat.is_eq(i, 5n), tp,
       Bool.pick(Nat, Nat.is_eq(i, 6n), sn, Bool.pick(Nat, Nat.is_eq(i, 7n), sm, Bool.pick(Nat, Nat.is_eq(i, 8n), sc,
-      Bool.pick(Nat, Nat.is_eq(i, 9n), fn, Bool.pick(Nat, Nat.is_eq(i, 10n), fl, Bool.pick(Nat, Nat.is_eq(i, 11n), fv, fm))))))))))))
+      Bool.pick(Nat, Nat.is_eq(i, 9n), fn, Bool.pick(Nat, Nat.is_eq(i, 10n), fl, Bool.pick(Nat, Nat.is_eq(i, 11n), fv, Bool.pick(Nat, Nat.is_eq(i, 12n), fm, Bool.pick(Nat, Nat.is_eq(i, 13n), bk,
+      Bool.pick(Nat, Nat.is_eq(i, 14n), da, Bool.pick(Nat, Nat.is_eq(i, 15n), dc, Bool.pick(Nat, Nat.is_eq(i, 16n), dk, dh)))))))))))))))))
     case CnOf{+x}:
       cn.at(x, i)
 
@@ -2587,6 +2652,16 @@ def live.waits(l: Live, +n: Nat, +t: Nat) -> Live:
     case ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, cn}:
       ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, cn.waits(cn, n, t)}
 
+def live.bkeys(l: Live, +k: Nat) -> Live:
+  match l:
+    case ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, cn}:
+      ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, cn.bkeys(cn, k)}
+
+def live.denied(l: Live, +w: String) -> Live:
+  match l:
+    case ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, cn}:
+      ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, cn.denied(cn, w)}
+
 def live.trk(l: Live, +a: Nat, +b: Nat, +d: Nat, +e: Nat) -> Live:
   match l:
     case ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, cn}:
@@ -2644,6 +2719,18 @@ def info.blocked(i: Info, +n: Nat, +t: Nat) -> Info:
   match i:
     case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
       IInfo{b, live.waits(l, n, t), c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}
+
+# the keys that clients wait on, k of them
+def info.bkeys(i: Info, +k: Nat) -> Info:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
+      IInfo{b, live.bkeys(l, k), c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}
+
+# a call ACL refused, for the reason w of its ACL LOG entry
+def info.denied(i: Info, +w: String) -> Info:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
+      IInfo{b, live.denied(l, w), c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}
 
 # the tracking's counts (CLIENT TRACKING): the clients that track, the
 # table's keys and its clients' ids, the BCAST prefixes
@@ -2831,12 +2918,19 @@ def info.blk(i: Info) -> Info:
     case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
       IInfo{b, l, c, inst, pk, c0, a0, a, stats.blk(st), ex, rw, tm, rf}
 
-# the client of id served after it waited, or unblocked by CLIENT UNBLOCK
-# (stats.served); gone, the call it blocked with is forgotten
+# the client of id served after it waited, its time up, or unblocked by
+# CLIENT UNBLOCK: its call counted (stats.served, and in
+# total_commands_processed); gone, the call it blocked with is forgotten,
+# and dropped, never counted
 def info.served(i: Info, +id: Nat) -> Info:
   match i:
     case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, +tm, rf}:
-      IInfo{b, l, c, inst, pk, c0, a0, a, stats.served(wt.get(tim.wt(tm), id), st, tim.cf(tm), id), ex, rw, tim.unwait(tm, id), rf}
+      IInfo{b, l, count.add(c, 1n, 0n, 0n), inst, pk, c0, a0, a, stats.served(wt.get(tim.wt(tm), id), st, tim.cf(tm), id), ex, rw, tim.unwait(tm, id), rf}
+
+def info.drop(i: Info, +id: Nat) -> Info:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
+      IInfo{b, l, c, inst, pk, c0, a0, a, stats.drop(st, id), ex, rw, tim.unwait(tm, id), rf}
 
 def info.gone(i: Info, +id: Nat) -> Info:
   match i:
@@ -3128,18 +3222,36 @@ def flag(b: Bool) -> String:
     case False{}:
       "0"
 
+# the listeners, as Redis 7.2 lists them (getListensInfoString): TCP's
+# while port is not 0, with bind's addresses as they are written (a '-'
+# too), then the unix socket's when there is one. Redis lists only as
+# many of bind's addresses as it listens on, the first ones; BendKV lists
+# them all. None can change while the server runs.
+def listen.binds(ws: List<&2, String>) -> String:
+  match ws:
+    case Nil{}:
+      ""
+    case Con{w, rest}:
+      ",bind=" ++ w ++ listen.binds(rest)
+
+def listeners(+items: List<&2, C.CItem>) -> String:
+  +port = cfg(items, "port")
+  +unix = cfg(items, "unixsocket")
+  Bool.pick(String, String.eq(port, "0"), "", "listener0:name=tcp" ++ listen.binds(C.words(cfg(items, "bind"))) ++ ",port=" ++ port ++ "\r\n") ++
+  Bool.pick(String, String.is_empty(unix), "", "listener1:name=unix,bind=" ++ unix ++ "\r\n")
+
 def sec.server(+items: List<&2, C.CItem>, +b: Boot, +l: Live) -> String:
   match b l:
     case IBoot{+os, +pid, +run, +replid, +exe, +conf, sysmem, +start, heap0, key} ILive{+secs, +usec, ut, st, mut, mst, rss, heap, act, conns, clients, cn}:
       +up = Bool.pick(U32, U32.is_le(start, secs), U32.sub(secs, start), 0)
-      "# Server\r\n" ++ kv("redis_version", "7.0.15") ++ kv("redis_git_sha1", "00000000") ++ kv("redis_git_dirty", "0") ++
+      "# Server\r\n" ++ kv("redis_version", "7.2.16") ++ kv("redis_git_sha1", "00000000") ++ kv("redis_git_dirty", "0") ++
       kv("redis_build_id", "0000000000000000") ++ kv("redis_mode", "standalone") ++ kv("os", os) ++ kv("arch_bits", "64") ++
       kv("monotonic_clock", "POSIX clock_gettime") ++ kv("multiplexing_api", "epoll") ++ kv("atomicvar_api", "c11-builtin") ++
       kv("gcc_version", "0.0.0") ++ kv("process_id", pid) ++ kv("process_supervised", "no") ++ kv("run_id", run) ++
       kv("tcp_port", cfg(items, "port")) ++ kv("server_time_usec", U32.show(secs) ++ pad(U32.show(usec), 6n)) ++
       kv("uptime_in_seconds", U32.show(up)) ++ kv("uptime_in_days", U32.show(U32.div(up, 86400))) ++
       kv("hz", cfg(items, "hz")) ++ kv("configured_hz", cfg(items, "hz")) ++ kv("lru_clock", U32.show(U32.and(secs, 16777215))) ++
-      kv("executable", exe) ++ kv("config_file", conf) ++ kv("io_threads_active", "0")
+      kv("executable", exe) ++ kv("config_file", conf) ++ kv("io_threads_active", "0") ++ listeners(items)
 
 def sec.clients(+items: List<&2, C.CItem>, +l: Live) -> String:
   match l:
@@ -3147,7 +3259,8 @@ def sec.clients(+items: List<&2, C.CItem>, +l: Live) -> String:
       "# Clients\r\n" ++ kv("connected_clients", Nat.show(clients)) ++ kv("cluster_connections", "0") ++
       kv("maxclients", cfg(items, "maxclients")) ++ kv("client_recent_max_input_buffer", "0") ++
       kv("client_recent_max_output_buffer", "0") ++ kv("blocked_clients", Nat.show(cn.at(cn, 0n))) ++ kv("tracking_clients", Nat.show(cn.at(cn, 2n))) ++
-      kv("clients_in_timeout_table", Nat.show(cn.at(cn, 1n)))
+      kv("clients_in_timeout_table", Nat.show(cn.at(cn, 1n))) ++ kv("total_blocking_keys", Nat.show(cn.at(cn, 13n))) ++
+      kv("total_blocking_keys_on_nokey", "0")
 
 # memory: used_memory is what the heap's live values hold (IO.heap, as
 # zmalloc counts what Redis allocated), from which maxmemory evicts;
@@ -3298,7 +3411,11 @@ def sec.stats.go(c: Count, inst: Inst, +conns: Nat, +errs: String, +expired: Nat
       kv("tracking_total_items", Nat.show(live.cn(l, 4n))) ++ kv("tracking_total_prefixes", Nat.show(live.cn(l, 5n))) ++ kv("unexpected_error_replies", "0") ++
       kv("total_error_replies", errs) ++ kv("dump_payload_sanitizations", "0") ++ kv("total_reads_processed", "0") ++
       kv("total_writes_processed", "0") ++ kv("io_threaded_reads_processed", "0") ++ kv("io_threaded_writes_processed", "0") ++
-      kv("reply_buffer_shrinks", "0") ++ kv("reply_buffer_expands", "0")
+      kv("reply_buffer_shrinks", "0") ++ kv("reply_buffer_expands", "0") ++ kv("eventloop_cycles", "0") ++
+      kv("eventloop_duration_sum", "0") ++ kv("eventloop_duration_cmd_sum", "0") ++ kv("instantaneous_eventloop_cycles_per_sec", "0") ++
+      kv("instantaneous_eventloop_duration_usec", "0") ++ kv("acl_access_denied_auth", Nat.show(live.cn(l, 14n))) ++
+      kv("acl_access_denied_cmd", Nat.show(live.cn(l, 15n))) ++ kv("acl_access_denied_key", Nat.show(live.cn(l, 16n))) ++
+      kv("acl_access_denied_channel", Nat.show(live.cn(l, 17n)))
 
 def sec.good(on: Bool) -> String:
   match on:
@@ -3345,6 +3462,7 @@ def sec.keyspace(dbs: List<&2, R.Db>) -> String:
 # As Redis's genInfoSectionDict picks them: none named is the default
 # ones; "default" adds them, "all" is every section but the modules'
 # own, "everything" every one; any other name, case aside, is a section.
+# Redis 7.2's debug comes last, and only when it is named.
 
 type Sel is Data:
   ISel{all: Bool, every: Bool, names: List<&2, String>}
@@ -3378,6 +3496,13 @@ def sel.has(+s: Sel, +name: String) -> Bool:
   match s:
     case ISel{all, every, +names}:
       Bool.or(all, C.text.member(names, name))
+
+# a section that "all" and "everything" leave out: only its name picks
+# it (Redis 7.2's debug)
+def sel.named(+s: Sel, +name: String) -> Bool:
+  match s:
+    case ISel{all, every, +names}:
+      C.text.member(names, name)
 
 # Redis puts an empty line between sections
 def join(xs: List<&2, String>, +acc: String) -> String:
@@ -3531,7 +3656,9 @@ def text(args: List<&2, String>, +items: List<&2, C.CItem>, +i: Info, +ds: R.Ds)
     on.errstats(sel.has(s, "errorstats"), i),
     on.latstats(sel.has(s, "latencystats"), items, i),
     on.head(sel.has(s, "cluster"), "# Cluster\r\n" ++ kv("cluster_enabled", "0")),
-    on.keyspace(sel.has(s, "keyspace"), ds)], "")
+    on.keyspace(sel.has(s, "keyspace"), ds),
+    on.head(sel.named(s, "debug"), "# Debug\r\n" ++ kv("eventloop_duration_aof_sum", "0") ++ kv("eventloop_duration_cron_sum", "0") ++
+      kv("eventloop_duration_max", "0") ++ kv("eventloop_cmd_per_cycle_max", "0"))], "")
 
 # MEMORY STATS and MEMORY DOCTOR
 # ------------------------------

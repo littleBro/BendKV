@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
 # gen_commands.py: what COMMAND says of each command BendKV has
-# (src/command.bend), taken from Redis 7.0.15 itself, so that COMMAND INFO
+# (src/command.bend), taken from Redis 7.2.16 itself, so that COMMAND INFO
 # and COMMAND DOCS answer with Redis's own description of each.
 #
 # Redis builds that description at its start, from src/commands/*.json and
 # rules of its own (ACL categories implied by flags, movable keys, the
 # first, last and step of the keys, flags hidden from the reply). So the
 # facts are read where they come out: --extract starts a redis-server
-# (7.0.15, from the PATH) on a spare port, asks it COMMAND INFO and
+# (7.2.16, from the PATH: tools/redis_ref.sh) on a spare port, asks it COMMAND INFO and
 # COMMAND DOCS of BendKV's commands and ACL CAT in RESP3 (HELLO 3), whose
 # replies say which arrays are maps and sets, and writes the replies to
 # tools/data/redis-commands.json, kept in the repository, so the second
 # step needs no Redis. The table holds them typed (R.RMap, R.RSet), as
 # BendKV answers them in RESP3; RESP2 writes them as the arrays Redis
 # writes in RESP2. Only the subcommands BendKV has are kept (BendKV's
-# CLIENT has all sixteen of Redis's), in the order of their names: Redis
+# CLIENT has sixteen of Redis's eighteen), in the order of their names: Redis
 # lists commands in the order of a hash table with a random seed, so no
 # order is Redis's own. The second step writes the block between
 # "# BEGIN gen_commands: table" and "# END gen_commands: table" in
@@ -36,7 +36,7 @@
 # them set). The fourth writes there how a request's name finds its
 # command (Step 4 below), from the same numbers.
 #
-# The descriptions are data from Redis 7.0.15 (src/commands/*.json, BSD
+# The descriptions are data from Redis 7.2.16 (src/commands/*.json, BSD
 # 3-clause, Copyright (c) 2009-2012 Salvatore Sanfilippo and Redis
 # contributors).
 import json, os, re, socket, subprocess, sys, time, pathlib
@@ -45,6 +45,8 @@ HERE = pathlib.Path(__file__).resolve().parent.parent
 JSON = HERE / "tools" / "data" / "redis-commands.json"
 BEND = HERE / "src" / "command.bend"
 REDIS = HERE / "src" / "redis.bend"
+# the Redis whose descriptions the table copies (--extract asks it)
+VERSION = "7.2.16"
 
 # BendKV's commands, and of a command with subcommands the ones BendKV has
 COMMANDS = {
@@ -214,8 +216,8 @@ def extract():
         if c.ask("HELLO", "3")["%"][5] != 3:
             raise SystemExit("gen_commands.py: Redis did not switch to RESP3")
         version = [l for l in c.ask("INFO", "server").split("\r\n") if l.startswith("redis_version:")][0]
-        if version != "redis_version:7.0.15":
-            raise SystemExit("gen_commands.py: needs Redis 7.0.15, found " + version)
+        if version != "redis_version:" + VERSION:
+            raise SystemExit("gen_commands.py: needs Redis " + VERSION + ", found " + version)
         cats = c.ask("ACL", "CAT")
         acl = {cat: sorted(c.ask("ACL", "CAT", cat)) for cat in cats}
         cmds = {}
@@ -226,7 +228,7 @@ def extract():
     finally:
         srv.terminate()
         srv.wait()
-    JSON.write_text(json.dumps({"redis": "7.0.15", "categories": cats, "acl": acl, "commands": cmds},
+    JSON.write_text(json.dumps({"redis": VERSION, "categories": cats, "acl": acl, "commands": cmds},
                                indent=1, sort_keys=True) + "\n")
 
 # Step 2: facts -> Bend
@@ -257,6 +259,13 @@ KEYNUM = {"eval": "KByEval{}", "evalsha": "KByEval{}", "eval_ro": "KByEval{}", "
 # among its options): COMMAND GETKEYS runs BendKV's copy of the
 # command's own function (sortGetKeys, sortROGetKeys)
 UNKNOWN = {"sort": "KBySort{}", "sort_ro": "KBySortRo{}"}
+
+# Commands with a key spec Redis 7.2 marks incomplete: COMMAND GETKEYS
+# reads their specs, then runs BendKV's copy of the command's own
+# function (georadiusGetKeys, xreadGetKeys) when an incomplete spec's
+# keyword is there or a spec fails, as getKeysFromCommandWithSpecs does
+INCOMPLETE = {"georadius": "KByGeo{}", "georadiusbymember": "KByGeo{}", "xread": "KByXread{}",
+              "xreadgroup": "KByXread{}"}
 
 def bstr(s):
     if any(ord(ch) > 126 or ord(ch) < 32 for ch in s):
@@ -319,7 +328,10 @@ def desc(info, docs, info3, docs3):
         varies = any("variable_flags" in statuses(dict(pairs(ks))["flags"]) for ks in info[8])
         if varies != (name in GETKEYS):
             raise SystemExit(f"gen_commands.py: how does Redis find the keys of {name}?")
-        way = GETKEYS.get(name, "KBySpecs{}")
+        incomplete = any("incomplete" in statuses(dict(pairs(ks))["flags"]) for ks in info[8])
+        if incomplete != (name in INCOMPLETE):
+            raise SystemExit(f"gen_commands.py: how does Redis find the keys of {name}?")
+        way = GETKEYS.get(name, INCOMPLETE.get(name, "KBySpecs{}"))
     nokeys = "True{}" if "no_mandatory_keys" in flags else "False{}"
     fields = [reply(x) for x in info3[:9]]
     doc = [reply(x) for k, v in pairs(docs3["%"]) if k != "subcommands" for x in (k, v)]
@@ -369,7 +381,7 @@ def ro(info):
     elif name in UNKNOWN:
         specs, way = [], UNKNOWN[name]
     else:
-        specs, way = [kspec(name, ks) for ks in info[8]], GETKEYS.get(name, "KBySpecs{}")
+        specs, way = [kspec(name, ks) for ks in info[8]], GETKEYS.get(name, INCOMPLETE.get(name, "KBySpecs{}"))
     return f"Ro{{{bint(info[1])}, {blist(specs)}, {way}}}"
 
 def by_key_block(facts):
@@ -875,7 +887,7 @@ def dispatch_block(nums, own):
 
 # Step 5: facts -> ACL's ids
 # --------------------------
-# ACL's ids number Redis 7.0.15's commands and subcommands, every one that
+# ACL's ids number Redis 7.2.16's commands and subcommands, every one that
 # ACL CAT lists under its categories (each is in @fast or @slow), in the
 # byte order of their names, so that a rule may name a command BendKV
 # lacks, as in Redis. The block between "# BEGIN gen_commands: acl" and
@@ -890,7 +902,7 @@ def acl_block(src, facts):
     names = sorted({n for ns in facts["acl"].values() for n in ns})
     ids = {n: i for i, n in enumerate(names)}
     tops, keys = stats_keys(src)
-    out = ["# Redis 7.0.15's commands and subcommands, by ACL id: their full names",
+    out = ["# Redis " + VERSION + "'s commands and subcommands, by ACL id: their full names",
            "# in byte order",
            "def acl.names() -> List<&2, String>:",
            "  " + blist([bstr(n) for n in names]), "",

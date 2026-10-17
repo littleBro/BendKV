@@ -10814,7 +10814,11 @@ def xsetid_chk_old(c: Nat, +id: KV.XId, +added: Maybe<&2, KV.XN>, +md: KV.XId, +
         case 0n:
           ew => gs => {==}
         case 1n+q:
-          ew => gs => {==}
+          match q:
+            case 0n:
+              ew => gs => {==}
+            case 1n+r:
+              ew => gs => {==}
 
 def xsetid_old_of(s: R.XS, +i: String, +rest: List<&2, String>, +x0: KV.XStream, -e: Nat) -> {R.xsetid.read(Con{i, rest}) == s : R.XS} -> Good(Some{KV.Item{KV.VColl{KV.CStream{x0}}, e}}, ch_of(R.xsetid.run.of(Con{i, rest}, s, x0))):
   match s:

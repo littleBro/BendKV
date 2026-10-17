@@ -249,12 +249,18 @@ def restores(b, r):
               cmd("RESTORE", "s", "x", p, "FREQ", "300"), cmd("RESTORE", "s", "x", p, "IDLETIME"),
               cmd("RESTORE", "k4", 1, p, "ABSTTL"), cmd("EXISTS", "k4"), cmd("RESTORE", "k4", 1, p, "absttl", "REPLACE"),
               cmd("RESTORE", "s", 1, p, "ABSTTL", "REPLACE"), cmd("EXISTS", "s"),
-              cmd("RESTORE", "k5", "9223372036854775807", p), cmd("EXISTS", "k5"),
               cmd("RESTORE", "k5", "9223372036854775807", p, "ABSTTL"), cmd("EXISTS", "k5"),
               cmd("RESTORE", "k6", "4102444800000", p, "ABSTTL"), cmd("PEXPIRETIME", "k6"),
               cmd("RESTORE", "l", "0", p, "REPLACE"), cmd("TYPE", "l"),
               cmd("RESTORE", "k7", 0, p, "ABSTTL"), cmd("TTL", "k7")]:
         same(b, r, c)
+    # a time to live that the clock's time added to overflows 64 bits: 7.0.15
+    # takes the sum for a time past and makes no key, 7.2.16 makes a key that
+    # lives until its cycle of expiries comes (docs/UPSTREAM.md, bug 5), so
+    # BendKV is held to 7.0.15's replies
+    for c, want in ((cmd("RESTORE", "k8", "9223372036854775807", p), (b"+", b"OK")),
+                    (cmd("EXISTS", "k8"), (b":", b"0"))):
+        check_same(b" ".join(c)[:200], run(b, c), want)
     # relative times, read within a second
     for t in ("100000", "1"):
         x, y = both(b, r, cmd("RESTORE", "t" + t, t, p))
@@ -299,7 +305,7 @@ def crc64(bs):
 
 
 def payload(body):
-    body = body + b"\x0a\x00"
+    body = body + b"\x0b\x00"
     return body + struct.pack("<Q", crc64(body))
 
 
@@ -491,11 +497,12 @@ def payloads(b, r, rnd, ncorrupt):
         restore_both(b, r, "broken " + name, payload(bytes(x)), True)
     # versions and checksums
     p = payload(b"\x00\x03abc")
-    for q in (p[:-10] + b"\x0b\x00" + p[-8:], p[:-10] + b"\x09\x00" + struct.pack("<Q", crc64(p[:-10] + b"\x09\x00")),
-              p[:-10] + b"\x0b\x00" + struct.pack("<Q", crc64(p[:-10] + b"\x0b\x00")),
+    for q in (p[:-10] + b"\x0c\x00" + p[-8:], p[:-10] + b"\x09\x00" + struct.pack("<Q", crc64(p[:-10] + b"\x09\x00")),
+              p[:-10] + b"\x0a\x00" + struct.pack("<Q", crc64(p[:-10] + b"\x0a\x00")),
+              p[:-10] + b"\x0c\x00" + struct.pack("<Q", crc64(p[:-10] + b"\x0c\x00")),
               p[:-1] + bytes([p[-1] ^ 1]), p + b"\x00", b"\x00" * 10, b"\x00" * 9, p[:-10] + b"\x00\x01" + struct.pack("<Q", crc64(p[:-10] + b"\x00\x01"))):
         restore_both(b, r, "a payload's version or checksum", q, False)
-    for t in (6, 7, 15, 19, 20, 255):
+    for t in (6, 7, 15, 19, 20, 21, 22, 255):
         restore_both(b, r, "a payload of type %d" % t, payload(bytes([t]) + b"\x00"), False)
 
 

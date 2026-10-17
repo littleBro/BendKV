@@ -9181,8 +9181,7 @@ the move's other kinds (below).
     (`addReplyErrorSdsExSafe`), as an error it returns did already.
   - FUNCTION RESTORE refuses a library in the format of 7.0's release candidates (type
     246): "Pre-GA function format not supported" (`lib.kind`). An RDB file's library in
-    that format is still read: Redis 7.2.16 stops its start at one, and the RDB file is
-    the move's kind E.
+    that format stops the start, as Redis 7.2.16's does (kind E: section 3zzzzc).
   - SCRIPT KILL's line in the log is a notice (`*`), not a warning (`#`).
 - **What was so already.**
   - Time stands still while a script runs, as 7.2's `commandTimeSnapshot` holds it:
@@ -9206,7 +9205,9 @@ the move's other kinds (below).
 belongs to another kind: the version and HELP's last line (A), Lua's doubles (C), the
 pushes and tracking (F), NOPERM's texts (G), ACL LOG's new fields and CLIENT LIST's
 `lib-name` and `lib-ver` (B and H), FUNCTION DUMP's version and the RESTORE of a payload
-of version 11 (E).
+of version 11 (E). Once A, E, F, G and H were in, function_test passed against 7.2.16,
+and script_test differed in Lua's doubles alone (C); a blocking command in a script ran
+as in MULTI with A's table, nothing more.
 
 **What it costs.** Nothing on a request's path: the metatables are protected when a state
 is made, and the texts are made only for an error or a refusal.
@@ -9672,6 +9673,133 @@ node's entries around, and the keyspace drops the old version.
 - The writes in place (PERFORMANCE 84): the stream taken out of the keyspace while a
   write runs, which needs every write of a stream to write its stream back, the writes
   that change nothing too, with no effect; XDEL's walk from the newest entry, in place.
+
+## 3zzzzb. Blocked calls counted as Redis 7.2.16 counts them
+
+**What changed** (#128, kind H: `src/info.bend`, `src/server.bend`, `src/session.bend`). Redis 7.2
+counts a call that blocks when its client is unblocked. It counts it in `updateStatsOnUnblock`, or
+in `call()` when a key serves the client and the command runs again. Redis 7.0 counted it when it
+blocked. BendKV now counts as 7.2 does:
+- **While its client waits**, the call is in no count. INFO commandstats shows nothing of it, and
+  `total_commands_processed` has not counted it.
+- **When its client is unblocked**, the call counts once. That holds when a key serves it, when its
+  time is up, and when CLIENT UNBLOCK unblocks it. It counts in `calls` and in
+  `total_commands_processed`. Its share of the window's time goes to `usec` and to the latency
+  histogram, and the slow log takes it.
+- **Failed calls.** An error reply (an UNBLOCKED error, a WRONGTYPE) counts the call failed.
+  CLIENT UNBLOCK with TIMEOUT does not; 7.0 counted every call it unblocked failed.
+- **A client that goes while it waits** leaves its call uncounted: its connection closed, or
+  CLIENT KILL closed it. WAIT is the exception, and so is a SAVE that waits for its save. Redis
+  7.2's `freeClient` counts only WAIT's, through `unblockClientWaitingReplicas`.
+- **The window's share** (section 3zzz). A blocked call's share stays with its client (`Wt`), as
+  before, and goes to `usec` once. 7.0 counted it twice: when the call ran, and again when the
+  client was unblocked.
+
+**Not copied.** In 7.2.16, 8.10.2 and Valkey 9.1.2, CLIENT UNBLOCK with ERROR counts a WAIT twice
+(`docs/UPSTREAM.md`, bug 4). BendKV counts it once, failed. `admin_test` checks this on BendKV
+alone, and compares the rest with 7.2.16.
+
+**What it costs.** Nothing on a request's path: the counts only move from the moment a client blocks
+to the moment it is unblocked. A client may go while the window still holds its call; then the
+call is taken out of the window (`fresh.drop`), one walk of the window's entries for each such
+client.
+
+## 3zzzzc. RDB 11, as Redis 7.2.16 writes and reads it
+
+**What changed** (#128, kind E: `src/rdb.bend`, `src/map.bend`, `src/server.bend`). DUMP
+and RESTORE, FUNCTION DUMP and RESTORE, SAVE, BGSAVE and the start write and read the
+format as 7.2.16's `rdb.c` does.
+- **The version** is 11 (`rdbver`): a payload's version and a file's `REDIS0011`, with
+  `redis-ver` 7.2.16 among the file's AUX fields. Versions 1 to 11 are read; a payload of
+  12 is "DUMP payload version or checksum are wrong", a file of 12 "Can't handle RDB
+  format version 12".
+- **Sets.** A set kept as a listpack (section 3zzzs) is written as SET_LISTPACK (20), its
+  members in their order; an intset is INTSET (11) still, a table SET (2). Type 20 is
+  read as a listpack when it has 128 members at most (7.2's reader checks no member's
+  length there), as a table past that; a member twice is corrupt. Type 2, which 7.0 wrote
+  for every set of strings, is read as 7.2's `rdbLoadObject` builds it: an intset while
+  the members are integers, and at the first that is not, a listpack if the intset had
+  fewer than 128 members and no member so far is longer than 64 bytes, its integers
+  first, sorted, then the rest in the file's order (`set.order`); a table past those
+  limits, or for more than 512 members. That order is SMEMBERS's and SSCAN's.
+- **Streams** are STREAM_LISTPACKS_3 (21). Each consumer has an active time after its
+  seen time, the last time it read or claimed an entry: none (−1, eight 0xFF bytes) for
+  one that has done neither (`KV.XAct`: `XActNone`, `XActAt`). A stream of type 19
+  (7.0's) gives each consumer its seen time for its active time, as 7.2's reader does.
+  The commands that set the active time and show it (XINFO CONSUMERS' `inactive`) are
+  the streams' (`src/stream.bend`): the value only keeps it.
+- **What 7.2.16 reads no more.** A library as 7.0's release candidates wrote it
+  (FUNCTION, 246) stops a load: "Pre-release function format not supported." (FUNCTION
+  RESTORE refuses it too: section 3zzzv); so does a module's value of type 6 (4.0's
+  release candidates): "Pre-release module format not supported". BendKV read both
+  before, as 7.0.15 did; the readers of the old library go.
+- **Lines in the log.** A file that does not load ends with "Fatal error loading the DB,
+  check server logs. Exiting." (7.0 named `errno`'s text); one that is there but does
+  not open first says "Fatal error: can't open the RDB file dump.rdb for reading: ...".
+  A save's write error is "Write error while saving DB to the disk(...)"; a directory
+  that does not sync after the rename is "Failed to fsync directory while saving DB:
+  ...", the save failed and its file in place.
+- **A bug not copied.** RESTORE with a time to live near 2^63 ms overflows its sum with
+  the clock, and 7.2.16 makes a key that its cycle of expiries deletes a moment later,
+  where 7.0.15 makes none: bug 5 of [UPSTREAM.md](UPSTREAM.md). BendKV makes none, and
+  `dump_test` holds it to 7.0.15's replies there.
+
+**Tests.** `dump_test`, `stream_dump_test` and `rdb_test` take 7.2.16's payloads, versions
+and lines: a payload of version 10 or 9 is still restored, 12 refused; type 19's
+payloads are made from 7.2's by the test (`older`), with the shapes of entries that 7.2
+no longer makes (XSETID below the greatest ID deleted) left out. Against 7.2.16 what still
+differs is other kinds': OBJECT ENCODING of lists and sets (D), the doubles of sorted
+sets (C); in `stream_write_test`, XSETID below the greatest ID deleted (G).
+
+**What it costs.** Nothing on a request's path. A save writes a packed set as one string,
+the listpack, where 7.0's format took a string for each member; a consumer takes 8 more
+bytes in the file and a word in the value.
+
+## 3zzzzd. Texts, checks and ACL LOG's fields of Redis 7.2.16
+
+**What changed** (#128, kinds G and H: `src/session.bend`, `src/acl.bend`, `src/server.bend`,
+`src/redis.bend`).
+- **HELLO** reads all its options before it does any, as 7.2's `helloCommand` does:
+  - An option it does not know, or a name unfit for a client, answers its error, and nothing
+    changes.
+  - Then the last AUTH logs the client in, once. A WRONGPASS stops the HELLO there. The ACL LOG
+    counts that AUTH alone (`hello.who`).
+  - Then a client that is not authenticated gets NOAUTH, whose text now says
+    `HELLO <proto> AUTH <user> <pass>`.
+  - Last, the last SETNAME names the client and the protocol changes.
+  - 7.0 did each option as it read it: an AUTH logged in, and a SETNAME named the client, before
+    a later option failed.
+- **NOPERM** names the user and the command: `User alice has no permissions to run the 'incr'
+  command`. A key or a channel is not named: `No permissions to access a key`, `... a channel`.
+  ACL DRYRUN's texts name the user, and the command, the key or the channel
+  (`getAclErrorMessage`, verbose). EXEC's text for a call that ACL refuses since it was queued
+  is unchanged.
+- **XREAD** names the command in its text for unbalanced streams: `Unbalanced 'xread' list of
+  streams`.
+- **XSETID** refuses an ID below the greatest one deleted from the stream ("smaller than current
+  max_deleted_entry_id"), before its other checks of the stream. The proof of XSETID's change
+  (`xsetid_chk_old`) has one more case, for the new error; no law changed.
+- **LPOS** refuses RANK LLONG_MIN as out of range (-LONG_MAX to LONG_MAX). 7.0 negated it, which
+  wraps in C, and BendKV read every match from the last element then.
+- **ACL LOG** gives `entry-id`, `timestamp-created` and `timestamp-last-updated` with each entry:
+  - `entry-id` is the number of entries made before it. The log keeps that count, and ACL LOG
+    RESET keeps it too (`ACLLogEntryCount`).
+  - `timestamp-created` is the time the entry was made; `timestamp-last-updated` is the last time
+    it counted an event.
+
+**Tests.**
+- `session_test`, `auth_test`, `monitor_test` and `acl_test` pass against 7.2.16. `list_test`'s
+  LPOS lines pass too.
+- `acl_test` and `script_test` (with `function_test`, which uses its helper) read an entry's
+  times as whether they are times in ms, the last update not before the creation. They read its
+  entry-id less the least of its reply's, since a test runs on servers that other tests have
+  used.
+- `numbers_test` and `diff_test` keep LSET's index within 32 bits on the paired side: 7.2.16
+  takes a larger one modulo 2^32 (`docs/UPSTREAM.md`, bug 1). `numbers_test` checks that BendKV
+  answers such an index is out of range.
+
+**What it costs.** Nothing on a request's path: the texts are made for an error alone, and HELLO
+and ACL LOG are not on the fast way.
 
 ## 3zzzze. Pushes after the reply, as Redis 7.2.16 sends them
 

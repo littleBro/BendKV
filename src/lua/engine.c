@@ -1503,9 +1503,10 @@ static void sc_set_field_num(lua_State* L, const char* name, lua_Number n) {
   lua_settable(L, -3);
 }
 
-// REDIS_VERSION and REDIS_VERSION_NUM, Redis 7.0.15's
-#define SC_REDIS_VERSION "7.0.15"
-#define SC_REDIS_VERSION_NUM 0x0007000f
+// REDIS_VERSION and REDIS_VERSION_NUM, those of the Redis BendKV answers
+// as (7.2.16: its version_num is 0x00070210)
+#define SC_REDIS_VERSION "7.2.16"
+#define SC_REDIS_VERSION_NUM 0x00070210
 
 // luaRegisterRedisAPI, and with eval scriptingInit's additions (the
 // debugger's breakpoint and debug, replicate_commands), which the

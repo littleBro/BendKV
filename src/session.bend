@@ -845,6 +845,12 @@ def srv.blocked(s: Srv, +n: Nat, +t: Nat) -> Srv:
     case Srv{pass, cfg, info, mm}:
       Srv{pass, cfg, I.info.blocked(info, n, t), mm}
 
+# the keys that clients wait on, k of them (server.bend: waits.bkeys)
+def srv.bkeys(s: Srv, +k: Nat) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.bkeys(info, k), mm}
+
 # the engine's facts of scripts (server.bend, Scripts): n scripts cached,
 # the Lua state's bytes (m), the cache's (c)
 def srv.scripts(s: Srv, +n: Nat, +m: Nat, +c: Nat) -> Srv:
@@ -902,6 +908,14 @@ def srv.gone(s: Srv, +id: Nat) -> Srv:
   match s:
     case Srv{pass, cfg, info, mm}:
       Srv{pass, cfg, I.info.gone(info, id), mm}
+
+# a client gone while it waited, whose call is never counted: a blocking
+# command's, but WAIT's (Redis 7.2's freeClient unblocks it, and only
+# WAIT's unblocking counts it: unblockClientWaitingReplicas)
+def srv.dropped(s: Srv, +id: Nat) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.drop(info, id), mm}
 
 def srv.slow(s: Srv, +us: Nat, +at: Nat, +xs: List<&2, String>, +peer: String, +name: String) -> Srv:
   match s:
@@ -1128,11 +1142,16 @@ def login.of(ok: Bool, +u: String) -> Login:
       LgFail{u}
 
 # HELLO [protover [AUTH user pass] [SETNAME name]]: the protocol (2 or
-# 3; none keeps the one there is), then the options, in order; each one
-# done stays done when a later one fails, as in Redis. The protocol
-# changes only when HELLO answers (helloCommand sets it last), and its
-# reply is in the protocol it changes to: a map of the server, as Redis
-# 7.0.15 describes itself.
+# 3; none keeps the one there is), then the options, all read before any
+# is done, as Redis 7.2 reads them (helloCommand): an option it does not
+# know, or a name unfit for a client, answers its error, and nothing
+# changes. Then the last AUTH, if there is one, logs the client in, and a
+# WRONGPASS stops the HELLO there; then a client that is not
+# authenticated is refused (NOAUTH); else the last SETNAME names it, the
+# protocol changes, and the reply is in the protocol it changes to: a map
+# of the server, as Redis 7.2.16 describes itself. Redis 7.0 did each
+# option as it read it, so that an AUTH logged in and a SETNAME named
+# before a later option failed.
 
 # what HELLO's options are doing: waiting for an option, the user of an
 # AUTH, its password, or the name of a SETNAME; or failed
@@ -1143,71 +1162,89 @@ type Want is Data:
   WName{}
   WFail{r: R.Reply}
 
-# the state of a HELLO: what it waits for, the connection's
-# authentication and name, the protocol it asks for (RESP3 or not), and
-# what its AUTHs did, the last first (an AUTH that fails is the last)
+# the last AUTH of a HELLO: none, or its user and its password (a hash:
+# login_ok)
+type Au is Data:
+  AuNone{}
+  AuOf{user: String, pass: String}
+
+# the state of a HELLO: what it waits for, its last AUTH, its last
+# SETNAME's name, and the protocol it asks for (RESP3 or not)
 type Hel is Data:
-  Hel{w: Want, auth: Bool, name: String, r3: Bool, who: List<&2, Login>}
+  Hel{w: Want, au: Au, name: Maybe<&2, String>, r3: Bool}
 
-def hello.opt(a: String, auth: Bool, name: String, r3: Bool, who: List<&2, Login>, au: Bool, sn: Bool) -> Hel:
-  match au sn:
+def hello.opt(a: String, au: Au, name: Maybe<&2, String>, r3: Bool, isau: Bool, issn: Bool) -> Hel:
+  match isau issn:
     case True{} _:
-      Hel{WUser{}, auth, name, r3, who}
+      Hel{WUser{}, au, name, r3}
     case False{} True{}:
-      Hel{WName{}, auth, name, r3, who}
+      Hel{WName{}, au, name, r3}
     case False{} False{}:
-      Hel{WFail{R.RError{R.e_fmt("ERR Syntax error in HELLO option '" ++ R.cstr(a) ++ "'")}}, auth, name, r3, who}
+      Hel{WFail{R.RError{R.e_fmt("ERR Syntax error in HELLO option '" ++ R.cstr(a) ++ "'")}}, au, name, r3}
 
-def hello.pass(ok: Bool, auth: Bool, name: String, r3: Bool, who: List<&2, Login>, +u: String) -> Hel:
+def hello.name(ok: Bool, au: Au, name: Maybe<&2, String>, n: String, r3: Bool) -> Hel:
   match ok:
     case True{}:
-      Hel{WOpt{}, True{}, name, r3, LgIn{u} <> who}
+      Hel{WOpt{}, au, Some{n}, r3}
     case False{}:
-      Hel{WFail{e_wrongpass()}, auth, name, r3, LgFail{u} <> who}
-
-def hello.name(ok: Bool, auth: Bool, name: String, n: String, r3: Bool, who: List<&2, Login>) -> Hel:
-  match ok:
-    case True{}:
-      Hel{WOpt{}, auth, n, r3, who}
-    case False{}:
-      Hel{WFail{e_name()}, auth, name, r3, who}
+      Hel{WFail{e_name()}, au, name, r3}
 
 # one argument of HELLO's options, n the number of those after it
-def hello.step(+s: Srv, h: Hel, +a: String, +n: Nat) -> Hel:
+def hello.step(h: Hel, +a: String, +n: Nat) -> Hel:
   match h:
-    case Hel{WOpt{}, auth, name, r3, who}:
-      hello.opt(a, auth, name, r3, who, Bool.and(R.is_word(a, "AUTH"), Nat.is_le(2n, n)), Bool.and(R.is_word(a, "SETNAME"), Nat.is_le(1n, n)))
-    case Hel{WUser{}, auth, name, r3, who}:
-      Hel{WPass{a}, auth, name, r3, who}
-    case Hel{WPass{+u}, auth, name, r3, who}:
-      hello.pass(login_ok(u, a, s), auth, name, r3, who, u)
-    case Hel{WName{}, auth, name, r3, who}:
-      hello.name(name_ok(a), auth, name, a, r3, who)
-    case Hel{WFail{r}, auth, name, r3, who}:
-      Hel{WFail{r}, auth, name, r3, who}
+    case Hel{WOpt{}, au, name, r3}:
+      hello.opt(a, au, name, r3, Bool.and(R.is_word(a, "AUTH"), Nat.is_le(2n, n)), Bool.and(R.is_word(a, "SETNAME"), Nat.is_le(1n, n)))
+    case Hel{WUser{}, au, name, r3}:
+      Hel{WPass{a}, au, name, r3}
+    case Hel{WPass{u}, au, name, r3}:
+      Hel{WOpt{}, AuOf{u, a}, name, r3}
+    case Hel{WName{}, au, name, r3}:
+      hello.name(name_ok(a), au, name, a, r3)
+    case Hel{WFail{r}, au, name, r3}:
+      Hel{WFail{r}, au, name, r3}
 
 # HELLO's options from args on, n of them
-def hello.go(+s: Srv, +args: List<&2, String>, +n: Nat, h: Hel) -> Hel:
+def hello.go(+args: List<&2, String>, +n: Nat, h: Hel) -> Hel:
   match args:
     case Nil{}:
       h
     case Con{+a, +rest}:
-      hello.go(s, rest, Nat.sub(n, 1n), hello.step(s, h, a, Nat.sub(n, 1n)))
+      hello.go(rest, Nat.sub(n, 1n), hello.step(h, a, Nat.sub(n, 1n)))
 
-def hello.opts(+s: Srv, +opts: List<&2, String>, h: Hel) -> Hel:
-  hello.go(s, opts, List.length(&2, String, opts), h)
+def hello.opts(+opts: List<&2, String>, h: Hel) -> Hel:
+  hello.go(opts, List.length(&2, String, opts), h)
 
-# HELLO's reply: the server, as Redis 7.0.15 describes itself, in the
+# HELLO's reply: the server, as Redis 7.2.16 describes itself, in the
 # protocol it switched to
 def hello.map(id: Nat, r3: Bool) -> R.Reply:
-  R.RMap{[R.RBulk{"server"}, R.RBulk{"redis"}, R.RBulk{"version"}, R.RBulk{"7.0.15"}, R.RBulk{"proto"}, R.r_int(Bool.pick(Nat, r3, 3n, 2n)), R.RBulk{"id"}, R.r_int(id), R.RBulk{"mode"}, R.RBulk{"standalone"}, R.RBulk{"role"}, R.RBulk{"master"}, R.RBulk{"modules"}, R.RArray{Nil{}}]}
+  R.RMap{[R.RBulk{"server"}, R.RBulk{"redis"}, R.RBulk{"version"}, R.RBulk{"7.2.16"}, R.RBulk{"proto"}, R.r_int(Bool.pick(Nat, r3, 3n, 2n)), R.RBulk{"id"}, R.r_int(id), R.RBulk{"mode"}, R.RBulk{"standalone"}, R.RBulk{"role"}, R.RBulk{"master"}, R.RBulk{"modules"}, R.RArray{Nil{}}]}
 
-def hello.fin(h: Hel, id: Nat, nopass: Bool) -> R.Reply:
+def e_hello_noauth() -> R.Reply:
+  R.RError{"NOAUTH HELLO must be called with the client already authenticated, otherwise the HELLO <proto> AUTH <user> <pass> option can be used to authenticate the client and select the RESP protocol version at the same time"}
+
+# what a HELLO whose options all read well comes to (its AUTH's login
+# already checked: ok): WRONGPASS, NOAUTH, or the map of the server
+def hello.end(au: Au, +ok: Bool, +authed: Bool, +id: Nat, +r3: Bool) -> R.Reply:
+  match au:
+    case AuOf{u, p}:
+      Bool.pick(R.Reply, ok, hello.map(id, r3), e_wrongpass())
+    case AuNone{}:
+      Bool.pick(R.Reply, authed, hello.map(id, r3), e_hello_noauth())
+
+# whether a HELLO's AUTH logs its client in (none, no AUTH)
+def hello.login(+au: Au, +s: Srv) -> Bool:
+  match au:
+    case AuOf{+u, +p}:
+      login_ok(u, p, s)
+    case AuNone{}:
+      False{}
+
+def hello.fin(h: Hel, +c: Conn, +s: Srv) -> R.Reply:
   match h:
-    case Hel{WFail{r}, auth, name, r3, who}:
+    case Hel{WFail{r}, au, name, r3}:
       r
-    case Hel{w, auth, name, r3, who}:
-      Bool.pick(R.Reply, Bool.or(auth, nopass), hello.map(id, r3), R.RError{"NOAUTH HELLO must be called with the client already authenticated, otherwise the HELLO AUTH <user> <pass> option can be used to authenticate the client and select the RESP protocol version at the same time"})
+    case Hel{w, +au, name, +r3}:
+      hello.end(au, hello.login(au, s), authed.of(conn.auth(c), s), conn.id(c), r3)
 
 # the protocol version, a long long as Redis reads one: none, 2, 3, or
 # the reply that refuses it; a version is whether it is 3
@@ -1231,49 +1268,73 @@ def hello.args(args: List<&2, String>) -> Ver & List<&2, String>:
     case Con{+v, rest}:
       (hello.ver(R.ll.read(v)), rest)
 
-def hello.run.if(+s: Srv, +c: Conn, v: Ver, opts: List<&2, String>) -> Hel:
+def hello.run.if(+c: Conn, v: Ver, opts: List<&2, String>) -> Hel:
   match v:
     case VerBad{r}:
-      Hel{WFail{r}, conn.auth(c), conn.name(c), conn.r3(c), Nil{}}
+      Hel{WFail{r}, AuNone{}, None{}, conn.r3(c)}
     case VerOk{r3}:
-      hello.opts(s, opts, Hel{WOpt{}, conn.auth(c), conn.name(c), r3, Nil{}})
+      hello.opts(opts, Hel{WOpt{}, AuNone{}, None{}, r3})
     case VerNone{}:
-      hello.opts(s, opts, Hel{WOpt{}, conn.auth(c), conn.name(c), conn.r3(c), Nil{}})
+      hello.opts(opts, Hel{WOpt{}, AuNone{}, None{}, conn.r3(c)})
 
-def hello.run.of(+s: Srv, +c: Conn, p: Ver & List<&2, String>) -> Hel:
+def hello.run.of(+c: Conn, p: Ver & List<&2, String>) -> Hel:
   (v, opts) = p
-  hello.run.if(s, c, v, opts)
+  hello.run.if(c, v, opts)
 
-def hello.run(+s: Srv, +c: Conn, args: List<&2, String>) -> Hel:
-  hello.run.of(s, c, hello.args(args))
+def hello.run(+c: Conn, args: List<&2, String>) -> Hel:
+  hello.run.of(c, hello.args(args))
 
-# the connection after a HELLO: authenticated if an AUTH of it was, or
-# if it was already, named as its SETNAME said, and in the protocol it
-# asked for if it answers (no option failed, and the client is
-# authenticated: hello.fin)
-def hello.ok(+w: Want, +auth: Bool, +s: Srv) -> Bool:
-  match w:
-    case WFail{r}:
-      False{}
-    case _:
-      authed.of(auth, s)
+# the connection after a HELLO: as it was when an option failed, its
+# AUTH did, or the client is not authenticated (NOAUTH); else named as
+# its last SETNAME said, and in the protocol it asked for. Only an AUTH
+# that logs the client in authenticates it (auok).
+def hello.named(+name: Maybe<&2, String>, +n: String) -> String:
+  match name:
+    case Some{x}:
+      x
+    case None{}:
+      n
+
+def hello.done(+auok: Bool, +ok: Bool, +name: Maybe<&2, String>, +h3: Bool, c: Conn) -> Conn:
+  match c:
+    case Conn{id, a, +n, mode, quit, db, r3}:
+      Conn{id, Bool.or(a, auok), Bool.pick(String, ok, hello.named(name, n), n), after(mode), quit, db, Bool.pick(Bool, ok, h3, r3)}
+
+# whether a HELLO's options, read well, let it go on: its AUTH logs its
+# client in, or, without one, the client is authenticated
+def hello.goes(+au: Au, +authed: Bool, +s: Srv) -> Bool:
+  match au:
+    case AuOf{+u, +p}:
+      login_ok(u, p, s)
+    case AuNone{}:
+      authed
 
 def hello.conn(h: Hel, +c: Conn, +s: Srv) -> Conn:
-  match h c:
-    case Hel{+w, auth, name, h3, who} Conn{id, a, n, mode, quit, db, r3}:
-      +au = Bool.or(auth, a)
-      Conn{id, au, name, after(mode), quit, db, Bool.pick(Bool, hello.ok(w, au, s), h3, r3)}
-
-# what a HELLO's AUTHs did, the last first: the server logs its client in
-# as the user of the last that did, and the ACL LOG counts one that
-# failed (server.bend, ACL)
-def hello.who(h: Hel) -> List<&2, Login>:
   match h:
-    case Hel{w, auth, name, r3, who}:
-      who
+    case Hel{WFail{r}, au, name, h3}:
+      step_conn(c, s)
+    case Hel{w, +au, +name, +h3}:
+      hello.done(hello.login(au, s), hello.goes(au, authed.of(conn.auth(c), s), s), name, h3, c)
+
+# what a HELLO's AUTH did: nothing, without one or when an option failed;
+# else it logged its client in, or failed (LgFail, which the ACL LOG
+# counts: server.bend, ACL)
+def hello.who.of(+au: Au, +s: Srv) -> List<&2, Login>:
+  match au:
+    case AuOf{+u, +p}:
+      [login.of(login_ok(u, p, s), u)]
+    case AuNone{}:
+      Nil{}
+
+def hello.who(h: Hel, +s: Srv) -> List<&2, Login>:
+  match h:
+    case Hel{WFail{r}, au, name, r3}:
+      Nil{}
+    case Hel{w, +au, name, r3}:
+      hello.who.of(au, s)
 
 def hello.logins(+s: Srv, +c: Conn, args: List<&2, String>) -> List<&2, Login>:
-  hello.who(hello.run(s, c, args))
+  hello.who(hello.run(c, args), s)
 
 # AUTH [user] password
 def auth.one(nopass: Bool, ok: Bool) -> R.Reply:
@@ -2130,11 +2191,19 @@ def cfg.nat.of(l: R.LL) -> Nat:
 def cfg.nat(+cfg: List<&2, C.CItem>, +name: String) -> Nat:
   cfg.nat.of(R.ll.read(C.config.get_value(cfg, name)))
 
+# a call ACL refused, counted by the reason w of its entry (INFO's
+# acl_access_denied_*)
+def srv.denied(s: Srv, +w: String) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.denied(info, w), mm}
+
 # the ACL LOG with an entry the server makes (a call it refused, an AUTH
 # that failed: server.bend, ACL), as many kept as acllog-max-len says
 def srv.acl.log(s: Srv, e: U.Ent) -> Srv:
   +s0 = s
-  srv.acl.set(s0, U.acl.log.add(srv.acl(s0), e, cfg.nat(srv.cfg(s0), "acllog-max-len")))
+  +e0 = e
+  srv.denied(srv.acl.set(s0, U.acl.log.add(srv.acl(s0), e0, cfg.nat(srv.cfg(s0), "acllog-max-len"))), U.ent.why(e0))
 
 # whether a listpack's longest element w is within the limit l: any is,
 # with l at its default of 64 or more
@@ -2750,7 +2819,7 @@ def mem.xcons(cs: List<&2, KV.XCon>, +acc: Nat) -> Nat:
   match cs:
     case Nil{}:
       acc
-    case Con{KV.XCon{+name, seen, +ids}, rest}:
+    case Con{KV.XCon{+name, seen, active, +ids}, rest}:
       mem.xcons(rest, Nat.add(acc, Nat.add(Nat.add(48n, String.length(name)), Nat.mul(32n, KV.xis.size(ids)))))
 
 def mem.xgroup(+g: KV.XGroup) -> Nat:
@@ -3603,7 +3672,7 @@ def script.reply(+k: Nat, +a: List<&2, String>) -> R.Reply:
 def own_reply(+o: R.SessOp, +c: Conn, +s: Srv, +ds: R.Ds) -> Maybe<&2, R.Reply>:
   match o:
     case R.SHello{args}:
-      say(conn.mode(c), hello.fin(hello.run(s, c, args), conn.id(c), nopass(s)))
+      say(conn.mode(c), hello.fin(hello.run(c, args), c, s))
     case R.SAuth{args}:
       say(conn.mode(c), auth.reply(args, s))
     case R.SSelect{+d}:
@@ -3711,7 +3780,7 @@ def own_reply(+o: R.SessOp, +c: Conn, +s: Srv, +ds: R.Ds) -> Maybe<&2, R.Reply>:
 def own_conn(+o: R.SessOp, +c: Conn, +s: Srv) -> Conn:
   match o:
     case R.SHello{args}:
-      hello.conn(hello.run(s, c, args), c, s)
+      hello.conn(hello.run(c, args), c, s)
     case R.SAuth{args}:
       auth.conn(auth.ok(args, s), c, s)
     case R.SSelect{+d}:

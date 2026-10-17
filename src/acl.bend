@@ -20,14 +20,14 @@ import ./map.bend as KV
 # CAT, and the stats keys of src/redis.bend).
 
 # BEGIN gen_commands: acl
-# Redis 7.0.15's commands and subcommands, by ACL id: their full names
+# Redis 7.2.16's commands and subcommands, by ACL id: their full names
 # in byte order
 def acl.names() -> List<&2, String>:
-  ["acl", "acl|cat", "acl|deluser", "acl|dryrun", "acl|genpass", "acl|getuser", "acl|help", "acl|list", "acl|load", "acl|log", "acl|save", "acl|setuser", "acl|users", "acl|whoami", "append", "asking", "auth", "bgrewriteaof", "bgsave", "bitcount", "bitfield", "bitfield_ro", "bitop", "bitpos", "blmove", "blmpop", "blpop", "brpop", "brpoplpush", "bzmpop", "bzpopmax", "bzpopmin", "client", "client|caching", "client|getname", "client|getredir", "client|help", "client|id", "client|info", "client|kill", "client|list", "client|no-evict", "client|pause", "client|reply", "client|setname", "client|tracking", "client|trackinginfo", "client|unblock", "client|unpause", "cluster", "cluster|addslots", "cluster|addslotsrange", "cluster|bumpepoch", "cluster|count-failure-reports", "cluster|countkeysinslot", "cluster|delslots", "cluster|delslotsrange", "cluster|failover", "cluster|flushslots", "cluster|forget", "cluster|getkeysinslot", "cluster|help", "cluster|info", "cluster|keyslot", "cluster|links", "cluster|meet", "cluster|myid", "cluster|nodes", "cluster|replicas", "cluster|replicate", "cluster|reset", "cluster|saveconfig", "cluster|set-config-epoch", "cluster|setslot", "cluster|shards", "cluster|slaves", "cluster|slots", "command", "command|count", "command|docs", "command|getkeys", "command|getkeysandflags", "command|help", "command|info", "command|list", "config", "config|get", "config|help", "config|resetstat", "config|rewrite", "config|set", "copy", "dbsize", "debug", "decr", "decrby", "del", "discard", "dump", "echo", "eval", "eval_ro", "evalsha", "evalsha_ro", "exec", "exists", "expire", "expireat", "expiretime", "failover", "fcall", "fcall_ro", "flushall", "flushdb", "function", "function|delete", "function|dump", "function|flush", "function|help", "function|kill", "function|list", "function|load", "function|restore", "function|stats", "geoadd", "geodist", "geohash", "geopos", "georadius", "georadius_ro", "georadiusbymember", "georadiusbymember_ro", "geosearch", "geosearchstore", "get", "getbit", "getdel", "getex", "getrange", "getset", "hdel", "hello", "hexists", "hget", "hgetall", "hincrby", "hincrbyfloat", "hkeys", "hlen", "hmget", "hmset", "hrandfield", "hscan", "hset", "hsetnx", "hstrlen", "hvals", "incr", "incrby", "incrbyfloat", "info", "keys", "lastsave", "latency", "latency|doctor", "latency|graph", "latency|help", "latency|histogram", "latency|history", "latency|latest", "latency|reset", "lcs", "lindex", "linsert", "llen", "lmove", "lmpop", "lolwut", "lpop", "lpos", "lpush", "lpushx", "lrange", "lrem", "lset", "ltrim", "memory", "memory|doctor", "memory|help", "memory|malloc-stats", "memory|purge", "memory|stats", "memory|usage", "mget", "migrate", "module", "module|help", "module|list", "module|load", "module|loadex", "module|unload", "monitor", "move", "mset", "msetnx", "multi", "object", "object|encoding", "object|freq", "object|help", "object|idletime", "object|refcount", "persist", "pexpire", "pexpireat", "pexpiretime", "pfadd", "pfcount", "pfdebug", "pfmerge", "pfselftest", "ping", "psetex", "psubscribe", "psync", "pttl", "publish", "pubsub", "pubsub|channels", "pubsub|help", "pubsub|numpat", "pubsub|numsub", "pubsub|shardchannels", "pubsub|shardnumsub", "punsubscribe", "quit", "randomkey", "readonly", "readwrite", "rename", "renamenx", "replconf", "replicaof", "reset", "restore", "restore-asking", "role", "rpop", "rpoplpush", "rpush", "rpushx", "sadd", "save", "scan", "scard", "script", "script|debug", "script|exists", "script|flush", "script|help", "script|kill", "script|load", "sdiff", "sdiffstore", "select", "set", "setbit", "setex", "setnx", "setrange", "shutdown", "sinter", "sintercard", "sinterstore", "sismember", "slaveof", "slowlog", "slowlog|get", "slowlog|help", "slowlog|len", "slowlog|reset", "smembers", "smismember", "smove", "sort", "sort_ro", "spop", "spublish", "srandmember", "srem", "sscan", "ssubscribe", "strlen", "subscribe", "substr", "sunion", "sunionstore", "sunsubscribe", "swapdb", "sync", "time", "touch", "ttl", "type", "unlink", "unsubscribe", "unwatch", "wait", "watch", "xack", "xadd", "xautoclaim", "xclaim", "xdel", "xgroup", "xgroup|create", "xgroup|createconsumer", "xgroup|delconsumer", "xgroup|destroy", "xgroup|help", "xgroup|setid", "xinfo", "xinfo|consumers", "xinfo|groups", "xinfo|help", "xinfo|stream", "xlen", "xpending", "xrange", "xread", "xreadgroup", "xrevrange", "xsetid", "xtrim", "zadd", "zcard", "zcount", "zdiff", "zdiffstore", "zincrby", "zinter", "zintercard", "zinterstore", "zlexcount", "zmpop", "zmscore", "zpopmax", "zpopmin", "zrandmember", "zrange", "zrangebylex", "zrangebyscore", "zrangestore", "zrank", "zrem", "zremrangebylex", "zremrangebyrank", "zremrangebyscore", "zrevrange", "zrevrangebylex", "zrevrangebyscore", "zrevrank", "zscan", "zscore", "zunion", "zunionstore"]
+  ["acl", "acl|cat", "acl|deluser", "acl|dryrun", "acl|genpass", "acl|getuser", "acl|help", "acl|list", "acl|load", "acl|log", "acl|save", "acl|setuser", "acl|users", "acl|whoami", "append", "asking", "auth", "bgrewriteaof", "bgsave", "bitcount", "bitfield", "bitfield_ro", "bitop", "bitpos", "blmove", "blmpop", "blpop", "brpop", "brpoplpush", "bzmpop", "bzpopmax", "bzpopmin", "client", "client|caching", "client|getname", "client|getredir", "client|help", "client|id", "client|info", "client|kill", "client|list", "client|no-evict", "client|no-touch", "client|pause", "client|reply", "client|setinfo", "client|setname", "client|tracking", "client|trackinginfo", "client|unblock", "client|unpause", "cluster", "cluster|addslots", "cluster|addslotsrange", "cluster|bumpepoch", "cluster|count-failure-reports", "cluster|countkeysinslot", "cluster|delslots", "cluster|delslotsrange", "cluster|failover", "cluster|flushslots", "cluster|forget", "cluster|getkeysinslot", "cluster|help", "cluster|info", "cluster|keyslot", "cluster|links", "cluster|meet", "cluster|myid", "cluster|myshardid", "cluster|nodes", "cluster|replicas", "cluster|replicate", "cluster|reset", "cluster|saveconfig", "cluster|set-config-epoch", "cluster|setslot", "cluster|shards", "cluster|slaves", "cluster|slots", "command", "command|count", "command|docs", "command|getkeys", "command|getkeysandflags", "command|help", "command|info", "command|list", "config", "config|get", "config|help", "config|resetstat", "config|rewrite", "config|set", "copy", "dbsize", "debug", "decr", "decrby", "del", "discard", "dump", "echo", "eval", "eval_ro", "evalsha", "evalsha_ro", "exec", "exists", "expire", "expireat", "expiretime", "failover", "fcall", "fcall_ro", "flushall", "flushdb", "function", "function|delete", "function|dump", "function|flush", "function|help", "function|kill", "function|list", "function|load", "function|restore", "function|stats", "geoadd", "geodist", "geohash", "geopos", "georadius", "georadius_ro", "georadiusbymember", "georadiusbymember_ro", "geosearch", "geosearchstore", "get", "getbit", "getdel", "getex", "getrange", "getset", "hdel", "hello", "hexists", "hget", "hgetall", "hincrby", "hincrbyfloat", "hkeys", "hlen", "hmget", "hmset", "hrandfield", "hscan", "hset", "hsetnx", "hstrlen", "hvals", "incr", "incrby", "incrbyfloat", "info", "keys", "lastsave", "latency", "latency|doctor", "latency|graph", "latency|help", "latency|histogram", "latency|history", "latency|latest", "latency|reset", "lcs", "lindex", "linsert", "llen", "lmove", "lmpop", "lolwut", "lpop", "lpos", "lpush", "lpushx", "lrange", "lrem", "lset", "ltrim", "memory", "memory|doctor", "memory|help", "memory|malloc-stats", "memory|purge", "memory|stats", "memory|usage", "mget", "migrate", "module", "module|help", "module|list", "module|load", "module|loadex", "module|unload", "monitor", "move", "mset", "msetnx", "multi", "object", "object|encoding", "object|freq", "object|help", "object|idletime", "object|refcount", "persist", "pexpire", "pexpireat", "pexpiretime", "pfadd", "pfcount", "pfdebug", "pfmerge", "pfselftest", "ping", "psetex", "psubscribe", "psync", "pttl", "publish", "pubsub", "pubsub|channels", "pubsub|help", "pubsub|numpat", "pubsub|numsub", "pubsub|shardchannels", "pubsub|shardnumsub", "punsubscribe", "quit", "randomkey", "readonly", "readwrite", "rename", "renamenx", "replconf", "replicaof", "reset", "restore", "restore-asking", "role", "rpop", "rpoplpush", "rpush", "rpushx", "sadd", "save", "scan", "scard", "script", "script|debug", "script|exists", "script|flush", "script|help", "script|kill", "script|load", "sdiff", "sdiffstore", "select", "set", "setbit", "setex", "setnx", "setrange", "shutdown", "sinter", "sintercard", "sinterstore", "sismember", "slaveof", "slowlog", "slowlog|get", "slowlog|help", "slowlog|len", "slowlog|reset", "smembers", "smismember", "smove", "sort", "sort_ro", "spop", "spublish", "srandmember", "srem", "sscan", "ssubscribe", "strlen", "subscribe", "substr", "sunion", "sunionstore", "sunsubscribe", "swapdb", "sync", "time", "touch", "ttl", "type", "unlink", "unsubscribe", "unwatch", "wait", "waitaof", "watch", "xack", "xadd", "xautoclaim", "xclaim", "xdel", "xgroup", "xgroup|create", "xgroup|createconsumer", "xgroup|delconsumer", "xgroup|destroy", "xgroup|help", "xgroup|setid", "xinfo", "xinfo|consumers", "xinfo|groups", "xinfo|help", "xinfo|stream", "xlen", "xpending", "xrange", "xread", "xreadgroup", "xrevrange", "xsetid", "xtrim", "zadd", "zcard", "zcount", "zdiff", "zdiffstore", "zincrby", "zinter", "zintercard", "zinterstore", "zlexcount", "zmpop", "zmscore", "zpopmax", "zpopmin", "zrandmember", "zrange", "zrangebylex", "zrangebyscore", "zrangestore", "zrank", "zrem", "zremrangebylex", "zremrangebyrank", "zremrangebyscore", "zrevrange", "zrevrangebylex", "zrevrangebyscore", "zrevrank", "zscan", "zscore", "zunion", "zunionstore"]
 
 # how many there are
 def acl.count() -> Nat:
-  366n
+  370n
 
 # the categories, in ACL CAT's order
 def acl.cats() -> List<&2, String>:
@@ -37,47 +37,47 @@ def acl.cats() -> List<&2, String>:
 def acl.cat.ids(+c: Nat) -> List<&2, Nat>:
   match c:
     case 0n:
-      [91n, 92n, 96n, 98n, 105n, 106n, 107n, 108n, 112n, 113n, 161n, 194n, 202n, 207n, 208n, 209n, 210n, 211n, 212n, 213n, 214n, 215n, 225n, 236n, 239n, 240n, 244n, 245n, 253n, 298n, 301n, 302n, 303n, 304n]
+      [94n, 95n, 99n, 101n, 108n, 109n, 110n, 111n, 115n, 116n, 164n, 197n, 205n, 210n, 211n, 212n, 213n, 214n, 215n, 216n, 217n, 218n, 228n, 239n, 242n, 243n, 247n, 248n, 256n, 301n, 304n, 305n, 306n, 307n]
     case 1n:
-      [19n, 21n, 23n, 92n, 98n, 105n, 108n, 125n, 126n, 127n, 129n, 131n, 132n, 134n, 135n, 138n, 142n, 143n, 144n, 147n, 148n, 149n, 151n, 152n, 155n, 156n, 161n, 171n, 172n, 174n, 177n, 179n, 182n, 192n, 193n, 207n, 208n, 210n, 211n, 215n, 217n, 225n, 236n, 253n, 254n, 262n, 271n, 272n, 274n, 281n, 282n, 285n, 288n, 290n, 292n, 294n, 295n, 301n, 302n, 303n, 322n, 323n, 325n, 326n, 327n, 328n, 329n, 331n, 335n, 336n, 337n, 340n, 341n, 343n, 345n, 348n, 349n, 350n, 351n, 353n, 358n, 359n, 360n, 361n, 362n, 363n, 364n]
+      [19n, 21n, 23n, 95n, 101n, 108n, 111n, 128n, 129n, 130n, 132n, 134n, 135n, 137n, 138n, 141n, 145n, 146n, 147n, 150n, 151n, 152n, 154n, 155n, 158n, 159n, 164n, 174n, 175n, 177n, 180n, 182n, 185n, 195n, 196n, 210n, 211n, 213n, 214n, 218n, 220n, 228n, 239n, 256n, 257n, 265n, 274n, 275n, 277n, 284n, 285n, 288n, 291n, 293n, 295n, 297n, 298n, 304n, 305n, 306n, 326n, 327n, 329n, 330n, 331n, 332n, 333n, 335n, 339n, 340n, 341n, 344n, 345n, 347n, 349n, 352n, 353n, 354n, 355n, 357n, 362n, 363n, 364n, 365n, 366n, 367n, 368n]
     case 2n:
-      [14n, 20n, 22n, 24n, 25n, 26n, 27n, 28n, 29n, 30n, 31n, 91n, 94n, 95n, 96n, 106n, 107n, 112n, 113n, 115n, 117n, 121n, 122n, 124n, 128n, 130n, 133n, 136n, 137n, 139n, 140n, 145n, 146n, 150n, 153n, 154n, 157n, 158n, 159n, 173n, 175n, 176n, 178n, 180n, 181n, 183n, 184n, 185n, 194n, 202n, 203n, 204n, 212n, 213n, 214n, 216n, 218n, 219n, 222n, 239n, 240n, 244n, 245n, 247n, 248n, 249n, 250n, 251n, 263n, 265n, 266n, 267n, 268n, 269n, 273n, 283n, 284n, 286n, 289n, 296n, 298n, 304n, 309n, 310n, 311n, 312n, 313n, 315n, 316n, 317n, 318n, 320n, 330n, 332n, 333n, 334n, 338n, 339n, 342n, 344n, 346n, 347n, 352n, 354n, 355n, 356n, 357n, 365n]
+      [14n, 20n, 22n, 24n, 25n, 26n, 27n, 28n, 29n, 30n, 31n, 94n, 97n, 98n, 99n, 109n, 110n, 115n, 116n, 118n, 120n, 124n, 125n, 127n, 131n, 133n, 136n, 139n, 140n, 142n, 143n, 148n, 149n, 153n, 156n, 157n, 160n, 161n, 162n, 176n, 178n, 179n, 181n, 183n, 184n, 186n, 187n, 188n, 197n, 205n, 206n, 207n, 215n, 216n, 217n, 219n, 221n, 222n, 225n, 242n, 243n, 247n, 248n, 250n, 251n, 252n, 253n, 254n, 266n, 268n, 269n, 270n, 271n, 272n, 276n, 286n, 287n, 289n, 292n, 299n, 301n, 307n, 313n, 314n, 315n, 316n, 317n, 319n, 320n, 321n, 322n, 324n, 334n, 336n, 337n, 338n, 342n, 343n, 346n, 348n, 350n, 351n, 356n, 358n, 359n, 360n, 361n, 369n]
     case 3n:
-      [251n, 254n, 262n, 263n, 271n, 272n, 273n, 274n, 281n, 282n, 283n, 284n, 285n, 286n, 288n, 289n, 290n, 295n, 296n]
+      [254n, 257n, 265n, 266n, 274n, 275n, 276n, 277n, 284n, 285n, 286n, 287n, 288n, 289n, 291n, 292n, 293n, 298n, 299n]
     case 4n:
-      [29n, 30n, 31n, 284n, 285n, 334n, 335n, 336n, 337n, 338n, 339n, 340n, 341n, 342n, 343n, 344n, 345n, 346n, 347n, 348n, 349n, 350n, 351n, 352n, 353n, 354n, 355n, 356n, 357n, 358n, 359n, 360n, 361n, 362n, 363n, 364n, 365n]
+      [29n, 30n, 31n, 287n, 288n, 338n, 339n, 340n, 341n, 342n, 343n, 344n, 345n, 346n, 347n, 348n, 349n, 350n, 351n, 352n, 353n, 354n, 355n, 356n, 357n, 358n, 359n, 360n, 361n, 362n, 363n, 364n, 365n, 366n, 367n, 368n, 369n]
     case 5n:
-      [24n, 25n, 26n, 27n, 28n, 172n, 173n, 174n, 175n, 176n, 178n, 179n, 180n, 181n, 182n, 183n, 184n, 185n, 247n, 248n, 249n, 250n, 284n, 285n]
+      [24n, 25n, 26n, 27n, 28n, 175n, 176n, 177n, 178n, 179n, 181n, 182n, 183n, 184n, 185n, 186n, 187n, 188n, 250n, 251n, 252n, 253n, 287n, 288n]
     case 6n:
-      [140n, 142n, 143n, 144n, 145n, 146n, 147n, 148n, 149n, 150n, 151n, 152n, 153n, 154n, 155n, 156n]
+      [143n, 145n, 146n, 147n, 148n, 149n, 150n, 151n, 152n, 153n, 154n, 155n, 156n, 157n, 158n, 159n]
     case 7n:
-      [14n, 94n, 95n, 134n, 136n, 137n, 138n, 139n, 157n, 158n, 159n, 171n, 193n, 203n, 204n, 222n, 265n, 267n, 268n, 269n, 292n, 294n]
+      [14n, 97n, 98n, 137n, 139n, 140n, 141n, 142n, 160n, 161n, 162n, 174n, 196n, 206n, 207n, 225n, 268n, 270n, 271n, 272n, 295n, 297n]
     case 8n:
-      [19n, 20n, 21n, 22n, 23n, 135n, 266n]
+      [19n, 20n, 21n, 22n, 23n, 138n, 269n]
     case 9n:
-      [216n, 217n, 218n, 219n, 220n]
+      [219n, 220n, 221n, 222n, 223n]
     case 10n:
-      [124n, 125n, 126n, 127n, 128n, 129n, 130n, 131n, 132n, 133n]
+      [127n, 128n, 129n, 130n, 131n, 132n, 133n, 134n, 135n, 136n]
     case 11n:
-      [309n, 310n, 311n, 312n, 313n, 315n, 316n, 317n, 318n, 319n, 320n, 322n, 323n, 324n, 325n, 326n, 327n, 328n, 329n, 330n, 331n, 332n, 333n]
+      [313n, 314n, 315n, 316n, 317n, 319n, 320n, 321n, 322n, 323n, 324n, 326n, 327n, 328n, 329n, 330n, 331n, 332n, 333n, 334n, 335n, 336n, 337n]
     case 12n:
-      [223n, 226n, 228n, 230n, 231n, 232n, 233n, 234n, 287n, 291n, 293n, 297n, 305n]
+      [226n, 229n, 231n, 233n, 234n, 235n, 236n, 237n, 290n, 294n, 296n, 300n, 308n]
     case 13n:
-      [2n, 3n, 5n, 7n, 8n, 9n, 10n, 11n, 12n, 17n, 18n, 39n, 40n, 41n, 42n, 47n, 48n, 50n, 51n, 52n, 53n, 55n, 56n, 57n, 58n, 59n, 65n, 68n, 69n, 70n, 71n, 72n, 73n, 75n, 86n, 88n, 89n, 90n, 93n, 109n, 162n, 164n, 165n, 167n, 168n, 169n, 170n, 197n, 198n, 199n, 200n, 201n, 218n, 220n, 224n, 241n, 242n, 246n, 252n, 270n, 275n, 277n, 279n, 280n, 299n]
+      [2n, 3n, 5n, 7n, 8n, 9n, 10n, 11n, 12n, 17n, 18n, 39n, 40n, 41n, 43n, 49n, 50n, 52n, 53n, 54n, 55n, 57n, 58n, 59n, 60n, 61n, 67n, 71n, 72n, 73n, 74n, 75n, 76n, 78n, 89n, 91n, 92n, 93n, 96n, 112n, 165n, 167n, 168n, 170n, 171n, 172n, 173n, 200n, 201n, 202n, 203n, 204n, 221n, 223n, 227n, 244n, 245n, 249n, 255n, 273n, 278n, 280n, 282n, 283n, 302n]
     case 14n:
-      [14n, 15n, 16n, 21n, 30n, 31n, 92n, 94n, 95n, 97n, 99n, 105n, 106n, 107n, 108n, 134n, 135n, 136n, 137n, 139n, 140n, 141n, 142n, 143n, 145n, 146n, 148n, 149n, 150n, 153n, 154n, 155n, 157n, 158n, 159n, 162n, 174n, 177n, 178n, 180n, 181n, 193n, 202n, 205n, 212n, 213n, 214n, 215n, 216n, 221n, 225n, 226n, 235n, 237n, 238n, 240n, 243n, 246n, 247n, 249n, 250n, 251n, 254n, 264n, 268n, 274n, 282n, 283n, 286n, 287n, 289n, 292n, 298n, 300n, 301n, 302n, 303n, 304n, 306n, 308n, 309n, 310n, 311n, 312n, 313n, 326n, 332n, 334n, 335n, 336n, 339n, 343n, 345n, 346n, 347n, 353n, 354n, 361n, 363n]
+      [14n, 15n, 16n, 21n, 30n, 31n, 95n, 97n, 98n, 100n, 102n, 108n, 109n, 110n, 111n, 137n, 138n, 139n, 140n, 142n, 143n, 144n, 145n, 146n, 148n, 149n, 151n, 152n, 153n, 156n, 157n, 158n, 160n, 161n, 162n, 165n, 177n, 180n, 181n, 183n, 184n, 196n, 205n, 208n, 215n, 216n, 217n, 218n, 219n, 224n, 228n, 229n, 238n, 240n, 241n, 243n, 246n, 249n, 250n, 252n, 253n, 254n, 257n, 267n, 271n, 277n, 285n, 286n, 289n, 290n, 292n, 295n, 301n, 303n, 304n, 305n, 306n, 307n, 309n, 312n, 313n, 314n, 315n, 316n, 317n, 330n, 336n, 338n, 339n, 340n, 343n, 347n, 349n, 350n, 351n, 357n, 358n, 365n, 367n]
     case 15n:
-      [0n, 1n, 2n, 3n, 4n, 5n, 6n, 7n, 8n, 9n, 10n, 11n, 12n, 13n, 17n, 18n, 19n, 20n, 22n, 23n, 24n, 25n, 26n, 27n, 28n, 29n, 32n, 33n, 34n, 35n, 36n, 37n, 38n, 39n, 40n, 41n, 42n, 43n, 44n, 45n, 46n, 47n, 48n, 49n, 50n, 51n, 52n, 53n, 54n, 55n, 56n, 57n, 58n, 59n, 60n, 61n, 62n, 63n, 64n, 65n, 66n, 67n, 68n, 69n, 70n, 71n, 72n, 73n, 74n, 75n, 76n, 77n, 78n, 79n, 80n, 81n, 82n, 83n, 84n, 85n, 86n, 87n, 88n, 89n, 90n, 91n, 93n, 96n, 98n, 100n, 101n, 102n, 103n, 104n, 109n, 110n, 111n, 112n, 113n, 114n, 115n, 116n, 117n, 118n, 119n, 120n, 121n, 122n, 123n, 124n, 125n, 126n, 127n, 128n, 129n, 130n, 131n, 132n, 133n, 138n, 144n, 147n, 151n, 152n, 156n, 160n, 161n, 163n, 164n, 165n, 166n, 167n, 168n, 169n, 170n, 171n, 172n, 173n, 175n, 176n, 179n, 182n, 183n, 184n, 185n, 186n, 187n, 188n, 189n, 190n, 191n, 192n, 194n, 195n, 196n, 197n, 198n, 199n, 200n, 201n, 203n, 204n, 206n, 207n, 208n, 209n, 210n, 211n, 217n, 218n, 219n, 220n, 222n, 223n, 224n, 227n, 228n, 229n, 230n, 231n, 232n, 233n, 234n, 236n, 239n, 241n, 242n, 244n, 245n, 248n, 252n, 253n, 255n, 256n, 257n, 258n, 259n, 260n, 261n, 262n, 263n, 265n, 266n, 267n, 269n, 270n, 271n, 272n, 273n, 275n, 276n, 277n, 278n, 279n, 280n, 281n, 284n, 285n, 288n, 290n, 291n, 293n, 294n, 295n, 296n, 297n, 299n, 305n, 307n, 314n, 315n, 316n, 317n, 318n, 319n, 320n, 321n, 322n, 323n, 324n, 325n, 327n, 328n, 329n, 330n, 331n, 333n, 337n, 338n, 340n, 341n, 342n, 344n, 348n, 349n, 350n, 351n, 352n, 355n, 356n, 357n, 358n, 359n, 360n, 362n, 364n, 365n]
+      [0n, 1n, 2n, 3n, 4n, 5n, 6n, 7n, 8n, 9n, 10n, 11n, 12n, 13n, 17n, 18n, 19n, 20n, 22n, 23n, 24n, 25n, 26n, 27n, 28n, 29n, 32n, 33n, 34n, 35n, 36n, 37n, 38n, 39n, 40n, 41n, 42n, 43n, 44n, 45n, 46n, 47n, 48n, 49n, 50n, 51n, 52n, 53n, 54n, 55n, 56n, 57n, 58n, 59n, 60n, 61n, 62n, 63n, 64n, 65n, 66n, 67n, 68n, 69n, 70n, 71n, 72n, 73n, 74n, 75n, 76n, 77n, 78n, 79n, 80n, 81n, 82n, 83n, 84n, 85n, 86n, 87n, 88n, 89n, 90n, 91n, 92n, 93n, 94n, 96n, 99n, 101n, 103n, 104n, 105n, 106n, 107n, 112n, 113n, 114n, 115n, 116n, 117n, 118n, 119n, 120n, 121n, 122n, 123n, 124n, 125n, 126n, 127n, 128n, 129n, 130n, 131n, 132n, 133n, 134n, 135n, 136n, 141n, 147n, 150n, 154n, 155n, 159n, 163n, 164n, 166n, 167n, 168n, 169n, 170n, 171n, 172n, 173n, 174n, 175n, 176n, 178n, 179n, 182n, 185n, 186n, 187n, 188n, 189n, 190n, 191n, 192n, 193n, 194n, 195n, 197n, 198n, 199n, 200n, 201n, 202n, 203n, 204n, 206n, 207n, 209n, 210n, 211n, 212n, 213n, 214n, 220n, 221n, 222n, 223n, 225n, 226n, 227n, 230n, 231n, 232n, 233n, 234n, 235n, 236n, 237n, 239n, 242n, 244n, 245n, 247n, 248n, 251n, 255n, 256n, 258n, 259n, 260n, 261n, 262n, 263n, 264n, 265n, 266n, 268n, 269n, 270n, 272n, 273n, 274n, 275n, 276n, 278n, 279n, 280n, 281n, 282n, 283n, 284n, 287n, 288n, 291n, 293n, 294n, 296n, 297n, 298n, 299n, 300n, 302n, 308n, 310n, 311n, 318n, 319n, 320n, 321n, 322n, 323n, 324n, 325n, 326n, 327n, 328n, 329n, 331n, 332n, 333n, 334n, 335n, 337n, 341n, 342n, 344n, 345n, 346n, 348n, 352n, 353n, 354n, 355n, 356n, 359n, 360n, 361n, 362n, 363n, 364n, 366n, 368n, 369n]
     case 16n:
-      [24n, 25n, 26n, 27n, 28n, 29n, 30n, 31n, 329n, 330n]
+      [24n, 25n, 26n, 27n, 28n, 29n, 30n, 31n, 333n, 334n]
     case 17n:
-      [2n, 3n, 5n, 7n, 8n, 9n, 10n, 11n, 12n, 17n, 18n, 39n, 40n, 41n, 42n, 47n, 48n, 50n, 51n, 52n, 53n, 55n, 56n, 57n, 58n, 59n, 65n, 68n, 69n, 70n, 71n, 72n, 73n, 75n, 86n, 88n, 89n, 90n, 93n, 109n, 112n, 113n, 160n, 161n, 162n, 164n, 165n, 167n, 168n, 169n, 170n, 194n, 197n, 198n, 199n, 200n, 201n, 218n, 220n, 224n, 241n, 242n, 244n, 245n, 246n, 252n, 270n, 275n, 277n, 279n, 280n, 284n, 285n, 298n, 299n]
+      [2n, 3n, 5n, 7n, 8n, 9n, 10n, 11n, 12n, 17n, 18n, 39n, 40n, 41n, 43n, 49n, 50n, 52n, 53n, 54n, 55n, 57n, 58n, 59n, 60n, 61n, 67n, 71n, 72n, 73n, 74n, 75n, 76n, 78n, 89n, 91n, 92n, 93n, 96n, 112n, 115n, 116n, 163n, 164n, 165n, 167n, 168n, 170n, 171n, 172n, 173n, 197n, 200n, 201n, 202n, 203n, 204n, 221n, 223n, 227n, 244n, 245n, 247n, 248n, 249n, 255n, 273n, 278n, 280n, 282n, 283n, 287n, 288n, 301n, 302n]
     case 18n:
-      [15n, 16n, 33n, 34n, 35n, 36n, 37n, 38n, 39n, 40n, 41n, 42n, 43n, 44n, 45n, 46n, 47n, 48n, 77n, 78n, 79n, 80n, 81n, 82n, 83n, 84n, 99n, 141n, 221n, 235n, 237n, 238n, 243n, 264n, 307n]
+      [15n, 16n, 33n, 34n, 35n, 36n, 37n, 38n, 39n, 40n, 41n, 42n, 43n, 44n, 45n, 46n, 47n, 48n, 49n, 50n, 80n, 81n, 82n, 83n, 84n, 85n, 86n, 87n, 102n, 144n, 224n, 238n, 240n, 241n, 246n, 267n, 310n, 311n]
     case 19n:
-      [97n, 104n, 205n, 306n, 308n]
+      [100n, 107n, 208n, 309n, 312n]
     case 20n:
-      [100n, 101n, 102n, 103n, 110n, 111n, 115n, 116n, 117n, 118n, 119n, 120n, 121n, 122n, 123n, 256n, 257n, 258n, 259n, 260n, 261n]
+      [103n, 104n, 105n, 106n, 113n, 114n, 118n, 119n, 120n, 121n, 122n, 123n, 124n, 125n, 126n, 259n, 260n, 261n, 262n, 263n, 264n]
     case _:
       []
 
@@ -86,99 +86,99 @@ def acl.cat.ids(+c: Nat) -> List<&2, Nat>:
 def acl.of.key(+k: Nat) -> Nat:
   match k:
     case 1n:
-      221n
+      224n
     case 2n:
-      99n
+      102n
     case 3n:
-      134n
+      137n
     case 4n:
-      265n
-    case 5n:
       268n
+    case 5n:
+      271n
     case 6n:
-      139n
+      142n
     case 7n:
-      96n
+      99n
     case 8n:
-      304n
+      307n
     case 9n:
-      105n
+      108n
     case 10n:
-      157n
+      160n
     case 11n:
-      94n
+      97n
     case 12n:
-      158n
+      161n
     case 13n:
-      95n
+      98n
     case 14n:
       14n
     case 15n:
-      292n
+      295n
     case 16n:
-      193n
+      196n
     case 17n:
-      203n
+      206n
     case 18n:
-      92n
+      95n
     case 19n:
-      112n
+      115n
     case 20n:
-      113n
+      116n
     case 21n:
-      161n
+      164n
     case 22n:
-      253n
+      256n
     case 23n:
-      267n
+      270n
     case 24n:
-      222n
-    case 25n:
-      303n
-    case 26n:
-      137n
-    case 27n:
-      136n
-    case 28n:
-      106n
-    case 29n:
-      213n
-    case 30n:
-      107n
-    case 31n:
-      214n
-    case 32n:
-      302n
-    case 33n:
       225n
+    case 25n:
+      306n
+    case 26n:
+      140n
+    case 27n:
+      139n
+    case 28n:
+      109n
+    case 29n:
+      216n
+    case 30n:
+      110n
+    case 31n:
+      217n
+    case 32n:
+      305n
+    case 33n:
+      228n
     case 34n:
-      108n
+      111n
     case 35n:
-      215n
+      218n
     case 36n:
-      212n
+      215n
     case 37n:
-      138n
+      141n
     case 38n:
-      294n
+      297n
     case 39n:
-      269n
+      272n
     case 40n:
-      135n
+      138n
     case 41n:
-      266n
+      269n
     case 42n:
       19n
     case 43n:
       23n
     case 44n:
-      301n
+      304n
     case 45n:
-      204n
+      207n
     case 46n:
-      239n
+      242n
     case 47n:
-      240n
+      243n
     case 48n:
       22n
     case 49n:
@@ -186,209 +186,209 @@ def acl.of.key(+k: Nat) -> Nat:
     case 50n:
       21n
     case 51n:
-      153n
-    case 52n:
-      154n
-    case 53n:
-      143n
-    case 54n:
-      149n
-    case 55n:
-      150n
-    case 56n:
-      140n
-    case 57n:
-      148n
-    case 58n:
-      155n
-    case 59n:
-      142n
-    case 60n:
-      147n
-    case 61n:
       156n
-    case 62n:
-      144n
-    case 63n:
-      145n
-    case 64n:
-      152n
-    case 65n:
-      100n
-    case 66n:
-      180n
-    case 67n:
-      249n
-    case 68n:
-      181n
-    case 69n:
-      250n
-    case 70n:
-      178n
-    case 71n:
-      247n
-    case 72n:
-      174n
-    case 73n:
-      172n
-    case 74n:
-      182n
-    case 75n:
-      184n
-    case 76n:
-      173n
-    case 77n:
-      183n
-    case 78n:
-      185n
-    case 79n:
-      179n
-    case 80n:
-      175n
-    case 81n:
-      248n
-    case 82n:
-      176n
-    case 83n:
-      251n
-    case 84n:
-      289n
-    case 85n:
-      254n
-    case 86n:
-      274n
-    case 87n:
-      282n
-    case 88n:
-      281n
-    case 89n:
-      290n
-    case 90n:
-      283n
-    case 91n:
-      271n
-    case 92n:
-      272n
-    case 93n:
-      273n
-    case 94n:
-      295n
-    case 95n:
-      296n
-    case 96n:
-      262n
-    case 97n:
-      263n
-    case 98n:
-      159n
-    case 99n:
+    case 52n:
+      157n
+    case 53n:
       146n
+    case 54n:
+      152n
+    case 55n:
+      153n
+    case 56n:
+      143n
+    case 57n:
+      151n
+    case 58n:
+      158n
+    case 59n:
+      145n
+    case 60n:
+      150n
+    case 61n:
+      159n
+    case 62n:
+      147n
+    case 63n:
+      148n
+    case 64n:
+      155n
+    case 65n:
+      103n
+    case 66n:
+      183n
+    case 67n:
+      252n
+    case 68n:
+      184n
+    case 69n:
+      253n
+    case 70n:
+      181n
+    case 71n:
+      250n
+    case 72n:
+      177n
+    case 73n:
+      175n
+    case 74n:
+      185n
+    case 75n:
+      187n
+    case 76n:
+      176n
+    case 77n:
+      186n
+    case 78n:
+      188n
+    case 79n:
+      182n
+    case 80n:
+      178n
+    case 81n:
+      251n
+    case 82n:
+      179n
+    case 83n:
+      254n
+    case 84n:
+      292n
+    case 85n:
+      257n
+    case 86n:
+      277n
+    case 87n:
+      285n
+    case 88n:
+      284n
+    case 89n:
+      293n
+    case 90n:
+      286n
+    case 91n:
+      274n
+    case 92n:
+      275n
+    case 93n:
+      276n
+    case 94n:
+      298n
+    case 95n:
+      299n
+    case 96n:
+      265n
+    case 97n:
+      266n
+    case 98n:
+      162n
+    case 99n:
+      149n
     case 100n:
-      264n
+      267n
     case 101n:
-      141n
+      144n
     case 102n:
       16n
     case 103n:
-      235n
+      238n
     case 104n:
-      243n
+      246n
     case 105n:
       32n
     case 106n:
-      114n
+      117n
     case 107n:
-      85n
+      88n
     case 108n:
-      160n
+      163n
     case 109n:
-      77n
+      80n
     case 110n:
-      236n
+      239n
     case 111n:
-      298n
+      301n
     case 112n:
-      202n
+      205n
     case 113n:
-      300n
+      303n
     case 114n:
-      206n
+      209n
     case 115n:
-      91n
+      94n
     case 116n:
-      171n
+      174n
     case 117n:
-      151n
+      154n
     case 118n:
-      186n
+      189n
     case 119n:
-      286n
+      289n
     case 120n:
-      288n
+      291n
     case 121n:
-      334n
-    case 122n:
-      339n
-    case 123n:
-      354n
-    case 124n:
-      335n
-    case 125n:
-      363n
-    case 126n:
-      345n
-    case 127n:
-      353n
-    case 128n:
-      361n
-    case 129n:
-      336n
-    case 130n:
-      343n
-    case 131n:
-      349n
-    case 132n:
-      351n
-    case 133n:
-      360n
-    case 134n:
-      350n
-    case 135n:
-      359n
-    case 136n:
-      358n
-    case 137n:
-      356n
-    case 138n:
-      357n
-    case 139n:
-      355n
-    case 140n:
-      347n
-    case 141n:
-      346n
-    case 142n:
-      362n
-    case 143n:
-      364n
-    case 144n:
-      340n
-    case 145n:
-      337n
-    case 146n:
-      341n
-    case 147n:
-      365n
-    case 148n:
-      342n
-    case 149n:
       338n
-    case 150n:
-      352n
-    case 151n:
+    case 122n:
+      343n
+    case 123n:
+      358n
+    case 124n:
+      339n
+    case 125n:
+      367n
+    case 126n:
+      349n
+    case 127n:
+      357n
+    case 128n:
+      365n
+    case 129n:
+      340n
+    case 130n:
+      347n
+    case 131n:
+      353n
+    case 132n:
+      355n
+    case 133n:
+      364n
+    case 134n:
+      354n
+    case 135n:
+      363n
+    case 136n:
+      362n
+    case 137n:
+      360n
+    case 138n:
+      361n
+    case 139n:
+      359n
+    case 140n:
+      351n
+    case 141n:
+      350n
+    case 142n:
+      366n
+    case 143n:
+      368n
+    case 144n:
       344n
-    case 152n:
+    case 145n:
+      341n
+    case 146n:
+      345n
+    case 147n:
+      369n
+    case 148n:
+      346n
+    case 149n:
+      342n
+    case 150n:
+      356n
+    case 151n:
       348n
+    case 152n:
+      352n
     case 153n:
       26n
     case 154n:
@@ -406,125 +406,125 @@ def acl.of.key(+k: Nat) -> Nat:
     case 160n:
       29n
     case 161n:
-      205n
+      208n
     case 162n:
-      104n
+      107n
     case 163n:
-      97n
+      100n
     case 164n:
-      308n
+      312n
     case 165n:
-      306n
+      309n
     case 166n:
-      293n
+      296n
     case 167n:
-      305n
+      308n
     case 168n:
-      223n
-    case 169n:
-      234n
-    case 170n:
-      291n
-    case 171n:
-      297n
-    case 172n:
       226n
+    case 169n:
+      237n
+    case 170n:
+      294n
+    case 171n:
+      300n
+    case 172n:
+      229n
     case 173n:
-      287n
+      290n
     case 174n:
-      227n
+      230n
     case 175n:
-      201n
+      204n
     case 176n:
       17n
     case 177n:
-      284n
+      287n
     case 178n:
-      285n
+      288n
     case 179n:
-      216n
-    case 180n:
-      217n
-    case 181n:
       219n
-    case 182n:
-      218n
-    case 183n:
+    case 180n:
       220n
+    case 181n:
+      222n
+    case 182n:
+      221n
+    case 183n:
+      223n
     case 184n:
-      162n
+      165n
     case 185n:
-      246n
+      249n
     case 186n:
-      307n
+      310n
     case 187n:
-      270n
+      273n
     case 188n:
-      177n
+      180n
     case 189n:
-      124n
-    case 190n:
-      125n
-    case 191n:
-      126n
-    case 192n:
       127n
-    case 193n:
+    case 190n:
       128n
-    case 194n:
+    case 191n:
       129n
-    case 195n:
+    case 192n:
       130n
-    case 196n:
+    case 193n:
       131n
-    case 197n:
+    case 194n:
       132n
-    case 198n:
+    case 195n:
       133n
+    case 196n:
+      134n
+    case 197n:
+      135n
+    case 198n:
+      136n
     case 199n:
-      98n
-    case 200n:
-      244n
-    case 201n:
-      276n
-    case 202n:
-      163n
-    case 203n:
-      252n
-    case 204n:
-      102n
-    case 205n:
       101n
-    case 206n:
-      103n
-    case 207n:
+    case 200n:
+      247n
+    case 201n:
+      279n
+    case 202n:
+      166n
+    case 203n:
       255n
+    case 204n:
+      105n
+    case 205n:
+      104n
+    case 206n:
+      106n
+    case 207n:
+      258n
     case 208n:
-      110n
+      113n
     case 209n:
-      111n
+      114n
     case 210n:
       0n
     case 211n:
-      326n
+      330n
     case 212n:
-      328n
-    case 213n:
-      331n
-    case 214n:
-      329n
-    case 215n:
-      321n
-    case 216n:
-      327n
-    case 217n:
-      310n
-    case 218n:
-      333n
-    case 219n:
-      313n
-    case 220n:
       332n
+    case 213n:
+      335n
+    case 214n:
+      333n
+    case 215n:
+      325n
+    case 216n:
+      331n
+    case 217n:
+      314n
+    case 218n:
+      337n
+    case 219n:
+      317n
+    case 220n:
+      336n
     case 221n:
       18n
     case 222n:
@@ -532,21 +532,21 @@ def acl.of.key(+k: Nat) -> Nat:
     case 223n:
       36n
     case 224n:
-      43n
+      44n
     case 225n:
       34n
     case 226n:
-      44n
+      46n
     case 227n:
       33n
     case 228n:
-      47n
+      49n
     case 229n:
       35n
     case 230n:
       41n
     case 231n:
-      46n
+      48n
     case 232n:
       40n
     case 233n:
@@ -554,119 +554,119 @@ def acl.of.key(+k: Nat) -> Nat:
     case 234n:
       39n
     case 235n:
-      42n
+      43n
     case 236n:
-      48n
+      50n
     case 237n:
-      45n
+      47n
     case 238n:
-      117n
-    case 239n:
-      118n
-    case 240n:
-      121n
-    case 241n:
-      115n
-    case 242n:
       120n
-    case 243n:
+    case 239n:
+      121n
+    case 240n:
+      124n
+    case 241n:
+      118n
+    case 242n:
       123n
+    case 243n:
+      126n
     case 244n:
-      119n
-    case 245n:
-      116n
-    case 246n:
       122n
+    case 245n:
+      119n
+    case 246n:
+      125n
     case 247n:
-      86n
-    case 248n:
-      90n
-    case 249n:
-      88n
-    case 250n:
       89n
+    case 248n:
+      93n
+    case 249n:
+      91n
+    case 250n:
+      92n
     case 251n:
-      87n
+      90n
     case 252n:
-      83n
+      86n
     case 253n:
-      79n
-    case 254n:
-      84n
-    case 255n:
       82n
+    case 254n:
+      87n
+    case 255n:
+      85n
     case 256n:
-      78n
-    case 257n:
-      80n
-    case 258n:
       81n
+    case 257n:
+      83n
+    case 258n:
+      84n
     case 259n:
-      209n
+      212n
     case 260n:
-      208n
-    case 261n:
-      207n
-    case 262n:
       211n
-    case 263n:
+    case 261n:
       210n
+    case 262n:
+      214n
+    case 263n:
+      213n
     case 264n:
-      188n
-    case 265n:
-      192n
-    case 266n:
       191n
+    case 265n:
+      195n
+    case 266n:
+      194n
     case 267n:
-      187n
-    case 268n:
       190n
+    case 268n:
+      193n
     case 269n:
-      189n
+      192n
     case 270n:
-      228n
-    case 271n:
-      229n
-    case 272n:
-      230n
-    case 273n:
       231n
-    case 274n:
+    case 271n:
       232n
-    case 275n:
+    case 272n:
       233n
+    case 273n:
+      234n
+    case 274n:
+      235n
+    case 275n:
+      236n
     case 276n:
-      277n
-    case 277n:
-      279n
-    case 278n:
       280n
+    case 277n:
+      282n
+    case 278n:
+      283n
     case 279n:
-      278n
+      281n
     case 280n:
-      164n
-    case 281n:
-      165n
-    case 282n:
-      166n
-    case 283n:
       167n
-    case 284n:
+    case 281n:
       168n
-    case 285n:
+    case 282n:
       169n
-    case 286n:
+    case 283n:
       170n
+    case 284n:
+      171n
+    case 285n:
+      172n
+    case 286n:
+      173n
     case 287n:
-      261n
+      264n
     case 288n:
-      257n
-    case 289n:
-      258n
-    case 290n:
       260n
+    case 289n:
+      261n
+    case 290n:
+      263n
     case 291n:
-      259n
+      262n
     case 292n:
       1n
     case 293n:
@@ -694,15 +694,15 @@ def acl.of.key(+k: Nat) -> Nat:
     case 304n:
       13n
     case 305n:
-      324n
+      328n
     case 306n:
-      325n
+      329n
     case 307n:
-      323n
+      327n
     case 308n:
-      322n
+      326n
     case _:
-      366n
+      370n
 # END gen_commands: acl
 
 # Types
@@ -737,9 +737,18 @@ type User is Data:
 # an entry of the ACL LOG: how many events it counts, why (command, key,
 # channel or auth), where (toplevel or multi), what (the command's full
 # name, the key, the channel, or AUTH as typed), the user, when it last
-# counted one (ms since 1970), and its client's line (CLIENT LIST's) then
+# counted one (ms since 1970), its client's line (CLIENT LIST's) then,
+# its number (entry-id: the entries made before it) and when it was made
+# (timestamp-created), as Redis 7.2 keeps them
 type Ent is Data:
-  Ent{count: Nat, why: String, ctx: String, obj: String, user: String, at: Nat, info: String}
+  Ent{count: Nat, why: String, ctx: String, obj: String, user: String, at: Nat, info: String, id: Nat, made: Nat}
+
+# the ACL LOG: its entries, newest first, and how many were made, which
+# ACL LOG RESET keeps (Redis's ACLLogEntryCount). LogOf, a log that holds
+# a log, is never built: it makes Log a node of its own
+type Log is Data:
+  Log{es: List<&2, Ent>, n: Nat}
+  LogOf{l: Log}
 
 # what the checks look up, each in a trie (map.bend) read in place: the
 # ids of the restricted clients (Restricted clients, below) and how many
@@ -754,7 +763,7 @@ type Ix is Data:
 # user (rp), ACL GENPASS's secret key and count of the blocks it made,
 # and the lookups of the checks (Ix)
 type Acl is Data:
-  Acl{dflt: User, users: List<&2, User>, log: List<&2, Ent>, gone: List<&2, String>, rp: String, key: String, ctr: Nat, ix: Ix}
+  Acl{dflt: User, users: List<&2, User>, log: Log, gone: List<&2, String>, rp: String, key: String, ctr: Nat, ix: Ix}
 
 # Small things
 # ------------
@@ -1557,10 +1566,17 @@ def acl.users(+a: Acl) -> List<&2, User>:
     case Acl{dflt, +users, log, gone, rp, key, ctr, ix}:
       users
 
+def log.es(+l: Log) -> List<&2, Ent>:
+  match l:
+    case Log{+es, n}:
+      es
+    case LogOf{x}:
+      log.es(x)
+
 def acl.log(+a: Acl) -> List<&2, Ent>:
   match a:
     case Acl{dflt, users, +log, gone, rp, key, ctr, ix}:
-      log
+      log.es(log)
 
 def acl.gone(+a: Acl) -> List<&2, String>:
   match a:
@@ -1672,7 +1688,7 @@ def acl.dflt.of(+pass: String) -> User:
 
 # key: GENPASS's secret, random hex digits the server read at its start
 def acl.new(+pass: String, key: String) -> Acl:
-  Acl{acl.dflt.of(pass), Nil{}, Nil{}, Nil{}, pass, key, 0n, Ix{KV.empty(Nat), 0n, KV.empty(User)}}
+  Acl{acl.dflt.of(pass), Nil{}, Log{Nil{}, 0n}, Nil{}, pass, key, 0n, Ix{KV.empty(Nat), 0n, KV.empty(User)}}
 
 # requirepass set: the default user's passwords reset, then the new one
 # or nopass (Redis's ACLUpdateDefaultUserPassword)
@@ -2316,13 +2332,14 @@ def user.verdict(v: Verdict, +c: Call) -> Verdict:
 def user.check(+u: User, +c: Call) -> Verdict:
   user.verdict(sels.check(user.sels(u), c, VNo{0n, 0n, ""}), c)
 
-# NOPERM's text for a call denied (processCommand's)
-def verdict.err(+v: Verdict) -> String:
+# NOPERM's text for a call of user n denied, as Redis 7.2's
+# processCommand words it (getAclErrorMessage, not verbose: the user and
+# the command named, not the key or the channel)
+def verdict.err(+v: Verdict, +n: String) -> String:
   match v:
     case VNo{+why, at, +obj}:
-      Bool.pick(String, Nat.is_eq(why, 1n), "NOPERM this user has no permissions to run the '" ++ obj ++ "' command",
-        Bool.pick(String, Nat.is_eq(why, 2n), "NOPERM this user has no permissions to access one of the keys used as arguments",
-          "NOPERM this user has no permissions to access one of the channels used as arguments"))
+      Bool.pick(String, Nat.is_eq(why, 1n), "NOPERM User " ++ n ++ " has no permissions to run the '" ++ obj ++ "' command",
+        Bool.pick(String, Nat.is_eq(why, 2n), "NOPERM No permissions to access a key", "NOPERM No permissions to access a channel"))
     case VOk{}:
       ""
 
@@ -2336,14 +2353,16 @@ def verdict.exec(+v: Verdict) -> String:
     case VOk{}:
       ""
 
-# ACL DRYRUN's reply: OK, or why not as a bulk string
-def verdict.dry(+v: Verdict) -> R.Reply:
+# ACL DRYRUN's reply for user n: OK, or why not as a bulk string, as
+# Redis 7.2 words it (getAclErrorMessage, verbose: the user named, and
+# the command, the key or the channel)
+def verdict.dry(+v: Verdict, +n: String) -> R.Reply:
   match v:
     case VOk{}:
       R.r_ok()
     case VNo{+why, at, +obj}:
-      R.RBulk{Bool.pick(String, Nat.is_eq(why, 1n), "This user has no permissions to run the '" ++ obj ++ "' command",
-        Bool.pick(String, Nat.is_eq(why, 2n), "This user has no permissions to access the '" ++ obj ++ "' key", "This user has no permissions to access the '" ++ obj ++ "' channel"))}
+      R.RBulk{"User " ++ n ++ Bool.pick(String, Nat.is_eq(why, 1n), " has no permissions to run the '" ++ obj ++ "' command",
+        Bool.pick(String, Nat.is_eq(why, 2n), " has no permissions to access the '" ++ obj ++ "' key", " has no permissions to access the '" ++ obj ++ "' channel"))}
 
 # the reason ACL LOG gives a verdict
 def verdict.why(+v: Verdict) -> String:
@@ -2704,7 +2723,7 @@ def dry.call(+u: User, r: CallR, +cmd: String) -> R.Reply:
   match r:
     case CallOk{c}:
       +c0 = c
-      verdict.dry(user.check(u, c0))
+      verdict.dry(user.check(u, c0), user.name(u))
     case CallNone{}:
       R.RError{R.e_fmt("ERR Command '" ++ R.cstr(cmd) ++ "' not found")}
     case CallArity{name}:
@@ -2781,14 +2800,26 @@ def acl.keeps(+u: User, chs: List<&2, String>, pats: List<&2, String>) -> Bool:
 
 def ent.same(+x: Ent, +e: Ent) -> Bool:
   match x e:
-    case Ent{c0, +w0, +x0, +o0, +u0, +t0, i0} Ent{c1, +w1, +x1, +o1, +u1, +t1, i1}:
+    case Ent{c0, +w0, +x0, +o0, +u0, +t0, i0, d0, m0} Ent{c1, +w1, +x1, +o1, +u1, +t1, i1, d1, m1}:
       Bool.and(Bool.and(Bool.and(String.eq(w0, w1), String.eq(x0, x1)), Bool.and(String.eq(o0, o1), String.eq(u0, u1))),
         Nat.is_le(Bool.pick(Nat, Nat.is_le(t0, t1), Nat.sub(t1, t0), Nat.sub(t0, t1)), 60000n))
 
+# the reason of an entry: "auth", "command", "key" or "channel"
+def ent.why(+e: Ent) -> String:
+  match e:
+    case Ent{c, +w, x, o, u, t, i, d, m}:
+      w
+
 def ent.bump(x: Ent, e: Ent) -> Ent:
   match x e:
-    case Ent{c0, w0, x0, o0, u0, t0, i0} Ent{c1, w1, x1, o1, u1, t1, i1}:
-      Ent{Nat.add(c0, 1n), w0, x0, o0, u0, t1, i1}
+    case Ent{c0, w0, x0, o0, u0, t0, i0, d0, m0} Ent{c1, w1, x1, o1, u1, t1, i1, d1, m1}:
+      Ent{Nat.add(c0, 1n), w0, x0, o0, u0, t1, i1, d0, m0}
+
+# a new entry, numbered n (the entries made before it)
+def ent.numbered(e: Ent, +n: Nat) -> Ent:
+  match e:
+    case Ent{c, w, x, o, u, t, i, d, m}:
+      Ent{c, w, x, o, u, t, i, n, m}
 
 type Pick is Data:
   Pick{hit: Maybe<&2, Ent>, rest: List<&2, Ent>}
@@ -2806,36 +2837,54 @@ def log.pick(k: Nat, +log: List<&2, Ent>, +e: Ent) -> Pick:
     case _ other:
       Pick{None{}, other}
 
-def log.put(p: Pick, e: Ent, +max: Nat) -> List<&2, Ent>:
+def log.put(p: Pick, e: Ent, +max: Nat, +n: Nat) -> Log:
   match p:
     case Pick{Some{x}, rest}:
-      ent.bump(x, e) <> rest
+      Log{ent.bump(x, e) <> rest, n}
     case Pick{None{}, rest}:
-      List.take(&2, Ent, e <> rest, max)
+      Log{List.take(&2, Ent, ent.numbered(e, n) <> rest, max), Nat.add(n, 1n)}
+
+def log.add(l: Log, e: Ent, +max: Nat) -> Log:
+  match l:
+    case Log{+es, +n}:
+      +e0 = e
+      log.put(log.pick(10n, es, e0), e0, max, n)
+    case LogOf{x}:
+      log.add(x, e, max)
 
 def acl.log.add(a: Acl, e: Ent, +max: Nat) -> Acl:
   match a:
-    case Acl{dflt, users, +log, gone, rp, key, ctr, ix}:
-      +e0 = e
-      Acl{dflt, users, log.put(log.pick(10n, log, e0), e0, max), gone, rp, key, ctr, ix}
+    case Acl{dflt, users, log, gone, rp, key, ctr, ix}:
+      Acl{dflt, users, log.add(log, e, max), gone, rp, key, ctr, ix}
+
+# ACL LOG RESET: no entry, the count of those made kept
+def log.reset(l: Log) -> Log:
+  match l:
+    case Log{es, +n}:
+      Log{Nil{}, n}
+    case LogOf{x}:
+      log.reset(x)
 
 def acl.log.reset(a: Acl) -> Acl:
   match a:
     case Acl{dflt, users, log, gone, rp, key, ctr, ix}:
-      Acl{dflt, users, Nil{}, gone, rp, key, ctr, ix}
+      Acl{dflt, users, log.reset(log), gone, rp, key, ctr, ix}
 
 # a Nat as a double
 def acl.dbl(+n: Nat) -> F.Fl:
   F.fl.round(F.fmt.d(), False{}, F.big.of(n), F.fl.eb(), False{})
 
+# an entry as ACL LOG answers it, with Redis 7.2's entry-id,
+# timestamp-created and timestamp-last-updated last
 def ent.reply(e: Ent, +now: Nat) -> R.Reply:
   match e:
-    case Ent{count, why, ctx, obj, user, +at, info}:
+    case Ent{count, why, ctx, obj, user, +at, info, id, made}:
       +age = Bool.pick(Nat, Nat.is_le(at, now), Nat.sub(now, at), 0n)
       R.RMap{[R.RBulk{"count"}, R.RInt{R.IPos{count}}, R.RBulk{"reason"}, R.RBulk{why}, R.RBulk{"context"}, R.RBulk{ctx},
         R.RBulk{"object"}, R.RBulk{obj}, R.RBulk{"username"}, R.RBulk{user},
         R.RBulk{"age-seconds"}, R.RDbl{F.fl.show_g(F.fl.div(F.fmt.d(), acl.dbl(age), acl.dbl(1000n)))},
-        R.RBulk{"client-info"}, R.RBulk{info}]}
+        R.RBulk{"client-info"}, R.RBulk{info}, R.RBulk{"entry-id"}, R.RInt{R.IPos{id}},
+        R.RBulk{"timestamp-created"}, R.RInt{R.IPos{made}}, R.RBulk{"timestamp-last-updated"}, R.RInt{R.IPos{at}}]}
 
 def ents.reply(es: List<&2, Ent>, +now: Nat) -> List<&2, R.Reply>:
   match es:
