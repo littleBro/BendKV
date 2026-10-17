@@ -9181,8 +9181,7 @@ the move's other kinds (below).
     (`addReplyErrorSdsExSafe`), as an error it returns did already.
   - FUNCTION RESTORE refuses a library in the format of 7.0's release candidates (type
     246): "Pre-GA function format not supported" (`lib.kind`). An RDB file's library in
-    that format is still read: Redis 7.2.16 stops its start at one, and the RDB file is
-    the move's kind E.
+    that format stops the start, as Redis 7.2.16's does (kind E: section 3zzzzc).
   - SCRIPT KILL's line in the log is a notice (`*`), not a warning (`#`).
 - **What was so already.**
   - Time stands still while a script runs, as 7.2's `commandTimeSnapshot` holds it:
@@ -9199,13 +9198,16 @@ the move's other kinds (below).
   - `redis.REDIS_VERSION` and `REDIS_VERSION_NUM`, and HELP's last line, "Print this
     help." (kind A).
   - Lua's numbers in `redis.call`, and a script's double, in `fpconv_dtoa`'s form (kind C).
-  - The order of pushes, and the keys that a script's reads track (kind F).
+  - The order of pushes, and the keys that a script's reads track (kind F, done in
+    section 3zzzzg).
 
 **Tests.** `script_test` and `function_test`, against 7.2.16. Each line that differs
 belongs to another kind: the version and HELP's last line (A), Lua's doubles (C), the
 pushes and tracking (F), NOPERM's texts (G), ACL LOG's new fields and CLIENT LIST's
 `lib-name` and `lib-ver` (B and H), FUNCTION DUMP's version and the RESTORE of a payload
-of version 11 (E).
+of version 11 (E). Once A, E, F, G and H were in, function_test passed against 7.2.16,
+and script_test differed in Lua's doubles alone (C); a blocking command in a script ran
+as in MULTI with A's table, nothing more.
 
 **What it costs.** Nothing on a request's path: the metatables are protected when a state
 is made, and the texts are made only for an error or a refusal.
@@ -9752,6 +9754,7 @@ sets (C); in `stream_write_test`, XSETID below the greatest ID deleted (G).
 **What it costs.** Nothing on a request's path. A save writes a packed set as one string,
 the listpack, where 7.0's format took a string for each member; a consumer takes 8 more
 bytes in the file and a word in the value.
+
 ## 3zzzzd. Texts, checks and ACL LOG's fields of Redis 7.2.16
 
 **What changed** (#128, kinds G and H: `src/session.bend`, `src/acl.bend`, `src/server.bend`,
@@ -9798,7 +9801,126 @@ bytes in the file and a word in the value.
 **What it costs.** Nothing on a request's path: the texts are made for an error alone, and HELLO
 and ACL LOG are not on the fast way.
 
-## 3zzzze. Doubles as Redis 7.2.16 writes them
+## 3zzzze. CONFIG's parameters, as Redis 7.2.16 has them
+
+**What changed** (#128, kind D: `tools/gen_config.py`, `src/config.bend`, `src/startup.bend`,
+`src/server.bend`). The table of parameters is 7.2.16's, 184 of them where 7.0.15 had 178,
+read from its `config.c` by the generator. The generator leaves out the parameters of a build
+with `LOG_REQ_RES` (the log of requests and replies of Redis's own tests), which a release
+build does not have.
+- **New:** `set-max-listpack-entries` (128) and `set-max-listpack-value` (64);
+  `locale-collate`; `cluster-announce-human-nodename`; and two hidden ones,
+  `cluster-ping-interval` and `lua-enable-deprecated-api` (immutable, `no`: section 3zzzv).
+- **Changed:**
+  - `aof-disable-auto-gc` is hidden: CONFIG GET of a pattern skips it, its name finds it.
+  - `loglevel` takes `nothing`, at which the log takes no line, the logo neither.
+  - `cluster-announce-ip` is checked: empty, or an address as `inet_pton` reads one.
+    IPv4 is four numbers of 0 to 255, none with a zero before its digits. IPv6 is RFC 4291's
+    text form: eight groups of hex digits, or fewer with one `::` for one group of zeros or
+    more, the last two groups possibly an IPv4 address. Anything else is "Cluster announce
+    IP must be a valid IPv4 or IPv6 address" (`text.ip`).
+  - `cluster-announce-human-nodename` takes no control byte and none of
+    `!#$%&()*+:;<>?@[]^{|}~,= "'\`, the bytes the cluster's file of nodes uses as
+    delimiters: "Announced human node name contained invalid character" (`text.aux`).
+- **locale-collate** names the locale in which SORT's ALPHA compares. BendKV compares
+  bytes, as the C locales do, so it takes those alone: empty, `C`, `POSIX`, `C.UTF-8`
+  (`AppLocale`). A CONFIG SET of another fails once the values are checked, as Redis's
+  `updateLocaleCollate` fails for a locale its system lacks ("Invalid locale name"); a
+  start with one stops ("Failed to configure LOCALE for invalid locale name."). The law of
+  CONFIG SET, that one that succeeds stores the value its check gave, holds as before: its
+  proof takes the new case (`sg.loc`).
+- **appendfsync**: 7.2's apply drains the thread that syncs the file when it becomes
+  `always` (`updateAppendFsync`); BendKV's writer has nothing to drain.
+
+**Tests.** `config_test` against 7.2.16, with cases for each new check: addresses right and
+wrong, names, locales, `loglevel nothing`, the hidden parameter by name and by pattern.
+`CONFIG SET tls-port` crashes 7.2.16 built without TLS (bug 3 of
+[UPSTREAM.md](UPSTREAM.md)), so the test sends it to BendKV alone and holds it to 7.0.15's
+refusal. `activedefrag yes` too goes to BendKV alone: the reference, built from its tarball
+with Redis's own jemalloc, turns it on, where the Redis 7.0.15 of Ubuntu (with the system's
+jemalloc) refused it, and BendKV, which has no defragmentation, refuses it as that one did.
+
+**What it costs.** Nothing on a request's path: the checks run on CONFIG SET.
+
+## 3zzzzf. The start's and the shutdown's lines, as Redis 7.2.16 writes them
+
+**What changed** (#128: `src/server.bend`). Redis 7.2 logs the start's lines as notices,
+not warnings: the banner, the version, "Configuration loaded" and "Server initialized"
+(the warning that no file was named stays a warning). "User requested shutdown..." is a
+notice as well. "Ready to accept connections" names the kind of each listener, a line for
+each, `tcp` then `unix`; the unix socket's own line ("The server is now ready to accept
+connections at ...") is gone. A TCP port in use stops the start with "Failed listening
+on port N (tcp), aborting.". So `loglevel warning` now leaves the whole start out, but
+for its warnings.
+
+**Tests.** `start_test` against 7.2.16; its check of `loglevel warning` looks for
+maxmemory's warning, which stays. The reference built from its tarball has no systemd
+support where `pkg-config` finds no libsystemd (Redis's Makefile links it only then): it
+logs that it cannot speak to systemd and tells it nothing. For such a reference, the two
+cases under systemd compare the rest and take what systemd is told and the log's lines
+from Redis's code (`redisSupervisedSystemd` and `main`), which 7.2.16 has as 7.0.15 had
+it.
+
+**What it costs.** Nothing.
+
+## 3zzzzg. Pushes after the reply, as Redis 7.2.16 sends them
+
+**What changed** (#128, kind F: `src/server.bend`, Own pushes). Redis 7.0 wrote a push
+to the client whose command ran as the command ran: before the command's reply, among
+EXEC's replies, before a script's reply. Redis 7.2 keeps such pushes for the end of the
+call (`afterCommand`, from `pending_push_messages`), and BendKV now does too.
+- **What waits.** The current client's messages on a channel it subscribed to (RESP3),
+  its keyspace events and the invalidations it gets as a redirect wait in Pub/Sub's
+  `own`; its own invalidations wait in the tracking's `pend`, as they already did.
+  After the command's reply the first go out, then the second (`bg.own.after`, then
+  `bg.trk.after`). For the commands of a transaction they come after EXEC's array, and
+  for a script's calls after the script's reply (`sc.pend`).
+- **The current client** is the batch's client; while a script runs, its caller
+  (`trk.cur` gives the caller for the script client's id 0); while a blocked pop runs
+  again, the client served, whose invalidations, its own and those it gets as a
+  redirect, wait for its reply (`iv.route.me`), and what the client whose command
+  served it gets waits for that client. The pushes kept wait aside while the clients a
+  command served are served (`pd.aside`), and while a busy script's group runs other
+  clients' requests (`sc.busy.group`), so that no other command takes them.
+- **Found on the way.**
+  - PUBLISH to its own channel inside EXEC put its pushes in EXEC's array and counted
+    them there (`*5` for three replies).
+  - The keyspace events of EXEC's commands never reached their own client.
+  - A served pop's keyspace events reached the client whose command served it before
+    that command's reply.
+  - Left as it was: CONFIG SET notify-keyspace-events takes effect from the next batch,
+    not from the next command of the same pipeline, since Pub/Sub's classes of events are
+    set again at a batch's end. A pipeline that sets them, subscribes and writes at once
+    hears nothing of that write, from Redis 7.0.15 as from 7.2.16.
+- **Tracking.**
+  - A blocked pop that is served runs its command again in Redis 7.2. So BLPOP and BRPOP
+    signal the key they popped from, as BLMPOP and the sorted sets' pops did, and BLMOVE
+    and BRPOPLPUSH signal their source after their destination (`ps.trk.served.go`). In
+    BCAST mode the change is the served client's, which NOLOOP leaves out for it.
+  - A script's call that only reads remembers its own keys for the caller, as Redis
+    7.2's `call()` remembers them for the current client (`trackingRememberKeys`). The
+    script's KEYS are no longer used: a key the script reads undeclared is tracked, a
+    declared one it does not read is not. Scr's `ks` is gone.
+
+**Tests.** Against 7.2.16:
+- resp3_test: two new scenarios, a transaction and a script that publish and write to
+  their own client, and pops served to a pusher and to a served client that both
+  subscribe. Its five scenarios of a client's own pushes pass; in 7.0's order they fail.
+- tracking_test: a redirect's own write in a transaction, a served BLMOVE in BCAST
+  mode, and a redirect to the client served; "redirects" and "served pops" pass.
+- script_test: "10 pipelines" and "12 tracking" pass.
+- The other differential tests that pushes and tracking touch (blocking, multi, pubsub,
+  client, monitor, pause, function, acl, keyspace, list, info, stats, the streams'), and
+  the file tests, differ from 7.2.16 in the same lines as before kind F: none of them
+  is kind F's.
+
+**What it costs.** After each command of the general way, a look at Pub/Sub's `own`
+(`bg.own.has`); nothing on the fast way, which makes no such push. perfcheck's GET, SET
+and INCR count 3,508, 4,299 and 4,621 instructions, against 3,507, 4,302 and 4,616 for
+kind I's build (5d523c6), counted alike; with 100 clients in BLPOP, 3,611 and 4,455
+against 3,618 and 4,460.
+
+## 3zzzzh. Doubles as Redis 7.2.16 writes them
 
 **What changed** (#128, kind C: `src/float.bend`, and the places that write a double in
 `src/redis.bend`, `src/rdb.bend`, `src/aof.bend`, `src/acl.bend` and `src/info.bend`).

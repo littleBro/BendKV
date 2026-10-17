@@ -555,9 +555,11 @@ def date(+secs: U32, +us: U32) -> String:
 def log.char(+level: U32) -> String:
   Bool.pick(String, U32.is_eq(level, 0), ".", Bool.pick(String, U32.is_eq(level, 1), "-", Bool.pick(String, U32.is_eq(level, 2), "*", "#")))
 
-# loglevel's value as a level
+# loglevel's value as a level: past warning, nothing (LL_NOTHING) is
+# logged
 def log.level(+v: String) -> U32:
-  Bool.pick(U32, String.eq(v, "debug"), 0, Bool.pick(U32, String.eq(v, "verbose"), 1, Bool.pick(U32, String.eq(v, "warning"), 3, 2)))
+  Bool.pick(U32, String.eq(v, "debug"), 0, Bool.pick(U32, String.eq(v, "verbose"), 1,
+    Bool.pick(U32, String.eq(v, "warning"), 3, Bool.pick(U32, String.eq(v, "nothing"), 4, 2))))
 
 # role: 'C' before the server is up (Redis's pid is not yet set then), 'M'
 # after

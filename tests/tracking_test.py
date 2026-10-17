@@ -13,8 +13,9 @@ LIST's lines cut to their ids, flags and redirects).
   nothing (no invalidation).
 - Redirects: to a RESP2 client subscribed to __redis__:invalidate (a
   message), to a RESP3 client (a push), to a RESP2 client without a
-  subscription (nothing); a redirect's own write (the push before its
-  reply); a redirect gone (tracking-redir-broken, the R flag).
+  subscription (nothing); a redirect's own write (the push after its
+  reply, after EXEC's in a transaction); a redirect gone
+  (tracking-redir-broken, the R flag).
 - OPTIN and OPTOUT with CLIENT CACHING, in MULTI, after a CLIENT command.
 - BCAST: prefixes, NOLOOP, the empty prefix, keys sorted, one push for
   the writes of a batch.
@@ -27,10 +28,13 @@ LIST's lines cut to their ids, flags and redirects).
   the table's limit (tracking-table-max-keys: which keys go is random,
   so their number).
 - A client served by BLMOVE: its destination's invalidation after its
-  reply, and none when the destination holds another type (WRONGTYPE). Clients served by BLMPOP, BZPOPMIN and BZMPOP: the key they
-  popped from invalidated (BLPOP's and BRPOP's is not), after another
-  client read it again in a transaction; in BCAST mode with NOLOOP, the
-  served client's own change.
+  reply, and none when the destination holds another type (WRONGTYPE).
+  Clients served by BLPOP, BLMPOP, BZPOPMIN and BZMPOP: the key they
+  popped from invalidated, after another client read it again in a
+  transaction, as Redis 7.2 runs a served command again; in BCAST mode
+  with NOLOOP, the served client's own change, BLMOVE's destination and
+  source too; to the client a tracking client redirects to, when it is the
+  one served, after its reply.
 - LMOVE's and RPOPLPUSH's keys: the destination's invalidation first.
 - CLIENT CACHING yes inside EXEC lasts until EXEC ends; CLIENT alone (an
   error of arity) clears it.
@@ -326,6 +330,10 @@ def redirects(r):
     r.do(t, "GET", "f")
     r.do(t, "GET", "g")
     r.do(r3, "MSET", "f", "2", "g", "2")
+    # in a transaction: after EXEC's reply
+    r.do(t, "GET", "f")
+    for args in (["MULTI"], ["SET", "f", "3"], ["PING"], ["EXEC"]):
+        r.do(r3, *args)
     r.do(b, "FLUSHDB")
     r.do(r3, "PING")
     tracking_info(r)
@@ -544,14 +552,22 @@ def served(r):
     r.do(t, "LRANGE", "s1", "0", "-1")
     r.do(t, "LRANGE", "d1", "0", "-1")
     r.do(v, "RPOPLPUSH", "s1", "d1")
-    # in BCAST mode: the key a served BLMPOP popped from is its client's
-    # change, which NOLOOP leaves out; a served BLPOP's is the pusher's
+    # in BCAST mode: the key a served pop popped from is its client's
+    # change, which NOLOOP leaves out, and a served BLMOVE's destination
     n, m = r.conn("n", 3), r.conn("m", 3)
     r.do(n, "CLIENT", "TRACKING", "on", "BCAST", "NOLOOP", "PREFIX", "q")
     r.do(m, "CLIENT", "TRACKING", "on", "BCAST", "PREFIX", "q")
-    for wait, key in ((["BLMPOP", "0", "1", "q1", "LEFT"], "q1"), (["BLPOP", "q2", "0"], "q2")):
+    for wait, key in ((["BLMPOP", "0", "1", "q1", "LEFT"], "q1"), (["BLPOP", "q2", "0"], "q2"),
+                      (["BLMOVE", "q3", "q4", "LEFT", "LEFT", "0"], "q3")):
         r.do(n, *wait)
         r.do(b, "RPUSH", key, "a", "b")
+    # a client that redirects to the client served: its invalidation after
+    # the served client's reply
+    t2, s = r.conn("t2"), r.conn("s", 3)
+    r.do(t2, "CLIENT", "TRACKING", "on", "REDIRECT", tid(s))
+    r.do(t2, "GET", "d5")
+    r.do(s, "BLMOVE", "s5", "d5", "LEFT", "RIGHT", "0")
+    r.do(b, "RPUSH", "s5", "v")
 
 
 def caching(r):

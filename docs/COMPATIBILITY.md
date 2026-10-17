@@ -396,6 +396,13 @@ ERROR counts a WAIT twice, and RESTORE with a time to live near 2^63 ms makes a 
 7.0.15 does not. BendKV does not copy them. [UPSTREAM.md](UPSTREAM.md) has how to see each, where it is in the code, and
 where it is to be reported.
 
+A difference kept on purpose. `locale-collate`, new in 7.2, names the locale in which SORT's
+ALPHA compares; BendKV compares bytes, as the C locales do, and takes those alone: CONFIG
+SET of another answers "Invalid locale name", and a start with one stops (README's
+Configuration). No test of the suite sets it. And BendKV has no defragmentation:
+`activedefrag yes` fails as it does in a Redis built without its own jemalloc, where a
+Redis built from its tarball, as the reference is, turns it on (README's Memory).
+
 ## What this mode does not test
 
 Tests that need a server of their own do not run in this mode: the units above with no
