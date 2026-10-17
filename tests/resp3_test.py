@@ -201,9 +201,11 @@ SCENARIOS = [
     ("own pushes of a pop served", [
         ("a", ["HELLO 3", "CONFIG SET notify-keyspace-events KEA", "SUBSCRIBE __keyspace@0__:l"]),
         ("w!", ["HELLO 3", "BLPOP l 5"]),
+        ("q", ["PING"]),  # w waits by now
         ("a", ["RPUSH l x y", "PING"]),
         ("w", []),
         ("v!", ["HELLO 3", "SUBSCRIBE __keyspace@0__:m", "BLMOVE m n LEFT RIGHT 5"]),
+        ("q", ["PING"]),
         ("a", ["RPUSH m z"]),
         ("v", ["PING"]),
     ]),
