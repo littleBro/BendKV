@@ -66,6 +66,13 @@ def big.show(+b: Big) -> String:
     case IBig{+hi, +lo}:
       big.show.if(Nat.is_lt(0n, hi), hi, lo)
 
+# the count's last 12 digits (the commands' count as a cycle of the
+# event loop starts: info.ncmds)
+def big.lo(+b: Big) -> Nat:
+  match b:
+    case IBig{hi, +lo}:
+      lo
+
 # a - b for counts at most 10^12 apart
 def big.diff(+a: Big, +b: Big) -> Nat:
   match a b:
@@ -2789,6 +2796,103 @@ def info.tick(i: Info, +ms: Nat) -> Info:
     case IInfo{b, l, +c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
       IInfo{b, l, c, inst.tick(inst, c, ms), pk, c0, a0, a, stats.fold(st), ex, rw, tm, rf}
 
+# the event loop's cycles, as Redis 7.2.16's duration_stats count them
+# (durationAddSample): each group of the actor is one (server.bend,
+# Timing), from the clock's reading as it starts to the one after it
+# ends, and the scripts the engine runs after it (el.more); its time but
+# its ticks' is its commands' (cmd), its ticks' the cron's (cron, and cc
+# the cycle's that runs); the longest cycle, and the most commands one
+# ran (INFO's debug section); the last cycle's time, and the commands'
+# count as it started (its last 12 digits: info.ncmds); and for the
+# cron's samples, the time of the last one in ms (0: none since the
+# start or CONFIG RESETSTAT, whose next sample only sets the base, as
+# Redis's trackInstantaneousMetric does), the cycles and their time then,
+# and the last 16 samples of the cycles a second and of the us a cycle
+# took, newest first (Redis's STATS_METRIC_EL_CYCLE and
+# STATS_METRIC_EL_DURATION). Kept with the server's own (session.bend:
+# Mm, a node of 15 words that a cycle changes cheaply), not in Info,
+# whose node of 65 words each change of it reads and writes whole. ElOf,
+# never built, makes El a node of its own
+type El is Data:
+  El{cyc: Nat, sum: Nat, cmd: Nat, cron: Nat, cc: Nat, max: Nat, cmax: Nat, last: Nat, ln: Nat, lt: Nat, lc: Nat, ls: Nat, ec: List<&2, Nat>, ed: List<&2, Nat>}
+  ElOf{e: El}
+
+def el.zero() -> El:
+  El{0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, samples.zero(), samples.zero()}
+
+# a cycle of d us that ran n commands, the commands' count n0 as it
+# started (its ticks' time is the cron's, not the commands')
+def el.cycle(e: El, +d: Nat, +n: Nat, +n0: Nat) -> El:
+  match e:
+    case El{cyc, sum, cmd, cron, +cc, max, cmax, last, ln, lt, lc, ls, ec, ed}:
+      El{Nat.add(cyc, 1n), Nat.add(sum, d), Nat.add(cmd, Nat.sub(d, Nat.min(d, cc))), cron, 0n, Nat.max(max, d), Nat.max(cmax, n), d, n0, lt, lc, ls, ec, ed}
+    case ElOf{x}:
+      el.cycle(x, d, n, n0)
+
+# the last cycle d us longer, the commands' count n1 now: the scripts of
+# its group that the engine ran after it (server.bend: grp.more), their
+# time its commands', their calls its commands
+def el.more(e: El, +d: Nat, +n1: Nat) -> El:
+  match e:
+    case El{cyc, sum, cmd, cron, cc, max, cmax, +last, +ln, lt, lc, ls, ec, ed}:
+      +l = Nat.add(last, d)
+      El{cyc, Nat.add(sum, d), Nat.add(cmd, d), cron, cc, Nat.max(max, l), Nat.max(cmax, Nat.sub(n1, ln)), l, ln, lt, lc, ls, ec, ed}
+    case ElOf{x}:
+      el.more(x, d, n1)
+
+# a tick that took d us
+def el.cron(e: El, +d: Nat) -> El:
+  match e:
+    case El{cyc, sum, cmd, cron, cc, max, cmax, last, ln, lt, lc, ls, ec, ed}:
+      El{cyc, sum, cmd, Nat.add(cron, d), Nat.add(cc, d), max, cmax, last, ln, lt, lc, ls, ec, ed}
+    case ElOf{x}:
+      el.cron(x, d)
+
+# the cron's sample at ms since 1970: the cycles a second, and the us a
+# cycle took, since the last sample (Redis 7.2.16's
+# trackInstantaneousMetric of STATS_METRIC_EL_CYCLE over the time, and
+# of STATS_METRIC_EL_DURATION over the cycles); with no sample before,
+# the base alone
+def el.sample.c(first: Bool, +n: Nat, +t: Nat, ec: List<&2, Nat>) -> List<&2, Nat>:
+  match first:
+    case True{}:
+      ec
+    case False{}:
+      rate(n, t) <> take15(15n, ec)
+
+def el.sample.d(first: Bool, +n: Nat, +s: Nat, ed: List<&2, Nat>) -> List<&2, Nat>:
+  match first:
+    case True{}:
+      ed
+    case False{}:
+      Bool.pick(Nat, Nat.is_lt(0n, n), Nat.div(s, n), 0n) <> take15(15n, ed)
+
+def el.sample(e: El, +ms: Nat) -> El:
+  match e:
+    case El{+cyc, +sum, cmd, cron, cc, max, cmax, last, ln, +lt, +lc, +ls, ec, ed}:
+      +f = Nat.is_eq(lt, 0n)
+      +n = Nat.sub(cyc, lc)
+      El{cyc, sum, cmd, cron, cc, max, cmax, last, ln, ms, cyc, sum, el.sample.c(f, n, Nat.sub(ms, lt), ec), el.sample.d(f, n, Nat.sub(sum, ls), ed)}
+    case ElOf{x}:
+      el.sample(x, ms)
+
+# CONFIG RESETSTAT: all again, as Redis's resetServerStats zeroes
+# duration_stats, el_cmd_cnt_max and the samples
+def el.reset(e: El) -> El:
+  match e:
+    case El{cyc, sum, cmd, cron, cc, max, cmax, last, ln, lt, lc, ls, ec, ed}:
+      el.zero()
+    case ElOf{x}:
+      el.reset(x)
+
+# the commands' count, its last 12 digits, as a cycle of the event loop
+# starts (El): a number, so that no part of the server is held while the
+# cycle runs (one held would be copied by each change of it)
+def info.ncmds(+i: Info) -> Nat:
+  match i:
+    case IInfo{b, l, ICount{+cmds, inb, outb}, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
+      big.lo(cmds)
+
 # CONFIG RESETSTAT: the counts, the rates and the statistics start again,
 # as Redis's resetServerStats, resetCommandTableStats and
 # resetErrorTableStats start them (the window's calls before it are timed,
@@ -3212,6 +3316,25 @@ def lat.stats.of(on: Bool, +st: Stats, +items: List<&2, C.CItem>) -> String:
 def kv(+k: String, +v: String) -> String:
   k ++ ":" ++ v ++ "\r\n"
 
+# the event loop's lines of INFO's stats (El)
+def el.stats(+e: El) -> String:
+  match e:
+    case El{+cyc, +sum, +cmd, cron, cc, max, cmax, last, ln, lt, lc, ls, +ec, +ed}:
+      kv("eventloop_cycles", Nat.show(cyc)) ++ kv("eventloop_duration_sum", Nat.show(sum)) ++
+      kv("eventloop_duration_cmd_sum", Nat.show(cmd)) ++ kv("instantaneous_eventloop_cycles_per_sec", Nat.show(mean(ec))) ++
+      kv("instantaneous_eventloop_duration_usec", Nat.show(mean(ed)))
+    case ElOf{+x}:
+      el.stats(x)
+
+# and of its debug section: the AOF's time is not told apart (0)
+def el.debug(+e: El) -> String:
+  match e:
+    case El{cyc, sum, cmd, +cron, cc, +max, +cmax, last, ln, lt, lc, ls, ec, ed}:
+      kv("eventloop_duration_aof_sum", "0") ++ kv("eventloop_duration_cron_sum", Nat.show(cron)) ++
+      kv("eventloop_duration_max", Nat.show(max)) ++ kv("eventloop_cmd_per_cycle_max", Nat.show(cmax))
+    case ElOf{+x}:
+      el.debug(x)
+
 def cfg(+items: List<&2, C.CItem>, +name: String) -> String:
   C.config.get_value(items, name)
 
@@ -3391,7 +3514,7 @@ def sec.persistence(+items: List<&2, C.CItem>, +rf: Rdb, +a0: Nat, +a: Nat, +rw:
   kv("aof_last_cow_size", "0") ++ kv("module_fork_in_progress", "0") ++ kv("module_fork_last_cow_size", "0") ++
   sec.aof(on, a0, a, rws.sched(rw))
 
-def sec.stats.go(c: Count, inst: Inst, +conns: Nat, +errs: String, +expired: Nat, +ex: Exp, +now: Nat, +l: Live) -> String:
+def sec.stats.go(c: Count, inst: Inst, +conns: Nat, +errs: String, +expired: Nat, +ex: Exp, +now: Nat, +l: Live, +el: El) -> String:
   match c inst:
     case ICount{+cmds, +inb, +outb} IInst{ms, last, +sc, +si, +so}:
       "# Stats\r\n" ++ kv("total_connections_received", Nat.show(conns)) ++ kv("total_commands_processed", big.show(cmds)) ++
@@ -3411,9 +3534,8 @@ def sec.stats.go(c: Count, inst: Inst, +conns: Nat, +errs: String, +expired: Nat
       kv("tracking_total_items", Nat.show(live.cn(l, 4n))) ++ kv("tracking_total_prefixes", Nat.show(live.cn(l, 5n))) ++ kv("unexpected_error_replies", "0") ++
       kv("total_error_replies", errs) ++ kv("dump_payload_sanitizations", "0") ++ kv("total_reads_processed", "0") ++
       kv("total_writes_processed", "0") ++ kv("io_threaded_reads_processed", "0") ++ kv("io_threaded_writes_processed", "0") ++
-      kv("reply_buffer_shrinks", "0") ++ kv("reply_buffer_expands", "0") ++ kv("eventloop_cycles", "0") ++
-      kv("eventloop_duration_sum", "0") ++ kv("eventloop_duration_cmd_sum", "0") ++ kv("instantaneous_eventloop_cycles_per_sec", "0") ++
-      kv("instantaneous_eventloop_duration_usec", "0") ++ kv("acl_access_denied_auth", Nat.show(live.cn(l, 14n))) ++
+      kv("reply_buffer_shrinks", "0") ++ kv("reply_buffer_expands", "0") ++ el.stats(el) ++
+      kv("acl_access_denied_auth", Nat.show(live.cn(l, 14n))) ++
       kv("acl_access_denied_cmd", Nat.show(live.cn(l, 15n))) ++ kv("acl_access_denied_key", Nat.show(live.cn(l, 16n))) ++
       kv("acl_access_denied_channel", Nat.show(live.cn(l, 17n)))
 
@@ -3582,10 +3704,10 @@ def on.persistence(on: Bool, +items: List<&2, C.CItem>, +i: Info, +now: Nat) -> 
     case False{} _:
       ""
 
-def on.stats(on: Bool, +i: Info, +now: Nat) -> String:
+def on.stats(on: Bool, +i: Info, +now: Nat, +el: El) -> String:
   match on i:
     case True{} IInfo{b, +l, +c, +inst, pk, +c0, a0, a, +st, +ex, rw, tm, rf}:
-      sec.stats.go(c, inst, Nat.sub(live.conns(l), c0), stats.total(st), exp.n(ex), ex, now, l)
+      sec.stats.go(c, inst, Nat.sub(live.conns(l), c0), stats.total(st), exp.n(ex), ex, now, l, el)
     case False{} _:
       ""
 
@@ -3640,15 +3762,16 @@ def on.head(on: Bool, +head: String) -> String:
     case False{}:
       ""
 
-# INFO [section ...]: the text of the sections asked for
-def text(args: List<&2, String>, +items: List<&2, C.CItem>, +i: Info, +ds: R.Ds) -> String:
+# INFO [section ...]: the text of the sections asked for, the event
+# loop's cycles el (El) with the rest
+def text(args: List<&2, String>, +items: List<&2, C.CItem>, +i: Info, +el: El, +ds: R.Ds) -> String:
   +s = sel.of(args)
   join([
     on.server(sel.has(s, "server"), items, i),
     on.clients(sel.has(s, "clients"), items, i),
     on.memory(sel.has(s, "memory"), items, i),
     on.persistence(sel.has(s, "persistence"), items, i, R.ds.now(ds)),
-    on.stats(sel.has(s, "stats"), i, R.ds.now(ds)),
+    on.stats(sel.has(s, "stats"), i, R.ds.now(ds), el),
     on.replication(sel.has(s, "replication"), items, i),
     on.cpu(sel.has(s, "cpu"), i),
     on.head(Bool.or(sel.has(s, "module_list"), sel.has(s, "modules")), "# Modules\r\n"),
@@ -3657,8 +3780,7 @@ def text(args: List<&2, String>, +items: List<&2, C.CItem>, +i: Info, +ds: R.Ds)
     on.latstats(sel.has(s, "latencystats"), items, i),
     on.head(sel.has(s, "cluster"), "# Cluster\r\n" ++ kv("cluster_enabled", "0")),
     on.keyspace(sel.has(s, "keyspace"), ds),
-    on.head(sel.named(s, "debug"), "# Debug\r\n" ++ kv("eventloop_duration_aof_sum", "0") ++ kv("eventloop_duration_cron_sum", "0") ++
-      kv("eventloop_duration_max", "0") ++ kv("eventloop_cmd_per_cycle_max", "0"))], "")
+    on.head(sel.named(s, "debug"), "# Debug\r\n" ++ el.debug(el))], "")
 
 # MEMORY STATS and MEMORY DOCTOR
 # ------------------------------

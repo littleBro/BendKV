@@ -11415,7 +11415,7 @@ def db_mem(+w: Nat, qs: List<&1, Req>, t: U32 & U32, srv: S.Srv, ds: R.Ds, ws: W
       do IO<Unit>:
         h : Nat & Nat <- IO.heap()
         g : Grp <- mem.run(h, s0, u0, srv, R.ds.at(clock.ms.of(s0, u0), ds), ws, tx, pb, rw.busy(w2), rw.pid(w2))
-        db_group(group_from(False{}, qs, g, s0, k), w2, reqs)
+        db_group(group_from(False{}, qs, g, s0, u0, k), w2, reqs)
 
 # The database actor
 # ------------------
@@ -12117,6 +12117,37 @@ def grp.lat(+name: String, +d: Nat, +now: Nat, g: Grp) -> Grp:
 def grp.clock(+g: Grp) -> U32:
   Clock.us(U32.from_nat(grp.down(g)))
 
+# a tick's window of d us, the cron's time (INFO's eventloop_*: El in
+# info.bend, kept with the server's own in S.Mm)
+def grp.cron(+d: Nat, g: Grp) -> Grp:
+  match g:
+    case Grp{outs, es, S.Srv{pass, cfg, info, mm}, ds, ws, up, tx, pb}:
+      Grp{outs, es, S.Srv{pass, cfg, info, S.mm.cron(mm, d)}, ds, ws, up, tx, pb}
+
+# the commands' count as a cycle starts or ends (I.info.ncmds), read in
+# a statement of its own before the group runs: read in the call that
+# runs it, it would hold the group, and each change of it, the
+# keyspace's among them, would copy what it changes
+def grp.ncmds(+g: Grp) -> Nat:
+  match g:
+    case Grp{outs, es, S.Srv{pass, cfg, +info, mm}, ds, ws, up, tx, pb}:
+      I.info.ncmds(info)
+
+def grp.cycle.at(+d: Nat, +n: Nat, +n0: Nat, g: Grp) -> Grp:
+  match g:
+    case Grp{outs, es, S.Srv{pass, cfg, info, mm}, ds, ws, up, tx, pb}:
+      Grp{outs, es, S.Srv{pass, cfg, info, S.mm.cycle(mm, d, n, n0)}, ds, ws, up, tx, pb}
+
+# a cycle of the event loop, the group g, which started at the clock's
+# reading c0 with the commands' count n0 (El): it ends at the clock's
+# reading once g is made, as Redis's cycle ends in beforeSleep, and ran
+# the commands counted since
+def grp.cycle(+c0: U32, +n0: Nat, g: Grp) -> Grp:
+  +x = g
+  +c1 = grp.clock(x)
+  +n1 = grp.ncmds(x)
+  grp.cycle.at(us.of(c0, c1), Nat.sub(n1, n0), n0, x)
+
 # the group's requests, each timed: the window from the clock's reading
 # c0 (Clock.us) to the one after it; s0 and k place a reading in s since
 # 1970 (secs.of)
@@ -12154,24 +12185,39 @@ def group_all(+log: Bool, qs: List<&1, Req>, g: Grp, +s0: U32, +k: U32, +c0: U32
     case Con{Tick{+ms}, rest}:
       +g1 = group_req(log, Tick{ms}, g)
       +c1 = grp.clock(g1)
-      group_all(log, rest, grp.lat("expire-cycle", us.of(c0, c1), secs.of(s0, k, c1), g1), s0, k, c1)
+      +d = us.of(c0, c1)
+      group_all(log, rest, grp.lat("expire-cycle", d, secs.of(s0, k, c1), grp.cron(d, g1)), s0, k, c1)
     case Con{q, rest}:
       +g1 = group_req(log, q, g)
       +c1 = grp.clock(g1)
       group_all(log, rest, grp.timed(0n, "", us.of(c0, c1), secs.of(s0, k, c1), g1), s0, k, c1)
 
 # the group's requests when the wall clock read s0 s and u0 us past them
-# (IO.clock), timed from the clock's reading now
+# (IO.clock), timed from the clock's reading now: a cycle of the event
+# loop (grp.cycle)
 def group_at(+log: Bool, qs: List<&1, Req>, +s0: U32, +u0: U32, g: Grp) -> Grp:
+  +c = Clock.us(u0)
+  +x = g
+  +n0 = grp.ncmds(x)
+  grp.cycle(c, n0, group_all(log, qs, x, s0, U32.sub(c, u0), c))
+
+# and a busy group's (sc.busy.of), no cycle of its own: its time is the
+# script's group's, as Redis counts no cycle of the events it serves
+# while a script runs (processEventsWhileBlocked)
+def group_busy(+log: Bool, qs: List<&1, Req>, +s0: U32, +u0: U32, g: Grp) -> Grp:
   +c = Clock.us(u0)
   group_all(log, qs, g, s0, U32.sub(c, u0), c)
 
 # the group's requests after an eviction (mem.run), which Redis does not
 # count in a call's time either: the first window starts after it; s0 and
-# k as group_all takes them
-def group_from(+log: Bool, qs: List<&1, Req>, g: Grp, +s0: U32, +k: U32) -> Grp:
+# k as group_all takes them. Its cycle (grp.cycle) starts before it, at
+# the clock's reading u0 + k as the group started, as Redis's cycle holds
+# its evictions
+def group_from(+log: Bool, qs: List<&1, Req>, g: Grp, +s0: U32, +u0: U32, +k: U32) -> Grp:
   +x = g
-  group_all(log, qs, x, s0, k, grp.clock(x))
+  +c = grp.clock(x)
+  +n0 = grp.ncmds(x)
+  grp.cycle(U32.add(u0, k), n0, group_all(log, qs, x, s0, k, c))
 
 # The rewrite's state
 # -------------------
@@ -12475,9 +12521,14 @@ def db_group.sc(any: Bool, g: Grp, rw: Rw, +reqs: Chan(Req)) -> IO(Unit):
       +w = rw
       do IO<Unit>:
         t0 : U32 & U32 <- IO.clock()
-        g2 : Grp <- sc.drive(sc.fuel(), False{}, rw.pid(w), grp.at.set(clk.of(t0), g), reqs)
-        t1 : U32 & U32 <- IO.clock()
-        db_group.go(sc.window(clk.of(t1), g2), w, reqs)
+        db_group.drive(clk.of(t0), g, w, reqs)
+
+@unsafe
+def db_group.drive(+c0: Clk, g: Grp, +w: Rw, +reqs: Chan(Req)) -> IO(Unit):
+  do IO<Unit>:
+    g2 : Grp <- sc.drive(sc.fuel(), False{}, rw.pid(w), grp.at.set(c0, g), reqs)
+    t1 : U32 & U32 <- IO.clock()
+    db_group.go(grp.driven(c0, clk.of(t1), g2), w, reqs)
 
 @unsafe
 def db_group.go(g: Grp, rw: Rw, +reqs: Chan(Req)) -> IO(Unit):
@@ -14107,6 +14158,25 @@ def sc.window(t: Clk, g: Grp) -> Grp:
   +y = t
   sc.timed(grp.at(x), y, grp.at.set(y, x))
 
+# the last cycle d us longer: the scripts the engine ran after its group
+# (db_group.drive, aof_group.drive.from), as Redis's cycle holds the
+# script it runs, the commands counted by n1 then
+def grp.more.at(+d: Nat, +n1: Nat, g: Grp) -> Grp:
+  match g:
+    case Grp{outs, es, S.Srv{pass, cfg, info, mm}, ds, ws, up, tx, pb}:
+      Grp{outs, es, S.Srv{pass, cfg, info, S.mm.more(mm, d, n1)}, ds, ws, up, tx, pb}
+
+def grp.more(+d: Nat, g: Grp) -> Grp:
+  +x = g
+  +n1 = grp.ncmds(x)
+  grp.more.at(d, n1, x)
+
+# the driver's run from c0 to t: its last window timed (sc.window), and
+# the last cycle longer by the run (grp.more)
+def grp.driven(+c0: Clk, t: Clk, g: Grp) -> Grp:
+  +y = t
+  grp.more(clk.us(c0, y), sc.window(y, g))
+
 # the clock read and the window up to it timed: as a command of the
 # engine starts (its start, grp.at, for its call's time)
 @unsafe
@@ -14656,7 +14726,7 @@ def sc.noticks(qs: List<&1, Req>) -> List<&1, Req>:
     case Con{q, rest}:
       q <> sc.noticks(rest)
 
-# a busy group run (group_at) with answers of its own; the group's
+# a busy group run (group_busy) with answers of its own; the group's
 # answers that wait still (sc.busy.out), the clients that wait and those
 # unblocked meanwhile (by the script's calls) held aside, as Redis serves
 # no client that waits while a script runs (t: the clock as the requests
@@ -14671,7 +14741,7 @@ def grp.aside.back(own: List<&2, R.Reply>, pend: List<&2, R.Reply>, g: Grp) -> G
 
 def sc.busy.of(p: List<&2, R.Reply> & Ps, own: List<&2, R.Reply>, qs: List<&1, Req>, +s0: U32, +u0: U32, +aof: Bool, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, srv: S.Srv, ds: R.Ds, ws: Waits, up: List<&2, Up>, tx: Tx) -> Bz:
   (pend, pb) = p
-  Bz{outs, ws, up, grp.aside.back(own, pend, group_at(aof, sc.noticks(qs), s0, u0, Grp{Nil{}, es, srv, ds, WaitNone{}, Nil{}, tx, pb}))}
+  Bz{outs, ws, up, grp.aside.back(own, pend, group_busy(aof, sc.noticks(qs), s0, u0, Grp{Nil{}, es, srv, ds, WaitNone{}, Nil{}, tx, pb}))}
 
 def sc.busy.aside(p: List<&2, R.Reply> & Ps, qs: List<&1, Req>, +s0: U32, +u0: U32, +aof: Bool, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, srv: S.Srv, ds: R.Ds, ws: Waits, up: List<&2, Up>, tx: Tx) -> Bz:
   (own, pb) = p
@@ -15885,7 +15955,7 @@ def aof_mem(+w: Nat, qs: List<&1, Req>, t: U32 & U32, srv: S.Srv, ds: R.Ds, ws: 
       do IO<Unit>:
         h : Nat & Nat <- IO.heap()
         g : Grp <- mem.run(h, s0, u0, srv, R.ds.at(clock.ms.of(s0, u0), ds), ws, tx, pb, rw.busy(w2), rw.pid(w2))
-        aof_group(group_from(True{}, qs, g, s0, k), sel, w2, f, sync, reqs)
+        aof_group(group_from(True{}, qs, g, s0, u0, k), sel, w2, f, sync, reqs)
 
 @unsafe
 def aof_more(st: St, f: File, +sync: Sync, +reqs: Chan(Req), m: Maybe<&1, Req>) -> IO(Unit):
@@ -15919,9 +15989,14 @@ def aof_group.drive.at(f: File, g: Grp, s: Nat & Rw, +sync: Sync, +reqs: Chan(Re
   +w = rw
   do IO<Unit>:
     t0 : U32 & U32 <- IO.clock()
-    g2 : Grp <- sc.drive(sc.fuel(), True{}, rw.pid(w), grp.at.set(clk.of(t0), g), reqs)
+    aof_group.drive.from(clk.of(t0), f, g, sel, w, sync, reqs)
+
+@unsafe
+def aof_group.drive.from(+c0: Clk, f: File, g: Grp, +sel: Nat, +w: Rw, +sync: Sync, +reqs: Chan(Req)) -> IO(Unit):
+  do IO<Unit>:
+    g2 : Grp <- sc.drive(sc.fuel(), True{}, rw.pid(w), grp.at.set(c0, g), reqs)
     t1 : U32 & U32 <- IO.clock()
-    aof_group.fx(grp.fx.take(sc.window(clk.of(t1), g2)), sel, w, f, sync, reqs)
+    aof_group.fx(grp.fx.take(grp.driven(c0, clk.of(t1), g2)), sel, w, f, sync, reqs)
 
 @unsafe
 def aof_group.drive.of(f: File, r: Grp & (Nat & Rw), +sync: Sync, +reqs: Chan(Req)) -> IO(Unit):

@@ -66,11 +66,13 @@ type Pe is Data:
 # rewrite of the append-only file or a background save runs (mm.view):
 # the heap's used bytes when the job took its snapshot (h0), the keys of
 # the databases then (k0), and the bytes a key held then on average
-# (per). MmOf, never built, makes Mm a type that holds itself, which the
+# (per); and the event loop's cycles (info.bend: El), which INFO shows
+# and each group changes, here in a node of a few words rather than in
+# Info's. MmOf, never built, makes Mm a type that holds itself, which the
 # compiler makes a node of its own: Srv stays four words, as with the
 # random numbers' word alone.
 type Mm is Data:
-  Mm{rng: U32, max: Nat, pol: Nat, smp: Nat, ten: Nat, lfl: Nat, lfd: Nat, kick: Bool, pool: List<&2, Pe>, next: Nat, h0: Nat, k0: Nat, per: Nat, acl: U.Acl}
+  Mm{rng: U32, max: Nat, pol: Nat, smp: Nat, ten: Nat, lfl: Nat, lfd: Nat, kick: Bool, pool: List<&2, Pe>, next: Nat, h0: Nat, k0: Nat, per: Nat, acl: U.Acl, el: I.El}
   MmOf{m: Mm}
 
 # the server, besides its database: the requirepass it was last given
@@ -119,25 +121,25 @@ def mm.get(+cfg: List<&2, C.CItem>, +name: String) -> Nat:
 # numbers at rng, and its users: the default user alone, with requirepass
 # as its password, GENPASS's key the start's secret
 def mm.of(+rng: U32, +cfg: List<&2, C.CItem>, key: String) -> Mm:
-  Mm{rng, mm.get(cfg, "maxmemory"), mm.pol.of(C.config.get_value(cfg, "maxmemory-policy")), mm.get(cfg, "maxmemory-samples"), mm.get(cfg, "maxmemory-eviction-tenacity"), mm.get(cfg, "lfu-log-factor"), mm.get(cfg, "lfu-decay-time"), False{}, Nil{}, 0n, 0n, 0n, 0n, U.acl.new(C.config.get_value(cfg, "requirepass"), key)}
+  Mm{rng, mm.get(cfg, "maxmemory"), mm.pol.of(C.config.get_value(cfg, "maxmemory-policy")), mm.get(cfg, "maxmemory-samples"), mm.get(cfg, "maxmemory-eviction-tenacity"), mm.get(cfg, "lfu-log-factor"), mm.get(cfg, "lfu-decay-time"), False{}, Nil{}, 0n, 0n, 0n, 0n, U.acl.new(C.config.get_value(cfg, "requirepass"), key), I.el.zero()}
 
 def mm.rng(+m: Mm) -> U32:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl}:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, el}:
       rng
     case MmOf{+n}:
       mm.rng(n)
 
 def mm.max(+m: Mm) -> Nat:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl}:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, el}:
       max
     case MmOf{+n}:
       mm.max(n)
 
 def mm.pol(+m: Mm) -> Nat:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl}:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, el}:
       pol
     case MmOf{+n}:
       mm.pol(n)
@@ -148,9 +150,9 @@ def mm.pol(+m: Mm) -> Nat:
 # requirepass changed is the default user's password from then on
 def mm.cfg(+m: Mm, +cfg: List<&2, C.CItem>) -> Mm:
   match m:
-    case Mm{rng, +max, pol, smp, ten, lfl, lfd, +kick, pool, next, h0, k0, per, acl}:
+    case Mm{rng, +max, pol, smp, ten, lfl, lfd, +kick, pool, next, h0, k0, per, acl, el}:
       +mx = mm.get(cfg, "maxmemory")
-      Mm{rng, mx, mm.pol.of(C.config.get_value(cfg, "maxmemory-policy")), mm.get(cfg, "maxmemory-samples"), mm.get(cfg, "maxmemory-eviction-tenacity"), mm.get(cfg, "lfu-log-factor"), mm.get(cfg, "lfu-decay-time"), Bool.and(Bool.or(kick, Bool.not(Nat.is_eq(mx, max))), Nat.is_lt(0n, mx)), pool, next, h0, k0, per, U.acl.cfg(acl, C.config.get_value(cfg, "requirepass"))}
+      Mm{rng, mx, mm.pol.of(C.config.get_value(cfg, "maxmemory-policy")), mm.get(cfg, "maxmemory-samples"), mm.get(cfg, "maxmemory-eviction-tenacity"), mm.get(cfg, "lfu-log-factor"), mm.get(cfg, "lfu-decay-time"), Bool.and(Bool.or(kick, Bool.not(Nat.is_eq(mx, max))), Nat.is_lt(0n, mx)), pool, next, h0, k0, per, U.acl.cfg(acl, C.config.get_value(cfg, "requirepass")), el}
     case MmOf{+n}:
       mm.cfg(n, cfg)
 
@@ -158,22 +160,22 @@ def mm.cfg(+m: Mm, +cfg: List<&2, C.CItem>) -> Mm:
 # KV.mix scrambles)
 def mm.rand(m: Mm) -> Mm:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl}:
-      Mm{U32.add(rng, 2654435769), max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl}
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, el}:
+      Mm{U32.add(rng, 2654435769), max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, el}
     case MmOf{n}:
       mm.rand(n)
 
 # lfu-log-factor and lfu-decay-time
 def mm.lfl(+m: Mm) -> Nat:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl}:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, el}:
       lfl
     case MmOf{+n}:
       mm.lfl(n)
 
 def mm.lfd(+m: Mm) -> Nat:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl}:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, el}:
       lfd
     case MmOf{+n}:
       mm.lfd(n)
@@ -186,7 +188,7 @@ def mm.lfu(+m: Mm) -> Bool:
 # whether a CONFIG SET changed maxmemory
 def mm.kick(+m: Mm) -> Bool:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl}:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, el}:
       kick
     case MmOf{+n}:
       mm.kick(n)
@@ -197,43 +199,89 @@ def mm.kick(+m: Mm) -> Bool:
 # SET's change of maxmemory first; 2 evict
 def mm.what(+m: Mm, +used: Nat) -> Nat:
   match m:
-    case Mm{rng, +max, pol, smp, ten, lfl, lfd, +kick, pool, next, h0, k0, per, acl}:
+    case Mm{rng, +max, pol, smp, ten, lfl, lfd, +kick, pool, next, h0, k0, per, acl, el}:
       Bool.pick(Nat, kick, 1n, Bool.pick(Nat, Bool.and(Nat.is_lt(0n, max), Nat.is_lt(max, used)), 2n, 0n))
     case MmOf{+n}:
       mm.what(n, used)
 
+# the event loop's cycles (El): a cycle of d us that ran n commands from
+# the count n0, a tick of d us, the scripts of d us that the engine ran
+# after the last cycle with the count n1 then, the cron's sample at ms,
+# and CONFIG RESETSTAT
+def mm.cycle(m: Mm, +d: Nat, +n: Nat, +n0: Nat) -> Mm:
+  match m:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, el}:
+      Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, I.el.cycle(el, d, n, n0)}
+    case MmOf{x}:
+      mm.cycle(x, d, n, n0)
+
+def mm.cron(m: Mm, +d: Nat) -> Mm:
+  match m:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, el}:
+      Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, I.el.cron(el, d)}
+    case MmOf{x}:
+      mm.cron(x, d)
+
+def mm.more(m: Mm, +d: Nat, +n1: Nat) -> Mm:
+  match m:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, el}:
+      Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, I.el.more(el, d, n1)}
+    case MmOf{x}:
+      mm.more(x, d, n1)
+
+def mm.sample(m: Mm, +ms: Nat) -> Mm:
+  match m:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, el}:
+      Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, I.el.sample(el, ms)}
+    case MmOf{x}:
+      mm.sample(x, ms)
+
+def mm.reset(m: Mm) -> Mm:
+  match m:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, el}:
+      Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, I.el.reset(el)}
+    case MmOf{x}:
+      mm.reset(x)
+
+def mm.el(+m: Mm) -> I.El:
+  match m:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, +el}:
+      el
+    case MmOf{+n}:
+      mm.el(n)
+
 # the change of maxmemory seen to
 def mm.kicked(m: Mm) -> Mm:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl}:
-      Mm{rng, max, pol, smp, ten, lfl, lfd, False{}, pool, next, h0, k0, per, acl}
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, el}:
+      Mm{rng, max, pol, smp, ten, lfl, lfd, False{}, pool, next, h0, k0, per, acl, el}
     case MmOf{n}:
       mm.kicked(n)
 
 def mm.smp(+m: Mm) -> Nat:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl}:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, el}:
       smp
     case MmOf{+n}:
       mm.smp(n)
 
 def mm.ten(+m: Mm) -> Nat:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl}:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, el}:
       ten
     case MmOf{+n}:
       mm.ten(n)
 
 def mm.next(+m: Mm) -> Nat:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl}:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, el}:
       next
     case MmOf{+n}:
       mm.next(n)
 
 def mm.pool(+m: Mm) -> List<&2, Pe>:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl}:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, el}:
       pool
     case MmOf{+n}:
       mm.pool(n)
@@ -245,8 +293,8 @@ type Mp is Data:
 
 def mm.pool.take(m: Mm) -> Mp:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl}:
-      Mp{pool, Mm{rng, max, pol, smp, ten, lfl, lfd, kick, Nil{}, next, h0, k0, per, acl}}
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, el}:
+      Mp{pool, Mm{rng, max, pol, smp, ten, lfl, lfd, kick, Nil{}, next, h0, k0, per, acl, el}}
     case MmOf{x}:
       mm.pool.take(x)
 
@@ -258,15 +306,15 @@ def mm.step(+rng: U32, +n: Nat) -> U32:
 # random (the database it picked from), of n databases
 def mm.pool.set(m: Mm, ps: List<&2, Pe>, +n: Nat) -> Mm:
   match m:
-    case Mm{+rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl}:
-      Mm{mm.step(rng, n), max, pol, smp, ten, lfl, lfd, kick, ps, next, h0, k0, per, acl}
+    case Mm{+rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, el}:
+      Mm{mm.step(rng, n), max, pol, smp, ten, lfl, lfd, kick, ps, next, h0, k0, per, acl, el}
     case MmOf{x}:
       mm.pool.set(x, ps, n)
 
 def mm.next.set(m: Mm, +j: Nat, +n: Nat) -> Mm:
   match m:
-    case Mm{+rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl}:
-      Mm{mm.step(rng, n), max, pol, smp, ten, lfl, lfd, kick, pool, j, h0, k0, per, acl}
+    case Mm{+rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, el}:
+      Mm{mm.step(rng, n), max, pol, smp, ten, lfl, lfd, kick, pool, j, h0, k0, per, acl, el}
     case MmOf{x}:
       mm.next.set(x, j, n)
 
@@ -282,8 +330,8 @@ def mm.next.set(m: Mm, +j: Nat, +n: Nat) -> Mm:
 # place counts once the job has ended, when the heap is read as it is.
 def mm.snap(m: Mm, +h: Nat, +k: Nat, +p: Nat) -> Mm:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl}:
-      Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h, k, p, acl}
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, el}:
+      Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h, k, p, acl, el}
     case MmOf{x}:
       mm.snap(x, h, k, p)
 
@@ -316,7 +364,7 @@ def mm.view.of(up: Bool, +h0: Nat, +k0: Nat, +per: Nat, +k: Nat) -> Nat:
 
 def mm.view(+m: Mm, +k: Nat) -> Nat:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, +h0, +k0, +per, acl}:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, +h0, +k0, +per, acl, el}:
       mm.view.of(Nat.is_le(k0, k), h0, k0, per, k)
     case MmOf{+n}:
       mm.view(n, k)
@@ -324,15 +372,15 @@ def mm.view(+m: Mm, +k: Nat) -> Nat:
 # the users, and the server with them changed
 def mm.acl(+m: Mm) -> U.Acl:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, +acl}:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, +acl, el}:
       acl
     case MmOf{+n}:
       mm.acl(n)
 
 def mm.acl.set(m: Mm, a: U.Acl) -> Mm:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl}:
-      Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, a}
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, el}:
+      Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, a, el}
     case MmOf{n}:
       mm.acl.set(n, a)
 
@@ -344,35 +392,35 @@ def mm.acl.set(m: Mm, a: U.Acl) -> Mm:
 # back only what they read.
 def mm.open(+m: Mm) -> Bool:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, +acl}:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, +acl, el}:
       U.acl.open(acl)
     case MmOf{+n}:
       mm.open(n)
 
 def mm.restricted(+m: Mm, +id: Nat) -> Bool:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, +acl}:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, +acl, el}:
       U.acl.restricted(acl, id)
     case MmOf{+n}:
       mm.restricted(n, id)
 
 def mm.acl.any(+m: Mm) -> Bool:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, +acl}:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, +acl, el}:
       U.acl.any(acl)
     case MmOf{+n}:
       mm.acl.any(n)
 
 def mm.acl.check(+m: Mm, +n: String, +k: Nat, +argv: List<&2, String>) -> U.Verdict:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, +acl}:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, +acl, el}:
       U.acl.check(acl, n, k, argv)
     case MmOf{+x}:
       mm.acl.check(x, n, k, argv)
 
 def mm.acl.sort(+m: Mm, +n: String, +k: Nat, +argv: List<&2, String>) -> Maybe<&2, String>:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, +acl}:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, +acl, el}:
       U.acl.sort.err(acl, n, k, argv)
     case MmOf{+x}:
       mm.acl.sort(x, n, k, argv)
@@ -539,6 +587,12 @@ def srv.mm(+s: Srv) -> Mm:
   match s:
     case Srv{pass, cfg, info, mm}:
       mm
+
+# the event loop's cycles, for INFO (I.text)
+def srv.el(+s: Srv) -> I.El:
+  match s:
+    case Srv{pass, cfg, info, +mm}:
+      mm.el(mm)
 
 def srv.rng(+s: Srv) -> U32:
   mm.rng(srv.mm(s))
@@ -830,7 +884,7 @@ def srv.live.held(s: Srv, l: I.Live) -> Srv:
 def srv.tick(s: Srv, +ms: Nat) -> Srv:
   match s:
     case Srv{pass, cfg, info, mm}:
-      Srv{pass, cfg, I.info.tick(info, ms), mm}
+      Srv{pass, cfg, I.info.tick(info, ms), mm.sample(mm, ms)}
 
 # a call of code k that failed after it was counted (a blocked client
 # that CLIENT UNBLOCK unblocked), and the clients that wait (INFO's
@@ -1000,7 +1054,7 @@ def srv.acl.sort(+s: Srv, +n: String, +k: Nat, +argv: List<&2, String>) -> Maybe
 # and MISCONF's read through srv.rdb copied INFO's node.
 def mm.tune(+m: Mm) -> U32:
   match m:
-    case Mm{rng, +max, +pol, smp, ten, lfl, lfd, +kick, pool, next, h0, k0, per, +acl}:
+    case Mm{rng, +max, +pol, smp, ten, lfl, lfd, +kick, pool, next, h0, k0, per, +acl, el}:
       U32.or(U32.or(Bool.pick(U32, Nat.is_lt(0n, max), 1, 0), Bool.pick(U32, Bool.or(Nat.is_eq(pol, 3n), Nat.is_eq(pol, 4n)), 2, 0)), U32.or(Bool.pick(U32, kick, 4, 0), Bool.pick(U32, U.acl.any(acl), 8, 0)))
     case MmOf{+n}:
       mm.tune(n)
@@ -3701,7 +3755,7 @@ def own_reply(+o: R.SessOp, +c: Conn, +s: Srv, +ds: R.Ds) -> Maybe<&2, R.Reply>:
     case R.SConfigResetStat{}:
       say(conn.mode(c), R.r_ok())
     case R.SInfo{args}:
-      say(conn.mode(c), R.RVerb{I.text(args, srv.cfg(s), srv.info(s), ds)})
+      say(conn.mode(c), R.RVerb{I.text(args, srv.cfg(s), srv.info(s), srv.el(s), ds)})
     case R.SCommand{args}:
       say(conn.mode(c), K.reply(args))
     case R.SRandomKey{}:
@@ -3935,7 +3989,7 @@ def srv.set(r: Result<&2, &2, R.Reply, List<&2, C.CItem>>, +s: Srv) -> Srv:
 def srv.reset(s: Srv) -> Srv:
   match s:
     case Srv{pass, cfg, info, mm}:
-      Srv{pass, cfg, I.info.reset(info), mm}
+      Srv{pass, cfg, I.info.reset(info), mm.reset(mm)}
 
 # RANDOMKEY: the next state of the random numbers (mm.rand)
 def srv.rand(s: Srv) -> Srv:

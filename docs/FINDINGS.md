@@ -10102,6 +10102,99 @@ before.
   steps, which reloaded more registers from the stack.
 - `ClfOf`, never built, makes `Clf` a node of its own, one word, and the bank is 50 again.
 
+## 3zzzzj. The event loop's cycles, as Redis 7.2.16 times them
+
+**What Redis does** (7.2.16's `server.c` and `latency.c`).
+- A cycle of its event loop starts in `afterSleep`, once the wait for events returns
+  (`el_start`, and the commands' count then, `el_cmd_cnt_start`), and ends in
+  `beforeSleep`, before the next wait. Its time goes to `duration_stats`'
+  `EL_DURATION_TYPE_EL` (`durationAddSample`: a count, a sum and the longest), and the
+  most commands one cycle ran to `el_cmd_cnt_max`.
+- `call()` adds each call's time to `EL_DURATION_TYPE_CMD`, but a call within another
+  (`execution_nesting`). `beforeSleep` adds the AOF's flush to `EL_DURATION_TYPE_AOF`, and
+  serverCron's time with its own work, the AOF's flush and the writes to clients aside, to
+  `EL_DURATION_TYPE_CRON`.
+- serverCron samples every 100 ms the cycles a second (`STATS_METRIC_EL_CYCLE`, over the
+  time) and the us a cycle took (`STATS_METRIC_EL_DURATION`, over the cycles since the
+  last sample). INFO shows the mean of each one's last 16 samples.
+- INFO stats has `eventloop_cycles`, `eventloop_duration_sum`,
+  `eventloop_duration_cmd_sum` and the two rates. INFO debug, only when it is named, has
+  `eventloop_duration_aof_sum`, `eventloop_duration_cron_sum`, `eventloop_duration_max`
+  and `eventloop_cmd_per_cycle_max`. CONFIG RESETSTAT zeroes them all
+  (`resetServerStats`).
+- The events Redis serves while a script runs (`processEventsWhileBlocked`) are no cycle
+  of their own: the script's cycle holds them, and their commands.
+
+**What BendKV does** (`src/info.bend`'s `El`, kept in `src/session.bend`'s `Mm`;
+`src/server.bend`'s Timing).
+- A group of the actor, the requests it takes from its channel at once, is a cycle.
+  `group_at` and `group_from` read the clock as it starts (the reading its first window
+  starts from) and the commands' count then, and `grp.cycle` reads both again once the
+  group is made. A group that evicts starts its cycle before its eviction, as Redis's
+  cycle holds its evictions.
+- The engine's run of a group's scripts, after the group (`db_group.drive`,
+  `aof_group.drive.from`), makes the group's cycle as much longer, and its calls are the
+  cycle's commands (`grp.more`), as Redis's cycle holds the script it runs. A busy group,
+  served while a script runs (`sc.busy.of`), is no cycle (`group_busy`).
+- A tick's window (the sweep of expired keys and the cron's work) is the cron's time, and
+  a cycle's time but its ticks' is its commands'. The cycle's ticks' time is counted in
+  `El` itself (`cc`), not read as the cycle starts.
+- The cron's sample (`mm.sample`, with Info's) samples the cycles a second and the us a
+  cycle took. After the start and after CONFIG RESETSTAT the first sample sets the base
+  alone, as Redis's `trackInstantaneousMetric` does while its base is 0.
+- A cycle's commands are the count's growth over it: none when CONFIG RESETSTAT made it
+  smaller, as Redis counts them only when the count grew.
+- Where BendKV differs:
+  - `eventloop_duration_cmd_sum` holds the actor's own work around the calls, where
+    Redis's holds its calls' alone;
+  - the sends of a group's replies and its writes to the append-only file, in the IO
+    around the group (`db_group`, `aof_group`), are not timed in its cycle, where Redis's
+    cycle holds both; `eventloop_duration_aof_sum` reads 0;
+  - the cron's time is its ticks'.
+
+**Three first versions**, each a lesson in how the compiler lays out and copies the
+server's state.
+- The first read the server's statistics as a cycle starts (`grp.info`) and held them
+  while the cycle ran. Each change of them in the group then copied their node, since a
+  node held twice cannot change in place. That cost every request about 150 instructions
+  under callgrind (GET 3,648 against 3,499 before): `term_drop` 53 more, and the copies of
+  `info.one` with their reference counts (`span_fade`, `ctr_take`, `ctr_own_slow`) the
+  rest.
+- The second read the count and the cron's time as numbers, but within the call that ran
+  the group: `grp.cycle(c, grp.ncmds(x), grp.crons(x), group_all(…, x, …))`. There the
+  compiler runs the group first, and keeps the group as it started for the reads after
+  it (a `term_keep` on each of its 13 words). So the group ran on a server held twice,
+  and each SET copied its path in the keyspace: SET 8,656 instructions a request, INCR
+  9,125, three to four times the misses, and a quarter of the prefetches lost.
+- The third read them in statements of their own, before that call (its compiled
+  `group_at` keeps no word of the group), and kept `El` in Info (in `Inst`). A request
+  cost 45 instructions more at pipelines of 16 (GET 3,546), and 1,705 more alone in its
+  group (GET 19,181 against 17,476 without pipelining). Info is a node of 65 words, its
+  records of one constructor laid out inside it, and a change of any of its fields reads
+  and writes all of them (`ctr_take`, then the rebuild): the cycle's change cost about
+  300 instructions. And the cron's time, read as the cycle starts through `inst.el`, kept
+  four of Info's words (`slot_keep`, which wraps each in a reference count), after which
+  the group's first changes of Info cost about 900 instructions more (`info.one` 368,
+  `term_drop` 261, `span_fade` 143, `slot_keep` 88).
+- Now `El` is kept in `Mm`, a node of 15 words that changes rarely otherwise, and the
+  cycle's ticks' time is counted in `El`, so that only the commands' count is read from
+  Info, as a number, as the cycle starts and as it ends.
+
+**Tests.** `info_test` checks on each server what Redis 7.2.16's `tests/unit/info.tcl`
+checks of the fields (its tests "stats: eventloop metrics", "instantaneous metrics" and
+"debug metrics"). It also checks the fields after CONFIG RESETSTAT, a pipeline of 100
+commands in one cycle, and a script of 200 calls whose cycle is as long as the script
+ran. It passes against 7.2.16 and against BendKV.
+
+**What it costs.** About 220 instructions a cycle under callgrind, so that a request pays
+them whole only alone in its group:
+- At pipelines of 16 from 20 clients (`tools/perf_guard.sh`), GET costs 3,501
+  instructions a request, SET 4,301 and INCR 4,609, against 3,499, 4,292 and 4,608 before.
+- Without pipelining, one client, a request to a group: GET 17,697, SET 18,837 and INCR
+  19,209, against 17,476, 18,607 and 18,960 (1.3% more). Of the 221 more for GET, 160
+  are `grp.cycle`'s (the clock's reading, the count's, `Mm`'s and `El`'s changes), 46 the
+  continuation that holds the cycle's start while the group runs, 11 `clock_gettime`.
+
 ## 4. Where a request's time goes, and hiding the memory waits
 
 With the eight patches, BendKV ran fewer instructions on GET and SET than Redis, missed
