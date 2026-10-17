@@ -402,8 +402,10 @@ def unix_seen(a, cmd, abstract=False):
         seen["systemd"] = grams
         out = s.text("out")
         seen["log"] = [l for l in ("Supervised by systemd. Please make sure you set appropriate values for TimeoutStartSec and TimeoutStopSec in your service unit.",
-                                   "The server is now ready to accept connections at s.sock",
+                                   "Ready to accept connections unix",
                                    "Removing the unix socket file.") if l in out]
+        if "compiled without libsystemd support" in out:
+            seen["no libsystemd"] = True
         return seen
     finally:
         s.stop()
@@ -435,11 +437,27 @@ def ipv6_seen(a, cmd, v6):
         s.stop()
 
 
+# What a Redis built with libsystemd tells systemd and logs of it
+# (redisSupervisedSystemd and main), the same in 7.2.16 as in 7.0.15. A
+# Redis built where pkg-config finds no libsystemd, as its Makefile builds
+# it then, cannot speak to systemd: its other answers are compared, these
+# are taken from its code.
+SYSTEMD_TOLD = ["STATUS=BendKV is loading...\n", "STATUS=Ready to accept connections\n", "READY=1\n", "STOPPING=1\n"]
+SYSTEMD_LOG = ["Supervised by systemd. Please make sure you set appropriate values for TimeoutStartSec and TimeoutStopSec in your service unit.",
+               "Ready to accept connections unix", "Removing the unix socket file."]
+
+
+def as_supervised(r):
+    if not r.pop("no libsystemd", False):
+        return r
+    return dict(r, systemd=SYSTEMD_TOLD, log=SYSTEMD_LOG)
+
+
 def against_redis(a):
     ok = True
-    r, b = unix_seen(a, a.redis), unix_seen(a, a.bin)
+    r, b = as_supervised(unix_seen(a, a.redis)), unix_seen(a, a.bin)
     ok &= check("a unix socket under systemd, as Redis", r == b and "mode" in r, "redis %r\n      bendkv %r" % (r, b))
-    r, b = unix_seen(a, a.redis, True), unix_seen(a, a.bin, True)
+    r, b = as_supervised(unix_seen(a, a.redis, True)), unix_seen(a, a.bin, True)
     ok &= check("systemd at an abstract name, as Redis", r == b and len(r.get("systemd", [])) >= 3,
                 "redis %r\n      bendkv %r" % (r, b))
     v6 = host_ipv6()
@@ -492,12 +510,14 @@ def own(a):
     ok &= check("two addresses, one count of clients", up and len(set(ids)) == 3, repr(ids))
     b.stop()
 
-    # the log's level: warnings only leaves out the notices
-    b = Server(a, a.bin, ["--port", "{port}", "--loglevel", "warning"], {}, None, {})
+    # the log's level: warnings only leaves out the notices (in 7.2, the
+    # start's lines too), and keeps a warning, maxmemory's below 1 MB
+    b = Server(a, a.bin, ["--port", "{port}", "--loglevel", "warning", "--maxmemory", "1000"], {}, None, {})
     up = b.up() is None
     out = b.text("out")
     ok &= check("loglevel warning leaves out the notices",
-                up and "Server initialized" in out and "Ready to accept" not in out, out)
+                up and "maxmemory value that is less than 1MB" in out and "Server initialized" not in out
+                and "Ready to accept" not in out, out)
     b.stop()
     return ok
 

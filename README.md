@@ -651,7 +651,8 @@ translation stays in the trusted base.
 - **Start:** as `redis-server` starts: a configuration file, `--name value` options and
   `-` for the standard input, read line by line as Redis reads them (includes, `dir`
   changing the directory at once, save points that add up, the same errors at the same
-  lines), and a log in Redis's form, on the standard output or in `logfile`. The port,
+  lines), and a log in Redis 7.2.16's form, its lines at Redis's levels, on the standard
+  output or in `logfile`. The port,
   `bind` (IPv4 and IPv6, each IPv6 socket IPv6 alone, as Redis binds them), `unixsocket`
   and `unixsocketperm`, `requirepass`, `protected-mode`, `supervised` (systemd is told the
   server loads, is ready and stops, as Redis's sd_notify tells it), the append-only file

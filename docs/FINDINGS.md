@@ -9839,6 +9839,27 @@ jemalloc) refused it, and BendKV, which has no defragmentation, refuses it as th
 
 **What it costs.** Nothing on a request's path: the checks run on CONFIG SET.
 
+## 3zzzzf. The start's and the shutdown's lines, as Redis 7.2.16 writes them
+
+**What changed** (#128: `src/server.bend`). Redis 7.2 logs the start's lines as notices,
+not warnings: the banner, the version, "Configuration loaded" and "Server initialized"
+(the warning that no file was named stays a warning). "User requested shutdown..." is a
+notice as well. "Ready to accept connections" names the kind of each listener, a line for
+each, `tcp` then `unix`; the unix socket's own line ("The server is now ready to accept
+connections at ...") is gone. A TCP port in use stops the start with "Failed listening
+on port N (tcp), aborting.". So `loglevel warning` now leaves the whole start out, but
+for its warnings.
+
+**Tests.** `start_test` against 7.2.16; its check of `loglevel warning` looks for
+maxmemory's warning, which stays. The reference built from its tarball has no systemd
+support where `pkg-config` finds no libsystemd (Redis's Makefile links it only then): it
+logs that it cannot speak to systemd and tells it nothing. For such a reference, the two
+cases under systemd compare the rest and take what systemd is told and the log's lines
+from Redis's code (`redisSupervisedSystemd` and `main`), which 7.2.16 has as 7.0.15 had
+it.
+
+**What it costs.** Nothing.
+
 ## 4. Where a request's time goes, and hiding the memory waits
 
 With the eight patches, BendKV ran fewer instructions on GET and SET than Redis, missed
