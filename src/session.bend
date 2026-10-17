@@ -1466,15 +1466,22 @@ type Blk is Data:
   BlkScript{rs: List<&2, R.Reply>}
 
 # The timeout, as getTimeoutFromObjectOrReply reads one in seconds: a
-# long double as string2ld reads it, times 1000 (rounded as x87 rounds),
-# up to the next integer (ceill), as a long long, which x87 makes its
-# least (negative) for any number past its range, an infinity too.
+# long double as string2ld reads it, times 1000 (rounded as x87 rounds);
+# past LLONG_MAX, an infinity too, out of range (Redis 7.2.16; 7.0.15
+# took it to a long long, which x87 makes its least, negative); else up
+# to the next integer (ceill), as a long long, which x87 makes its least
+# for -inf and NaN. Where BendKV differs: Redis 7.2.16 finds out of
+# range, too, a timeout that the time now (in ms) takes past LLONG_MAX,
+# one of more than 292 million years.
 type Tmo is Data:
   TmoMs{ms: List<&2, Nat>}
   TmoBad{r: R.Reply}
 
 def blk.k1000() -> F.Fl:
   F.FNum{False{}, F.big.of(1000n), F.fl.eb()}
+
+def blk.tmo.neg() -> Tmo:
+  TmoBad{R.RError{"ERR timeout is negative"}}
 
 # |x| = m * 2^(e - eb) cut to an integer, and whether bits were cut
 def blk.int.if(up: Bool, +m: List<&2, Nat>, +e: Nat) -> List<&2, Nat> & Bool:
@@ -1485,47 +1492,48 @@ def blk.int.if(up: Bool, +m: List<&2, Nat>, +e: Nat) -> List<&2, Nat> & Bool:
       +sh = Nat.sub(F.fl.eb(), e)
       (F.big.shr(m, sh), F.big.low_nz(m, sh))
 
-# a positive count of ms, a long long below 2^63
-def blk.ms.pos(+n: List<&2, Nat>) -> Maybe<&2, List<&2, Nat>>:
-  Bool.pick(Maybe<&2, List<&2, Nat>>, Nat.is_le(F.big.bitlen(n), 63n), Some{n}, None{})
+# a positive x up to the next integer, n: a long long below 2^63, else x
+# was past LLONG_MAX, 2^63 - 1
+def blk.ms.pos(+n: List<&2, Nat>) -> Tmo:
+  Bool.pick(Tmo, Nat.is_le(F.big.bitlen(n), 63n), TmoMs{n}, TmoBad{R.RError{"ERR timeout is out of range"}})
 
 # ceill of a negative number is its integer part (-0 is 0, no error)
-def blk.ms.neg(p: List<&2, Nat> & Bool) -> Maybe<&2, List<&2, Nat>>:
+def blk.ms.neg(p: List<&2, Nat> & Bool) -> Tmo:
   (+n, cut) = p
-  Bool.pick(Maybe<&2, List<&2, Nat>>, F.big.is_zero(n), Some{Nil{}}, None{})
+  Bool.pick(Tmo, F.big.is_zero(n), TmoMs{Nil{}}, blk.tmo.neg())
 
-def blk.ms.up(p: List<&2, Nat> & Bool) -> Maybe<&2, List<&2, Nat>>:
+def blk.ms.up(p: List<&2, Nat> & Bool) -> Tmo:
   (+n, cut) = p
   blk.ms.pos(Bool.pick(List<&2, Nat>, cut, F.big.add(n, F.big.of(1n)), n))
 
-def blk.ms.of(neg: Bool, p: List<&2, Nat> & Bool) -> Maybe<&2, List<&2, Nat>>:
+def blk.ms.of(neg: Bool, p: List<&2, Nat> & Bool) -> Tmo:
   match neg:
     case True{}:
       blk.ms.neg(p)
     case False{}:
       blk.ms.up(p)
 
-# (long long) ceill(x): the ms, or None for a negative long long
-def blk.ll(x: F.Fl) -> Maybe<&2, List<&2, Nat>>:
+def blk.inf(neg: Bool) -> Tmo:
+  match neg:
+    case True{}:
+      blk.tmo.neg()
+    case False{}:
+      TmoBad{R.RError{"ERR timeout is out of range"}}
+
+# the ms of x, as (long long) ceill(x) after the check of its range
+def blk.ll(x: F.Fl) -> Tmo:
   match x:
     case F.FNum{+neg, +m, +e}:
       blk.ms.of(neg, blk.int.if(Nat.is_le(F.fl.eb(), e), m, e))
     case F.FInf{neg}:
-      None{}
+      blk.inf(neg)
     case F.FNaN{}:
-      None{}
-
-def blk.tmo.ms(m: Maybe<&2, List<&2, Nat>>) -> Tmo:
-  match m:
-    case Some{ms}:
-      TmoMs{ms}
-    case None{}:
-      TmoBad{R.RError{"ERR timeout is negative"}}
+      blk.tmo.neg()
 
 def blk.tmo.of(m: Maybe<&2, F.Fl>) -> Tmo:
   match m:
     case Some{v}:
-      blk.tmo.ms(blk.ll(F.fl.mul(F.fmt.ld(), v, blk.k1000())))
+      blk.ll(F.fl.mul(F.fmt.ld(), v, blk.k1000()))
     case None{}:
       TmoBad{R.RError{"ERR timeout is not a float or out of range"}}
 

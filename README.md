@@ -19,8 +19,8 @@ throughput of Redis 7.0.15 on the same machine, with half its memory for small v
 > and the latency monitor, ACL users, the server's administrative commands, an
 > append-only file and its rewrite, maxmemory and its eviction, Lua scripts and
 > functions, RESP3). The goal now is a drop-in replacement for a single Redis node,
-> measured by Redis's own test suite: of the 1,677 tests Redis 7.0.15 passes against a
-> server it did not start, BendKV passes 1,556, and 1,516 of the 1,565 in what it implements
+> measured by Redis's own test suite: of the 1,812 tests Redis 7.2.16 passes against a
+> server it did not start, BendKV passes 1,672, and 1,631 of the 1,688 in what it implements
 > ([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)). Do not use it for data you cannot
 > lose.
 
@@ -246,18 +246,20 @@ translation stays in the trusted base.
   kept in the header and made stale by a change). The count is Ertl's estimator as Redis
   takes it, on doubles in software. A string that is not a HyperLogLog answers Redis's
   WRONGTYPE, a corrupt sparse one INVALIDOBJ, as Redis 7.2.16 judges it, with the fix of
-  CVE-2025-32023. PFADD, PFCOUNT of one key and PFDEBUG
-  are logged as the changes they make (a SET, a SET with KEEPTTL, the SETRANGE of the
-  count), PFMERGE as the SET of its destination; a file of Redis's, which holds the PF
-  commands, is read by running them. PFADD takes four to six times Redis's instructions,
-  a PFCOUNT that counts 13 to 18 times (2.6 times on two dense HyperLogLogs), PFMERGE 1.2
-  to 2.4 times (section 59 of [docs/PERFORMANCE.md](docs/PERFORMANCE.md)). Where BendKV
-  differs: `hll-sparse-max-bytes` is not read (3,000); PFSELFTEST checks fewer cases; the
-  byte past a sparse string's end, which an XZERO cut at its end reads, is 0 as each
-  command starts, where Redis keeps what a set wrote there (docs/UPSTREAM.md, bug 6); a PFADD that a corrupt value
-  stops keeps its change with an event and a log, where Redis keeps it silently; and
-  OBJECT ENCODING answers `embstr` for a HyperLogLog of up to 44 bytes, where Redis's is
-  `raw`.
+  CVE-2025-32023, whose walks end at the first opcode past the last register, so that
+  one of any length is answered at once (FINDINGS.md, section 3zzzzk). PFADD, PFCOUNT of
+  one key and PFDEBUG are logged as the changes they make (a SET, a SET with KEEPTTL,
+  the SETRANGE of the count), PFMERGE as the SET of its destination; a file of Redis's,
+  which holds the PF commands, is read by running them. PFADD takes four to six times
+  Redis's instructions, a PFCOUNT that counts 13 to 18 times (2.6 times on two dense
+  HyperLogLogs), PFMERGE 1.2 to 2.4 times (section 59 of
+  [docs/PERFORMANCE.md](docs/PERFORMANCE.md)). Where BendKV differs:
+  `hll-sparse-max-bytes` is not read (3,000); PFSELFTEST checks fewer cases; the byte
+  past a sparse string's end, which an XZERO cut at its end reads, is 0 as each command
+  starts, where Redis keeps what a set wrote there (docs/UPSTREAM.md, bug 6); a PFADD
+  that a corrupt value stops keeps its change with an event and a log, where Redis keeps
+  it silently; and OBJECT ENCODING answers `embstr` for a HyperLogLog of up to 44 bytes,
+  where Redis's is `raw`.
 - **GEO:** GEOADD, GEOPOS, GEOHASH, GEODIST, GEORADIUS and GEORADIUSBYMEMBER with their
   `_RO` forms, GEOSEARCH and GEOSEARCHSTORE, as Redis 7.2.16's `geo.c` runs them: a
   position is a member of a sorted set whose score is its 52-bit geohash, GEOADD the ZADD
@@ -342,7 +344,9 @@ translation stays in the trusted base.
   a key a client waits on, or a command of the connection or of the server). A client that
   waits costs nothing to the commands on other keys (PERFORMANCE.md, section 61). XREAD
   is not there, and WAIT's wait ends only by its time or CLIENT UNBLOCK (The server,
-  below). In a transaction a blocking command does not wait, as in Redis (below).
+  below); a timeout that the time now takes past 2^63 - 1 ms, one of more than 292
+  million years, waits, where Redis 7.2.16 refuses it as out of range. In a transaction
+  a blocking command does not wait, as in Redis (below).
 - **Transactions:** MULTI, EXEC, DISCARD, WATCH and UNWATCH, as Redis 7.2.16 runs them.
   After MULTI a command is queued (QUEUED), but for EXEC, DISCARD, MULTI (an error:
   transactions do not nest), WATCH (an error inside MULTI), QUIT and RESET, which run; a
@@ -499,9 +503,12 @@ translation stays in the trusted base.
   monitor is never held back. While the pause holds, keys are not swept as they expire,
   nor evicted, as Redis keeps the data set still. A script is held back by its flags, as
   Redis reads them: one that may write (EVAL without a shebang, EVALSHA, a shebang without
-  no-writes), not one that declares no-writes, and an EXEC by the scripts it queued. Where BendKV differs: CLIENT UNBLOCK of a
-  client held back answers 0, as Redis 8.10.2 and Valkey 9.1.2 do, where 7.0.15 and
-  7.2.16 crash on it (docs/UPSTREAM.md, bug 7).
+  no-writes), not one that declares no-writes, and an EXEC by the scripts it queued. Where
+  BendKV differs: CLIENT UNBLOCK of a client held back answers 0, as Redis 8.10.2 and
+  Valkey 9.1.2 do, where 7.0.15 and 7.2.16 crash on it (docs/UPSTREAM.md, bug 7); and
+  while a pause holds back writes, RANDOMKEY of a database whose keys all have a time to
+  live, all past it, answers nil, where Redis 7.2.16, which may not delete them then,
+  answers one of them.
 - **MONITOR**, as Redis 7.2.16 runs it: each call that runs after it, of any client,
   sends every monitor a line, `+<s>.<us> [<db> <ip:port>]` and the call's arguments as
   the client sent them, quoted as Redis quotes them. As in Redis, a command refused

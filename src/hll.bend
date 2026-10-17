@@ -889,13 +889,25 @@ def hist.sp(k: Nat, at: Nat, g: Nat, +d: U32, o: Op, +v: String, +p: Nat, +idx: 
                   +p2 = Nat.add(p, op.step(c))
                   hist.sp(q, 0n, hist.g(U32.from_nat(val)), hist.d(U32.from_nat(val), U32.from_nat(len)), op.at(v, p2, 0), v, p2, Nat.add(idx, len), h0, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18, h19, h20, h21, h22, h23, h24, h25)
 
+# the opcodes a walk of v reads at most: each holds a register or more,
+# so that of opcodes that hold 16384 there are 16384 at most, and the
+# 16385th, if any, passes the last register, where the fix of
+# CVE-2025-32023 ends Redis's walks (7.2.16's, and 7.0.15's as Ubuntu
+# ships it); a walk that read on would find the same, as the registers
+# only add up, but in time that grows with the square of v's length, as
+# String.code_at finds a byte of a String of several chunks by walking
+# its chunks from the first (1 MB of zeros took 1.5 s, and the 32 MB of
+# a test of Redis 7.2.16 would take half an hour a walk)
+def sp.most(+v: String) -> Nat:
+  Nat.min(Nat.add(String.length(v), 1n), 16385n)
+
 # whether the opcodes hold 16384 registers (hllMerge, hllSparseToDense),
 # i the registers before p: an opcode that would pass the last register
 # ends the walk, and makes them invalid, as the fix of CVE-2025-32023 has
-# it (Redis 7.0.15 as Ubuntu ships it, which the tests compare with;
-# before it, the zeros ran on, and a VAL past the last register ended
-# the walk where the opcodes were valid if it ended at 16384); so they
-# are valid when their runs add up to 16384
+# it (Redis 7.2.16, and 7.0.15 as Ubuntu ships it; before it, the zeros
+# ran on, and a VAL past the last register ended the walk where the
+# opcodes were valid if it ended at 16384); so they are valid when their
+# runs add up to 16384, which k = sp.most(v) steps find
 def sp.valid(k: Nat, o: Op, +v: String, +p: Nat, +i: Nat, +pe: U32) -> Bool:
   match k:
     case 0n:
@@ -943,11 +955,11 @@ def sp.pairs(k: Nat, o: Op, +v: String, +p: Nat, +i: Nat, +pe: U32) -> List<&2, 
 
 # the registers of a valid sparse v, as words
 def sp.words(+v: String, a: List<&2, U32>, +pe: U32) -> List<&2, U32>:
-  ws.add(a, sp.pairs(Nat.add(String.length(v), 1n), op.at(v, 16n, pe), v, 16n, 0n, pe))
+  ws.add(a, sp.pairs(sp.most(v), op.at(v, 16n, pe), v, 16n, 0n, pe))
 
 # whether the opcodes of a sparse v hold 16384 registers
 def sp.ok(+v: String, +pe: U32) -> Bool:
-  sp.valid(Nat.add(String.length(v), 1n), op.at(v, 16n, pe), v, 16n, 0n, pe)
+  sp.valid(sp.most(v), op.at(v, 16n, pe), v, 16n, 0n, pe)
 
 def sp.dense.of(ok: Bool, +v: String, +pe: U32) -> Maybe<&2, String>:
   match ok:
@@ -1512,7 +1524,7 @@ def count.new(sparse: Bool, +v: String) -> Count:
   match sparse:
     case True{}:
       +f = flat(v)
-      count.sp(hist.sp(Nat.add(Nat.mul(String.length(f), 2n), 2n), 1n, 0n, 0, op.at(f, 16n, 0), f, 16n, 0n, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0))
+      count.sp(hist.sp(Nat.mul(sp.most(f), 2n), 1n, 0n, 0, op.at(f, 16n, 0), f, 16n, 0n, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0))
     case False{}:
       CntNew{est(d.hist(v))}
 
@@ -1673,7 +1685,7 @@ def hist.ps(k: Nat, at: Nat, g: Nat, +d: U32, +ps: List<&2, RV>, +n: Nat, +h0: U
 def acc.sp.s(ok: Bool, +v: String, +ps: List<&2, RV>) -> Acc:
   match ok:
     case True{}:
-      AccS{ps.max(ps, sp.pairs(Nat.add(String.length(v), 1n), op.at(v, 16n, 0), v, 16n, 0n, 0))}
+      AccS{ps.max(ps, sp.pairs(sp.most(v), op.at(v, 16n, 0), v, 16n, 0n, 0))}
     case False{}:
       AccBad{}
 

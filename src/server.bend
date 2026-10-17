@@ -157,19 +157,19 @@ def ans.len(+a: Ans) -> Nat:
 # weights before it runs, from the databases as the batch found them
 # (fast.run.w, run_put.w), and no other batch reads anything more before
 # it runs. The general way counts each call as it runs (gen.count.d). A
-# client served later by a push (Blocked clients) counts what Redis counts
-# for it: the elements BLMPOP and BZMPOP took, and BZPOPMIN's and
-# BZPOPMAX's one; BLPOP, BRPOP, BLMOVE and BRPOPLPUSH, served so, count
-# none in Redis 7.0.15. Where BendKV counts otherwise (README, "Where
-# BendKV differs"): SET with GET counts its reply (none for a key not
-# there with NX or without it, one for a key there with NX); ZADD and
-# GEOADD without NX or CH count each pair, those whose score was there
-# unchanged too; BITFIELD counts each SET and INCRBY that OVERFLOW FAIL
-# did not refuse, those that leave the bits as they were too; PFADD counts
-# one where Redis counts each register that changes, and one for a new
-# key; PFCOUNT and PFDEBUG count none; a call of the fast way reads the
-# databases as its batch found them, not as the calls before it in the
-# batch left them.
+# client served later by a push (Blocked clients) counts what its call
+# counts, as Redis 7.2.16 runs the command again for it: the elements
+# BLMPOP and BZMPOP took, one for the others (Redis 7.0.15 counted none
+# for BLPOP, BRPOP, BLMOVE and BRPOPLPUSH served so). Where BendKV counts
+# otherwise (README, "Where BendKV differs"): SET with GET counts its
+# reply (none for a key not there with NX or without it, one for a key
+# there with NX); ZADD and GEOADD without NX or CH count each pair, those
+# whose score was there unchanged too; BITFIELD counts each SET and INCRBY
+# that OVERFLOW FAIL did not refuse, those that leave the bits as they
+# were too; PFADD counts one where Redis counts each register that
+# changes, and one for a new key; PFCOUNT and PFDEBUG count none; a call
+# of the fast way reads the databases as its batch found them, not as the
+# calls before it in the batch left them.
 
 # a reply that is an error; the integer of one that is a positive one (0
 # for any other)
@@ -368,26 +368,11 @@ def dirty.first(+k: Nat, +rs: List<&2, R.Reply>, +w: Nat) -> Nat:
       0n
 
 # a client served later by a push (bg.popped), its command's code k and
-# the reply it was sent: the elements of BLMPOP and BZMPOP, BZPOPMIN's
-# and BZPOPMAX's one (a key, a member and its score), none for the rest
-def d.three(+r: R.Reply) -> Nat:
-  match r:
-    case R.RArray{Con{+a, Con{+b, Con{+c, Nil{}}}}}:
-      1n
-    case _:
-      0n
-
-def dirty.served.of(+rule: Nat, +r: R.Reply) -> Nat:
-  match rule:
-    case 6n:
-      d.mpop(r)
-    case 8n:
-      d.three(r)
-    case _:
-      0n
-
+# the reply it was sent: what the call counts, by its command's rule
+# (none of which reads a weight), as Redis 7.2.16 runs the command again
+# for the client it serves
 def dirty.served(+k: Nat, +r: R.Reply) -> Nat:
-  dirty.served.of(R.stat.dirty(R.code.key(k)), r)
+  dirty.of(R.stat.dirty(R.code.key(k)), r, 0n)
 
 # The weights (rules 10 to 15): what a call changes, from its arguments
 # and the databases before it (ds, its client's database in focus)

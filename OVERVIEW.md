@@ -932,55 +932,29 @@ The translation the kernel reads can be dumped with
 ### What is checked by tests
 
 - **Redis's own test suite** (`tools/redis_suite.py`, `make suite`; in detail,
-  [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)). The `tests/` suite of Redis 7.0.15
+  [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)). The `tests/` suite of Redis 7.2.16
   itself in external mode (`runtest --host --port` with
   `--ignore-encoding --ignore-digest --durable`; without `--singledb`, since BendKV has
   16 databases): each unit of `tests/unit` and `tests/unit/type` runs against a server
   already started, and the tests that need a server of their own (`external:skip`) are
-  skipped. The reference is the same run on redis-server 7.0.15 with default settings,
-  each unit on a freshly started server instance: in this mode 1,757 tests run, and
-  Redis passes 1,677 (almost all the others need DEBUG, off by default in 7.0). BendKV
-  passes 1,556 of them (92.8%), and in the units of what it has (the protocol, the
+  skipped. The reference is the same run on redis-server 7.2.16 with default settings,
+  each unit on a freshly started server instance: in this mode 1,905 tests run, and
+  Redis passes 1,812 (almost all the others need DEBUG, off by default in 7). BendKV
+  passes 1,672 of them (92.3%), and in the units of what it has (the protocol, the
   connection and clients and their pause, the keyspace and databases, strings with
   ranges, bits and fields, counters, hashes, lists, sets, sorted sets, SORT, HyperLogLogs,
   GEO, DUMP and RESTORE, times to live, lazy freeing, transactions, Pub/Sub and keyspace
   notifications, introspection, the slow log and the latency monitor, client-side
-  caching, ACL users, Lua scripts and functions), 1,516 of 1,565 (96.9%): `unit/tracking`
-  all 10, `unit/latency-monitor` all 13, `unit/slowlog` 8 of 9 (the other uses MIGRATE),
-  `unit/dump` all 11,
-  `unit/geo` all 59, `unit/introspection-2` 40 of 43 (the others need COMMAND's entries
-  of commands BendKV does not have: XGROUP's, CLUSTER's subcommands and MIGRATE's),
-  `unit/introspection` 27 of 28 (the other needs MIGRATE),
-  `unit/other` all 19, `unit/multi` 32 of 53 (the others read the replication stream or
-  need replicas, need XGROUP, or run after a test that left the client in MULTI),
-  `unit/pubsub` 29 of 30 (the other needs streams), `unit/expire` 57 of 59 (the others
-  need replication), `unit/type/string` 74 of 77 (two others need replication, the third
-  runs only with jemalloc), `unit/keyspace` 50 of 52 (the others need streams' groups, and MOVE
-  counts keys left by earlier tests), `unit/type/hash` 70 of 72 (the others need a hash
-  Redis keeps in a listpack past the parameters' defaults), `unit/type/incr` all 24,
-  `unit/type/list-3` all 11,
-  `unit/type/list-2` both, `unit/type/list` 216 of 218 (the others need replication), `unit/sort` all 52,
-  `unit/hyperloglog` all 20, `unit/pause` all 14,
-  `unit/type/set` all 94, `unit/type/zset` 287 of 289 (the other two need replication),
-  `unit/bitops` 44 of 45 (the remaining one counts changes since the last save, which
-  BendKV counts otherwise for a SETBIT or BITFIELD that leaves its value), `unit/bitfield` all 16, `unit/protocol` all 17; SCAN and
-  RANDOMKEY pass all their tests on keys, HSCAN, SSCAN and ZSCAN all theirs; of the 17
-  tests with several databases that Redis passes, 9 (SET and GET in different databases,
-  DEL in database 1, four tests of MOVE and three of COPY). `unit/functions` passes all
-  90 (its other four use DEBUG RELOAD), and `unit/scripting` 104 of the 110 Redis passes
-  (the others need replication, streams' groups and CLUSTER).
-  Streams' values, reads and writes pass 39 of `unit/type/stream`'s 63 (the others wait
-  in XREAD, set `stream-node-max-entries`, or run after the unit stops at `CONFIG SET
-  appendonly yes`), and 1 of `unit/type/stream-cgroups`'s 47.
-  The others hit commands that do not exist (64 tests: XGROUP, SYNC…), do not run
-  because the unit stopped earlier (19), or fail on XREAD's wait and streams' groups, on
-  a client left in MULTI by a test that failed inside a transaction on a command that
-  does not exist, on COMMAND GETKEYS for commands that do not exist, on keys and clients
-  left by tests stopped earlier, on the number of changes since the last save, which
-  BendKV counts otherwise for a SETBIT or BITFIELD that leaves its value, on the size of
-  a client's query buffer, which it does not have (two tests of `unit/querybuf`), on the
-  order of a hash Redis keeps in a listpack past the parameters' defaults, and on CLUSTER
-  and replicas in a script (38). Times to live and
+  caching, ACL users, Lua scripts and functions), 1,631 of 1,688 (96.6%); streams' values,
+  reads and writes pass 41 of the 122 tests of `unit/type/stream` and
+  `unit/type/stream-cgroups` that Redis passes. The others stop on commands that do not
+  exist (74 tests: XGROUP, SYNC…), do not run because the unit stopped earlier (24), or
+  fail on XREAD's wait and streams' groups, on clients left in MULTI or subscribed by
+  tests that failed on a command that does not exist, on `hll-sparse-max-bytes`, which
+  BendKV does not read, on RANDOMKEY during a pause, and on what the list in
+  docs/COMPATIBILITY.md gives (42). Against Redis 7.0.15, whose suite runs 1,757 tests
+  in this mode, BendKV passed 1,556 of the 1,677 that Redis passed (92.8%), and 1,516
+  of 1,565 in the units of what it has. Times to live and
   the sweep of expired keys added 78 passed tests: before them there were 135, and 30
   tests failed on SET's options; ranges and bits added 49 more, TOUCH, TIME and OBJECT
   4, MSETNX, RENAME and RENAMENX 13, COPY 7, BITOP and LCS 19, BITFIELD 16, hashes 64,
@@ -998,7 +972,7 @@ The translation the kernel reads can be dumped with
   script, less one of `unit/functions`), and functions 195 (`unit/functions`' 89,
   `unit/scripting`'s 104, which runs past its half of functions now, and one each of
   `unit/pause` and `unit/introspection`).
-  The suite found two bugs in what there is. KEYS matched with a naive glob, and the
+  The suite found three bugs in what there is. KEYS matched with a naive glob, and the
   pattern `a*a*…a*b` against a key of forty `a` characters hung the server for minutes;
   there were no classes `[...]` and no escaping either. Fixed: KEYS matches as Redis's
   `stringmatchlen` does, together with the limit of 1,000 nested stars that Redis
@@ -1007,7 +981,10 @@ The translation the kernel reads can be dumped with
   `unit/geo`'s fuzzing tests): its arguments were read by index in a packed String that
   a read by index walks from its start. Fixed: a long request's arguments are read
   through a window of one chunk (the GEOADD takes 0.19 s; section 3zzn of
-  docs/FINDINGS.md).
+  docs/FINDINGS.md). And the walks of a sparse HyperLogLog's opcodes read to the value's
+  end, by index, so that 7.2.16's test of 32 MB of them, past the last register, stopped
+  its unit: they now end at the first opcode past it, as Redis's do (8 ms; section
+  3zzzzk of docs/FINDINGS.md).
 - **The test suites of client libraries** (`tools/client_suite.py`, `make clients`; and in
   CI's heavy tier, before a pull request merges): redis-py 8.1.0's tests of its sync and asyncio clients, in
   RESP2 and in RESP3, and go-redis v9.23.0's specs, in RESP3, each against Redis 7.2.16
@@ -1600,7 +1577,7 @@ make test BEND="$B"    # start-up (about a hundred command lines and files on bo
 make pgo BEND="$B"     # build/bendkv-pgo: a build with a profile (needs llvm-profdata)
 make bench BEND="$B"   # redis-benchmark: BendKV against Redis
 make suite BEND="$B" REDIS_SRC=../redis   # Redis's test suite on Redis and on BendKV
-                       # (a Redis 7.0.15 source tree with tests/, tclsh)
+                       # (a Redis 7.2.16 source tree with tests/, tclsh)
 make clients BEND="$B" # redis-py's and go-redis's test suites on Redis and on BendKV
                        # (python3, go; PyPI and the Go module proxy)
 ```
@@ -1625,8 +1602,8 @@ make clients BEND="$B" # redis-py's and go-redis's test suites on Redis and on B
    FLUSHDB, FLUSHALL, keyspace lines per database — with laws and recovery of all the
    databases from the append-only file), the ranges and bits of strings (GETRANGE,
    SETRANGE, GETBIT, SETBIT, BITCOUNT, BITPOS — with a law of SETRANGE and recovery from
-   the append-only file). Redis's suite in external mode: BendKV passes 1,556 of the
-   1,677 tests Redis itself passes, and 1,516 of 1,565 in the units of what it has
+   the append-only file). Redis's suite in external mode: BendKV passes 1,672 of the
+   1,812 tests Redis 7.2.16 itself passes, and 1,631 of 1,688 in the units of what it has
    ([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)). Start-up as for redis-server (the
    command line and the configuration file). The database as a record with a count of
    keys (DBSIZE in O(1)).

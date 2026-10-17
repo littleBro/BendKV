@@ -7,7 +7,7 @@ against the server it is pointed at. Redis has options for that mode meant for s
 that are compatible without being Redis: `--singledb` uses database 0 alone,
 `--ignore-encoding` skips the checks of Redis's internal encodings (listpack, intset,
 quicklist), `--ignore-digest` the checks with `DEBUG DIGEST`
-([tests/README.md](https://github.com/redis/redis/blob/7.0.15/tests/README.md)). BendKV
+([tests/README.md](https://github.com/redis/redis/blob/7.2.16/tests/README.md)). BendKV
 has Redis's 16 databases, so it runs without `--singledb`: the suite keeps its keys in
 database 9 and uses the others for the tests of SELECT, MOVE and SWAPDB. It is the
 measure of BendKV as a drop-in replacement for one Redis node.
@@ -15,7 +15,7 @@ measure of BendKV as a drop-in replacement for one Redis node.
 ## How it runs
 
 `tools/redis_suite.py` runs each unit of `tests/unit` and `tests/unit/type` of a Redis
-7.0.15 source tree in that mode, with `--ignore-encoding --ignore-digest --durable`
+7.2.16 source tree in that mode, with `--ignore-encoding --ignore-digest --durable`
 (`--durable`: a test that ends in an error counts as failed and the unit goes
 on; an error between tests still ends the unit). Three instances of the server under
 test take one unit at a time each, each in a directory of its own, and each unit runs on
@@ -27,10 +27,10 @@ the same instance found INCR's shared integers counted once). Before each group 
 tests the suite empties the server (FLUSHALL, FUNCTION FLUSH) and sets the parameters
 the group asks for with CONFIG SET.
 
-The same run against `redis-server` 7.0.15 in its default configuration is the
-reference: a test counts only if Redis passes it. 80 of the 1,757 tests that run in this
-mode fail on Redis itself, nearly all of them because they use `DEBUG`, which Redis 7.0
-refuses unless `enable-debug-command` is set at its start.
+The same run against `redis-server` 7.2.16 in its default configuration is the
+reference: a test counts only if Redis passes it. 93 of the 1,905 tests that run in this
+mode fail on Redis itself, 82 of them because they use `DEBUG`, which Redis 7 refuses
+unless `enable-debug-command` is set at its start.
 
 ```bash
 make suite REDIS_SRC=../redis      # both runs and the table, in build/suite/
@@ -38,9 +38,48 @@ make suite REDIS_SRC=../redis      # both runs and the table, in build/suite/
 
 ## The result
 
-Redis 7.0.15, October 2026. Of the 1,677 tests Redis passes in this mode, BendKV passes
+Redis 7.2.16, October 2026. Of the 1,812 tests Redis passes in this mode, BendKV passes
+**1,672 (92.3%)**; of the 1,688 in the units of what BendKV has, 1,631 (96.6%), and 41
+of the 122 of streams'.
+
+7.2.16's suite runs 148 tests more in this mode than 7.0.15's, and Redis passes 135 more;
+BendKV passes 116 more, 1,672 where it passed 1,556 of the 1,677 that 7.0.15 passed
+(92.8%). The suite found three things to fix (section 3zzzzk of
+[FINDINGS.md](FINDINGS.md)), and BendKV passed 1,657 before them:
+- unit/hyperloglog, 27 tests where 7.0.15's had 20, sets a sparse HyperLogLog of 32 MB of
+  opcodes whose runs pass the last register, the test of the fix of CVE-2025-32023.
+  BendKV answered INVALIDOBJ as Redis does, but its walks of the opcodes read on to the
+  end, in a time that grew with the square of the length, and the unit stopped at the
+  suite's limit of 60 s, 13 tests passed. They now end at the first opcode past the last
+  register, as Redis's do, and BendKV passes 25: the other two set `hll-sparse-max-bytes`,
+  which BendKV does not read (README, HyperLogLogs).
+- unit/type/list's tests of a timeout whose ms pass LLONG_MAX, which 7.2.16 finds out of
+  range where 7.0.15 found it negative, and of the changes a served BLPOP or BLMOVE
+  counts, which 7.2.16 counts as their calls, as it runs the command again for the client
+  it serves (234 of its 237).
+
+Of the others that 7.2.16 passes and BendKV does not:
+- unit/pubsub, 46 tests where 7.0.15's had 30, passes 42: its test of streams' events
+  stops at XGROUP before it closes its client, subscribed to every channel, so that the
+  three tests of a client that publishes to itself count one receiver more (run without
+  that test, they pass).
+- unit/pause, 17 where 7.0.15's had 14, passes 16: while a pause holds back writes,
+  RANDOMKEY of a database whose keys have all passed their times answers one of them in
+  7.2.16, which may not delete them then; BendKV answers nil (README, CLIENT PAUSE).
+- unit/other's test of every HELP subcommand asks MODULE's, and unit/dump's and
+  unit/type/set's new tests read the replication stream.
+
+One test passed in one run of the suite and failed in another: unit/pubsub's PUNSUBSCRIBE
+without arguments, which a client sends without waiting for its reply before another
+client publishes. BendKV may run the PUBLISH first, as each connection reaches the actor
+on its own; it failed in the first run, three units at once, and passed in the run above
+and alone.
+
+### Against Redis 7.0.15
+
+Redis 7.0.15, October 2026. Of the 1,677 tests Redis passes in this mode, BendKV passed
 **1,556 (92.8%)**; of the 1,565 in the units of what BendKV has, 1,516 (96.9%), and 40
-of the 110 of streams'.
+of the 110 of streams'. What each feature brought then, as measured against 7.0.15:
 Functions (section 3zzzp of [FINDINGS.md](FINDINGS.md)) brought 195:
 - unit/functions passes all the 90 tests Redis passes. Its other four use DEBUG RELOAD,
   which Redis refuses unless `enable-debug-command` is set and which BendKV does not have.
@@ -265,10 +304,12 @@ would remove them with FLUSHDB, stops at XGROUP (at XADD before streams). COPY b
 more (into another database with REPLACE and without, and a copy independent of its
 source): 9 of the 17. The other 7 need MULTI and WATCH, Lua or lists (then).
 
+### By area and by unit, against Redis 7.2.16
+
 | area | units | Redis passes | BendKV passes |
 |---|---|---:|---:|
-| what BendKV has: the protocol, connections and clients and their pause, the keyspace and its databases, strings and their ranges, bits and fields, counters and floats, hashes, lists, sets, sorted sets and the commands that wait on them, SORT, HyperLogLogs, GEO, DUMP and RESTORE, times to live, lazy freeing, transactions, pub/sub and keyspace notifications, introspection, the slow log and the latency monitor, client-side caching, ACL users, Lua scripts and functions | protocol, quit, keyspace, type/string, type/incr, type/hash, type/list, list-2, list-3, type/set, type/zset, sort, hyperloglog, geo, dump, scan, bitops, bitfield, expire, lazyfree, violations, multi, pubsub, pause, introspection, introspection-2, other, info-command, latency-monitor, slowlog, tracking, scripting, functions | 1565 | **1516** |
-| streams: their values, reads and writes; their groups and XREAD's wait not yet | type/stream, type/stream-cgroups | 110 | **40** |
+| what BendKV has: the protocol, connections and clients and their pause, the keyspace and its databases, strings and their ranges, bits and fields, counters and floats, hashes, lists, sets, sorted sets and the commands that wait on them, SORT, HyperLogLogs, GEO, DUMP and RESTORE, times to live, lazy freeing, transactions, pub/sub and keyspace notifications, introspection, the slow log and the latency monitor, client-side caching, ACL users, Lua scripts and functions | protocol, quit, keyspace, type/string, type/incr, type/hash, type/list, list-2, list-3, type/set, type/zset, sort, hyperloglog, geo, dump, scan, bitops, bitfield, expire, lazyfree, violations, multi, pubsub, pause, introspection, introspection-2, other, info-command, latency-monitor, slowlog, tracking, scripting, functions | 1688 | **1631** |
+| streams: their values, reads and writes; their groups and XREAD's wait not yet | type/stream, type/stream-cgroups | 122 | **41** |
 | the query buffer, not yet | querybuf | 2 | 0 |
 
 unit/type/stream-cgroups's one pass passes without the feature it tests: it expects an
@@ -277,88 +318,98 @@ two of unit/lazyfree pass on BendKV's account of its heap (its other two free st
 and unit/violations's one is a SORT.
 
 By unit (units where every test needs a server of its own are left out: acl, acl-v2,
-aofrw, auth, client-eviction, cluster, cluster-scripting, info, limits, maxmemory,
-memefficiency, networking, obuf-limits, oom-score-adj, pendingquerybuf, printver,
-pubsubshard, shutdown, tls, type/list-common, wait):
+aofrw, auth, client-eviction, info, limits, maxmemory, memefficiency, networking,
+obuf-limits, oom-score-adj, printver, pubsubshard, shutdown, tls, type/list-common,
+wait):
 
 | unit | tests | Redis passes | BendKV passes |
 |---|---:|---:|---:|
-| unit/bitfield | 16 | 16 | 16 |
+| unit/bitfield | 18 | 18 | 18 |
 | unit/bitops | 45 | 45 | 44 |
-| unit/dump | 12 | 11 | 11 |
-| unit/expire | 65 | 59 | 57 |
-| unit/functions | 94 | 90 | 90 |
-| unit/geo | 59 | 59 | 59 |
-| unit/hyperloglog | 20 | 20 | 20 |
+| unit/dump | 14 | 12 | 11 |
+| unit/expire | 66 | 59 | 57 |
+| unit/functions | 96 | 92 | 92 |
+| unit/geo | 64 | 64 | 64 |
+| unit/hyperloglog | 27 | 27 | 25 |
 | unit/info-command | 3 | 3 | 3 |
-| unit/introspection | 28 | 28 | 27 |
-| unit/introspection-2 | 43 | 43 | 40 |
-| unit/keyspace | 53 | 52 | 50 |
-| unit/latency-monitor | 14 | 13 | 13 |
+| unit/introspection | 34 | 34 | 33 |
+| unit/introspection-2 | 47 | 46 | 44 |
+| unit/keyspace | 54 | 53 | 51 |
+| unit/latency-monitor | 16 | 14 | 14 |
 | unit/lazyfree | 4 | 4 | 2 |
 | unit/multi | 60 | 53 | 32 |
-| unit/other | 22 | 19 | 19 |
-| unit/pause | 14 | 14 | 14 |
+| unit/other | 25 | 22 | 21 |
+| unit/pause | 17 | 17 | 16 |
 | unit/protocol | 25 | 17 | 17 |
-| unit/pubsub | 30 | 30 | 29 |
-| unit/querybuf | 2 | 2 | 0 |
+| unit/pubsub | 46 | 46 | 42 |
+| unit/querybuf | 3 | 2 | 0 |
 | unit/quit | 3 | 3 | 3 |
 | unit/replybufsize | 1 | 0 | 0 |
-| unit/scan | 17 | 17 | 17 |
-| unit/scripting | 111 | 110 | 104 |
-| unit/slowlog | 16 | 9 | 8 |
-| unit/sort | 52 | 52 | 52 |
+| unit/scan | 21 | 18 | 18 |
+| unit/scripting | 120 | 119 | 114 |
+| unit/slowlog | 17 | 9 | 8 |
+| unit/sort | 53 | 53 | 53 |
 | unit/tracking | 13 | 10 | 10 |
 | unit/type/hash | 73 | 72 | 70 |
-| unit/type/incr | 25 | 24 | 24 |
-| unit/type/list | 235 | 218 | 216 |
+| unit/type/incr | 32 | 31 | 31 |
+| unit/type/list | 257 | 237 | 234 |
 | unit/type/list-2 | 2 | 2 | 2 |
 | unit/type/list-3 | 11 | 11 | 11 |
-| unit/type/set | 98 | 94 | 94 |
-| unit/type/stream | 72 | 63 | 39 |
-| unit/type/stream-cgroups | 50 | 47 | 1 |
-| unit/type/string | 77 | 77 | 74 |
-| unit/type/zset | 291 | 289 | 287 |
+| unit/type/set | 118 | 114 | 113 |
+| unit/type/stream | 75 | 66 | 40 |
+| unit/type/stream-cgroups | 59 | 56 | 1 |
+| unit/type/string | 82 | 82 | 79 |
+| unit/type/zset | 303 | 300 | 298 |
 | unit/violations | 1 | 1 | 1 |
-| **all** | **1757** | **1677** | **1556 (92.8%)** |
+| **all** | **1905** | **1812** | **1672 (92.3%)** |
 
-## Why the other 121 fail
+## Why the other 140 fail
 
-- **64 stop on a command BendKV does not have.** By the number of tests each one stops:
-  - XGROUP 34;
-  - SYNC 23: tests that read the replication stream, 12 of them unit/multi's of what a
+Against Redis 7.2.16:
+
+- **74 stop on a command BendKV does not have.** By the number of tests each one stops:
+  - XGROUP 40;
+  - SYNC 26: tests that read the replication stream, 12 of them unit/multi's of what a
     transaction propagates and 3 unit/scripting's of what a script propagates;
-  - 4 more below five, 7 tests in all: MIGRATE, XAUTOCLAIM, XREADGROUP and REPLICAOF.
-- **19 never ran**: their unit ended before them.
-  - 18 are type/stream's and type/stream-cgroups', on a command outside any test:
+  - 5 more below five, 8 tests in all: MIGRATE, XAUTOCLAIM, XREADGROUP, REPLICAOF and
+    MODULE.
+- **24 never ran**: their unit ended before them.
+  - 23 are type/stream's and type/stream-cgroups', on a command outside any test:
     `CONFIG SET appendonly yes`. BendKV turns its append-only file on only at its start.
   - One test runs only on a server that names jemalloc as its allocator.
-- **38 fail with another error.**
+- **42 fail with another error.**
   - 20 are streams': XREAD with BLOCK, which BendKV answers with an error (10), XACK and
     XPENDING on a group XGROUP did not make (8), and the two tests that set
     `stream-node-max-entries`.
-  - 6 fail on a client left in MULTI by a test before them that failed inside a
-    transaction on what BendKV does not have: REPLICAOF in unit/multi.
-  - The others fail for what BendKV does not have yet:
-    - COMMAND's entries of commands it does not have: GETKEYS of XGROUP, LIST's
-      subcommands of CLUSTER, and MIGRATE marked movablekeys;
-    - CLUSTER called from a script (unit/scripting);
+  - 9 fail on a client a test before them left as what BendKV does not have left it: 6
+    in MULTI, by REPLICAOF in unit/multi, and 3 subscribed to every channel, by XGROUP in
+    unit/pubsub (above).
+  - The others fail for what BendKV does not have yet, or has otherwise:
+    - COMMAND's entries of commands it does not have: GETKEYS of XGROUP, and MIGRATE
+      marked movablekeys;
+    - `hll-sparse-max-bytes`, which BendKV does not read (2);
+    - RANDOMKEY while a pause holds back writes (above);
     - the order of a hash Redis keeps in a listpack past the parameters' defaults
-      (above);
-    - replication: `min-replicas-to-write`, EXEC's NOREPLICAS, and a script's when it
-      counts good replicas;
+      (2, above);
+    - replication: EXEC's NOREPLICAS, and a script's when it counts good replicas;
     - `rdb_changes_since_last_save`, counted otherwise than Redis for a SETBIT or
       BITFIELD that leaves its value as it was;
-    - the size of a client's query buffer (CLIENT LIST's qbuf, 0);
+    - the size of a client's query buffer (CLIENT LIST's qbuf, 0; 2);
     - MOVE's basic usage (above).
+
+Against 7.0.15, 121 failed: 64 on a command BendKV does not have, 19 that never ran, and
+38 with another error, CLUSTER's among them (its subcommands in COMMAND LIST, and called
+from a script), which pass since BendKV answers CLUSTER as Redis 7.2.16 answers it with
+cluster support disabled.
 
 Before times to live, SET's options failed 30 more tests here, answered `ERR syntax error`.
 INFO's statistics per command, which `info-command` looked for, made 3 more tests pass.
 SCAN and RANDOMKEY pass all their tests on keys: SCAN's basic iteration, COUNT, MATCH,
 TYPE, and its guarantee under a load of writes, and RANDOMKEY's three.
 
-So what the suite counts next is streams' groups and XREAD's wait (70 tests), then the
-query buffer of the third row (2 tests), then replication, whose SYNC stops 23 tests.
+So what the suite counts next is streams' groups and XREAD's wait (81 tests of the
+streams' units, and 10 of others), then the query buffer of the third row (2 tests),
+then replication, whose SYNC stops 26 tests.
 
 ## What it found
 
@@ -390,11 +441,14 @@ its parse takes time in proportion to its length: the GEOADD takes 194 ms, the E
 29 ms (section 3zzn of [FINDINGS.md](FINDINGS.md)).
 
 Bugs in Redis and Valkey. Comparing BendKV with Redis 7.2.16, 8.10.2 and Valkey 9.1.2
-found five bugs in them: LSET takes its index modulo 2^32, a failed AUTH in a pipeline
+found eight bugs in them: LSET takes its index modulo 2^32, a failed AUTH in a pipeline
 gets no reply, CONFIG SET tls-port crashes a server built without TLS, CLIENT UNBLOCK with
-ERROR counts a WAIT twice, and RESTORE with a time to live near 2^63 ms makes a key that
-7.0.15 does not. BendKV does not copy them. [UPSTREAM.md](UPSTREAM.md) has how to see each, where it is in the code, and
-where it is to be reported.
+ERROR counts a WAIT twice, RESTORE with a time to live near 2^63 ms makes a key that
+7.0.15 does not, PFADD reads the byte after a sparse HyperLogLog's end (every version),
+CLIENT UNBLOCK of a client CLIENT PAUSE holds crashes the server, and CLIENT TRACKING
+answers an overlap of its prefixes twice. BendKV does not copy them, but for the sixth,
+where it reads that byte as 0. [UPSTREAM.md](UPSTREAM.md) has how to see each, where it
+is in the code, and where it is to be reported.
 
 A difference kept on purpose. `locale-collate`, new in 7.2, names the locale in which SORT's
 ALPHA compares; BendKV compares bytes, as the C locales do, and takes those alone: CONFIG

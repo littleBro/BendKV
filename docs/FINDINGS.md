@@ -10195,6 +10195,70 @@ them whole only alone in its group:
   are `grp.cycle`'s (the clock's reading, the count's, `Mm`'s and `El`'s changes), 46 the
   continuation that holds the cycle's start while the group runs, 11 `clock_gettime`.
 
+## 3zzzzk. Redis 7.2.16's own test suite, and what it found
+
+`tools/redis_suite.py` runs Redis 7.2.16's `tests/unit` in its external mode, against
+redis-server 7.2.16 and against BendKV, as it ran 7.0.15's (docs/COMPATIBILITY.md).
+7.2.16's suite runs 1,905 tests in this mode, where 7.0.15's ran 1,757, and Redis passes
+1,812 of them (1,677). BendKV passed 1,657 at first (91.4%), and passes 1,672 (92.3%)
+since the three changes below.
+
+**A HyperLogLog's walks read to its end.** unit/hyperloglog has a test of the fix of
+CVE-2025-32023: a sparse HyperLogLog of 32 MB of ZERO opcodes, 64 registers each, and a
+VAL after them, which PFCOUNT and PFDEBUG GETREG must answer with INVALIDOBJ. BendKV
+answered so, as its walks of the opcodes (the histogram of PFCOUNT, the merge of PFCOUNT
+of several keys and PFMERGE, the turn to dense) found the registers past 16,384; but
+they read on to the value's end, by `String.code_at`, which finds a byte of a String of
+several chunks by walking its chunks from the first. 1 MB of zeros took 1.5 s, the
+test's 32 MB would have taken half an hour a walk, and the unit stopped at the suite's
+limit of 60 s, 13 of its 27 tests passed. Each opcode holds a register at least, so of
+opcodes that hold 16,384 there are 16,384 at most, and the 16,385th, if any, passes the
+last register, where Redis's walks end: a walk now reads `sp.most(v)` opcodes, the
+length plus one or 16,385, whichever is less (src/hll.bend). Its answer is the same, as
+the registers only add up. PFCOUNT of the 32 MB takes 8 ms, and the unit passes 25 of
+its 27 (the other two set `hll-sparse-max-bytes`, which BendKV does not read).
+`hll_test` sets four values whose opcodes pass the last register, one of them 4 MB of
+ZEROs, compares six commands on each with Redis, and fails one not answered within 5 s.
+PFDEBUG DECODE still walks every opcode, as Redis's does.
+
+**BLPOP's timeout past LLONG_MAX.** Redis 7.2.16 finds out of range a timeout in seconds
+whose ms pass LLONG_MAX (unit/type/list: `BLPOP blist1 0x7FFFFFFFFFFFFF`), where 7.0.15
+took it to a long long, which x87 makes its least, and answered "timeout is negative".
+BendKV answers "ERR timeout is out of range" so, an infinity too (`blk.ll`, `blk.inf`
+in src/session.bend); -inf and NaN stay negative. Redis 7.2.16 also finds out of range a
+timeout that the time now (in ms) takes past LLONG_MAX, BLPOP's, WAIT's and CLIENT
+PAUSE's; BendKV, whose parse of a timeout does not read the time, lets such a timeout,
+one of more than 292 million years, wait (README).
+
+**The changes a served pop counts.** Redis 7.2.16 serves a blocked client by running
+its command again (`unblockClientOnKey`, `processCommandAndResetClient`), so that a pop
+served by a push counts its changes as its call does: unit/type/list's "BLPOP/BLMOVE
+should increase dirty" expects 2 for an LPUSH that serves a BLPOP. 7.0.15 counted none
+for BLPOP, BRPOP, BLMOVE and BRPOPLPUSH served so, and BendKV counted as 7.0.15 did.
+`dirty.served` (src/server.bend) now counts by the command's rule, as for a call that
+runs at once: one for BLPOP, BRPOP, BLMOVE, BRPOPLPUSH, BZPOPMIN and BZPOPMAX, the
+elements for BLMPOP and BZMPOP. `blocking_test` serves each of the six against Redis
+and compares `rdb_changes_since_last_save` after it.
+
+**What it did not change.** Of the 140 tests Redis passes and BendKV does not, the new
+ones of 7.2.16:
+- unit/hyperloglog's two that set `hll-sparse-max-bytes` and expect a HyperLogLog to turn
+  dense past it.
+- unit/pause's RANDOMKEY while a pause holds back writes: when every key of a database
+  has a time to live and has passed it, Redis 7.2.16, which may not delete them then,
+  answers one of them after 100 tries (`dbRandomKey`); BendKV answers nil.
+- unit/pubsub's three tests of a client that publishes to itself, in a transaction and
+  in a script: the test of streams' events before them stops at XGROUP before it closes
+  its client, subscribed to every channel, so that each PUBLISH counts one receiver more,
+  and the replies of the next tests come one late. Run without that test, they pass.
+- unit/other's test of every HELP subcommand, which asks MODULE's, and unit/dump's and
+  unit/type/set's new tests, which read the replication stream.
+
+unit/pubsub's PUNSUBSCRIBE without arguments, which a client sends without waiting for
+its reply before another client publishes, failed in the first run, three units at once,
+and passed in the second and alone: each connection reaches the actor on its own, so the
+PUBLISH may run first. It passed against 7.0.15.
+
 ## 4. Where a request's time goes, and hiding the memory waits
 
 With the eight patches, BendKV ran fewer instructions on GET and SET than Redis, missed
