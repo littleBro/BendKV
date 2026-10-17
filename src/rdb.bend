@@ -3405,7 +3405,8 @@ def load(p: String) -> Maybe<&2, KV.Val>:
 # is 0) and the code without that line, which Redis 7.0.15 still reads
 # (rdbFunctionLoad): the code it makes of them is "#!<engine>
 # name=<name>\n" and that code, each part as sdscatfmt's %s copies it, up
-# to its first NUL, the description let go.
+# to its first NUL, the description let go. An RDB file's is read so;
+# FUNCTION RESTORE refuses it, as Redis 7.2.16 does.
 
 # the libraries' codes cs, oldest first, before rest
 def lib.put(cs: List<&2, String>, rest: String) -> String:
@@ -3496,8 +3497,9 @@ def lib.one(k: Nat, s: String) -> LibR:
 
 # FUNCTION RESTORE's read of a payload that verify takes
 # (functionRestoreCommand): while more than its last ten bytes (the
-# version and the CRC64) are left, a type, FUNCTION2 or FUNCTION, and a
-# library. Lib is a read under way (the bytes left, the codes read, the
+# version and the CRC64) are left, a type, FUNCTION2, and a library;
+# FUNCTION is refused ("Pre-GA function format not supported", as
+# 7.2.16's). Lib is a read under way (the bytes left, the codes read, the
 # newest first) or its end: the codes, and the error's text that stopped
 # the read ("" for none). Redis makes each library as it reads it, so a
 # read that fails after some answers a failure to make one of them first:
@@ -3520,7 +3522,7 @@ def lib.kind(k: Nat, t: String, cs: List<&2, String>) -> Lib:
     case 1n:
       lib.got(lib.one(1n, t), cs)
     case _:
-      lib.got(lib.one(2n, t), cs)
+      LibEnd{cs, "Pre-GA function format not supported"}
 
 def lib.type(m: Maybe<&1, Nat & String>, cs: List<&2, String>) -> Lib:
   match m:

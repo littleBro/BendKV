@@ -14134,13 +14134,22 @@ def grp.acl.call(on: Bool, +code: Nat, +raw: String, +g: Grp) -> U.Verdict:
     case Grp{outs, es, +srv, ds, ws, up, tx, +pb}:
       grp.acl.call.on(Bool.and(on, ps.acl.on(pb)), code, raw, srv, pb)
 
-def sc.acl.why(+v: U.Verdict) -> String:
+# the user a script's calls run as: its caller's (scriptCall's)
+def grp.scr.user(g: Grp) -> String:
+  match g:
+    case Grp{outs, es, srv, ds, ws, up, tx, +pb}:
+      ps.user(ps.scr.who(pb), pb)
+
+# a call's ACL refusal (scriptVerifyACL): "ACL failure in script: " and
+# the refusal's text, not verbose (getAclErrorMessage): for a command,
+# the user's name and the command's full name (the verdict's object)
+def sc.acl.why(+v: U.Verdict, g: Grp) -> String:
   match v:
     case U.VOk{}:
       ""
-    case U.VNo{+why, at, obj}:
-      "ERR The user executing the script " ++ Bool.pick(String, Nat.is_eq(why, 1n), "can't run this command or subcommand",
-        Bool.pick(String, Nat.is_eq(why, 2n), "can't access at least one of the keys mentioned in the command arguments", "can't publish to the channel mentioned in the command"))
+    case U.VNo{+why, at, +obj}:
+      "ERR ACL failure in script: " ++ Bool.pick(String, Nat.is_eq(why, 1n), "User " ++ grp.scr.user(g) ++ " has no permissions to run the '" ++ obj ++ "' command",
+        Bool.pick(String, Nat.is_eq(why, 2n), "No permissions to access a key", "No permissions to access a channel"))
 
 # the caller's line in the entry (addACLLogEntry's server.script_caller):
 # the client of the script command's wait, in its batch's connection,
@@ -14333,12 +14342,14 @@ def sc.busy.group(qs: List<&1, Req>, t: U32 & U32, +aof: Bool, g: Grp) -> Bz:
     case Grp{outs, es, srv, ds, ws, up, tx, pb}:
       Bz{outs, ws, up, group_at(aof, sc.noticks(qs), s0, u0, Grp{Nil{}, es, srv, ds, WaitNone{}, Nil{}, tx, pb})}
 
-# whether the command of an ACL check is known (redis.acl_check_cmd)
+# whether the command of an ACL check is known (redis.acl_check_cmd),
+# and then whether its number of words passes its arity ("!" when not:
+# Redis 7.2 checks it, commandCheckArity, before the user's rules)
 def sc.acl.ans(known: Bool, +k: Nat, +raw: String, +g: Grp) -> String:
   match known g:
     case True{} Grp{outs, es, +srv, ds, ws, up, tx, +pb}:
       +id = ps.scr.who(pb)
-      Bool.pick(String, U.verdict.ok(bg.acl.check(S.srv.restricted(srv, id), id, srv, pb, k, AvRaw{raw, 0n})), ":1\r\n", ":0\r\n")
+      Bool.pick(String, R.stat.arity.ok(R.code.key(k), List.length(&2, String, av.first(P.argvs(raw)))), Bool.pick(String, U.verdict.ok(bg.acl.check(S.srv.restricted(srv, id), id, srv, pb, k, AvRaw{raw, 0n})), ":1\r\n", ":0\r\n"), "!")
     case _ g0:
       "-"
 
@@ -14364,7 +14375,7 @@ def sc.next(+word: U32, sc: Sc, +aof: Bool, +pid: U32, g: Grp, +reqs: Chan(Req))
     sc.loop(st, sc, aof, pid, g, reqs)
 
 # the engine goes on, or is told to end the script once SCRIPT KILL asked
-# (logged as Redis logs it)
+# (logged as Redis logs it, a notice)
 @unsafe
 def sc.go.if(kill: Bool, +sc: Sc, +aof: Bool, +pid: U32, g: Grp, +reqs: Chan(Req)) -> IO(Grp):
   match kill:
@@ -14372,7 +14383,7 @@ def sc.go.if(kill: Bool, +sc: Sc, +aof: Bool, +pid: U32, g: Grp, +reqs: Chan(Req
       sc.next(1, sc, aof, pid, g, reqs)
     case True{}:
       do IO<Grp>:
-        Unit <- log(sc.lg(sc), 3, "Lua script killed by user with SCRIPT KILL.")
+        Unit <- log(sc.lg(sc), 2, "Lua script killed by user with SCRIPT KILL.")
         sc.next(2, sc, aof, pid, g, reqs)
 
 @unsafe
@@ -14609,7 +14620,8 @@ def sc.log(+level: U32, +msg: String, sc: Sc, +aof: Bool, +pid: U32, g: Grp, +re
 # redis.acl_check_cmd's check (luaRedisAclCheckCmdPermissionsCommand):
 # ":1" when its caller's user may run the command with its arguments,
 # ":0" when it may not (ACLCheckAllUserCommandPerm: no entry in the log),
-# "-" when the command is not known
+# "-" when the command is not known, "!" when its arity does not allow
+# its number of words
 @unsafe
 def sc.acl(+raw: String, sc: Sc, +aof: Bool, +pid: U32, g: Grp, +reqs: Chan(Req)) -> IO(Grp):
   +x = g
@@ -14707,7 +14719,7 @@ def sc.call.run(+c: R.Cmd, +code: Nat, +r3: Bool, +raw: String, +sc: Sc, +aof: B
   +v = grp.acl.call(Bool.not(Bool.or(unknown, Bool.or(arity, noscript))), code, raw, x)
   +clean = U32.is_eq(U32.and(grp.sc.st(x), 2), 0)
   +xb = sc.xblock.is(Nat.is_eq(key, R.stat.top(214n)), raw)
-  sc.call.at(sc.call.why(unknown, arity, noscript, sc.acl.why(v), Bool.and(sc.ro(sc), R.stat.pausable(key)), Bool.and(grp.misconf(x), Bool.and(clean, R.stat.write(key))), Bool.and(Bool.not(sc.aoom(sc)), Bool.and(grp.oom(x), Bool.and(clean, R.stat.denyoom(key))))), sc.xblock.cmd(xb, raw, c), Bool.pick(Nat, xb, R.stat.code(key, 2n), code), r3, raw, sc, aof, pid, sc.acl.log(v, sc, x), reqs)
+  sc.call.at(sc.call.why(unknown, arity, noscript, sc.acl.why(v, x), Bool.and(sc.ro(sc), R.stat.pausable(key)), Bool.and(grp.misconf(x), Bool.and(clean, R.stat.write(key))), Bool.and(Bool.not(sc.aoom(sc)), Bool.and(grp.oom(x), Bool.and(clean, R.stat.denyoom(key))))), sc.xblock.cmd(xb, raw, c), Bool.pick(Nat, xb, R.stat.code(key, 2n), code), r3, raw, sc, aof, pid, sc.acl.log(v, sc, x), reqs)
 
 @unsafe
 def sc.call.of(b: P.Batch, +r3: Bool, +raw: String, sc: Sc, +aof: Bool, +pid: U32, g: Grp, +reqs: Chan(Req)) -> IO(Grp):
