@@ -10,10 +10,13 @@
 # acts (aof.bend: A.acts), its effects written with the SELECTs the
 # server writes, the file replayed over 16 databases. Last, files the
 # start must refuse, each with the entry it names and the byte it starts
-# at, and a file as Redis writes it, which it replays. Each check prints
-# its line; any that fails makes the run exit with 1. With
-# BENDKV_CHECK_BREAK set to log, db, cut or check, one kind of check is
-# given a wrong expectation, to show that its failure fails the run
+# at, and a file as Redis writes it, which it replays. Each file, and
+# files the start cuts or reverts, is read in windows too, as the start
+# reads it (aof.bend: A.windows), in windows of 1 byte to 4 kB: each
+# must give what the whole file gives (A.start). Each check prints its
+# line; any that fails makes the run exit with 1. With
+# BENDKV_CHECK_BREAK set to log, db, cut, check or win, one kind of check
+# is given a wrong expectation, to show that its failure fails the run
 # (tests/smoke_check.sh).
 # Run: bend tests/aof_check.bend
 import Base
@@ -125,7 +128,9 @@ def dump.val(v: KV.Val) -> String:
     case KV.VColl{KV.CMems{+m}}:
       "<set" ++ dump.elems(KV.mems.all(m)) ++ ">"
     case KV.VColl{KV.CZset{+z}}:
-      "<zset" ++ dump.zels(KV.zt.all(KV.zset.tree(z))) ++ ">"
+      "<zset" ++ dump.zels(KV.zset.all(z)) ++ ">"
+    case KV.VColl{KV.CStream{+x}}:
+      "<stream " ++ Nat.show(KV.xstream.len(x)) ++ ">"
 
 def dump.ent(m: Maybe<&2, KV.Item<KV.Val>>) -> String:
   match m:
@@ -240,6 +245,51 @@ def dump.checked(+f: String, r: A.Replay) -> String:
 def checked(+f: String, +n: Nat) -> String:
   dump.checked(f, A.checked(Pair.fst(List<&2, List<&2, String>>, String, A.load(f)), n))
 
+# The start in windows
+# --------------------
+
+# what the start makes of a file: its verdict (the databases, or the
+# entry refused and why), the number of entries kept, the entries of a
+# transaction reverted, written again, and what follows the last whole
+# entry
+def dump.verdict(r: A.Replay) -> String:
+  match r:
+    case A.Replayed{+ds}:
+      dump.ds(ds)
+    case A.Refused{+i, why}:
+      "refused entry " ++ Nat.show(i) ++ ": " ++ why
+
+def dump.start(st: A.Start) -> String:
+  match st:
+    case A.Start{r, +k, cut, rest}:
+      dump.verdict(r) ++ "; " ++ Nat.show(k) ++ " entries kept; reverted: " ++ A.encode(cut) ++ "; left: " ++ rest
+
+# f in windows of k bytes (the last shorter)
+def chunks(fuel: Nat, f: String, +k: Nat) -> List<&2, String>:
+  match fuel f:
+    case _ SNil{}:
+      Nil{}
+    case 0n SCon{h, t}:
+      [SCon{h, t}]
+    case 1n+g SCon{+h, +t}:
+      String.take(SCon{h, t}, k) <> chunks(g, String.drop(SCon{h, t}, k), k)
+
+# the sizes of windows each file is read in
+def win.sizes() -> List<&2, Nat>:
+  [1n, 2n, 3n, 7n, 64n, 4096n]
+
+# the sizes whose windows give what the whole file gives, as a line
+def win.check(ks: List<&2, Nat>, +f: String, +n: Nat, +want: String) -> String:
+  match ks:
+    case Nil{}:
+      "same"
+    case Con{+k, rest}:
+      Bool.pick(String, String.eq(dump.start(A.windows(chunks(String.length(f), f, k), n)), want), win.check(rest, f, n, want), "differ in windows of " ++ Nat.show(k) ++ " bytes")
+
+# the start reads f in windows of each size as it reads the whole of it
+def windows(+mode: String, name: String, +f: String, +n: Nat) -> IO(Bool):
+  same("the start reads " ++ name ++ " in windows as whole", win.check(win.sizes(), f, n, dump.start(A.start(f, n))), "same" ++ brk(mode, "win"))
+
 def report.of(+mode: String, +cs: List<&2, R.Cmd>, q: List<&2, R.Cmd> & R.Db) -> IO(Bool):
   (es, +db) = q
   +f = A.encode(A.args_all(es))
@@ -252,7 +302,9 @@ def report.of(+mode: String, +cs: List<&2, R.Cmd>, q: List<&2, R.Cmd> & R.Db) ->
     c : Bool <- same("the start's checked replay", checked(f, 0n), "0: " ++ want ++ "\n")
     Unit <- IO.print("database: " ++ want)
     d : Bool <- cuts.run(cuts.go(mode), f, brk(mode, "cut"))
-    return Bool.and(Bool.and(a, b), Bool.and(c, d))
+    e : Bool <- windows(mode, "the file", f, 0n)
+    g : Bool <- windows(mode, "the file cut inside its last entry", String.take(f, Nat.sub(String.length(f), 5n)), 0n)
+    return Bool.and(Bool.and(a, b), Bool.and(c, Bool.and(d, Bool.and(e, g))))
 
 def report(+mode: String, +cs: List<&2, R.Cmd>, r: List<&2, R.Reply> & (List<&2, R.Cmd> & R.Db)) -> IO(Bool):
   (rs, q) = r
@@ -280,7 +332,8 @@ def mreport.of(+mode: String, q: List<&2, A.Eff> & R.Ds) -> IO(Bool):
     b : Bool <- same("the start's checked replay of the databases", checked(f, 15n), want)
     Unit <- IO.print("databases:\n" ++ want)
     c : Bool <- cuts.run(cuts.go(mode), f, brk(mode, "cut"))
-    return Bool.and(a, Bool.and(b, c))
+    d : Bool <- windows(mode, "the file on several databases", f, 15n)
+    return Bool.and(a, Bool.and(b, Bool.and(c, d)))
 
 # Files the start refuses
 # -----------------------
@@ -314,6 +367,24 @@ def dump.kept.of(r: A.Replay) -> String:
 def redis_file() -> List<&2, List<&2, String>>:
   [["SELECT", "0"], ["set", "k", "v"], ["MULTI"], ["del", "k"], ["set", "k", "w"], ["EXEC"],
    ["SELECT", "3"], ["SET", "x", "y"], ["PEXPIREAT", "x", "99999999999999"], ["multi"], ["exec"]]
+
+# files the start refuses, reverts or cuts, read in windows: a
+# transaction left open (reverted, its entries left out), then an entry
+# cut short; one that holds an entry the check refuses; a MULTI inside
+# one left open, and one closed after; a value longer than the windows;
+# something that is no entry after the last
+def windowed(+mode: String) -> IO(Bool):
+  +open = A.encode([one(), ["MULTI"], ["SET", "b", "2"], ["SET", "c", "3"]])
+  +big = String.take("0123456789abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz", 100n)
+  do IO<Bool>:
+    a : Bool <- windows(mode, "a transaction left open", open, 15n)
+    b : Bool <- windows(mode, "a transaction left open, then an entry cut short", open ++ "*3\r\n$3\r\nSET\r\n$1\r\nd", 15n)
+    c : Bool <- windows(mode, "a refused entry inside a transaction left open", A.encode([one(), ["MULTI"], ["SXT", "x"]]), 15n)
+    d : Bool <- windows(mode, "a refused entry inside a transaction closed after", A.encode([one(), ["MULTI"], ["SXT", "x"], ["EXEC"]]), 15n)
+    e : Bool <- windows(mode, "a MULTI inside one left open", A.encode([["MULTI"], one(), ["MULTI"], ["SET", "b", "2"]]), 15n)
+    f : Bool <- windows(mode, "a MULTI inside one, closed after", A.encode([["MULTI"], one(), ["MULTI"], ["SET", "b", "2"], ["EXEC"]]), 15n)
+    g : Bool <- windows(mode, "transactions, a long value, and no entry after", A.encode([["MULTI"], one(), ["SET", "v", big ++ big ++ big], ["EXEC"], ["SELECT", "3"], ["MULTI"], ["DEL", "v"], ["exec"], ["SET", "w", big]]) ++ "+OK\r\n", 15n)
+    return Bool.and(Bool.and(Bool.and(a, b), Bool.and(c, d)), Bool.and(Bool.and(e, f), g))
 
 def refusals(+mode: String) -> IO(Bool):
   do IO<Bool>:
@@ -352,8 +423,9 @@ def refusals(+mode: String) -> IO(Bool):
       "0: k=w (1 keys counted, 0 with a time); 3: x=y@99999999999999 (1 keys counted, 1 with a time); ")
     q : Bool <- same("the start replays it as replay does", checked(A.encode(redis_file()), 15n),
       dump.ds(A.replay(redis_file(), 15n)))
+    w : Bool <- windowed(mode)
     return Bool.and(Bool.and(Bool.and(Bool.and(a, b), Bool.and(c, d)), Bool.and(Bool.and(e, f), Bool.and(g, h))),
-      Bool.and(Bool.and(Bool.and(i, j), Bool.and(k, l)), Bool.and(Bool.and(m, n), Bool.and(o, Bool.and(p, q)))))
+      Bool.and(Bool.and(Bool.and(i, j), Bool.and(k, l)), Bool.and(Bool.and(m, n), Bool.and(o, Bool.and(p, Bool.and(q, w))))))
 
 def env.or(r: Result<&1, &1, U32 & String, String>) -> String:
   match r:

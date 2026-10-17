@@ -6,7 +6,12 @@ one. A list keeps its order on both servers, so every reply is compared
 as it is, but MEMORY USAGE, an estimate on each server, which is
 compared by kind (a number, a nil, an error), and a whole SCAN, whose
 keys each server lists in the order of its own table: compared as a
-set.
+set. BendKV keeps a list in pieces of up to 2,048 bytes: lists of long
+elements grown, read, set (a piece made longer than a buffer is dealt
+again), trimmed and emptied from either end, each dumped by BendKV and
+restored in Redis; searched (LPOS), written in the middle (LINSERT) and
+taken from (LREM) across their pieces, from either end; then random
+commands on lists of long elements.
 
     python3 tests/list_test.py --bendkv 6380 --redis 6390 [--rounds 3000] [--seed 1]
 """
@@ -179,6 +184,117 @@ def sizes(b, r):
     same(b, r, [b"LRANGE", b"que", b"0", b"20"])
 
 
+# BendKV's DUMP of key, restored in Redis, gives Redis the list BendKV
+# holds
+def dumped(b, r, key):
+    global n
+    n += 1
+    payload = run(b, [b"DUMP", key])[1]
+    run(r, [b"RESTORE", key + b".b", b"0", payload, b"REPLACE"])
+    x, y = run(b, [b"LRANGE", key, b"0", b"-1"]), run(r, [b"LRANGE", key + b".b", b"0", b"-1"])
+    if x != y:
+        fail([b"DUMP", key], x, y)
+    run(r, [b"DEL", key + b".b"])
+
+
+# lists past one piece (2,048 bytes in BendKV): grown an element at a
+# time at either end, read across the pieces, set to longer and shorter
+# elements (a piece past a buffer is dealt again), trimmed inside pieces,
+# and emptied from the end it was not made from; elements longer than a
+# piece among short ones
+def pieces(b, r):
+    look = lambda key: ([b"LLEN", key], [b"LRANGE", key, b"0", b"-1"], [b"LINDEX", key, b"0"], [b"LINDEX", key, b"-1"])
+    el = lambda i, w: (b"%d:" % i).ljust(w, b"x")
+    for i in range(80):
+        same(b, r, [b"LPUSH" if i % 3 else b"RPUSH", b"pc", el(i, 300 if i % 2 else 7)])
+        if i % 10 == 9:
+            for cmd in look(b"pc"):
+                same(b, r, cmd)
+    for i in range(0, 80, 7):
+        same(b, r, [b"LINDEX", b"pc", b"%d" % i])
+        same(b, r, [b"LRANGE", b"pc", b"%d" % i, b"%d" % (i + 13)])
+    for i in range(0, 80, 9):
+        same(b, r, [b"LSET", b"pc", b"%d" % i, el(1000 + i, 1900)])
+    for i in range(3, 80, 9):
+        same(b, r, [b"LSET", b"pc", b"%d" % i, b""])
+    for cmd in look(b"pc"):
+        same(b, r, cmd)
+    dumped(b, r, b"pc")
+    for cmd in ([b"LTRIM", b"pc", b"3", b"-4"], [b"LTRIM", b"pc", b"11", b"-12"], [b"LRANGE", b"pc", b"0", b"-1"]):
+        same(b, r, cmd)
+    for i in range(30):
+        same(b, r, [b"LPOP" if i % 4 else b"RPOP", b"pc"])
+    same(b, r, [b"LPOP", b"pc", b"100"])
+    same(b, r, [b"EXISTS", b"pc"])
+    # made at one end, emptied from the other
+    for key, push, pop in ((b"pr", b"RPUSH", b"LPOP"), (b"pl", b"LPUSH", b"RPOP")):
+        for i in range(0, 600, 20):
+            same(b, r, [push, key] + [el(j, 40 + j % 90) for j in range(i, i + 20)])
+        for cmd in look(key):
+            same(b, r, cmd)
+        dumped(b, r, key)
+        for i in range(0, 600, 7):
+            same(b, r, [pop, key, b"7"])
+            if i % 140 == 0:
+                for cmd in look(key):
+                    same(b, r, cmd)
+        same(b, r, [b"EXISTS", key])
+    # elements longer than a piece among short ones
+    for i in range(12):
+        same(b, r, [b"RPUSH" if i % 2 else b"LPUSH", b"pb", el(i, 5000 if i % 3 == 0 else 50)])
+    for cmd in look(b"pb") + ([b"LINDEX", b"pb", b"5"], [b"LRANGE", b"pb", b"2", b"8"], [b"LSET", b"pb", b"4", el(99, 3000)],
+                              [b"LSET", b"pb", b"6", b"s"], [b"LTRIM", b"pb", b"1", b"-2"]) + look(b"pb"):
+        same(b, r, cmd)
+    dumped(b, r, b"pb")
+    for i in range(12):
+        same(b, r, [b"RPOP" if i % 2 else b"LPOP", b"pb"])
+    # a list of two pieces, popped from each end in turn
+    for i in range(16):
+        same(b, r, [b"RPUSH", b"pt", el(i, 250)])
+    for i in range(16):
+        same(b, r, [b"LPOP" if i % 2 else b"RPOP", b"pt"])
+        same(b, r, [b"LRANGE", b"pt", b"0", b"-1"])
+
+
+# LPOS, LINSERT and LREM through lists of many pieces in both stacks, of
+# values that repeat: from either end, past pieces, with a piece pushed
+# past a buffer by LINSERT and pieces emptied by LREM
+def searches(b, r):
+    el = lambda i, w: (b"%d:" % i).ljust(w, b"x")
+    vals = [b"a", b"b", b"", b"c" * 300, b"d" * 2500]
+    for i in range(900):
+        x = vals[i % 5] if i % 3 == 0 else el(i, 20 + i % 60)
+        same(b, r, [b"LPUSH" if i % 2 else b"RPUSH", b"sr", x])
+    look = ([b"LLEN", b"sr"], [b"LINDEX", b"sr", b"0"], [b"LINDEX", b"sr", b"450"], [b"LINDEX", b"sr", b"-1"])
+    for x in vals + [el(4, 24), el(895, 75), b"none"]:
+        for opts in ([], [b"RANK", b"2"], [b"RANK", b"-1"], [b"RANK", b"-3"], [b"COUNT", b"0"], [b"COUNT", b"5"],
+                     [b"RANK", b"-2", b"COUNT", b"0"], [b"MAXLEN", b"300"], [b"RANK", b"-1", b"MAXLEN", b"200", b"COUNT", b"0"],
+                     [b"RANK", b"40", b"COUNT", b"3"], [b"RANK", b"1000"]):
+            same(b, r, [b"LPOS", b"sr", x] + opts)
+    for x, v in ((b"a", b"ia"), (b"b", el(1, 1900)), (el(4, 24), b"i4"), (el(895, 75), el(2, 2100)), (b"c" * 300, b"")):
+        for where in (b"BEFORE", b"AFTER"):
+            same(b, r, [b"LINSERT", b"sr", where, x, v])
+            same(b, r, [b"LPOS", b"sr", v, b"COUNT", b"0"])
+    same(b, r, [b"LINSERT", b"sr", b"BEFORE", b"none", b"x"])
+    for cmd in look:
+        same(b, r, cmd)
+    dumped(b, r, b"sr")
+    for x, c in ((b"a", b"3"), (b"a", b"-2"), (b"", b"0"), (b"b", b"-100"), (el(1, 1900), b"1"), (b"none", b"0"),
+                 (b"c" * 300, b"2"), (b"d" * 2500, b"0"), (b"ia", b"0")):
+        same(b, r, [b"LREM", b"sr", c, x])
+        for cmd in look:
+            same(b, r, cmd)
+    same(b, r, [b"LRANGE", b"sr", b"0", b"-1"])
+    dumped(b, r, b"sr")
+    # pieces of one value, taken whole, then the list emptied
+    for i in range(300):
+        same(b, r, [b"RPUSH" if i % 2 else b"LPUSH", b"so", b"z" * 100 if i % 50 else b"y"])
+    for cmd in ([b"LREM", b"so", b"-7", b"z" * 100], [b"LRANGE", b"so", b"0", b"20"], [b"LREM", b"so", b"0", b"z" * 100],
+                [b"LRANGE", b"so", b"0", b"-1"], [b"LINSERT", b"so", b"AFTER", b"y", b"w"], [b"LRANGE", b"so", b"0", b"-1"],
+                [b"LREM", b"so", b"0", b"y"], [b"LREM", b"so", b"0", b"w"], [b"EXISTS", b"so"]):
+        same(b, r, cmd)
+
+
 # a list whose time passed: a read finds nothing, a write makes it anew,
 # a move takes it as not there, as a source or a destination
 def expired(b, r):
@@ -239,6 +355,37 @@ def rand_cmd(r):
                      [b"LRANGE", key, b"0", b"-1"], [b"TYPE", key], [b"EXISTS", key], [b"TTL", key]])
 
 
+# random commands on two lists of elements of up to 400 bytes, a few
+# pieces each, sometimes one longer than a piece
+def rand_wide(r):
+    key = r.choice([b"w1", b"w2"])
+    pool = [b"a", b"", b"v" * 300, b"w" * 2500]
+    v = lambda: (r.choice(pool) if r.random() < 0.25 else
+                 b"v" * (r.randint(0, 400) if r.random() < 0.98 else r.randint(2000, 6000)))
+    idx = lambda: b"%d" % r.randint(-40, 40)
+    k = r.random()
+    if k < 0.3:
+        return [r.choice([b"LPUSH", b"RPUSH"]), key] + [v() for _ in range(r.randint(1, 3))]
+    if k < 0.45:
+        return [r.choice([b"LPOP", b"RPOP"]), key] + ([b"%d" % r.randint(1, 4)] if r.random() < 0.3 else [])
+    if k < 0.55:
+        return [b"LSET", key, idx(), v()]
+    if k < 0.6:
+        return [b"LTRIM", key, b"%d" % r.randint(0, 2), b"%d" % r.randint(-3, -1)]
+    if k < 0.65:
+        return [b"LMOVE", key, r.choice([b"w1", b"w2"]), r.choice([b"LEFT", b"RIGHT"]), r.choice([b"LEFT", b"RIGHT"])]
+    if k < 0.75:
+        return [b"LRANGE", key, idx(), idx()]
+    if k < 0.8:
+        return [b"LRANGE", key, b"0", b"-1"]
+    if k < 0.85:
+        return [b"LPOS", key, v()] + r.choice([[], [b"RANK", r.choice([b"2", b"-1", b"-3"])], [b"COUNT", b"0"],
+                                               [b"RANK", b"-1", b"COUNT", b"3", b"MAXLEN", b"50"]])
+    if k < 0.9:
+        return [b"LREM", key, r.choice([b"0", b"1", b"2", b"-1", b"-2"]), v()]
+    return r.choice([[b"LINDEX", key, idx()], [b"LLEN", key], [b"LINSERT", key, r.choice([b"BEFORE", b"AFTER"]), v(), v()]])
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--bendkv", type=int, default=6380)
@@ -252,12 +399,19 @@ def main():
     for cmd in SCRIPT:
         same(b, rd, cmd)
     sizes(b, rd)
+    pieces(b, rd)
+    searches(b, rd)
     expired(b, rd)
     r = random.Random(a.seed)
     for _ in range(a.rounds):
         same(b, rd, rand_cmd(r))
     for key in KEYS:
         same(b, rd, [b"LRANGE", key, b"0", b"-1"])
+    for i in range(a.rounds):
+        same(b, rd, rand_wide(r))
+        if i % 500 == 499:
+            for key in (b"w1", b"w2"):
+                dumped(b, rd, key)
     for c in (b, rd):
         run(c, [b"FLUSHALL"])
     if bad:

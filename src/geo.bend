@@ -729,9 +729,8 @@ def geo.scan(xs: List<&2, KV.ZEl>, full: Bool, +q: Search, +limit: Nat, ps: List
 
 # the elements of z whose scores are from lo to below hi, in order
 def geo.range(+z: KV.Zset, +lo: D, +hi: D) -> List<&2, KV.ZEl>:
-  +t = KV.zset.tree(z)
-  +a = KV.zt.before(t, KV.ZGeS{KV.ZSB{d.score(lo), False{}}})
-  +b = KV.zt.before(t, KV.ZGeS{KV.ZSB{d.score(hi), False{}}})
+  +a = KV.zset.before(z, KV.ZGeS{KV.ZSB{d.score(lo), False{}}})
+  +b = KV.zset.before(z, KV.ZGeS{KV.ZSB{d.score(hi), False{}}})
   KV.zset.slice(False{}, z, a, b)
 
 # the next geohash of the same step
