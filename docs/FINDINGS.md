@@ -9937,7 +9937,9 @@ call (`afterCommand`, from `pending_push_messages`), and BendKV now does too.
 (`bg.own.has`); nothing on the fast way, which makes no such push. perfcheck's GET, SET
 and INCR count 3,508, 4,299 and 4,621 instructions, against 3,507, 4,302 and 4,616 for
 kind I's build (5d523c6), counted alike; with 100 clients in BLPOP, 3,611 and 4,455
-against 3,618 and 4,460.
+against 3,618 and 4,460. The classes of events set again within a batch add a test of
+each command's key to the general way (`ev.key`), and nothing to the fast way: GET and SET
+count 3,504 and 4,299 with kind C in, 3,610 and 4,456 with 100 clients in BLPOP.
 
 ## 3zzzzh. Doubles as Redis 7.2.16 writes them
 
