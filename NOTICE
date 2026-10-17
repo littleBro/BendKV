@@ -1,6 +1,9 @@
-BendKV includes the following third-party software, as its authors ship
-it, under the licenses that come with it. BendKV's own license is not
-decided yet (issue #42).
+BendKV
+Copyright 2026 The BendKV Authors
+
+BendKV is licensed under the Apache License, Version 2.0 (LICENSE). It
+includes the following third-party software, as its authors ship it, and
+code ported from it, under the licenses that come with it.
 
 deps/redis: the Lua engine of Redis 7.0.15 and three of Redis's helpers,
 built into the server for EVAL and its kin (src/lua/engine.c, which is
@@ -38,3 +41,76 @@ test of an integer key against a table's array (ltable.c), which
 subtracted 1 from the key, as Redis 7.2's ltable.c writes it: the same
 answers, without the overflow that C leaves undefined for the smallest
 int.
+
+Ported from Redis 7.0.15: BSD 3-Clause License (deps/redis/COPYING),
+Copyright (c) 2006-2020, Salvatore Sanfilippo, Copyright (c) 2009-2021,
+Redis Labs Ltd., and the authors named below. BendKV answers, and lays
+out its data, as Redis 7.0.15 does, and these parts of it are written
+from Redis's sources:
+
+- Code, from Redis's C files:
+  - src/acl.bend: acl.c;
+  - src/stream.bend, and the streams of src/redis.bend: t_stream.c and
+    util.c;
+  - src/rdb.bend: rdb.c, listpack.c, ziplist.c, zipmap.c, intset.c,
+    crc64.c, lzf_d.c, and cluster.c's checks of a DUMP payload;
+  - src/hll.bend: hyperloglog.c, with its MurmurHash64A;
+  - src/geo.bend, and the GEO commands of src/redis.bend: geo.c,
+    geohash.c, geohash_helper.c and pqsort.c;
+  - src/info.bend: latency.c, slowlog.c, sparkline.c, and the histograms
+    of Redis's deps/hdr_histogram;
+  - src/lolwut.bend: lolwut.c, lolwut5.c and lolwut6.c;
+  - SORT, in src/redis.bend and src/float.bend: sort.c;
+  - src/map.bend: intset.c;
+  - src/resp.bend: networking.c;
+  - src/server.bend: multi.c, pubsub.c, tracking.c, eval.c, script.c,
+    script_lua.c and rdb.c;
+  - src/startup.bend: config.c.
+- Data, and what is generated from it:
+  - tools/data/redis-commands.json, from src/commands/*.json, and the
+    tables of commands that tools/gen_commands.py makes from it;
+  - tools/data/redis-configs.json, from src/config.c and src/server.h,
+    and the tables of parameters that tools/gen_config.py makes from it;
+  - the HELP texts of CLIENT, OBJECT, MEMORY, PUBSUB, XINFO and the other
+    commands that have one, in src/redis.bend.
+- Tests, whose cases follow Redis's own (tests/unit):
+  tests/protocol_test.py (protocol.tcl), tests/sort_test.py (sort.tcl),
+  tests/script_test.py (scripting.tcl), tests/maxmemory_test.py
+  (maxmemory.tcl and pubsub.tcl) and tests/multi_test.py (info.tcl).
+
+The files of Redis 7.0.15 with other authors, under the BSD 3-Clause
+License unless said otherwise:
+
+- geo.c, geohash.c and geohash_helper.c: Copyright (c) 2013-2014,
+  yinqiwen; Copyright (c) 2014, Matt Stancliff; Copyright (c) 2015-2016,
+  Salvatore Sanfilippo.
+- intset.c: Copyright (c) 2009-2012, Pieter Noordhuis; Copyright (c)
+  2009-2012, Salvatore Sanfilippo.
+- ziplist.c: Copyright (c) 2009-2012, Pieter Noordhuis; Copyright (c)
+  2009-2017, Salvatore Sanfilippo; Copyright (c) 2020, Redis Labs, Inc.
+- listpack.c: Copyright (c) 2017, Salvatore Sanfilippo; Copyright (c)
+  2020, Redis Labs, Inc.
+- crc64.c: Copyright (c) 2014, Matt Stancliff; Copyright (c) 2020, Amazon
+  Web Services.
+- script.c and script_lua.c: Copyright (c) 2009-2021, Redis Ltd.
+- pqsort.c: NetBSD's qsort, Copyright (c) 1992, 1993 The Regents of the
+  University of California; Redis's changes, Copyright (c) 2009-2012
+  Salvatore Sanfilippo.
+- lzf_d.c: Copyright (c) 2000-2010 Marc Alexander Lehmann. BSD 2-Clause
+  License, or, at the user's choice, the GPL version 2 or later; BendKV
+  takes it under the BSD license.
+- hdr_histogram: by Gil Tene, Michael Barker and Matt Warren, released to
+  the public domain (CC0 1.0), or under the BSD 2-Clause License.
+- MurmurHash64A: Austin Appleby's MurmurHash2, 64-bit version, in the
+  public domain, made endian-neutral by Redis.
+
+Bend (bend-patches/): patches to the Bend compiler and its runtime
+(github.com/bendlang/bend at 1cce499, Bend 2.0.35), Copyright 2026
+HigherOrderCO, under the Apache License, Version 2.0: bend-patches/LICENSE.
+Each patch is BendKV's change to Bend's files, and bend-patches/README.md
+says what each one changes.
+
+Redis is a registered trademark of Redis Ltd. Any rights therein are
+reserved to Redis Ltd. BendKV names Redis, and Valkey, only to say what it
+is compatible with and what it is measured against. It is not affiliated
+with, or endorsed by, Redis Ltd. or the Valkey project.
