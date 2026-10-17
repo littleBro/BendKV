@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # gen_config.py: the table of server parameters that CONFIG GET and CONFIG
-# SET serve (src/config.bend), taken from Redis 7.0.15's own table, so that
+# SET serve (src/config.bend), taken from Redis 7.2.16's own table, so that
 # BendKV knows every parameter Redis knows, with its type, bounds, flags and
 # default.
 #
@@ -16,7 +16,7 @@
 #   python3 tools/gen_config.py                      # JSON -> src/config.bend
 #   python3 tools/gen_config.py --check              # fails if out of date
 #
-# The table is data from Redis 7.0.15 (src/config.c, BSD 3-clause,
+# The table is data from Redis 7.2.16 (src/config.c, BSD 3-clause,
 # Copyright (c) 2009-2012 Salvatore Sanfilippo and Redis contributors).
 import json, re, sys, pathlib
 
@@ -39,7 +39,7 @@ APPLY = {"updateHZ": "AppHz{}", "updateRequirePass": "AppPass{}",
          "updatePort": 'AppFixed{"Unable to listen on this port. Check server logs."}',
          "applyBind": 'AppFixed{"Failed to bind to specified addresses."}',
          "updateAppendonly": 'AppFixed{"Unable to turn on AOF. Check server logs."}',
-         "updateReplBacklogSize": 'AppMin{"16384"}'}
+         "updateReplBacklogSize": 'AppMin{"16384"}', "updateLocaleCollate": "AppLocale{}"}
 # BendKV speaks no TLS: its port and the TLS of replication and of the
 # cluster cannot be turned on, which fails as in a Redis with no
 # certificates; the other TLS parameters are kept, as they are in Redis
@@ -173,13 +173,18 @@ SPECIAL = {"dir": ("dir", ""), "save": ("save", "3600 1 300 100 60 10000"),
            "bind": ("bind", "* -::*"), "replicaof": ("replicaof", ""),
            "latency-tracking-info-percentiles": ("pct", "50 99 99.9")}
 
+# the parameters a build has without LOG_REQ_RES (the request and reply
+# log of Redis's own tests, which a release build leaves out)
+def build_only(table):
+    return re.sub(r"#ifdef LOG_REQ_RES\n.*?#endif\n", "", table, flags=re.S)
+
 def extract(src):
     text = (src / "src" / "config.c").read_text()
     ev = constants(src)
     start = text.index("standardConfig static_configs[] = {")
     end = text.index("{NULL}", start)
     out = []
-    for kind, a in calls(text[start:end]):
+    for kind, a in calls(build_only(text[start:end])):
         e = {"name": c_str(a[0]), "alias": c_str(a[1]) or "", "flags": flag_set(a[2])}
         if kind == "Bool":
             e.update(type="bool", default="yes" if ev(a[4]) else "no", check=a[5], apply=a[6])
@@ -228,7 +233,8 @@ FMT = {(): "NPlain{}", ("memory",): "NMem{}", ("memory", "percent"): "NMemPct{}"
 CHECK = {"NULL": "VNone{}", "isValidDBfilename": "VFile{}", "isValidAOFfilename": "VAofFile{}",
          "isValidAOFdirname": "VAofDir{}", "isValidAnnouncedHostname": "VHost{}",
          "isValidProcTitleTemplate": "VTitle{}", "isValidShutdownOnSigFlags": "VSig{}",
-         "isValidActiveDefrag": "VDefrag{}"}
+         "isValidActiveDefrag": "VDefrag{}", "isValidClusterAnnounceIp": "VIp{}",
+         "isValidAnnouncedNodename": "VNodeName{}"}
 SPEC = {"dir": "XDir{}", "save": "XSave{}", "obuf": "XObuf{}", "oom": "XOom{}", "notify": "XNotify{}",
         "bind": "XBind{}", "replicaof": "XReplicaof{}", "pct": "XPct{}"}
 
@@ -251,7 +257,7 @@ def ty(e):
     return f"CSpec{{{SPEC[e['special']]}}}"
 
 def block(facts):
-    out = ["# every parameter of Redis 7.0.15 (built with TLS, as distributions build it), in the order of",
+    out = ["# every parameter of Redis 7.2.16 (built with TLS, as distributions build it), in the order of",
            "# Redis's table, each with its value when the server starts (written by",
            "# tools/gen_config.py from tools/data/redis-configs.json)",
            "def config.table() -> List<&2, CItem>:",

@@ -129,6 +129,13 @@ parts of it are written from 7.2.16's sources:
   never when its client goes while it waits but in WAIT (blocked.c's
   updateStatsOnUnblock, server.c's call() and replication.c), in
   src/info.bend and src/server.bend.
+- Configuration: tools/data/redis-configs.json, the parameters of
+  Redis 7.2.16's config.c, and the table tools/gen_config.py writes from
+  it into src/config.bend; the checks of cluster-announce-ip,
+  cluster-announce-human-nodename and locale-collate, as config.c's
+  isValidClusterAnnounceIp, cluster.c's isValidAuxChar and config.c's
+  updateLocaleCollate make them (src/config.bend, src/server.bend), and
+  loglevel's nothing (src/startup.bend).
 - Persistence: src/rdb.bend, from rdb.c, t_set.c and t_stream.c (RDB
   version 11: sets as SET_LISTPACK, the order an intset's members take
   when a set read from a file becomes a listpack, streams as

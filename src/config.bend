@@ -40,6 +40,8 @@ type Vet is Data:
   VTitle{}
   VSig{}
   VDefrag{}
+  VIp{}
+  VNodeName{}
 
 # the parameters that have a syntax of their own
 type XSpec is Data:
@@ -65,13 +67,16 @@ type CTy is Data:
 
 # what a new value does in BendKV: nothing more; hz is capped to 1..500;
 # a value below min is raised to it (repl-backlog-size); requirepass is
-# the password; or it cannot change, and msg is the error
+# the password; it cannot change, and msg is the error; or it is the
+# locale's name for collation (locale-collate), which takes only the
+# C locales: BendKV compares bytes, as they do
 type CApp is Data:
   AppNone{}
   AppHz{}
   AppMin{min: String}
   AppPass{}
   AppFixed{msg: String}
+  AppLocale{}
 
 # a parameter: its name, its other name (empty for none), whether it
 # cannot change while the server runs, whether a pattern skips it, whether
@@ -85,7 +90,7 @@ type CItem is Data:
   CItem{p: CParam, v: String}
 
 # BEGIN gen_config: table
-# every parameter of Redis 7.0.15 (built with TLS, as distributions build it), in the order of
+# every parameter of Redis 7.2.16 (built with TLS, as distributions build it), in the order of
 # Redis's table, each with its value when the server starts (written by
 # tools/gen_config.py from tools/data/redis-configs.json)
 def config.table() -> List<&2, CItem>:
@@ -134,16 +139,18 @@ def config.table() -> List<&2, CItem>:
     CItem{CParam{"cluster-allow-replica-migration", "", False{}, False{}, False{}, False{}, CBool{VNone{}}, AppNone{}}, "yes"},
     CItem{CParam{"replica-announced", "", False{}, False{}, False{}, False{}, CBool{VNone{}}, AppNone{}}, "yes"},
     CItem{CParam{"latency-tracking", "", False{}, False{}, False{}, False{}, CBool{VNone{}}, AppNone{}}, "yes"},
-    CItem{CParam{"aof-disable-auto-gc", "", False{}, False{}, False{}, False{}, CBool{VNone{}}, AppNone{}}, "no"},
+    CItem{CParam{"aof-disable-auto-gc", "", False{}, True{}, False{}, False{}, CBool{VNone{}}, AppNone{}}, "no"},
     CItem{CParam{"replica-ignore-disk-write-errors", "", False{}, False{}, False{}, False{}, CBool{VNone{}}, AppNone{}}, "no"},
+    CItem{CParam{"lua-enable-deprecated-api", "", True{}, True{}, False{}, False{}, CBool{VNone{}}, AppNone{}}, "no"},
     CItem{CParam{"aclfile", "", True{}, False{}, False{}, False{}, CStr{False{}, VNone{}}, AppNone{}}, ""},
     CItem{CParam{"unixsocket", "", True{}, False{}, False{}, False{}, CStr{True{}, VNone{}}, AppNone{}}, ""},
     CItem{CParam{"pidfile", "", True{}, False{}, False{}, False{}, CStr{True{}, VNone{}}, AppNone{}}, ""},
     CItem{CParam{"replica-announce-ip", "slave-announce-ip", False{}, False{}, False{}, False{}, CStr{True{}, VNone{}}, AppNone{}}, ""},
     CItem{CParam{"masteruser", "", False{}, False{}, False{}, False{}, CStr{True{}, VNone{}}, AppNone{}}, ""},
-    CItem{CParam{"cluster-announce-ip", "", False{}, False{}, False{}, False{}, CStr{True{}, VNone{}}, AppNone{}}, ""},
+    CItem{CParam{"cluster-announce-ip", "", False{}, False{}, False{}, False{}, CStr{True{}, VIp{}}, AppNone{}}, ""},
     CItem{CParam{"cluster-config-file", "", True{}, False{}, False{}, False{}, CStr{False{}, VNone{}}, AppNone{}}, "nodes.conf"},
     CItem{CParam{"cluster-announce-hostname", "", False{}, False{}, False{}, False{}, CStr{True{}, VHost{}}, AppNone{}}, ""},
+    CItem{CParam{"cluster-announce-human-nodename", "", False{}, False{}, False{}, False{}, CStr{True{}, VNodeName{}}, AppNone{}}, ""},
     CItem{CParam{"syslog-ident", "", True{}, False{}, False{}, False{}, CStr{False{}, VNone{}}, AppNone{}}, "redis"},
     CItem{CParam{"dbfilename", "", False{}, False{}, True{}, False{}, CStr{False{}, VFile{}}, AppNone{}}, "dump.rdb"},
     CItem{CParam{"appendfilename", "", True{}, False{}, False{}, False{}, CStr{False{}, VAofFile{}}, AppNone{}}, "appendonly.aof"},
@@ -156,12 +163,13 @@ def config.table() -> List<&2, CItem>:
     CItem{CParam{"proc-title-template", "", False{}, False{}, False{}, False{}, CStr{False{}, VTitle{}}, AppNone{}}, "{title} {listen-addr} {server-mode}"},
     CItem{CParam{"bind-source-addr", "", False{}, False{}, False{}, False{}, CStr{True{}, VNone{}}, AppNone{}}, ""},
     CItem{CParam{"logfile", "", True{}, False{}, False{}, False{}, CStr{False{}, VNone{}}, AppNone{}}, ""},
+    CItem{CParam{"locale-collate", "", False{}, False{}, False{}, False{}, CStr{False{}, VNone{}}, AppLocale{}}, ""},
     CItem{CParam{"masterauth", "", False{}, False{}, False{}, False{}, CStr{True{}, VNone{}}, AppNone{}}, ""},
     CItem{CParam{"requirepass", "", False{}, False{}, False{}, False{}, CStr{True{}, VNone{}}, AppPass{}}, ""},
     CItem{CParam{"supervised", "", True{}, False{}, False{}, False{}, CEnum{["upstart", "systemd", "auto", "no"], [3, 2, 1, 0], False{}, VNone{}}, AppNone{}}, "no"},
     CItem{CParam{"syslog-facility", "", True{}, False{}, False{}, False{}, CEnum{["user", "local0", "local1", "local2", "local3", "local4", "local5", "local6", "local7"], [8, 128, 136, 144, 152, 160, 168, 176, 184], False{}, VNone{}}, AppNone{}}, "local0"},
     CItem{CParam{"repl-diskless-load", "", False{}, False{}, False{}, False{}, CEnum{["disabled", "on-empty-db", "swapdb"], [0, 1, 2], False{}, VNone{}}, AppNone{}}, "disabled"},
-    CItem{CParam{"loglevel", "", False{}, False{}, False{}, False{}, CEnum{["debug", "verbose", "notice", "warning"], [0, 1, 2, 3], False{}, VNone{}}, AppNone{}}, "notice"},
+    CItem{CParam{"loglevel", "", False{}, False{}, False{}, False{}, CEnum{["debug", "verbose", "notice", "warning", "nothing"], [0, 1, 2, 3, 4], False{}, VNone{}}, AppNone{}}, "notice"},
     CItem{CParam{"maxmemory-policy", "", False{}, False{}, False{}, False{}, CEnum{["volatile-lru", "volatile-lfu", "volatile-random", "volatile-ttl", "allkeys-lru", "allkeys-lfu", "allkeys-random", "noeviction"], [1, 258, 768, 512, 1029, 1286, 1540, 1792], False{}, VNone{}}, AppNone{}}, "noeviction"},
     CItem{CParam{"appendfsync", "", False{}, False{}, False{}, False{}, CEnum{["everysec", "always", "no"], [2, 1, 0], False{}, VNone{}}, AppNone{}}, "everysec"},
     CItem{CParam{"oom-score-adj", "", False{}, False{}, False{}, False{}, CEnum{["no", "yes", "relative", "absolute"], [0, 1, 1, 2], False{}, VNone{}}, AppNone{}}, "no"},
@@ -219,6 +227,7 @@ def config.table() -> List<&2, CItem>:
     CItem{CParam{"acllog-max-len", "", False{}, False{}, False{}, False{}, CNum{False{}, "0", "9223372036854775807", NPlain{}}, AppNone{}}, "128"},
     CItem{CParam{"busy-reply-threshold", "lua-time-limit", False{}, False{}, False{}, False{}, CNum{True{}, "0", "9223372036854775807", NPlain{}}, AppNone{}}, "5000"},
     CItem{CParam{"cluster-node-timeout", "", False{}, False{}, False{}, False{}, CNum{True{}, "0", "9223372036854775807", NPlain{}}, AppNone{}}, "15000"},
+    CItem{CParam{"cluster-ping-interval", "", False{}, True{}, False{}, False{}, CNum{True{}, "0", "9223372036854775807", NPlain{}}, AppNone{}}, "0"},
     CItem{CParam{"slowlog-log-slower-than", "", False{}, False{}, False{}, False{}, CNum{True{}, "-1", "9223372036854775807", NPlain{}}, AppNone{}}, "10000"},
     CItem{CParam{"latency-monitor-threshold", "", False{}, False{}, False{}, False{}, CNum{True{}, "0", "9223372036854775807", NPlain{}}, AppNone{}}, "0"},
     CItem{CParam{"proto-max-bulk-len", "", False{}, False{}, False{}, False{}, CNum{True{}, "1048576", "9223372036854775807", NMem{}}, AppNone{}}, "536870912"},
@@ -228,6 +237,8 @@ def config.table() -> List<&2, CItem>:
     CItem{CParam{"cluster-link-sendbuf-limit", "", False{}, False{}, False{}, False{}, CNum{False{}, "0", "18446744073709551615", NMem{}}, AppNone{}}, "0"},
     CItem{CParam{"hash-max-listpack-entries", "hash-max-ziplist-entries", False{}, False{}, False{}, False{}, CNum{False{}, "0", "9223372036854775807", NPlain{}}, AppNone{}}, "512"},
     CItem{CParam{"set-max-intset-entries", "", False{}, False{}, False{}, False{}, CNum{False{}, "0", "9223372036854775807", NPlain{}}, AppNone{}}, "512"},
+    CItem{CParam{"set-max-listpack-entries", "", False{}, False{}, False{}, False{}, CNum{False{}, "0", "9223372036854775807", NPlain{}}, AppNone{}}, "128"},
+    CItem{CParam{"set-max-listpack-value", "", False{}, False{}, False{}, False{}, CNum{False{}, "0", "9223372036854775807", NPlain{}}, AppNone{}}, "64"},
     CItem{CParam{"zset-max-listpack-entries", "zset-max-ziplist-entries", False{}, False{}, False{}, False{}, CNum{False{}, "0", "9223372036854775807", NPlain{}}, AppNone{}}, "128"},
     CItem{CParam{"active-defrag-ignore-bytes", "", False{}, False{}, False{}, False{}, CNum{False{}, "1", "9223372036854775807", NMem{}}, AppNone{}}, "104857600"},
     CItem{CParam{"hash-max-listpack-value", "hash-max-ziplist-value", False{}, False{}, False{}, False{}, CNum{False{}, "0", "9223372036854775807", NMem{}}, AppNone{}}, "64"},
@@ -679,6 +690,134 @@ def text.host(s: String) -> Bool:
     case SCon{Chr{+x}, t}:
       Bool.and(Bool.or(Bool.or(byte.digit(x), byte.alpha(x)), Bool.or(U32.is_eq(x, 45), U32.is_eq(x, 46))), text.host(t))
 
+# s up to its first NUL, as C reads a string
+def text.cstr(+s: String) -> String:
+  String.take(s, String.find(s, Chr{0}, 0n))
+
+# cluster-announce-ip (isValidClusterAnnounceIp): empty, or an address as
+# inet_pton reads one, IPv4 or IPv6. An IPv4 address is four numbers of 0
+# to 255 split by dots, none with a zero before its digits. I4 is such a
+# read under way: the number being read (n, of d digits) and the numbers
+# before it (k); or a text that is no address
+type I4 is Data:
+  I4At{n: Nat, d: Nat, k: Nat}
+  I4Bad{}
+
+def ip4.digit(+n: Nat, +d: Nat, +k: Nat, +v: Nat) -> I4:
+  +m = Nat.add(Nat.mul(n, 10n), v)
+  Bool.pick(I4, Bool.or(Bool.and(Nat.is_lt(0n, d), Nat.is_eq(n, 0n)), Nat.is_lt(255n, m)), I4Bad{}, I4At{m, 1n+d, k})
+
+def ip4.step(r: I4, +x: U32) -> I4:
+  match r:
+    case I4At{+n, +d, +k}:
+      Bool.pick(I4, byte.digit(x), ip4.digit(n, d, k, Nat.sub(U32.to_nat(x), 48n)),
+        Bool.pick(I4, Bool.and(U32.is_eq(x, 46), Bool.and(Nat.is_lt(0n, d), Nat.is_lt(k, 3n))), I4At{0n, 0n, 1n+k}, I4Bad{}))
+    case I4Bad{}:
+      I4Bad{}
+
+def ip4.go(s: String, r: I4) -> I4:
+  match s:
+    case SNil{}:
+      r
+    case SCon{Chr{+x}, t}:
+      ip4.go(t, ip4.step(r, x))
+
+def ip4.done(r: I4) -> Bool:
+  match r:
+    case I4At{n, +d, +k}:
+      Bool.and(Nat.is_lt(0n, d), Nat.is_eq(k, 3n))
+    case I4Bad{}:
+      False{}
+
+def text.ip4(s: String) -> Bool:
+  ip4.done(ip4.go(s, I4At{0n, 0n, 0n}))
+
+# An IPv6 address (RFC 4291's text form): eight groups of one to four hex
+# digits split by ':', or fewer, where one '::' stands for one group of
+# zeros or more; its last two groups may be an IPv4 address instead. H6 is
+# the read of the groups under way: the groups done (g), the digits of the
+# group being read (h), whether '::' came (dc), and the last character (c:
+# 0 a digit, or none yet; 1 a ':' after a group; 2 the second ':' of '::';
+# 3 a ':' that begins the text, which another must follow)
+type H6 is Data:
+  H6At{g: Nat, h: Nat, dc: Bool, c: Nat}
+  H6Bad{}
+
+def byte.hex(+x: U32) -> Bool:
+  Bool.or(byte.digit(x), Bool.or(Bool.and(U32.is_ge(x, 65), U32.is_le(x, 70)), Bool.and(U32.is_ge(x, 97), U32.is_le(x, 102))))
+
+def ip6.colon(+g: Nat, +h: Nat, +dc: Bool, +c: Nat) -> H6:
+  Bool.pick(H6, Nat.is_lt(0n, h), H6At{1n+g, 0n, dc, 1n},
+    Bool.pick(H6, Nat.is_eq(c, 0n), H6At{g, 0n, dc, 3n},
+      Bool.pick(H6, Bool.or(Nat.is_eq(c, 3n), Bool.and(Nat.is_eq(c, 1n), Bool.not(dc))), H6At{g, 0n, True{}, 2n}, H6Bad{})))
+
+def ip6.step(r: H6, +x: U32) -> H6:
+  match r:
+    case H6At{+g, +h, +dc, +c}:
+      Bool.pick(H6, byte.hex(x), Bool.pick(H6, Bool.or(Nat.is_eq(c, 3n), Nat.is_eq(h, 4n)), H6Bad{}, H6At{g, 1n+h, dc, 0n}),
+        Bool.pick(H6, U32.is_eq(x, 58), ip6.colon(g, h, dc, c), H6Bad{}))
+    case H6Bad{}:
+      H6Bad{}
+
+def ip6.go(s: String, r: H6) -> H6:
+  match s:
+    case SNil{}:
+      r
+    case SCon{Chr{+x}, t}:
+      ip6.go(t, ip6.step(r, x))
+
+def ip6.done(r: H6) -> Bool:
+  match r:
+    case H6At{+g, +h, +dc, +c}:
+      Bool.pick(Bool, Nat.is_lt(0n, h), Bool.pick(Bool, dc, Nat.is_le(1n+g, 7n), Nat.is_eq(1n+g, 8n)),
+        Bool.and(Nat.is_eq(c, 2n), Nat.is_le(g, 7n)))
+    case H6Bad{}:
+      False{}
+
+def ip6.hex(s: String) -> Bool:
+  ip6.done(ip6.go(s, H6At{0n, 0n, False{}, 0n}))
+
+# the text after the last ':' (of length n) is an IPv4 address when it has
+# a dot: the rest, with two groups in its place, must then be IPv6's
+def ip6.tail(dot: Bool, +s: String, +n: Nat) -> Bool:
+  match dot:
+    case True{}:
+      +k = Nat.sub(String.length(s), n)
+      Bool.and(text.ip4(String.drop(s, k)), ip6.hex(String.take(s, k) ++ "0:0"))
+    case False{}:
+      ip6.hex(s)
+
+def text.ip6(+s: String) -> Bool:
+  +r = String.reverse(s)
+  +n = String.find(r, Chr{58}, 0n)
+  ip6.tail(Nat.is_lt(String.find(r, Chr{46}, 0n), n), s, n)
+
+def text.ip(+s: String) -> Bool:
+  +c = text.cstr(s)
+  Bool.or(String.is_empty(c), Bool.or(text.ip4(c), text.ip6(c)))
+
+# cluster-announce-human-nodename (isValidAuxString): no control byte, and
+# none of !#$%&()*+:;<>?@[]^{|}~,= "'\ (bytes past 127 pass, as C's
+# signed chars do)
+def byte.aux(+x: U32) -> Bool:
+  Bool.not(Bool.or(Bool.or(U32.is_lt(x, 33), U32.is_eq(x, 127)),
+    Bool.or(Bool.or(Bool.or(U32.is_eq(x, 33), Bool.and(U32.is_ge(x, 34), U32.is_le(x, 44))), Bool.or(U32.is_eq(x, 58), U32.is_eq(x, 59))),
+      Bool.or(Bool.or(Bool.and(U32.is_ge(x, 60), U32.is_le(x, 64)), Bool.and(U32.is_ge(x, 91), U32.is_le(x, 94))), Bool.and(U32.is_ge(x, 123), U32.is_le(x, 126))))))
+
+def text.aux(s: String) -> Bool:
+  match s:
+    case SNil{}:
+      True{}
+    case SCon{Chr{+x}, t}:
+      Bool.and(byte.aux(x), text.aux(t))
+
+# the locales of C, whose collation is the bytes' order: the start's
+# (empty: the environment's, which BendKV reads as C), C, POSIX and C's
+# UTF-8
+def text.locale(+s: String) -> Bool:
+  Bool.or(Bool.or(String.is_empty(s), String.eq(s, "C")),
+    Bool.or(String.eq(s, "POSIX"), Bool.or(String.eq(s, "C.UTF-8"), String.eq(s, "C.utf8"))))
+
 # proc-title-template: Redis expands it with an empty title and keeps it
 # only when it expands to more than spaces. Its variables: {title},
 # {listen-addr}, {server-mode}, {config-file}, {port}, {tls-port} and
@@ -746,6 +885,10 @@ def str.set(vet: Vet, +v: String) -> Result<&2, &2, String, String>:
         Bool.pick(Result<&2, &2, String, String>, text.host(v), Done{v}, Fail{"Hostnames may only contain alphanumeric characters, hyphens or dots"}))
     case VTitle{}:
       Bool.pick(Result<&2, &2, String, String>, title.ok(title.go(v, TText{}, False{})), Done{v}, Fail{"template format is invalid or contains unknown variables"})
+    case VIp{}:
+      Bool.pick(Result<&2, &2, String, String>, text.ip(v), Done{v}, Fail{"Cluster announce IP must be a valid IPv4 or IPv6 address"})
+    case VNodeName{}:
+      Bool.pick(Result<&2, &2, String, String>, text.aux(v), Done{v}, Fail{"Announced human node name contained invalid character"})
     case _:
       Done{v}
 
@@ -1557,18 +1700,29 @@ def vals.err(vs: List<&2, Val>) -> Maybe<&2, String>:
     case Con{VOk{it, k, nv}, rest}:
       vals.err(rest)
 
-# a new value that cannot be applied: one that changes a fixed parameter
-def fixed.of(app: CApp, +key: String, same: Bool) -> Maybe<&2, String>:
-  match app same:
-    case AppFixed{msg} False{}:
+def fixed.fail(+key: String, +msg: String, ok: Bool) -> Maybe<&2, String>:
+  match ok:
+    case True{}:
+      None{}
+    case False{}:
       Some{e.set(key, msg)}
-    case _ _:
+
+# a new value that cannot be applied: one that changes a fixed parameter,
+# or a locale BendKV does not collate by (updateLocaleCollate's error);
+# same is whether the new value is the old one
+def fixed.of(app: CApp, +key: String, +nv: String, same: Bool) -> Maybe<&2, String>:
+  match app:
+    case AppFixed{msg}:
+      fixed.fail(key, msg, same)
+    case AppLocale{}:
+      fixed.fail(key, "Invalid locale name", Bool.or(same, text.locale(nv)))
+    case _:
       None{}
 
 def fixed.err(it: CItem, +key: String, +nv: String) -> Maybe<&2, String>:
   match it:
     case CItem{CParam{name, alias, imm, hidden, prot, multi, ty, app}, +old}:
-      fixed.of(app, key, String.eq(old, nv))
+      fixed.of(app, key, nv, String.eq(old, nv))
 
 def fixed.first(vs: List<&2, Val>) -> Maybe<&2, String>:
   match vs:
