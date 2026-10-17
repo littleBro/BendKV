@@ -9185,6 +9185,16 @@ the move's other kinds (below).
     246): "Pre-GA function format not supported" (`lib.kind`). An RDB file's library in
     that format stops the start, as Redis 7.2.16's does (kind E: section 3zzzzc).
   - SCRIPT KILL's line in the log is a notice (`*`), not a warning (`#`).
+- **Lua's numbers** (with kind C's `fpconv_dtoa`, section 3zzzzh).
+  - A number passed to `redis.call` is written as `luaArgsToRedisArgv` writes it. An
+    integer that a long long holds within 2^62 is written as one (`double2ll`); any other
+    as `fpconv_dtoa` writes it. So `3.14` and `0.1`, where 7.0's `%.17g` gave
+    `3.1400000000000001`; `-0` is `0`, and a NaN is `fpconv_dtoa`'s `-nan` (0/0 on x86-64).
+  - A script's `{double=...}` reply is `d2string`'s, as `addReplyDouble` writes it, in RESP2
+    and RESP3: `0.1`, `nan`, `-0`.
+  - The engine calls the vendored `fpconv_dtoa.c` (`sc_double2ll` and `sc_d2string` in
+    `src/lua/engine.c`). One change from 7.2.16: its `double2ll` casts a NaN to a long long
+    before it compares, which C leaves undefined. The port tests the range first.
 - **What was so already.**
   - Time stands still while a script runs, as 7.2's `commandTimeSnapshot` holds it:
     TIME, SET's EX and PX, EXPIRE, TTL and the keys' expiry all read the group's time.
@@ -9199,7 +9209,8 @@ the move's other kinds (below).
     queued, without waiting (`sc.run.call`), so it needs only the table.
   - `redis.REDIS_VERSION` and `REDIS_VERSION_NUM`, and HELP's last line, "Print this
     help." (kind A).
-  - Lua's numbers in `redis.call`, and a script's double, in `fpconv_dtoa`'s form (kind C).
+  - Lua's numbers in `redis.call`, and a script's double, in `fpconv_dtoa`'s form (kind C,
+    done: above).
   - The order of pushes, and the keys that a script's reads track (kind F, done in
     section 3zzzzg).
 
@@ -9209,7 +9220,7 @@ pushes and tracking (F), NOPERM's texts (G), ACL LOG's new fields and CLIENT LIS
 `lib-name` and `lib-ver` (B and H), FUNCTION DUMP's version and the RESTORE of a payload
 of version 11 (E). Once A, E, F, G and H were in, function_test passed against 7.2.16,
 and script_test differed in Lua's doubles alone (C); a blocking command in a script ran
-as in MULTI with A's table, nothing more.
+as in MULTI with A's table, nothing more. With C's `fpconv_dtoa`, script_test passes too.
 
 **What it costs.** Nothing on a request's path: the metatables are protected when a state
 is made, and the texts are made only for an error or a refusal.

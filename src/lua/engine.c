@@ -67,6 +67,7 @@
 #include <lua.h>
 #include <lualib.h>
 
+#include "fpconv_dtoa.h"
 #include "rand.h"
 #include "resp_parser.h"
 #include "server.h"
@@ -763,17 +764,46 @@ static void sc_bulk(ScBuf* b, const char* s, size_t n) {
   sc_buf_add(b, "\r\n", 2);
 }
 
-static void sc_double(ScRun* r, ScBuf* b, double d) {
-  if (isinf(d)) {
-    if (r->caller_resp == 2) {
-      sc_buf_str(b, d > 0 ? "$3\r\ninf\r\n" : "$4\r\n-inf\r\n");
-    } else {
-      sc_buf_str(b, d > 0 ? ",inf\r\n" : ",-inf\r\n");
-    }
-    return;
+// util.c's double2ll: whether d is an integer that a long long holds
+// without loss (within 2^62 either way), and which. A NaN fails the range's
+// test before the cast, which Redis makes of it too and C leaves undefined
+static int sc_double2ll(double d, long long* out) {
+  if (!(d >= (double)(-LLONG_MAX / 2) && d <= (double)(LLONG_MAX / 2))) {
+    return 0;
   }
-  char dbuf[5 * 1024 + 32];
-  int n = snprintf(dbuf, sizeof(dbuf), "%.17g", d);
+  long long ll = (long long)d;
+  if ((double)ll == d) {
+    *out = ll;
+    return 1;
+  }
+  return 0;
+}
+
+// util.c's d2string, as Redis 7.2 writes a double reply (addReplyDouble):
+// nan, inf and -inf, 0 and -0, an integer as one, any other in
+// fpconv_dtoa's shortest form; its length
+static int sc_d2string(char* buf, size_t len, double d) {
+  if (isnan(d)) {
+    return snprintf(buf, len, "nan");
+  }
+  if (isinf(d)) {
+    return snprintf(buf, len, d < 0 ? "-inf" : "inf");
+  }
+  if (d == 0) {
+    return snprintf(buf, len, signbit(d) ? "-0" : "0");
+  }
+  long long ll;
+  if (sc_double2ll(d, &ll)) {
+    return snprintf(buf, len, "%lld", ll);
+  }
+  int n = fpconv_dtoa(d, buf);
+  buf[n] = '\0';
+  return n;
+}
+
+static void sc_double(ScRun* r, ScBuf* b, double d) {
+  char dbuf[64];
+  int n = sc_d2string(dbuf, sizeof(dbuf), d);
   if (r->caller_resp == 2) {
     sc_bulk(b, dbuf, (size_t)n);
   } else {
@@ -1003,8 +1033,10 @@ static void sc_lua_to_reply(ScRun* r, lua_State* L, ScBuf* b) {
 // -------------
 
 // the arguments of a call as a RESP request in r->out: a number is
-// written as "%.17g", as Redis writes it; 0 and an error pushed when one
-// is neither a string nor a number
+// written as luaArgsToRedisArgv writes it, an integer as one, any other in
+// fpconv_dtoa's shortest form (-0 as 0, and a NaN as fpconv_dtoa has it,
+// nan or -nan); 0 and an error pushed when one is neither a string nor a
+// number
 static int sc_args_to_request(lua_State* L, ScRun* r) {
   int argc = lua_gettop(L);
   if (argc == 0) {
@@ -1017,7 +1049,9 @@ static int sc_args_to_request(lua_State* L, ScRun* r) {
   for (j = 0; j < argc; j += 1) {
     if (lua_type(L, j + 1) == LUA_TNUMBER) {
       char dbuf[64];
-      int n = snprintf(dbuf, sizeof(dbuf), "%.17g", (double)lua_tonumber(L, j + 1));
+      double num = (double)lua_tonumber(L, j + 1);
+      long long ll;
+      int n = sc_double2ll(num, &ll) ? snprintf(dbuf, sizeof(dbuf), "%lld", ll) : fpconv_dtoa(num, dbuf);
       sc_bulk(&r->out, dbuf, (size_t)n);
     } else {
       size_t n;

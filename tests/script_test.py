@@ -22,7 +22,8 @@ The scenarios:
    nested arrays, HGETALL), the errors of commands (WRONGTYPE, an
    unknown command, a wrong number of arguments, no arguments at all, an
    argument that is a table, a boolean or nil), numbers as arguments
-   (%.17g), pcall's error table and pcall(redis.call, ...)'s plain
+   (an integer as one, any other in fpconv_dtoa's shortest form, -0 as
+   0, inf and NaN), pcall's error table and pcall(redis.call, ...)'s plain
    message, the commands a script may not call (EVAL, MULTI, SUBSCRIBE),
    the blocking ones, which run as in MULTI, without waiting (BLPOP,
    BRPOPLPUSH, BZPOPMIN, BLMPOP, BZMPOP, WAIT), XREAD's BLOCK, which
@@ -275,6 +276,11 @@ RETURNS = [
     "return redis.status_reply({})", "return redis.status_reply()",
     # RESP3's types as tables, each in the caller's protocol
     "return {double=1.5}", "return {double=0.1}", "return {double=-1/0}", "return {double='x'}",
+    # a double as d2string writes it: nan, -0, an integer as one (within
+    # 2^62 either way), any other as fpconv_dtoa
+    "local z = 0 return {double=z/z}", "return {double=-0}", "return {double=100}", "return {double=1e17}",
+    "return {double=2^62}", "return {double=-2^62}", "return {double=2^62 + 2048}", "return {double=2^63}",
+    "return {double=1e300}", "return {double=5e-324}", "return {double=1/3}",
     "return {map={a=1, b='two', c={1, 2}}}", "return {map={}}", "return {set={x=true, y=true}}",
     "return {big_number='123456789012345678901234567890'}", "return {big_number='1\\r\\n2'}",
     "return {verbatim_string={format='txt', string='hello'}}", "return {verbatim_string={format='txt'}}",
@@ -379,8 +385,11 @@ CALLS = [
     ("return redis.call({})", [], []),
     ("return redis.call('SET', KEYS[1], 'v', 'EX', 0)", ["str"], []),
     ("return redis.call('SET', KEYS[1], 'v', 'XX', 'NX')", ["str"], []),
-    # numbers as arguments: %.17g (and -0, inf, nan made at run time)
+    # numbers as arguments: an integer as one within 2^62 either way, any
+    # other as fpconv_dtoa (and -0, inf, nan made at run time)
     ("local out = {} for i, v in ipairs({3.14, 0.1, 1/3, 100, -7, 2^63, 1e100, 1e-300, 5e-324, 2^53 + 1}) do "
+     "redis.call('SET', KEYS[1], v) out[i] = redis.call('GET', KEYS[1]) end return out", ["n"], []),
+    ("local out = {} for i, v in ipairs({2^62, -2^62, 2^62 + 2048, -2^62 - 2048, 1e17, 123456789.5, 1e21}) do "
      "redis.call('SET', KEYS[1], v) out[i] = redis.call('GET', KEYS[1]) end return out", ["n"], []),
     ("local z = tonumber(ARGV[1]) local out = {} for i, v in ipairs({-z, 1/z, -1/z, z/z}) do "
      "redis.call('SET', KEYS[1], v) out[i] = redis.call('GET', KEYS[1]) end return out", ["n"], ["0"]),
