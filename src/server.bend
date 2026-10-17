@@ -43,6 +43,7 @@ import ./config.bend as C
 import ./startup.bend as T
 import ./info.bend as I
 import ./rdb.bend as D
+import ./aofdir.bend as AD
 import ./command.bend as M
 import ./float.bend as F
 import ./hll.bend as H
@@ -10367,6 +10368,17 @@ def group_from(+log: Bool, qs: List<&1, Req>, g: Grp, +s0: U32, +k: U32) -> Grp:
 type RwRun is Data:
   RwRun{snap: Maybe<&2, A.Snap>, tmp: String, size: Nat, pend: List<&2, String>, pn: Nat, buf: List<&2, String>}
 
+# the directory of Redis 7's multi-part layout the rewrite writes to
+# (The append-only directory): none (the single file of Redis 6, path),
+# or the directory (appenddirname), the files' name (appendfilename), its
+# manifest, the size of the files when the rewrite that runs began (the
+# next base and the incremental file it began then are the files' size
+# after it), and the channel that gives everysec's syncer the path of the
+# incremental file the actor appends to
+type RDir is Data:
+  RDirNone{}
+  RDir{dname: String, name: String, mf: AD.Mf, inc0: Nat, pc: Chan(String)}
+
 # what the actor asks of a background save's writer (Background saves:
 # bgw.loop), which holds its temporary file open: bytes appended, and the
 # file synced after them when sync; the file's last bytes appended, the
@@ -10413,7 +10425,7 @@ type BgRun is Data:
 # in every frame of the actor's loop, and the widest frame sets the
 # registers of every function.
 type Rw is Data:
-  Rw{path: String, aof: Bool, pid: U32, cron: Nat, delay: Nat, until: Nat, last: Nat, run: Maybe<&2, RwRun>, bg: Maybe<&2, BgRun>, next: Nat, carry: Nat}
+  Rw{path: String, aof: Bool, pid: U32, cron: Nat, delay: Nat, until: Nat, last: Nat, run: Maybe<&2, RwRun>, bg: Maybe<&2, BgRun>, next: Nat, carry: Nat, dir: RDir}
   RwOf{r: Rw}
 
 # what a step of a rewrite reads and changes: the server's state (INFO's
@@ -10422,8 +10434,8 @@ type Rw is Data:
 type Rx is Data:
   Rx{srv: S.Srv, ds: R.Ds, sel: Nat, rw: Rw}
 
-def rw.new(+path: String, +aof: Bool, +pid: U32) -> Rw:
-  Rw{path, aof, pid, 0n, 0n, 0n, 0n, None{}, None{}, 0n, 0n}
+def rw.new(+path: String, +aof: Bool, +pid: U32, dir: RDir) -> Rw:
+  Rw{path, aof, pid, 0n, 0n, 0n, 0n, None{}, None{}, 0n, 0n, dir}
 
 def run.is(+m: Maybe<&2, RwRun>) -> Bool:
   match m:
@@ -10444,21 +10456,21 @@ def bgr.is(+m: Maybe<&2, BgRun>) -> Bool:
 # the snapshot holds of a key it frees: Eviction)
 def rw.runs(+rw: Rw) -> Bool:
   match rw:
-    case Rw{path, aof, pid, cron, delay, until, last, +run, bg, next, carry}:
+    case Rw{path, aof, pid, cron, delay, until, last, +run, bg, next, carry, dir}:
       run.is(run)
     case RwOf{+r}:
       rw.runs(r)
 
 def rw.saving(+rw: Rw) -> Bool:
   match rw:
-    case Rw{path, aof, pid, cron, delay, until, last, run, +bg, next, carry}:
+    case Rw{path, aof, pid, cron, delay, until, last, run, +bg, next, carry, dir}:
       bgr.is(bg)
     case RwOf{+r}:
       rw.saving(r)
 
 def rw.busy(+rw: Rw) -> Bool:
   match rw:
-    case Rw{path, aof, pid, cron, delay, until, last, +run, +bg, next, carry}:
+    case Rw{path, aof, pid, cron, delay, until, last, +run, +bg, next, carry, dir}:
       Bool.or(run.is(run), bgr.is(bg))
     case RwOf{+r}:
       rw.busy(r)
@@ -10466,7 +10478,7 @@ def rw.busy(+rw: Rw) -> Bool:
 # whether the next slice may go at now (ms)
 def rw.due(+rw: Rw, +now: Nat) -> Bool:
   match rw:
-    case Rw{path, aof, pid, cron, delay, until, last, run, bg, +next, carry}:
+    case Rw{path, aof, pid, cron, delay, until, last, run, bg, +next, carry, dir}:
       Nat.is_le(next, now)
     case RwOf{+r}:
       rw.due(r, now)
@@ -10515,7 +10527,7 @@ def rw.what.of(+ask: Nat, runs: Bool, saving: Bool, +srv: S.Srv, +cron: Nat, +la
 
 def rw.what(+rw: Rw, +srv: S.Srv, +now: Nat) -> Nat:
   match rw:
-    case Rw{path, aof, pid, +cron, delay, until, +last, +run, +bg, +next, carry}:
+    case Rw{path, aof, pid, +cron, delay, until, +last, +run, +bg, +next, carry, dir}:
       rw.what.of(bg.ask(srv), run.is(run), bgr.is(bg), srv, cron, last, next, now)
     case RwOf{+r}:
       rw.what(r, srv, now)
@@ -10528,10 +10540,19 @@ def run.keep(m: Maybe<&2, RwRun>, +bytes: String) -> Maybe<&2, RwRun>:
     case None{}:
       None{}
 
+# the same with the single file alone: in the directory, the entries go
+# to the incremental file the rewrite began (The append-only directory)
+def run.keep.in(d: RDir, m: Maybe<&2, RwRun>, +bytes: String) -> Maybe<&2, RwRun>:
+  match d:
+    case RDirNone{}:
+      run.keep(m, bytes)
+    case RDir{dn, n, mf, i, pc}:
+      m
+
 def rw.keep(rw: Rw, +bytes: String) -> Rw:
   match rw:
-    case Rw{path, aof, pid, cron, delay, until, last, run, bg, next, carry}:
-      Rw{path, aof, pid, cron, delay, until, last, run.keep(run, bytes), bg, next, carry}
+    case Rw{path, aof, pid, cron, delay, until, last, run, bg, next, carry, +dir}:
+      Rw{path, aof, pid, cron, delay, until, last, run.keep(run, bytes), bg, next, carry, dir}
     case RwOf{r}:
       rw.keep(r, bytes)
 
@@ -12540,6 +12561,116 @@ def err.msg(e: U32 & String) -> String:
   (code, msg) = e
   msg
 
+# The manifest on the disk
+# ------------------------
+# The manifest of Redis 7's multi-part layout (The append-only directory)
+# written as writeAofManifestFile writes it: temp-<appendfilename>.manifest
+# in the directory, written, synced and renamed onto
+# <appendfilename>.manifest, then the directory synced; a failure logged
+# with Redis's line for it. Whether it was written.
+
+@unsafe
+def mfw.fail(+lg: Log, +msg: String) -> IO(Bool):
+  do IO<Bool>:
+    Unit <- log(lg, 3, msg)
+    IO.pure(Bool, False{})
+
+@unsafe
+def mfw.dir(d: Result<&1, &1, U32 & String, Unit>, +lg: Log, +path: String) -> IO(Bool):
+  match d:
+    case Fail{e}:
+      mfw.fail(lg, "Fail to fsync AOF directory " ++ path ++ ": " ++ err.msg(e) ++ ".")
+    case Done{u}:
+      IO.pure(Bool, True{})
+
+@unsafe
+def mfw.renamed(r: Result<&1, &1, U32 & String, Unit>, +lg: Log, +tmp: String, +name: String, +path: String) -> IO(Bool):
+  match r:
+    case Fail{e}:
+      mfw.fail(lg, "Error trying to rename the temporary AOF manifest file " ++ tmp ++ " into " ++ name ++ ": " ++ err.msg(e))
+    case Done{u}:
+      do IO<Bool>:
+        d : Result<&1, &1, U32 & String, Unit> <- File.sync_dir(path)
+        mfw.dir(d, lg, path)
+
+@unsafe
+def mfw.synced.at(r: Result<&1, &1, U32 & String, Unit>, +lg: Log, +dn: String, +tmp: String, +name: String) -> IO(Bool):
+  match r:
+    case Fail{e}:
+      mfw.fail(lg, "Fail to fsync the temp AOF file " ++ tmp ++ ": " ++ err.msg(e) ++ ".")
+    case Done{u}:
+      do IO<Bool>:
+        q : Result<&1, &1, U32 & String, Unit> <- File.rename(dn ++ "/" ++ tmp, dn ++ "/" ++ name)
+        mfw.renamed(q, lg, tmp, name, dn ++ "/" ++ name)
+
+@unsafe
+def mfw.synced(p: File & Result<&1, &1, U32 & String, Unit>, +lg: Log, +dn: String, +tmp: String, +name: String) -> IO(Bool):
+  (f, r) = p
+  do IO<Bool>:
+    Unit <- File.close(f)
+    mfw.synced.at(r, lg, dn, tmp, name)
+
+@unsafe
+def mfw.wrote(p: File & Result<&1, &1, U32 & String, Unit>, +lg: Log, +dn: String, +tmp: String, +name: String) -> IO(Bool):
+  (f, r) = p
+  match r:
+    case Fail{e}:
+      do IO<Bool>:
+        Unit <- File.close(f)
+        mfw.fail(lg, "Error trying to write the temporary AOF manifest file " ++ tmp ++ ": " ++ err.msg(e))
+    case Done{u}:
+      do IO<Bool>:
+        q : File & Result<&1, &1, U32 & String, Unit> <- File.sync(f)
+        mfw.synced(q, lg, dn, tmp, name)
+
+@unsafe
+def mfw.opened(m: Result<&1, &1, U32 & String, File>, +lg: Log, +dn: String, +tmp: String, +name: String, +text: String) -> IO(Bool):
+  match m:
+    case Fail{e}:
+      mfw.fail(lg, "Can't open the AOF manifest file " ++ tmp ++ ": " ++ err.msg(e))
+    case Done{f}:
+      do IO<Bool>:
+        p : File & Result<&1, &1, U32 & String, Unit> <- File.write_raw(f, text)
+        mfw.wrote(p, lg, dn, tmp, name)
+
+# the manifest mf, of the files named n, written into the directory dn
+@unsafe
+def mf.save(+lg: Log, +dn: String, +n: String, mf: AD.Mf) -> IO(Bool):
+  +tmp = "temp-" ++ n ++ ".manifest"
+  do IO<Bool>:
+    m : Result<&1, &1, U32 & String, File> <- File.open(dn ++ "/" ++ tmp, "w")
+    mfw.opened(m, lg, dn, tmp, n ++ ".manifest", AD.mf.text(mf))
+
+# the history files of mf removed, each logged, then mf written without
+# them (aofDelHistoryFiles), unless aof-disable-auto-gc is yes (on) or
+# there are none: the manifest after it
+@unsafe
+def dir.unlink.all(+lg: Log, +dn: String, hs: List<&2, String>) -> IO(Unit):
+  match hs:
+    case Nil{}:
+      IO.pure(Unit, Unit{})
+    case Con{+h, rest}:
+      do IO<Unit>:
+        Unit <- log(lg, 2, "Removing the history file " ++ h ++ " in the background")
+        r : Result<&1, &1, U32 & String, Unit> <- File.unlink(dn ++ "/" ++ h)
+        dir.unlink.all(lg, dn, rest)
+
+@unsafe
+def dir.gc.at(go: Bool, +lg: Log, +dn: String, +n: String, +mf: AD.Mf) -> IO(AD.Mf):
+  match go:
+    case False{}:
+      IO.pure(AD.Mf, mf)
+    case True{}:
+      +m2 = AD.mf.hist.gone(mf)
+      do IO<AD.Mf>:
+        Unit <- dir.unlink.all(lg, dn, AD.mf.hist.names(mf))
+        ok : Bool <- mf.save(lg, dn, n, m2)
+        IO.pure(AD.Mf, m2)
+
+@unsafe
+def dir.gc(+lg: Log, +items: List<&2, C.CItem>, +dn: String, +n: String, +mf: AD.Mf) -> IO(AD.Mf):
+  dir.gc.at(Bool.and(String.eq(C.config.get_value(items, "aof-disable-auto-gc"), "no"), Bool.not(List.is_empty(&2, String, AD.mf.hist.names(mf)))), lg, dn, n, mf)
+
 # The rewrite that runs
 # ---------------------
 
@@ -12615,52 +12746,74 @@ def run.flushed(m: Maybe<&2, RwRun>, +n: Nat) -> Maybe<&2, RwRun>:
 
 def rw.path(+rw: Rw) -> String:
   match rw:
-    case Rw{+path, aof, pid, cron, delay, until, last, run, bg, next, carry}:
+    case Rw{+path, aof, pid, cron, delay, until, last, run, bg, next, carry, dir}:
       path
     case RwOf{+r}:
       rw.path(r)
 
 def rw.pid(+rw: Rw) -> U32:
   match rw:
-    case Rw{path, aof, +pid, cron, delay, until, last, run, bg, next, carry}:
+    case Rw{path, aof, +pid, cron, delay, until, last, run, bg, next, carry, dir}:
       pid
     case RwOf{+r}:
       rw.pid(r)
 
 def rw.tmp(+rw: Rw) -> String:
   match rw:
-    case Rw{path, aof, pid, cron, delay, until, last, +run, bg, next, carry}:
+    case Rw{path, aof, pid, cron, delay, until, last, +run, bg, next, carry, dir}:
       run.tmp(run)
     case RwOf{+r}:
       rw.tmp(r)
 
 def rw.pending(+rw: Rw) -> String:
   match rw:
-    case Rw{path, aof, pid, cron, delay, until, last, +run, bg, next, carry}:
+    case Rw{path, aof, pid, cron, delay, until, last, +run, bg, next, carry, dir}:
       run.pending(run)
     case RwOf{+r}:
       rw.pending(r)
 
 def rw.rest(+rw: Rw) -> String:
   match rw:
-    case Rw{path, aof, pid, cron, delay, until, last, +run, bg, next, carry}:
+    case Rw{path, aof, pid, cron, delay, until, last, +run, bg, next, carry, dir}:
       run.rest(run)
     case RwOf{+r}:
       rw.rest(r)
 
 def rw.next(+rw: Rw) -> Nat:
   match rw:
-    case Rw{path, aof, pid, cron, delay, until, last, +run, bg, next, carry}:
+    case Rw{path, aof, pid, cron, delay, until, last, +run, bg, next, carry, dir}:
       run.next(run)
     case RwOf{+r}:
       rw.next(r)
 
 def rw.size(+rw: Rw) -> Nat:
   match rw:
-    case Rw{path, aof, pid, cron, delay, until, last, +run, bg, next, carry}:
+    case Rw{path, aof, pid, cron, delay, until, last, +run, bg, next, carry, dir}:
       run.size(run)
     case RwOf{+r}:
       rw.size(r)
+
+def rw.dir(+rw: Rw) -> RDir:
+  match rw:
+    case Rw{path, aof, pid, cron, delay, until, last, run, bg, next, carry, +dir}:
+      dir
+    case RwOf{+r}:
+      rw.dir(r)
+
+# whether the server appends to the file (appendonly yes)
+def rw.on(+rw: Rw) -> Bool:
+  match rw:
+    case Rw{path, +aof, pid, cron, delay, until, last, run, bg, next, carry, dir}:
+      aof
+    case RwOf{+r}:
+      rw.on(r)
+
+def rw.dir.set(rw: Rw, d: RDir) -> Rw:
+  match rw:
+    case Rw{path, aof, pid, cron, delay, until, last, run, bg, next, carry, old}:
+      Rw{path, aof, pid, cron, delay, until, last, run, bg, next, carry, d}
+    case RwOf{r}:
+      rw.dir.set(r, d)
 
 # SHUTDOWN's log and its exit (SHUTDOWN, above), with Redis's lines: the
 # log of the server (its pid the rewrite's)
@@ -12814,16 +12967,16 @@ def down.cant(+lg: Log) -> IO(Unit):
 # snapshot taken; with n more bytes in its temporary file
 def rw.with(rw: Rw, run: Maybe<&2, RwRun>) -> Rw:
   match rw:
-    case Rw{path, aof, pid, cron, delay, until, last, old, bg, next, carry}:
-      Rw{path, aof, pid, cron, delay, until, last, run, bg, next, carry}
+    case Rw{path, aof, pid, cron, delay, until, last, old, bg, next, carry, dir}:
+      Rw{path, aof, pid, cron, delay, until, last, run, bg, next, carry, dir}
     case RwOf{r}:
       rw.with(r, run)
 
 # the same with run as a rewrite that starts, its pace from now
 def rw.begun(rw: Rw, run: Maybe<&2, RwRun>) -> Rw:
   match rw:
-    case Rw{path, aof, pid, cron, delay, until, last, old, bg, next, carry}:
-      Rw{path, aof, pid, cron, delay, until, last, run, bg, 0n, 0n}
+    case Rw{path, aof, pid, cron, delay, until, last, old, bg, next, carry, dir}:
+      Rw{path, aof, pid, cron, delay, until, last, run, bg, 0n, 0n, dir}
     case RwOf{r}:
       rw.begun(r, run)
 
@@ -12831,15 +12984,15 @@ def rw.begun(rw: Rw, run: Maybe<&2, RwRun>) -> Rw:
 # SHUTDOWN whose save failed); with run as the background save that runs
 def rw.stopped(rw: Rw) -> Rw:
   match rw:
-    case Rw{path, aof, pid, cron, delay, until, last, run, bg, next, carry}:
-      Rw{path, aof, pid, cron, delay, until, last, None{}, None{}, 0n, 0n}
+    case Rw{path, aof, pid, cron, delay, until, last, run, bg, next, carry, dir}:
+      Rw{path, aof, pid, cron, delay, until, last, None{}, None{}, 0n, 0n, dir}
     case RwOf{r}:
       rw.stopped(r)
 
 def rw.bg.with(rw: Rw, m: Maybe<&2, BgRun>) -> Rw:
   match rw:
-    case Rw{path, aof, pid, cron, delay, until, last, run, old, next, carry}:
-      Rw{path, aof, pid, cron, delay, until, last, run, m, next, carry}
+    case Rw{path, aof, pid, cron, delay, until, last, run, old, next, carry, dir}:
+      Rw{path, aof, pid, cron, delay, until, last, run, m, next, carry, dir}
     case RwOf{r}:
       rw.bg.with(r, m)
 
@@ -12853,25 +13006,25 @@ def pace.owed(+next: Nat, +ms: Nat, +owed: Nat) -> Nat & Nat:
 def pace.next(+next: Nat, +carry: Nat, +ms: Nat, +k: Nat, +dl: Nat) -> Nat & Nat:
   pace.owed(next, ms, Nat.add(Nat.mul(k, dl), carry))
 
-def rw.paced(q: Nat & Nat, path: String, aof: Bool, pid: U32, cron: Nat, delay: Nat, until: Nat, +now: Nat, run: Maybe<&2, RwRun>, bg: Maybe<&2, BgRun>) -> Rw:
+def rw.paced(q: Nat & Nat, path: String, aof: Bool, pid: U32, cron: Nat, delay: Nat, until: Nat, +now: Nat, run: Maybe<&2, RwRun>, bg: Maybe<&2, BgRun>, dir: RDir) -> Rw:
   (nx, cy) = q
-  Rw{path, aof, pid, cron, delay, until, now, run, bg, nx, cy}
+  Rw{path, aof, pid, cron, delay, until, now, run, bg, nx, cy, dir}
 
-def rw.sliced.of(p: Maybe<&2, RwRun> & Nat, path: String, aof: Bool, pid: U32, cron: Nat, delay: Nat, until: Nat, +now: Nat, bg: Maybe<&2, BgRun>, +next: Nat, +carry: Nat, +ms: Nat, +dl: Nat) -> Rw:
+def rw.sliced.of(p: Maybe<&2, RwRun> & Nat, path: String, aof: Bool, pid: U32, cron: Nat, delay: Nat, until: Nat, +now: Nat, bg: Maybe<&2, BgRun>, +next: Nat, +carry: Nat, +ms: Nat, +dl: Nat, dir: RDir) -> Rw:
   (run, +k) = p
-  rw.paced(pace.next(next, carry, ms, k, dl), path, aof, pid, cron, delay, until, now, run, bg)
+  rw.paced(pace.next(next, carry, ms, k, dl), path, aof, pid, cron, delay, until, now, run, bg, dir)
 
 def rw.sliced(rw: Rw, +now: Nat, +want: Nat, +ms: Nat, +dl: Nat) -> Rw:
   match rw:
-    case Rw{path, aof, pid, cron, delay, until, last, run, bg, +next, +carry}:
-      rw.sliced.of(run.slice(run, want), path, aof, pid, cron, delay, until, now, bg, next, carry, ms, dl)
+    case Rw{path, aof, pid, cron, delay, until, last, run, bg, +next, +carry, dir}:
+      rw.sliced.of(run.slice(run, want), path, aof, pid, cron, delay, until, now, bg, next, carry, ms, dl, dir)
     case RwOf{r}:
       rw.sliced(r, now, want, ms, dl)
 
 def rw.flushed(rw: Rw, +n: Nat) -> Rw:
   match rw:
-    case Rw{path, aof, pid, cron, delay, until, last, run, bg, next, carry}:
-      Rw{path, aof, pid, cron, delay, until, last, run.flushed(run, n), bg, next, carry}
+    case Rw{path, aof, pid, cron, delay, until, last, run, bg, next, carry, dir}:
+      Rw{path, aof, pid, cron, delay, until, last, run.flushed(run, n), bg, next, carry, dir}
     case RwOf{r}:
       rw.flushed(r, n)
 
@@ -12905,17 +13058,51 @@ def rx.next(+x: Rx) -> Nat:
     case Rx{srv, ds, sel, +rw}:
       rw.next(rw)
 
-# the temporary file a rewrite that starts writes
+# the temporary file a rewrite that starts writes: next to the single
+# file, or in dir for the directory, as Redis's child writes it
+def tmp.at(d: RDir, +path: String) -> String:
+  match d:
+    case RDirNone{}:
+      path
+    case RDir{dn, n, mf, i, pc}:
+      ""
+
 def rx.tmp0(+x: Rx) -> String:
   match x:
     case Rx{srv, ds, sel, +rw}:
-      tmp.path(rw.path(rw), rw.pid(rw))
+      tmp.path(tmp.at(rw.dir(rw), rw.path(rw)), rw.pid(rw))
 
 # the log, as the configuration has it now
 def rx.lg(+x: Rx) -> Log:
   match x:
     case Rx{+srv, ds, sel, +rw}:
       log.up(log.of(S.srv.cfg(srv), rw.pid(rw)))
+
+def rx.dir(+x: Rx) -> RDir:
+  match x:
+    case Rx{srv, ds, sel, +rw}:
+      rw.dir(rw)
+
+def rx.on(+x: Rx) -> Bool:
+  match x:
+    case Rx{srv, ds, sel, +rw}:
+      rw.on(rw)
+
+def rx.cfg(+x: Rx) -> List<&2, C.CItem>:
+  match x:
+    case Rx{+srv, ds, sel, rw}:
+      S.srv.cfg(srv)
+
+# the bytes appended to the files so far (INFO's aof_current_size)
+def rx.aof.size(+x: Rx) -> Nat:
+  match x:
+    case Rx{+srv, ds, sel, rw}:
+      S.srv.aof.size(srv)
+
+def rx.dir.set(x: Rx, d: RDir) -> Rx:
+  match x:
+    case Rx{srv, ds, sel, rw}:
+      Rx{srv, ds, sel, rw.dir.set(rw, d)}
 
 # a rewrite begun: the snapshot of the databases as they are, its
 # temporary file (made empty), and the database the file has selected one
@@ -12969,6 +13156,16 @@ def rx.done(x: Rx, +n: Nat, +ms: Nat) -> Rx:
   match x:
     case Rx{srv, ds, sel, +rw}:
       Rx{S.srv.rw.done(srv, Nat.add(rw.size(rw), n), ms), ds, sel, rw.with(rw, None{})}
+
+# in the directory: the files' size the new base's (its last n bytes
+# written) and that of the incremental file the rewrite began, which the
+# actor has appended to since (the bytes appended past inc0), as Redis's
+# backgroundRewriteDoneHandler counts aof_current_size and
+# aof_rewrite_base_size
+def rx.done.d(x: Rx, +n: Nat, +inc0: Nat, +ms: Nat) -> Rx:
+  match x:
+    case Rx{+srv, ds, sel, +rw}:
+      Rx{S.srv.rw.done(srv, Nat.add(Nat.add(rw.size(rw), n), Nat.sub(S.srv.aof.size(srv), inc0)), ms), ds, sel, rw.with(rw, None{})}
 
 # it failed at ms: the file as it was
 def rx.failed(x: Rx, +ms: Nat) -> Rx:
@@ -13094,21 +13291,21 @@ def look.go(held: Bool, sched: Bool, auto: Bool) -> Nat:
     case False{} False{} False{}:
       0n
 
-def look.of(+sched: Bool, +auto: Bool, l: RwLim, +grow: Nat, pt: Maybe<&2, I.Pt>, +bsched: Bool, srv: S.Srv, ds: R.Ds, +sel: Nat, path: String, +aof: Bool, +pid: U32, +now: Nat, +last: Nat, run: Maybe<&2, RwRun>, bg: Maybe<&2, BgRun>, +next: Nat, +carry: Nat) -> RwLook:
+def look.of(+sched: Bool, +auto: Bool, l: RwLim, +grow: Nat, pt: Maybe<&2, I.Pt>, +bsched: Bool, srv: S.Srv, ds: R.Ds, +sel: Nat, path: String, +aof: Bool, +pid: U32, +now: Nat, +last: Nat, run: Maybe<&2, RwRun>, bg: Maybe<&2, BgRun>, +next: Nat, +carry: Nat, dir: RDir) -> RwLook:
   match l:
     case RwLim{held, +delay, +until, +note}:
       +p = pt
-      RwLook{Rx{srv, ds, sel, Rw{path, aof, pid, Nat.add(now, 100n), delay, until, last, run, bg, next, carry}}, look.all(look.go(held, sched, auto), point.is(p), bsched), grow, note, p}
+      RwLook{Rx{srv, ds, sel, Rw{path, aof, pid, Nat.add(now, 100n), delay, until, last, run, bg, next, carry, dir}}, look.all(look.go(held, sched, auto), point.is(p), bsched), grow, note, p}
 
 def rw.look(rw: Rw, +srv: S.Srv, +ds: R.Ds, +sel: Nat) -> RwLook:
   match rw:
-    case Rw{path, +aof, +pid, cron, +delay, +until, +last, run, bg, +next, +carry}:
+    case Rw{path, +aof, +pid, cron, +delay, +until, +last, run, bg, +next, +carry, dir}:
       +now = R.ds.now(ds)
       +sched = S.srv.rw.sched(srv)
       +grow = rw.growth(S.srv.aof.size(srv), S.srv.aof.base(srv))
       +auto = rw.auto(aof, srv)
       +r = S.srv.rdb(srv)
-      look.of(sched, auto, lim.ask(Bool.or(sched, auto), S.srv.rw.fails(srv), Nat.div(now, 1000n), delay, until), grow, I.rdb.point(r, Nat.div(now, 1000n)), I.rdb.sched.go(r, Nat.div(now, 1000n)), srv, ds, sel, path, aof, pid, now, last, run, bg, next, carry)
+      look.of(sched, auto, lim.ask(Bool.or(sched, auto), S.srv.rw.fails(srv), Nat.div(now, 1000n), delay, until), grow, I.rdb.point(r, Nat.div(now, 1000n)), I.rdb.sched.go(r, Nat.div(now, 1000n)), srv, ds, sel, path, aof, pid, now, last, run, bg, next, carry, dir)
     case RwOf{r}:
       rw.look(r, srv, ds, sel)
 
@@ -13167,11 +13364,80 @@ def step.go(w: Nat, x: Rx, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx):
 
 # the start: the temporary file made empty, then the snapshot taken
 @unsafe
-def step.start(+x: Rx, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx):
+def step.start.tmp(+x: Rx, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx):
   +tmp = rx.tmp0(x)
   do IO<Maybe<&1, File> & Rx>:
     m : Result<&1, &1, U32 & String, File> <- File.open(tmp, "w")
     step.opened(m, tmp, x, f)
+
+# a rewrite in the directory that cannot begin, or end: why, logged
+# (none when the manifest's writer has; Redis answers BGREWRITEAOF with
+# an error when it cannot begin, BendKV has answered it by then), and the
+# rewrite counted as failed
+@unsafe
+def step.dfail(+x: Rx, f: Maybe<&1, File>, +why: String) -> IO(Maybe<&1, File> & Rx):
+  do IO<Maybe<&1, File> & Rx>:
+    t : U32 & U32 <- IO.clock()
+    Unit <- log.if(Bool.not(String.is_empty(why)), rx.lg(x), 3, why)
+    return (f, rx.failed(x, clock.ms(t)))
+
+# the new incremental file in place: the manifest written with it, the
+# old file synced (a sync that fails stops the server, as everywhere) and
+# closed, everysec's syncer told the new path, and the actor appending to
+# the new file from here on
+@unsafe
+def step.incr.saved(ok: Bool, g: File, old: File, +dn: String, +n: String, +m2: AD.Mf, +pc: Chan(String), +inc: String, +x: Rx) -> IO(Maybe<&1, File> & Rx):
+  match ok:
+    case False{}:
+      do IO<Maybe<&1, File> & Rx>:
+        Unit <- File.close(g)
+        step.dfail(x, Some{old}, "")
+    case True{}:
+      do IO<Maybe<&1, File> & Rx>:
+        Unit <- step.say(x, 2, "Creating AOF incr file " ++ inc ++ " on background rewrite")
+        p : File & Result<&1, &1, U32 & String, Unit> <- File.sync(old)
+        o : File <- down.synced(p)
+        Unit <- File.close(o)
+        Unit <- Chan.send_all(String, [(pc, dn ++ "/" ++ inc)])
+        step.start.tmp(rx.dir.set(x, RDir{dn, n, m2, rx.aof.size(x), pc}), Some{g})
+
+@unsafe
+def step.incr.opened(o: Result<&1, &1, U32 & String, File>, old: File, +dn: String, +n: String, +m2: AD.Mf, pc: Chan(String), +inc: String, +x: Rx) -> IO(Maybe<&1, File> & Rx):
+  match o:
+    case Fail{e}:
+      step.dfail(x, Some{old}, "Can't open the append-only file " ++ inc ++ ": " ++ err.msg(e))
+    case Done{g}:
+      do IO<Maybe<&1, File> & Rx>:
+        ok : Bool <- mf.save(rx.lg(x), dn, n, m2)
+        step.incr.saved(ok, g, old, dn, n, m2, pc, inc, x)
+
+# in the directory, with appendonly yes (a file f), a new incremental
+# file first, opened empty, which the actor appends to from the rewrite's
+# start on, its first entry after a SELECT of its own (rx.begin), as
+# openNewIncrAofForAppend makes it; with appendonly no, none
+@unsafe
+def step.incr(f: Maybe<&1, File>, +dn: String, +n: String, mf: AD.Mf, pc: Chan(String), +x: Rx) -> IO(Maybe<&1, File> & Rx):
+  match f:
+    case None{}:
+      step.start.tmp(rx.dir.set(x, RDir{dn, n, mf, 0n, pc}), None{})
+    case Some{old}:
+      +m2 = AD.mf.incr.new(mf, n)
+      +inc = AD.mf.incr.at(m2)
+      do IO<Maybe<&1, File> & Rx>:
+        o : Result<&1, &1, U32 & String, File> <- File.open(dn ++ "/" ++ inc, "w")
+        step.incr.opened(o, old, dn, n, m2, pc, inc, x)
+
+@unsafe
+def step.start.in(d: RDir, +x: Rx, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx):
+  match d:
+    case RDirNone{}:
+      step.start.tmp(x, f)
+    case RDir{+dn, +n, mf, i, pc}:
+      step.incr(f, dn, n, mf, pc, x)
+
+@unsafe
+def step.start(+x: Rx, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx):
+  step.start.in(rx.dir(x), x, f)
 
 @unsafe
 def step.opened(m: Result<&1, &1, U32 & String, File>, +tmp: String, +x: Rx, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx):
@@ -13329,9 +13595,24 @@ def step.fin.sync(r: Result<&1, &1, U32 & String, Unit>, +n: Nat, +tmp: String, 
     case Fail{e}:
       step.fail(x, f, tmp, "Error syncing the temporary file " ++ tmp ++ " of the AOF rewrite: " ++ err.msg(e))
     case Done{u}:
+      step.fin.to(rx.dir(x), n, tmp, x, f)
+
+# the single file: the temporary file renamed onto it; the directory: its
+# end, the base renamed into it (step.dfin)
+@unsafe
+def step.fin.to(d: RDir, +n: Nat, +tmp: String, +x: Rx, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx):
+  match d:
+    case RDirNone{}:
       do IO<Maybe<&1, File> & Rx>:
         q : Result<&1, &1, U32 & String, Unit> <- File.rename(tmp, rx.path(x))
         step.fin.renamed(q, n, tmp, x, f)
+    case RDir{+dn, +nm, mf, +inc0, pc}:
+      +m2 = AD.mf.base.new(mf, nm, False{})
+      +base = AD.mf.base.at(m2)
+      do IO<Maybe<&1, File> & Rx>:
+        Unit <- step.say(x, 2, "Background AOF rewrite terminated with success")
+        q : Result<&1, &1, U32 & String, Unit> <- File.rename(tmp, dn ++ "/" ++ base)
+        step.dfin.renamed(q, n, tmp, dn, nm, m2, inc0, pc, base, x, f)
 
 @unsafe
 def step.fin.renamed(q: Result<&1, &1, U32 & String, Unit>, +n: Nat, +tmp: String, +x: Rx, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx):
@@ -13382,6 +13663,43 @@ def step.done(f: Maybe<&1, File>, +n: Nat, +x: Rx) -> IO(Maybe<&1, File> & Rx):
     Unit <- step.say(x, 2, "Background AOF rewrite terminated with success")
     Unit <- step.say(x, 2, "Background AOF rewrite finished successfully")
     return (f, rx.done(x, n, clock.ms(t)))
+
+# The directory's end (backgroundRewriteDoneHandler): the temporary file
+# renamed into the directory as the new base (a base of commands,
+# <appendfilename>.<n>.base.aof, whatever aof-use-rdb-preamble says), the
+# base before it and all the incremental files but the one the actor
+# appends to made history (all of them with appendonly no), the manifest
+# written; then the files' size (rx.done.d), and the history removed
+# (dir.gc). A failure from the rename on leaves the manifest as it was,
+# the new base removed, and counts the rewrite as failed; the incremental
+# file it began stays, as in Redis, so the directory may hold several.
+@unsafe
+def step.dfin.saved(ok: Bool, +n: Nat, +dn: String, +nm: String, +m3: AD.Mf, +inc0: Nat, pc: Chan(String), +base: String, +x: Rx, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx):
+  match ok:
+    case False{}:
+      do IO<Maybe<&1, File> & Rx>:
+        r : Result<&1, &1, U32 & String, Unit> <- File.unlink(dn ++ "/" ++ base)
+        step.dfail(x, f, "")
+    case True{}:
+      do IO<Maybe<&1, File> & Rx>:
+        m4 : AD.Mf <- dir.gc(rx.lg(x), rx.cfg(x), dn, nm, m3)
+        t : U32 & U32 <- IO.clock()
+        Unit <- step.say(x, 2, "Background AOF rewrite finished successfully")
+        return (f, rx.done.d(rx.dir.set(x, RDir{dn, nm, m4, inc0, pc}), n, inc0, clock.ms(t)))
+
+@unsafe
+def step.dfin.renamed(q: Result<&1, &1, U32 & String, Unit>, +n: Nat, +tmp: String, +dn: String, +nm: String, +m2: AD.Mf, +inc0: Nat, pc: Chan(String), +base: String, +x: Rx, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx):
+  match q:
+    case Fail{e}:
+      do IO<Maybe<&1, File> & Rx>:
+        r : Result<&1, &1, U32 & String, Unit> <- File.unlink(tmp)
+        step.dfail(x, f, "Error trying to rename the temporary AOF base file " ++ tmp ++ " into " ++ dn ++ "/" ++ base ++ ": " ++ err.msg(e))
+    case Done{u}:
+      +m3 = AD.mf.mark(m2, rx.on(x))
+      do IO<Maybe<&1, File> & Rx>:
+        Unit <- step.say(x, 2, "Successfully renamed the temporary AOF base file " ++ tmp ++ " into " ++ base)
+        ok : Bool <- mf.save(rx.lg(x), dn, nm, m3)
+        step.dfin.saved(ok, n, dn, nm, m3, inc0, pc, base, x, f)
 
 # a rewrite that failed: why, logged; its temporary file removed; the
 # file as it was
@@ -13762,6 +14080,14 @@ def st.new(+srv: S.Srv, ds: R.Ds, rw: Rw) -> St:
   +x = ds
   St{srv, x, R.ds.index(x), WaitNone{}, TxNone{}, ps.tune(ps.new(), srv), rw}
 
+# the same for Redis 7's directory (The append-only directory): the file
+# appended to has selected no database, so its first entry goes after a
+# SELECT, as Redis's does after its start (aof_selected_db is -1), and as
+# a rewrite's first does (rx.begin)
+def st.new.d(+srv: S.Srv, ds: R.Ds, rw: Rw) -> St:
+  +x = ds
+  St{srv, x, R.ds.count(x), WaitNone{}, TxNone{}, ps.tune(ps.new(), srv), rw}
+
 # the directory that holds the file synced, so that the file's name is on
 # the disk before the first write to it is acknowledged: File.open may
 # have just made the file, and a sync of the file does not make its
@@ -13787,7 +14113,7 @@ def open_aof(+path: String, +sync: Sync, srv: S.Srv, ds: R.Ds, +lg: Log, +pid: U
     Unit <- dir_synced(r, path, lg)
     Unit <- syncer(sync, path)
     +reqs : Chan(Req) <- Chan.new(Req, 1024)
-    Unit <- IO.spawn(Unit, aof_loop(st.new(srv, ds, rw.new(path, True{}, pid)), f, sync, reqs))
+    Unit <- IO.spawn(Unit, aof_loop(st.new(srv, ds, rw.new(path, True{}, pid, RDirNone{})), f, sync, reqs))
     return reqs
 
 # The RDB file on the disk
@@ -14105,7 +14431,7 @@ def rdb.loaded(d: D.FLd, +t0: Nat, +lg: Log, info: I.Info, +more: Nat) -> IO(R.D
       do IO<R.Ds & I.Info>:
         Unit <- rdb.log(lg, List.reverse(&2, D.FLine, ls))
         IO.die(R.Ds & I.Info, 1, "")
-    case D.FOk{dbs, +ld, +ex, em, ls, sm}:
+    case D.FOk{dbs, +ld, +ex, em, ls, sm, end}:
       do IO<R.Ds & I.Info>:
         Unit <- rdb.log(lg, List.reverse(&2, D.FLine, ls))
         t1 : Nat <- IO.now()
@@ -14319,26 +14645,26 @@ def bgr.flushed(m: Maybe<&2, BgRun>, +n: Nat) -> Maybe<&2, BgRun>:
 
 def rw.bg(+rw: Rw) -> Maybe<&2, BgRun>:
   match rw:
-    case Rw{path, aof, pid, cron, delay, until, last, run, +bg, next, carry}:
+    case Rw{path, aof, pid, cron, delay, until, last, run, +bg, next, carry, dir}:
       bg
     case RwOf{+r}:
       rw.bg(r)
 
-def rw.bsliced.of(p: Maybe<&2, BgRun> & Nat, path: String, aof: Bool, pid: U32, cron: Nat, delay: Nat, until: Nat, +now: Nat, run: Maybe<&2, RwRun>, +next: Nat, +carry: Nat, +ms: Nat, +dl: Nat) -> Rw & Nat:
+def rw.bsliced.of(p: Maybe<&2, BgRun> & Nat, path: String, aof: Bool, pid: U32, cron: Nat, delay: Nat, until: Nat, +now: Nat, run: Maybe<&2, RwRun>, +next: Nat, +carry: Nat, +ms: Nat, +dl: Nat, dir: RDir) -> Rw & Nat:
   (bg, +k) = p
-  (rw.paced(pace.next(next, carry, ms, k, dl), path, aof, pid, cron, delay, until, now, run, bg), k)
+  (rw.paced(pace.next(next, carry, ms, k, dl), path, aof, pid, cron, delay, until, now, run, bg, dir), k)
 
 def rw.bsliced(rw: Rw, +now: Nat, +want: Nat, +ms: Nat, +dl: Nat) -> Rw & Nat:
   match rw:
-    case Rw{path, aof, pid, cron, delay, until, last, run, bg, +next, +carry}:
-      rw.bsliced.of(bgr.slice(bg, want), path, aof, pid, cron, delay, until, now, run, next, carry, ms, dl)
+    case Rw{path, aof, pid, cron, delay, until, last, run, bg, +next, +carry, dir}:
+      rw.bsliced.of(bgr.slice(bg, want), path, aof, pid, cron, delay, until, now, run, next, carry, ms, dl, dir)
     case RwOf{r}:
       rw.bsliced(r, now, want, ms, dl)
 
 def rw.bflushed(rw: Rw, +n: Nat) -> Rw:
   match rw:
-    case Rw{path, aof, pid, cron, delay, until, last, run, bg, next, carry}:
-      Rw{path, aof, pid, cron, delay, until, last, run, bgr.flushed(bg, n), next, carry}
+    case Rw{path, aof, pid, cron, delay, until, last, run, bg, next, carry, dir}:
+      Rw{path, aof, pid, cron, delay, until, last, run, bgr.flushed(bg, n), next, carry, dir}
     case RwOf{r}:
       rw.bflushed(r, n)
 
@@ -14445,8 +14771,8 @@ def rx.bgo(x: Rx, +unsched: Bool) -> Rx:
 # writer's channels kept, its pace from now
 def rx.bbegin(x: Rx, dbs: List<&2, R.Db>, +head: String, +sum: Bool, cf: I.BgCf, ch: BgCh) -> Rx:
   match x:
-    case Rx{srv, ds, sel, Rw{path, aof, pid, cron, delay, until, last, run, bg, next, carry}}:
-      Rx{srv, ds, sel, Rw{path, aof, pid, cron, delay, until, last, run, Some{BgRun{Some{D.FW{rdb.fdbs(dbs), 0n, None{}}}, rdb.crc(sum, head, D.C{0, 0}), sum, 0n, [head], String.length(head), cf, ch}}, 0n, 0n}}
+    case Rx{srv, ds, sel, Rw{path, aof, pid, cron, delay, until, last, run, bg, next, carry, dir}}:
+      Rx{srv, ds, sel, Rw{path, aof, pid, cron, delay, until, last, run, Some{BgRun{Some{D.FW{rdb.fdbs(dbs), 0n, None{}}}, rdb.crc(sum, head, D.C{0, 0}), sum, 0n, [head], String.length(head), cf, ch}}, 0n, 0n, dir}}
     case Rx{srv, ds, sel, RwOf{r}}:
       rx.bbegin(Rx{srv, ds, sel, r}, dbs, head, sum, cf, ch)
 
@@ -14747,6 +15073,624 @@ def step.bkill(+x: Rx, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx):
     Unit <- step.say(x, 3, "Background saving terminated by signal 10")
     return (f, rx.bdrop(x, clock.secs(t)))
 
+# The append-only directory
+# -------------------------
+# Redis 7's multi-part append-only file (aofdir.bend: its manifest), when
+# appenddirname is there in dir. The runtime has no effect that makes a
+# directory, so without one BendKV keeps the single file of Redis 6,
+# appendfilename (The append-only file), which Redis 7 moves into a
+# directory of its own when it starts on it. With the directory, the
+# start goes as Redis's main goes (in the configuration's form; the short
+# form keeps its one file): the manifest read (aofLoadManifestFromDisk:
+# one that Redis refuses stops the start, with Redis's lines, whatever
+# appendonly says); with appendonly yes, an old single file moved into
+# the directory as its base (aofUpgradePrepare), each file there checked
+# and then the base and each incremental file loaded in turn
+# (loadAppendOnlyFiles: each on the databases the files before it left,
+# from database 0; the base as an RDB file when it starts with REDIS, the
+# rest as commands, read in windows as the single file is; a file that
+# ends cut short or inside a transaction is cut back, as the single file
+# is, but stops the start when it is not the last file), then the last
+# incremental file opened to append to, or a new one when there is none,
+# after an empty base when there is no file at all
+# (aofOpenIfNeededOnServerStart), the manifest written; last, the history
+# files removed (aofDelHistoryFiles). BendKV writes its bases as commands
+# (<appendfilename>.<n>.base.aof), whatever aof-use-rdb-preamble says; an
+# RDB base followed by commands (an old file with an RDB preamble) stops
+# the start.
+
+# the start's windows (aof.bend: A.Wins) on the databases ds, from
+# database 0, as Redis's fake client starts each file
+def wins.on(ds: R.Ds) -> A.Wins:
+  A.Wins{A.WinAll{R.ds.focus(0n, ds), A.CkGo{0n, 0n}, 0n}, ""}
+
+# everysec in the directory: the file the actor appends to synced each
+# second, as sync_loop syncs the single file, at the path of the
+# incremental file, which a rewrite changes (pc gives the new one); the
+# file opened to read, which a sync takes as well, so that a path let go
+# (an incremental file a rewrite made history and removed) is not made
+# again: a path not there waits for the next second's
+def path.last(ps: List<&1, String>, +p: String) -> String:
+  match ps:
+    case Nil{}:
+      p
+    case Con{x, rest}:
+      path.last(rest, x)
+
+@unsafe
+def sync_after.d(r: Result<&1, &1, U32 & String, Unit>, +path: String, +pc: Chan(String)) -> IO(Unit):
+  match r:
+    case Fail{e}:
+      IO.die(Unit, 1, aof_fail(e))
+    case Done{u}:
+      sync_loop.d(path, pc)
+
+@unsafe
+def sync_next.d(p: File & Result<&1, &1, U32 & String, Unit>, +path: String, +pc: Chan(String)) -> IO(Unit):
+  (f, r) = p
+  do IO<Unit>:
+    Unit <- File.close(f)
+    sync_after.d(r, path, pc)
+
+@unsafe
+def sync_none.d(gone: Bool, +msg: String, +path: String, +pc: Chan(String)) -> IO(Unit):
+  match gone:
+    case True{}:
+      sync_loop.d(path, pc)
+    case False{}:
+      IO.die(Unit, 1, "the append-only file failed: " ++ msg)
+
+@unsafe
+def sync_open.d(m: Result<&1, &1, U32 & String, File>, +path: String, +pc: Chan(String)) -> IO(Unit):
+  match m:
+    case Fail{e}:
+      (code, msg) = e
+      sync_none.d(U32.is_eq(code, enoent()), msg, path, pc)
+    case Done{f}:
+      do IO<Unit>:
+        p : File & Result<&1, &1, U32 & String, Unit> <- File.sync(f)
+        sync_next.d(p, path, pc)
+
+@unsafe
+def sync_at.d(+now: String, +pc: Chan(String)) -> IO(Unit):
+  do IO<Unit>:
+    m : Result<&1, &1, U32 & String, File> <- File.open(now, "r")
+    sync_open.d(m, now, pc)
+
+@unsafe
+def sync_loop.d(+path: String, +pc: Chan(String)) -> IO(Unit):
+  do IO<Unit>:
+    Unit <- IO.sleep(1000)
+    ps : List<&1, String> <- Chan.drain(String, pc, 64)
+    sync_at.d(path.last(ps, path), pc)
+
+@unsafe
+def syncer.d(sync: Sync, +path: String, +pc: Chan(String)) -> IO(Unit):
+  match sync:
+    case EverySec{}:
+      IO.spawn(Unit, sync_loop.d(path, pc))
+    case Always{}:
+      IO.pure(Unit, Unit{})
+    case Never{}:
+      IO.pure(Unit, Unit{})
+
+# whether path is there (a file, or a directory: path/. there), opened to
+# read
+@unsafe
+def there.of(m: Result<&1, &1, U32 & String, File>) -> IO(Bool):
+  match m:
+    case Done{f}:
+      do IO<Bool>:
+        Unit <- File.close(f)
+        IO.pure(Bool, True{})
+    case Fail{e}:
+      IO.pure(Bool, False{})
+
+@unsafe
+def there(+path: String) -> IO(Bool):
+  do IO<Bool>:
+    m : Result<&1, &1, U32 & String, File> <- File.open(path, "r")
+    there.of(m)
+
+# The manifest read: its bytes, read until a read comes back empty, then
+# AD.mf.read's verdict; a manifest not there is an empty one
+@unsafe
+def mf.read.next(f: File, eof: Bool, x: String, got: List<&2, String>, +lg: Log) -> IO(File & String):
+  match eof:
+    case True{}:
+      IO.pure(File & String, (f, glue(got, SNil{})))
+    case False{}:
+      mf.read.all(f, x <> got, lg)
+
+@unsafe
+def mf.read.more(p: File & Result<&1, &1, U32 & String, String>, got: List<&2, String>, +lg: Log) -> IO(File & String):
+  (f, r) = p
+  match r:
+    case Fail{e}:
+      do IO<File & String>:
+        Unit <- log.lines(lg, 3, AD.mf.bad.lines(0n, None{}, "Read AOF manifest failed"))
+        IO.die(File & String, 1, "")
+    case Done{+x}:
+      mf.read.next(f, String.is_empty(x), x, got, lg)
+
+@unsafe
+def mf.read.all(f: File, got: List<&2, String>, +lg: Log) -> IO(File & String):
+  do IO<File & String>:
+    p : File & Result<&1, &1, U32 & String, String> <- File.read_raw(f, 65536)
+    mf.read.more(p, got, lg)
+
+@unsafe
+def mf.got(r: AD.MRead, +lg: Log) -> IO(AD.Mf):
+  match r:
+    case AD.MOk{mf, max}:
+      IO.pure(AD.Mf, mf)
+    case AD.MBad{+num, line, +msg}:
+      do IO<AD.Mf>:
+        Unit <- log.lines(lg, 3, AD.mf.bad.lines(num, line, msg))
+        IO.die(AD.Mf, 1, "")
+
+@unsafe
+def mf.got.file(p: File & String, +lg: Log) -> IO(AD.Mf):
+  (f, +s) = p
+  do IO<AD.Mf>:
+    Unit <- File.close(f)
+    mf.got(AD.mf.read(s), lg)
+
+@unsafe
+def mf.none(gone: Bool, +lg: Log, +path: String, +msg: String) -> IO(AD.Mf):
+  match gone:
+    case True{}:
+      IO.pure(AD.Mf, AD.mf.empty())
+    case False{}:
+      log.die(AD.Mf, lg, "Fatal error: can't open the AOF manifest file " ++ path ++ " for reading: " ++ msg)
+
+@unsafe
+def mf.opened(m: Result<&1, &1, U32 & String, File>, +lg: Log, +path: String) -> IO(AD.Mf):
+  match m:
+    case Fail{e}:
+      (code, msg) = e
+      mf.none(U32.is_eq(code, enoent()), lg, path, msg)
+    case Done{f}:
+      do IO<AD.Mf>:
+        p : File & String <- mf.read.all(f, Nil{}, lg)
+        mf.got.file(p, lg)
+
+# the manifest of the directory dn, of the files named n
+@unsafe
+def mf.load(+lg: Log, +dn: String, +n: String) -> IO(AD.Mf):
+  +path = dn ++ "/" ++ n ++ ".manifest"
+  do IO<AD.Mf>:
+    m : Result<&1, &1, U32 & String, File> <- File.open(path, "r")
+    mf.opened(m, lg, path)
+
+# An old single file, n, moved into the directory dn as its base, the
+# manifest written first (aofUpgradePrepare: a start that stops half way
+# upgrades again), when it is there and the manifest names nothing else
+# (AD.mf.upgrade.when); the manifest after it
+@unsafe
+def dir.moved(r: Result<&1, &1, U32 & String, Unit>, +lg: Log, +dn: String, +n: String, mf: AD.Mf) -> IO(AD.Mf):
+  match r:
+    case Fail{e}:
+      log.die(AD.Mf, lg, "Error trying to move the old AOF file " ++ n ++ " into dir " ++ dn ++ ": " ++ err.msg(e))
+    case Done{u}:
+      do IO<AD.Mf>:
+        Unit <- log(lg, 2, "Successfully migrated an old-style AOF file (" ++ n ++ ") into the AOF directory (" ++ dn ++ ").")
+        IO.pure(AD.Mf, mf)
+
+@unsafe
+def dir.upgraded(ok: Bool, +lg: Log, +dn: String, +n: String, mf: AD.Mf) -> IO(AD.Mf):
+  match ok:
+    case False{}:
+      IO.die(AD.Mf, 1, "")
+    case True{}:
+      do IO<AD.Mf>:
+        r : Result<&1, &1, U32 & String, Unit> <- File.rename(n, dn ++ "/" ++ n)
+        dir.moved(r, lg, dn, n, mf)
+
+@unsafe
+def dir.upgrade.at(go: Bool, +lg: Log, +dn: String, +n: String, +mf: AD.Mf) -> IO(AD.Mf):
+  match go:
+    case False{}:
+      IO.pure(AD.Mf, mf)
+    case True{}:
+      +m2 = AD.mf.upgraded(mf, n)
+      do IO<AD.Mf>:
+        ok : Bool <- mf.save(lg, dn, n, m2)
+        dir.upgraded(ok, lg, dn, n, m2)
+
+@unsafe
+def dir.upgrade(+lg: Log, +dn: String, +n: String, +mf: AD.Mf) -> IO(AD.Mf):
+  do IO<AD.Mf>:
+    old : Bool <- there(n)
+    inside : Bool <- there(dn ++ "/" ++ n)
+    dir.upgrade.at(Bool.and(old, AD.mf.upgrade.when(mf, n, inside)), lg, dn, n, mf)
+
+# Each file the manifest names there, as getBaseAndIncrAppendOnlyFilesSize
+# asks before any is loaded: one that is not stops the start
+@unsafe
+def dir.check.of(m: Result<&1, &1, U32 & String, File>, +lg: Log, +name: String) -> IO(Unit):
+  match m:
+    case Done{f}:
+      File.close(f)
+    case Fail{e}:
+      log.die(Unit, lg, "Unable to obtain the AOF file " ++ name ++ " length. stat: " ++ err.msg(e))
+
+@unsafe
+def dir.check(fs: List<&2, AD.MLoad>, +lg: Log, +dn: String) -> IO(Unit):
+  match fs:
+    case Nil{}:
+      IO.pure(Unit, Unit{})
+    case Con{AD.MLoad{+name, base}, rest}:
+      do IO<Unit>:
+        m : Result<&1, &1, U32 & String, File> <- File.open(dn ++ "/" ++ name, "r")
+        Unit <- dir.check.of(m, lg, name)
+        dir.check(rest, lg, dn)
+
+# What a file's load came to: the databases after it, its size after a
+# cut and before, and the keys an RDB base loaded and found expired
+type DLd is Data:
+  DLd{ds: R.Ds, size: Nat, read: Nat, ld: Nat, ex: Nat}
+
+@unsafe
+def dir.cmds.got(r: R.Ds & Nat, +read: Nat) -> IO(DLd):
+  (ds, +size) = r
+  IO.pure(DLd, DLd{ds, size, read, 0n, 0n})
+
+@unsafe
+def dir.cmds.at(+lg: Log, +trunc: Bool, +path: String, q: A.Start & Nat) -> IO(DLd):
+  (st, +read) = q
+  do IO<DLd>:
+    r : R.Ds & Nat <- restore_start(lg, trunc, path, read, st)
+    dir.cmds.got(r, read)
+
+@unsafe
+def dir.cmds.read(p: File & (A.Start & Nat), +lg: Log, +trunc: Bool, +path: String) -> IO(DLd):
+  (f, q) = p
+  do IO<DLd>:
+    Unit <- File.close(f)
+    dir.cmds.at(lg, trunc, path, q)
+
+# a file of commands (an incremental file, or a base of commands), its
+# first bytes, head, read already, on the databases ds
+@unsafe
+def dir.cmds(f: File, +head: String, +lg: Log, +trunc: Bool, +path: String, ds: R.Ds, +more: Nat) -> IO(DLd):
+  do IO<DLd>:
+    p : File & (A.Start & Nat) <- restore_win.next(f, False{}, head, wins.on(ds), more, 0n)
+    dir.cmds.read(p, lg, trunc, path)
+
+@unsafe
+def dir.rdb.tail(tail: Bool, +name: String, +lg: Log, ds: R.Ds, +len: Nat, +ld: Nat, +ex: Nat) -> IO(DLd):
+  match tail:
+    case True{}:
+      log.die(DLd, lg, "BendKV cannot read the commands after the RDB part of the append-only file " ++ name ++ " yet")
+    case False{}:
+      IO.pure(DLd, DLd{ds, len, len, ld, ex})
+
+@unsafe
+def dir.rdb.loaded(d: D.FLd, +len: Nat, +lg: Log, +name: String, +more: Nat) -> IO(DLd):
+  match d:
+    case D.FFail{ls}:
+      do IO<DLd>:
+        Unit <- rdb.log(lg, List.reverse(&2, D.FLine, ls))
+        IO.die(DLd, 1, "")
+    case D.FOk{dbs, +ld, +ex, em, ls, sm, +end}:
+      do IO<DLd>:
+        Unit <- rdb.log(lg, List.reverse(&2, D.FLine, ls))
+        dir.rdb.tail(Nat.is_lt(end, len), name, lg, rdb.ds(dbs, more), len, ld, ex)
+
+@unsafe
+def dir.rdb.read(p: File & String, +lg: Log, +items: List<&2, C.CItem>, +name: String, +more: Nat) -> IO(DLd):
+  (f, +s) = p
+  do IO<DLd>:
+    Unit <- File.close(f)
+    t : U32 & U32 <- IO.clock()
+    dir.rdb.loaded(D.file.load(s, 1n+more, clock.ms(t), String.eq(T.cfg(items, "rdbchecksum"), "yes")), String.length(s), lg, name, more)
+
+# a base's bytes, read until a read comes back empty; a read that fails
+# stops the start as a short read does
+@unsafe
+def dir.rdb.all(f: File, got: List<&2, String>, +lg: Log) -> IO(File & String):
+  do IO<File & String>:
+    p : File & Result<&1, &1, U32 & String, String> <- File.read_raw(f, 16777216)
+    dir.rdb.all.more(p, got, lg)
+
+@unsafe
+def dir.rdb.all.more(p: File & Result<&1, &1, U32 & String, String>, got: List<&2, String>, +lg: Log) -> IO(File & String):
+  (f, r) = p
+  match r:
+    case Fail{e}:
+      log.die(File & String, lg, "Short read or OOM loading DB. Unrecoverable error, aborting now.")
+    case Done{+x}:
+      dir.rdb.all.next(f, String.is_empty(x), x, got, lg)
+
+@unsafe
+def dir.rdb.all.next(f: File, eof: Bool, x: String, got: List<&2, String>, +lg: Log) -> IO(File & String):
+  match eof:
+    case True{}:
+      IO.pure(File & String, (f, glue(got, SNil{})))
+    case False{}:
+      dir.rdb.all(f, x <> got, lg)
+
+# a base that is an RDB file (it starts with REDIS): read whole, and
+# loaded as rdbLoadRio loads it, with its lines. The RDB file's start
+# reads its file in windows (Restoring); a base is read whole, as it was
+# before that: only a directory Redis made has an RDB base, and BendKV's
+# first rewrite there writes its base as commands
+@unsafe
+def dir.rdb(f: File, +head: String, +lg: Log, +items: List<&2, C.CItem>, +name: String, +more: Nat) -> IO(DLd):
+  do IO<DLd>:
+    Unit <- log(lg, 2, Bool.pick(String, String.eq(name, T.cfg(items, "appendfilename")), "Reading RDB preamble from AOF file...", "Reading RDB base file on AOF loading..."))
+    p : File & String <- dir.rdb.all(f, [head], lg)
+    dir.rdb.read(p, lg, items, name, more)
+
+# a file by its first bytes (w): empty (nothing to load: no line, as in
+# Redis; the database it leaves selected 0, where each file starts), an
+# RDB base, or commands
+@unsafe
+def dir.head.at(w: Nat, f: File, +x: String, +lg: Log, +trunc: Bool, +items: List<&2, C.CItem>, +path: String, +name: String, ds: R.Ds, +more: Nat) -> IO(DLd):
+  match w:
+    case 0n:
+      do IO<DLd>:
+        Unit <- File.close(f)
+        IO.pure(DLd, DLd{R.ds.focus(0n, ds), 0n, 0n, 0n, 0n})
+    case 1n:
+      dir.rdb(f, x, lg, items, name, more)
+    case _:
+      dir.cmds(f, x, lg, trunc, path, ds, more)
+
+@unsafe
+def dir.head(h: File & Result<&1, &1, U32 & String, String>, base: Bool, +lg: Log, +trunc: Bool, +items: List<&2, C.CItem>, +path: String, +name: String, ds: R.Ds, +more: Nat) -> IO(DLd):
+  (f, r) = h
+  match r:
+    case Fail{e}:
+      log.die(DLd, lg, "Unrecoverable error reading the append only file " ++ name ++ ": " ++ err.msg(e))
+    case Done{+x}:
+      dir.head.at(Bool.pick(Nat, String.is_empty(x), 0n, Bool.pick(Nat, Bool.and(base, String.eq(x, "REDIS")), 1n, 2n)), f, x, lg, trunc, items, path, name, ds, more)
+
+@unsafe
+def dir.file.open(m: Result<&1, &1, U32 & String, File>, base: Bool, +lg: Log, +trunc: Bool, +items: List<&2, C.CItem>, +path: String, +name: String, ds: R.Ds, +more: Nat) -> IO(DLd):
+  match m:
+    case Fail{e}:
+      log.die(DLd, lg, "Fatal error: can't open the append log file " ++ name ++ " for reading: " ++ err.msg(e))
+    case Done{f}:
+      do IO<DLd>:
+        h : File & Result<&1, &1, U32 & String, String> <- File.read_raw(f, 5)
+        dir.head(h, base, lg, trunc, items, path, name, ds, more)
+
+# The files loaded so far: the databases, the files' size and the base's,
+# and the keys an RDB base loaded and found expired
+type DAll is Data:
+  DAll{ds: R.Ds, size: Nat, base: Nat, ld: Nat, ex: Nat}
+
+def dall.ds(+a: DAll) -> R.Ds:
+  match a:
+    case DAll{+ds, size, base, ld, ex}:
+      ds
+
+def dall.with(a: DAll, d: DLd, +isb: Bool) -> DAll:
+  match a d:
+    case DAll{x, +size, +base, +ld, +ex} DLd{ds, +s, r, l, e}:
+      DAll{ds, Nat.add(size, s), Bool.pick(Nat, isb, s, base), Nat.add(ld, l), Nat.add(ex, e)}
+
+def dld.cut(+d: DLd) -> Bool:
+  match d:
+    case DLd{ds, +size, +read, ld, ex}:
+      Nat.is_lt(size, read)
+
+def dld.read(+d: DLd) -> Nat:
+  match d:
+    case DLd{ds, size, +read, ld, ex}:
+      read
+
+@unsafe
+def dir.truncated(stop: Bool, +lg: Log) -> IO(Unit):
+  match stop:
+    case True{}:
+      log.die(Unit, lg, "Fatal error: the truncated file is not the last file")
+    case False{}:
+      IO.pure(Unit, Unit{})
+
+# a file loaded in ms: Redis's line, but for an empty one, or one cut back
+# that is not the last (which stops the start)
+@unsafe
+def dir.loaded(d: DLd, +last: Bool, +base: Bool, +name: String, +ms: Nat, +lg: Log, a: DAll) -> IO(DAll):
+  +x = d
+  +cut = dld.cut(x)
+  do IO<DAll>:
+    Unit <- log.if(Bool.and(Nat.is_lt(0n, dld.read(x)), Bool.or(Bool.not(cut), last)), lg, 2, "DB loaded from " ++ Bool.pick(String, base, "base", "incr") ++ " file " ++ name ++ ": " ++ secs3(ms) ++ " seconds")
+    Unit <- dir.truncated(Bool.and(cut, Bool.not(last)), lg)
+    IO.pure(DAll, dall.with(a, x, base))
+
+@unsafe
+def dir.load.one(l: AD.MLoad, +last: Bool, +lg: Log, +trunc: Bool, +items: List<&2, C.CItem>, +dn: String, +more: Nat, +a: DAll) -> IO(DAll):
+  match l:
+    case AD.MLoad{+name, +base}:
+      do IO<DAll>:
+        t0 : Nat <- IO.now()
+        m : Result<&1, &1, U32 & String, File> <- File.open(dn ++ "/" ++ name, "r")
+        d : DLd <- dir.file.open(m, base, lg, trunc, items, dn ++ "/" ++ name, name, dall.ds(a), more)
+        t1 : Nat <- IO.now()
+        dir.loaded(d, last, base, name, Nat.sub(t1, t0), lg, a)
+
+@unsafe
+def dir.loads(fs: List<&2, AD.MLoad>, +lg: Log, +trunc: Bool, +items: List<&2, C.CItem>, +dn: String, +more: Nat, a: DAll) -> IO(DAll):
+  match fs:
+    case Nil{}:
+      IO.pure(DAll, a)
+    case Con{l, +rest}:
+      do IO<DAll>:
+        b : DAll <- dir.load.one(l, List.is_empty(&2, AD.MLoad, rest), lg, trunc, items, dn, more, a)
+        dir.loads(rest, lg, trunc, items, dn, more, b)
+
+# An empty base, made when the directory holds no file
+# (aofOpenIfNeededOnServerStart's rewriteAppendOnlyFile of the databases,
+# empty): temp-rewriteaof-<pid>.aof made empty, synced, and renamed into
+# the directory; a failure stops the start, with Redis's lines
+@unsafe
+def base0.renamed(r: Result<&1, &1, U32 & String, Unit>, +lg: Log, +tmp: String, +name: String) -> IO(Unit):
+  match r:
+    case Fail{e}:
+      do IO<Unit>:
+        u : Result<&1, &1, U32 & String, Unit> <- File.unlink(tmp)
+        log.die(Unit, lg, "Error moving temp append only file on the final destination: " ++ err.msg(e))
+    case Done{u}:
+      log(lg, 2, "Creating AOF base file " ++ name ++ " on server start")
+
+@unsafe
+def base0.sync.at(r: Result<&1, &1, U32 & String, Unit>, +lg: Log, +tmp: String, +dn: String, +name: String) -> IO(Unit):
+  match r:
+    case Fail{e}:
+      do IO<Unit>:
+        u : Result<&1, &1, U32 & String, Unit> <- File.unlink(tmp)
+        log.die(Unit, lg, "Write error writing append only file on disk: " ++ err.msg(e))
+    case Done{u}:
+      do IO<Unit>:
+        q : Result<&1, &1, U32 & String, Unit> <- File.rename(tmp, dn ++ "/" ++ name)
+        base0.renamed(q, lg, tmp, name)
+
+@unsafe
+def base0.synced(p: File & Result<&1, &1, U32 & String, Unit>, +lg: Log, +tmp: String, +dn: String, +name: String) -> IO(Unit):
+  (f, r) = p
+  do IO<Unit>:
+    Unit <- File.close(f)
+    base0.sync.at(r, lg, tmp, dn, name)
+
+@unsafe
+def base0.opened(m: Result<&1, &1, U32 & String, File>, +lg: Log, +tmp: String, +dn: String, +name: String) -> IO(Unit):
+  match m:
+    case Fail{e}:
+      log.die(Unit, lg, "Opening the temp file for AOF rewrite in rewriteAppendOnlyFile(): " ++ err.msg(e))
+    case Done{f}:
+      do IO<Unit>:
+        p : File & Result<&1, &1, U32 & String, Unit> <- File.sync(f)
+        base0.synced(p, lg, tmp, dn, name)
+
+@unsafe
+def base0(+lg: Log, +pid: U32, +dn: String, +name: String) -> IO(Unit):
+  +tmp = "temp-rewriteaof-" ++ U32.show(pid) ++ ".aof"
+  do IO<Unit>:
+    m : Result<&1, &1, U32 & String, File> <- File.open(tmp, "w")
+    base0.opened(m, lg, tmp, dn, name)
+
+# The incremental file the actor appends to: the manifest's last
+# ("Opening ..."), or a new one when it names none ("Creating ..."), the
+# manifest written with it (a failure stops the start); the manifest after
+# it, and the file's name
+type DOpen is Data:
+  DOpen{mf: AD.Mf, inc: String}
+
+@unsafe
+def dir.incr.saved(ok: Bool, +lg: Log, +inc: String, mf: AD.Mf) -> IO(DOpen):
+  match ok:
+    case False{}:
+      IO.die(DOpen, 1, "")
+    case True{}:
+      do IO<DOpen>:
+        Unit <- log(lg, 2, "Creating AOF incr file " ++ inc ++ " on server start")
+        IO.pure(DOpen, DOpen{mf, inc})
+
+@unsafe
+def dir.incr.at(m: Maybe<&2, String>, +lg: Log, +dn: String, +n: String, +mf: AD.Mf) -> IO(DOpen):
+  match m:
+    case Some{+inc}:
+      do IO<DOpen>:
+        Unit <- log(lg, 2, "Opening AOF incr file " ++ inc ++ " on server start")
+        IO.pure(DOpen, DOpen{mf, inc})
+    case None{}:
+      +m2 = AD.mf.incr.new(mf, n)
+      do IO<DOpen>:
+        ok : Bool <- mf.save(lg, dn, n, m2)
+        dir.incr.saved(ok, lg, AD.mf.incr.at(m2), m2)
+
+# the actor appending to the incremental file at path, its directory
+# synced, everysec's syncer on it; the file has selected no database yet
+# (st.new.d)
+@unsafe
+def open_aof.d(m: Result<&1, &1, U32 & String, File>, +path: String, +inc: String, +sync: Sync, srv: S.Srv, ds: R.Ds, +lg: Log, +pid: U32, d: RDir, +pc: Chan(String)) -> IO(Chan(Req)):
+  match m:
+    case Fail{e}:
+      log.die(Chan(Req), lg, "Can't open the append-only file " ++ inc ++ ": " ++ err.msg(e))
+    case Done{f}:
+      do IO<Chan(Req)>:
+        r : Result<&1, &1, U32 & String, Unit> <- File.sync_dir(path)
+        Unit <- dir_synced(r, path, lg)
+        Unit <- syncer.d(sync, path, pc)
+        +reqs : Chan(Req) <- Chan.new(Req, 1024)
+        Unit <- IO.spawn(Unit, aof_loop(st.new.d(srv, ds, rw.new(path, True{}, pid, d)), f, sync, reqs))
+        return reqs
+
+# the files' facts for INFO: their size, and the base's (as Redis takes
+# aof_rewrite_base_size at the start); the keys the RDB base loaded
+@unsafe
+def dir.serve(o: DOpen, a: DAll, +dn: String, +n: String, +sync: Sync, +items: List<&2, C.CItem>, info: I.Info, ls: List<&1, Listener>, +post: Bool, +lg: Log, +tl: Chan(Tally), +pid: U32) -> IO(Unit):
+  match o a:
+    case DOpen{mf, +inc} DAll{ds, +size, +base, +ld, +ex}:
+      +path = dn ++ "/" ++ inc
+      do IO<Unit>:
+        m2 : AD.Mf <- dir.gc(lg, items, dn, n, mf)
+        +pc : Chan(String) <- Chan.new(String, 64)
+        m : Result<&1, &1, U32 & String, File> <- File.open(path, "a")
+        +reqs : Chan(Req) <- open_aof.d(m, path, inc, sync, S.srv_of(items, I.info.rdb.loaded(I.info.aof(I.info.restored(info, base), Nat.sub(size, base)), ld, ex)), ds, lg, pid, RDir{dn, n, m2, 0n, pc}, pc)
+        accept_all(ls, reqs, post, lg, tl, items)
+
+@unsafe
+def dir.start.loaded(a: DAll, +t0: Nat, +lg: Log, +dn: String, +n: String, +mf: AD.Mf, +sync: Sync, +items: List<&2, C.CItem>, info: I.Info, ls: List<&1, Listener>, +post: Bool, +tl: Chan(Tally), +pid: U32) -> IO(Unit):
+  do IO<Unit>:
+    t1 : Nat <- IO.now()
+    Unit <- log(lg, 2, "DB loaded from append only file: " ++ secs3(Nat.sub(t1, t0)) ++ " seconds")
+    o : DOpen <- dir.incr.at(AD.mf.incr.last(mf), lg, dn, n, mf)
+    dir.serve(o, a, dn, n, sync, items, info, ls, post, lg, tl, pid)
+
+@unsafe
+def dir.start.files(any: Bool, +lg: Log, +trunc: Bool, +dn: String, +n: String, +mf: AD.Mf, +sync: Sync, +items: List<&2, C.CItem>, info: I.Info, ls: List<&1, Listener>, +post: Bool, +tl: Chan(Tally), +pid: U32, +more: Nat) -> IO(Unit):
+  match any:
+    case False{}:
+      +m1 = AD.mf.base.new(mf, n, False{})
+      do IO<Unit>:
+        Unit <- base0(lg, pid, dn, AD.mf.base.at(m1))
+        o : DOpen <- dir.incr.at(None{}, lg, dn, n, m1)
+        dir.serve(o, DAll{R.ds.empty(more), 0n, 0n, 0n, 0n}, dn, n, sync, items, info, ls, post, lg, tl, pid)
+    case True{}:
+      +fs = AD.mf.loads(mf)
+      do IO<Unit>:
+        Unit <- dir.check(fs, lg, dn)
+        t0 : Nat <- IO.now()
+        a : DAll <- dir.loads(fs, lg, trunc, items, dn, more, DAll{R.ds.empty(more), 0n, 0n, 0n, 0n})
+        dir.start.loaded(a, t0, lg, dn, n, mf, sync, items, info, ls, post, tl, pid)
+
+# the start with appendonly yes in the directory dn, its files named n,
+# its manifest mf0 as read
+@unsafe
+def dir.start(+lg: Log, +trunc: Bool, +dn: String, +n: String, mf0: AD.Mf, +sync: Sync, +items: List<&2, C.CItem>, info: I.Info, ls: List<&1, Listener>, +post: Bool, +tl: Chan(Tally), +pid: U32, +more: Nat) -> IO(Unit):
+  do IO<Unit>:
+    +mf : AD.Mf <- dir.upgrade(lg, dn, n, mf0)
+    dir.start.files(AD.mf.any(mf), lg, trunc, dn, n, mf, sync, items, info, ls, post, tl, pid, more)
+
+# with appendonly no (in the configuration's form), the directory's
+# manifest read all the same, for the rewrites (BGREWRITEAOF writes its
+# base there), and its history removed after the RDB file's load, as
+# Redis's main goes; none without the directory
+@unsafe
+def dir.off(there: Bool, +lg: Log, +dn: String, +n: String) -> IO(Maybe<&2, AD.Mf>):
+  match there:
+    case False{}:
+      IO.pure(Maybe<&2, AD.Mf>, None{})
+    case True{}:
+      do IO<Maybe<&2, AD.Mf>>:
+        mf : AD.Mf <- mf.load(lg, dn, n)
+        IO.pure(Maybe<&2, AD.Mf>, Some{mf})
+
+@unsafe
+def dir.off.gc(m: Maybe<&2, AD.Mf>, +lg: Log, +items: List<&2, C.CItem>, +dn: String, +n: String) -> IO(RDir):
+  match m:
+    case None{}:
+      IO.pure(RDir, RDirNone{})
+    case Some{+mf}:
+      do IO<RDir>:
+        m2 : AD.Mf <- dir.gc(lg, items, dn, n, mf)
+        pc : Chan(String) <- Chan.new(String, 1)
+        IO.pure(RDir, RDir{dn, n, m2, 0n, pc})
+
 # Serving
 # -------
 # The actor on its database (restored from the append-only file, with
@@ -14810,26 +15754,69 @@ def dbs.more(+items: List<&2, C.CItem>) -> Nat:
 # the actor without a file, on the databases the RDB file held (The RDB
 # file on the disk: rdb.start)
 @unsafe
-def serve.db(p: R.Ds & I.Info, ls: List<&1, Listener>, +post: Bool, +items: List<&2, C.CItem>, +lg: Log, +tl: Chan(Tally), +pid: U32) -> IO(Unit):
+def serve.db(p: R.Ds & I.Info, d: RDir, ls: List<&1, Listener>, +post: Bool, +items: List<&2, C.CItem>, +lg: Log, +tl: Chan(Tally), +pid: U32) -> IO(Unit):
   (ds, info) = p
   do IO<Unit>:
     +reqs : Chan(Req) <- Chan.new(Req, 1024)
-    Unit <- IO.spawn(Unit, db_start(S.srv_of(items, info), ds, rw.new(T.cfg(items, "appendfilename"), False{}, pid), reqs))
+    Unit <- IO.spawn(Unit, db_start(S.srv_of(items, info), ds, rw.new(T.cfg(items, "appendfilename"), False{}, pid, d), reqs))
     accept_all(ls, reqs, post, lg, tl, items)
 
 # rdb: whether the RDB file is loaded when there is no append-only file
 # (not in the short form)
 @unsafe
-def serve(aof: Maybe<&2, String>, ls: List<&1, Listener>, +post: Bool, +sync: Sync, +trunc: Bool, +items: List<&2, C.CItem>, info: I.Info, +lg: Log, +tl: Chan(Tally), +pid: U32, rdb: Bool) -> IO(Unit):
+def serve.single(+path: String, ls: List<&1, Listener>, +post: Bool, +sync: Sync, +trunc: Bool, +items: List<&2, C.CItem>, info: I.Info, +lg: Log, +tl: Chan(Tally), +pid: U32) -> IO(Unit):
+  do IO<Unit>:
+    p : R.Ds & Nat <- restore(lg, trunc, path, dbs.more(items))
+    serve.aof(p, path, sync, items, info, ls, post, lg, tl, pid)
+
+# with appendonly yes: the single file, or the directory when it is there
+# (The append-only directory), whose files are named path
+@unsafe
+def serve.at(dir: Bool, +path: String, ls: List<&1, Listener>, +post: Bool, +sync: Sync, +trunc: Bool, +items: List<&2, C.CItem>, info: I.Info, +lg: Log, +tl: Chan(Tally), +pid: U32) -> IO(Unit):
+  match dir:
+    case False{}:
+      serve.single(path, ls, post, sync, trunc, items, info, lg, tl, pid)
+    case True{}:
+      +dn = T.cfg(items, "appenddirname")
+      do IO<Unit>:
+        mf : AD.Mf <- mf.load(lg, dn, path)
+        dir.start(lg, trunc, dn, path, mf, sync, items, info, ls, post, tl, pid, dbs.more(items))
+
+@unsafe
+def serve.on(conf: Bool, +path: String, ls: List<&1, Listener>, +post: Bool, +sync: Sync, +trunc: Bool, +items: List<&2, C.CItem>, info: I.Info, +lg: Log, +tl: Chan(Tally), +pid: U32) -> IO(Unit):
+  match conf:
+    case False{}:
+      serve.single(path, ls, post, sync, trunc, items, info, lg, tl, pid)
+    case True{}:
+      do IO<Unit>:
+        d : Bool <- there(T.cfg(items, "appenddirname") ++ "/.")
+        serve.at(d, path, ls, post, sync, trunc, items, info, lg, tl, pid)
+
+# without an append-only file, the RDB file loaded (not in the short
+# form), with the directory's manifest read before it when the directory
+# is there, and its history removed after
+@unsafe
+def serve.off(+dir: Bool, ls: List<&1, Listener>, +post: Bool, +items: List<&2, C.CItem>, info: I.Info, +lg: Log, +tl: Chan(Tally), +pid: U32, rdb: Bool) -> IO(Unit):
+  +dn = T.cfg(items, "appenddirname")
+  +n = T.cfg(items, "appendfilename")
+  do IO<Unit>:
+    m : Maybe<&2, AD.Mf> <- dir.off(dir, lg, dn, n)
+    p : R.Ds & I.Info <- rdb.start(rdb, lg, items, info, dbs.more(items))
+    d : RDir <- dir.off.gc(m, lg, items, dn, n)
+    serve.db(p, d, ls, post, items, lg, tl, pid)
+
+# rdb: whether this is the configuration's form, where the RDB file is
+# loaded when there is no append-only file and Redis 7's directory is
+# used when it is there (not in the short form)
+@unsafe
+def serve(aof: Maybe<&2, String>, ls: List<&1, Listener>, +post: Bool, +sync: Sync, +trunc: Bool, +items: List<&2, C.CItem>, info: I.Info, +lg: Log, +tl: Chan(Tally), +pid: U32, +rdb: Bool) -> IO(Unit):
   match aof:
     case None{}:
       do IO<Unit>:
-        p : R.Ds & I.Info <- rdb.start(rdb, lg, items, info, dbs.more(items))
-        serve.db(p, ls, post, items, lg, tl, pid)
+        d : Bool <- there(T.cfg(items, "appenddirname") ++ "/.")
+        serve.off(Bool.and(rdb, d), ls, post, items, info, lg, tl, pid, rdb)
     case Some{+path}:
-      do IO<Unit>:
-        p : R.Ds & Nat <- restore(lg, trunc, path, dbs.more(items))
-        serve.aof(p, path, sync, items, info, ls, post, lg, tl, pid)
+      serve.on(rdb, path, ls, post, sync, trunc, items, info, lg, tl, pid)
 
 # Listening
 # ---------
@@ -14952,35 +15939,6 @@ def modules(load: Bool, cfg: Bool, +mod: String, +lg: Log) -> IO(Unit):
       IO.pure(Unit, Unit{})
 
 @unsafe
-def refuse.there(m: Result<&1, &1, U32 & String, File>, +msg: String, +lg: Log) -> IO(Unit):
-  match m:
-    case Done{f}:
-      do IO<Unit>:
-        Unit <- File.close(f)
-        log.die(Unit, lg, msg)
-    case Fail{e}:
-      IO.pure(Unit, Unit{})
-
-# a file there stops the start
-@unsafe
-def refuse.if_there(+path: String, +msg: String, +lg: Log) -> IO(Unit):
-  do IO<Unit>:
-    m : Result<&1, &1, U32 & String, File> <- File.open(path, "r")
-    refuse.there(m, msg, lg)
-
-# data BendKV cannot read stops the start, rather than a start without
-# it: Redis 7's multi-part append-only file (its manifest), with
-# appendonly yes (without, the RDB file loads: The RDB file on the disk)
-@unsafe
-def data.check(checks: Bool, +aof: Bool, +items: List<&2, C.CItem>, +lg: Log) -> IO(Unit):
-  match checks aof:
-    case True{} True{}:
-      refuse.if_there(T.cfg(items, "appenddirname") ++ "/" ++ T.cfg(items, "appendfilename") ++ ".manifest",
-        "BendKV cannot read Redis 7's multi-part append-only files yet: " ++ T.cfg(items, "dir") ++ "/" ++ T.cfg(items, "appenddirname") ++ " holds one", lg)
-    case _ _:
-      IO.pure(Unit, Unit{})
-
-@unsafe
 def start.refused(none: Bool, +msg: String, +lg: Log) -> IO(Unit):
   match none:
     case True{}:
@@ -15016,8 +15974,9 @@ def start.sup.env(+items: List<&2, C.CItem>, +lg: Log) -> IO(Unit):
     start.sup(T.sup.kind(T.cfg(items, "supervised"), env.set(up), env.set(sd)), lg)
 
 # the server as the configuration asks: up to listening, then serving;
-# checks: the data checks and the RDB file's load (not in the short
-# form); mod and mcfg: what startup.bend found of modules
+# checks: the configuration's form (the RDB file's load, and Redis 7's
+# append-only directory: not in the short form); mod and mcfg: what
+# startup.bend found of modules
 @unsafe
 def run(+items: List<&2, C.CItem>, +post: Bool, +aof: Maybe<&2, String>, +sync: Sync, +bare: Bool, +prog: String, +pid: U32, +checks: Bool, +mod: String, +mcfg: Bool, +exe: String, +conf: String) -> IO(Unit):
   +lg = log.of(items, pid)
@@ -15036,7 +15995,6 @@ def run(+items: List<&2, C.CItem>, +post: Bool, +aof: Maybe<&2, String>, +sync: 
     Unit <- log.if(Bool.not(String.eq(T.cfg(items, "always-show-logo"), "yes")), lm, 2, "Running mode=standalone, port=" ++ T.cfg(items, "port") ++ ".")
     Unit <- log(lm, 3, "Server initialized")
     Unit <- modules(Bool.not(String.is_empty(mod)), mcfg, mod, lm)
-    Unit <- data.check(checks, Maybe.is_some(&2, String, aof), items, lm)
     +tl : Chan(Tally) <- Chan.new(Tally, 1)
     ok : Bool <- Chan.send(Tally, tl, Tally{0n, 0n})
     info : I.Info <- info.read(pid, exe, conf, tl)
