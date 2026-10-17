@@ -4073,7 +4073,7 @@ def zt.balance(+m: String, +d: F.F64, +l: ZTree, +r: ZTree) -> ZTree:
 
 # t with the element (m, d) in its place (t does not hold m); c is how
 # (d, m) compares with t's root. A side is compared with (d, m) before it
-# goes down (+c): read after it was given to the insertion, it would be
+# goes down (+cl, +cr): read after it was given to the insertion, it would be
 # shared while the insertion runs, which would copy each node it passes,
 # and a tree the insertion owns alone (a sorted set taken out of the
 # keyspace, R.upd.takes) is changed in place.

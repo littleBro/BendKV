@@ -7327,9 +7327,16 @@ sorted set of 100,000 elements, as `tools/colls.sh` makes it, and one of 100):
 | ZINCRBY on the sorted set of 100 (not taken) | 93,911 | 94,047 | 89,607 | −4.6% |
 | ZSCORE | 17,790 | 17,845 | 17,789 | |
 
+The table's runs hold z and zs alone and go in this order: ZADD z 1 m50000 (the score a
+member has), ZADD z <random> m50000 (a new score), ZADD z 1 n:<random> (a new member),
+three new members at once, ZINCRBY z 1 m50000, ZADD z XX 1 x:<random>, ZINCRBY zs 1
+m50. `tools/colls.sh` runs ZINCRBY z 1 m50000 right after ZADD z 1 m50000, so its member
+starts from the score 1, where the table's starts from a random score, elsewhere in the
+tree: hence 68,728 there and 77,882 here before the change.
+
 The first test checked the options and the pairs before it read the member: a ZADD that
 changes nothing paid 2,929 instructions for it (+12%); checked last, 1,339. Of the rest of
-a ZINCRBY's test, its increment, added in software (section 3zk), is most. `tools/colls.sh`
+a ZINCRBY's test, its increment, added in software (FINDINGS 3zk), is most. `tools/colls.sh`
 (which now also runs ZADD of a new score and of a new member): ZINCRBY 68,728 → 50,220,
 ZADD of a new score 76,830 → 49,443, of a new member 47,807 → 33,854, of the score a
 member has 23,695 → 24,950; the other commands as before, within 0.4%. `make perfcheck`:

@@ -20391,7 +20391,10 @@ def zadd.old.of(nx: Bool, nan: Bool, keep: Bool, same: Bool, +sc: F.F64, +c: F.F
     case False{} False{} False{} False{}:
       ZAdd{KV.zset.set(z, i, m, c, sc), added, Nat.add(upd, 1n), Nat.add(done, 1n), sc}
 
-# a member there, of score c (i: where KV.zset.find found it)
+# a member there, of score c (i: where KV.zset.find found it). The NaN
+# test runs under INCR alone: a score read without INCR is never a NaN
+# (F.f64.parse refuses one, as Redis's string2d does), and PROOF.bend's
+# zadd_at_some needs the pairs without INCR never to answer a NaN
 def zadd.old(+o: ZOpts, +c: F.F64, +i: Nat, +d: F.F64, +m: String, z: KV.Zset, +added: Nat, +upd: Nat, +done: Nat, last: F.F64) -> ZAdd:
   match o:
     case ZOpts{+nx, xx, +gt, +lt, ch, +incr}:

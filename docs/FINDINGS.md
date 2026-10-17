@@ -5933,7 +5933,8 @@ A ZADD can change
 nothing: a member there with the score it has, XX of a member not there, NX of one there,
 a GT or an LT that keeps the score, or an INCR whose sum is a NaN. Such a write answers
 CKeep and drops the sorted set it was given, which a sorted set taken out of the
-keyspace cannot afford, so the take needs a test, proved, that the write changes it.
+keyspace cannot afford, so the take needs a test that the write changes it, with its proof in
+`proof/PROOF.bend` (`takes_over`).
 
 **The test** (`src/redis.bend`: `upd.takes`, `zadd.takes`).
 
@@ -5950,9 +5951,12 @@ keyspace cannot afford, so the take needs a test, proved, that the write changes
 - A small sorted set (a listpack) is not taken. Kept in one string (section 3zzzn), its
   write makes a new string whatever the take; kept as a tree past one buffer (`ZWide`),
   it holds at most 128 elements, so the paths its write copies are short.
-- ZADD's NaN test runs under INCR alone, as Redis's `zsetAdd` tests it. Without INCR a
-  score is one `F.f64.parse` read, which is never a NaN, so no reply changes, and the
-  proof needs no lemma about the parser.
+- ZADD's NaN test runs under INCR alone. Redis's `zsetAdd` refuses a NaN score whatever
+  the options and checks the sum under INCR, but a score ZADD reads is never a NaN:
+  `string2d` refuses one as it parses, and so does `F.f64.parse`. So only the sum can be
+  a NaN, no reply changes, and the proof needs no lemma about the parser
+  (`zadd_at_some` needs the pairs without INCR never to answer a NaN; a comment at
+  `zadd.old` says so).
 
 **The tree** (`src/map.bend`: Sorted sets). The take alone gave less than it should:
 ZADD of a new member took 43,874 instructions with it, of which 6,400 went to dropping
@@ -5998,11 +6002,11 @@ a new member are new there), on main of 16 October:
 
 On main of 15 October, before small sorted sets in one string (section 3zzzn), the
 same change gave −35.6%, −26.9% and −29.2% on the first three (from 76,830, 68,728 and
-47,807 to 49,443, 50,220 and 33,854), and the take alone −20.6%, −15.7% and −8.0%; a
-ZADD of three new members fell from 103,228 instructions to 58,387 (−43%). On the newer
-main, ZADD of a new score and ZINCRBY keep 6,000 to 8,000 instructions more of their
-cost than they did; where those go is not measured yet. `make perfcheck`: GET 3,490,
-SET 4,285, INCR 4,604 (main 3,484, 4,246, 4,588).
+47,807 to 49,443, 50,220 and 33,854). In the runs of PERFORMANCE 65's first table, the
+take alone gave −20.6%, −15.7% and −8.0%, and a ZADD of three new members fell from
+103,228 instructions to 58,387 (−43%). On the newer main, ZADD of a new score and
+ZINCRBY keep 5,800 and 7,600 instructions more than they did; where those go is not
+measured yet. GET, SET and INCR are as before (PERFORMANCE 65).
 
 **What is left.**
 
