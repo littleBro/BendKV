@@ -5676,23 +5676,48 @@ def le_refl(n: Nat) -> {le(n, n) == True{} : Bool}:
 # An SADD to a set that lacks its first member writes the set over
 # (takes_mems, for takes_over): the members added to a set leave it no
 # smaller (le_add_mem, len_adds_ge), a member it lacks makes it one
-# larger (le_big_new, le_ints_new), and a size one or more larger, less
-# the old size, is not 0 (sub_pos), so SADD adds one or more.
-def le_ints_putm(fits: Bool, +m: Nat, +n: Nat, -xs: KV.ITree, -y: String) -> {le(m, n) == True{} : Bool} -> {le(m, KV.mems.len(KV.mems.ints.put(fits, n, xs, y))) == True{} : Bool}:
+# larger (le_big_new), and a size one or more larger, less the old size,
+# is not 0 (sub_pos), so SADD adds one or more. A set kept in a string,
+# an intset or a small set of strings, is not taken (R.upd.takes). An
+# intset that grows into a hashtable (le_grow) and a small set that grows
+# (le_small_put, le_long_put) are no smaller as a string of members, as
+# pieces of them (le_set) and as a trie alike.
+def le_set_of(+m: Nat, +n: Nat, -k: Nat, -s: String, rest: List<&2, KV.MPiece>) -> {le(m, n) == True{} : Bool} -> {le(m, KV.mems.len(KV.ml.set.of(1n+n, k, s, rest))) == True{} : Bool}:
+  match rest:
+    case Nil{}:
+      e => le_succ(m, n)(e)
+    case Con{q, more}:
+      e => le_succ(m, n)(e)
+
+def le_set(+m: Nat, +n: Nat, ps: List<&2, KV.MPiece>) -> {le(m, n) == True{} : Bool} -> {le(m, KV.mems.len(KV.ml.set(1n+n, ps))) == True{} : Bool}:
+  match ps:
+    case Nil{}:
+      e => le_succ(m, n)(e)
+    case Con{KV.MPc{+k, +s}, rest}:
+      le_set_of(m, n, k, s, rest)
+
+def le_grow(fits: Bool, +m: Nat, +n: Nat, +xs: String, +y: String) -> {le(m, n) == True{} : Bool} -> {le(m, KV.mems.len(KV.mems.grow.of(fits, n, xs, y))) == True{} : Bool}:
+  match fits:
+    case True{}:
+      e => le_set(m, n, KV.ml.of(KV.ints.list.on(xs, n, [y])))(e)
+    case False{}:
+      e => le_succ(m, n)(e)
+
+def le_ints_putm(fits: Bool, +m: Nat, +n: Nat, +xs: String, +y: String) -> {le(m, n) == True{} : Bool} -> {le(m, KV.mems.len(KV.mems.ints.put(fits, n, xs, y))) == True{} : Bool}:
   match fits:
     case True{}:
       e => le_succ(m, n)(e)
     case False{}:
-      e => le_succ(m, n)(e)
+      e => le_grow(KV.ms.fits(1n+n, y), m, n, xs, y)(e)
 
-def le_ints_more(int: Bool, +m: Nat, +n: Nat, -xs: KV.ITree, -y: String) -> {le(m, n) == True{} : Bool} -> {le(m, KV.mems.len(KV.mems.ints.add(False{}, int, n, xs, y))) == True{} : Bool}:
+def le_ints_more(int: Bool, +m: Nat, +n: Nat, +xs: String, +y: String) -> {le(m, n) == True{} : Bool} -> {le(m, KV.mems.len(KV.mems.ints.add(False{}, int, n, xs, y))) == True{} : Bool}:
   match int:
     case True{}:
       e => le_ints_putm(Nat.is_lt(n, 512n), m, n, xs, y)(e)
     case False{}:
-      e => le_succ(m, n)(e)
+      e => le_grow(KV.ms.fits(1n+n, y), m, n, xs, y)(e)
 
-def le_ints_add(had: Bool, int: Bool, +m: Nat, +n: Nat, -xs: KV.ITree, -y: String) -> {le(m, n) == True{} : Bool} -> {le(m, KV.mems.len(KV.mems.ints.add(had, int, n, xs, y))) == True{} : Bool}:
+def le_ints_add(had: Bool, int: Bool, +m: Nat, +n: Nat, +xs: String, +y: String) -> {le(m, n) == True{} : Bool} -> {le(m, KV.mems.len(KV.mems.ints.add(had, int, n, xs, y))) == True{} : Bool}:
   match had:
     case True{}:
       e => e
@@ -5706,12 +5731,51 @@ def le_big_add(had: Bool, +m: Nat, +n: Nat, -t: KV.Trie<Unit>, -y: String) -> {l
     case False{}:
       e => le_succ(m, n)(e)
 
+def le_push(room: Bool, +m: Nat, +n: Nat, -b: String, -y: String) -> {le(m, n) == True{} : Bool} -> {le(m, KV.mems.len(KV.ms.push.of(room, n, b, y, String.length(y)))) == True{} : Bool}:
+  match room:
+    case True{}:
+      e => le_succ(m, n)(e)
+    case False{}:
+      e => le_succ(m, n)(e)
+
+def le_small_put(fits: Bool, +m: Nat, +n: Nat, +b: String, +y: String) -> {le(m, n) == True{} : Bool} -> {le(m, KV.mems.len(KV.mems.small.put(fits, n, b, y))) == True{} : Bool}:
+  match fits:
+    case True{}:
+      e => le_push(Nat.is_le(Nat.add(String.length(b), Nat.add(1n, String.length(y))), 2048n), m, n, b, y)(e)
+    case False{}:
+      e => le_succ(m, n)(e)
+
+def le_small_add(had: Bool, +m: Nat, +n: Nat, +b: String, +y: String) -> {le(m, n) == True{} : Bool} -> {le(m, KV.mems.len(KV.mems.small.add(had, n, b, y))) == True{} : Bool}:
+  match had:
+    case True{}:
+      e => e
+    case False{}:
+      e => le_small_put(KV.ms.fits(1n+n, y), m, n, b, y)(e)
+
+def le_long_put(fits: Bool, +m: Nat, +n: Nat, -ps: List<&2, KV.MPiece>, -y: String) -> {le(m, n) == True{} : Bool} -> {le(m, KV.mems.len(KV.mems.long.put(fits, n, ps, y))) == True{} : Bool}:
+  match fits:
+    case True{}:
+      e => le_succ(m, n)(e)
+    case False{}:
+      e => le_succ(m, n)(e)
+
+def le_long_add(had: Bool, +m: Nat, +n: Nat, -ps: List<&2, KV.MPiece>, +y: String) -> {le(m, n) == True{} : Bool} -> {le(m, KV.mems.len(KV.mems.long.add(had, n, ps, y))) == True{} : Bool}:
+  match had:
+    case True{}:
+      e => e
+    case False{}:
+      e => le_long_put(KV.ms.fits(1n+n, y), m, n, ps, y)(e)
+
 def le_add_mem(s: KV.Mems, +m: Nat, +y: String) -> {le(m, KV.mems.len(s)) == True{} : Bool} -> {le(m, KV.mems.len(KV.mems.add(s, y))) == True{} : Bool}:
   match s:
     case KV.MInts{+n, +xs}:
-      le_ints_add(KV.mems.ints.has(KV.ints.ok(y), y, xs), KV.ints.ok(y), m, n, xs, y)
+      le_ints_add(KV.mems.ints.has(KV.ints.ok(y), y, xs, n), KV.ints.ok(y), m, n, xs, y)
     case KV.MBig{+n, +t}:
       le_big_add(KV.has(Unit, t, y), m, n, t, y)
+    case KV.MSmall{+n, +b}:
+      le_small_add(KV.ms.has(y, b, n), m, n, b, y)
+    case KV.MLong{+n, +ps}:
+      le_long_add(KV.ml.has(y, ps, False{}), m, n, ps, y)
 
 def len_adds_ge(xs: List<&2, String>, +s: KV.Mems, +m: Nat) -> {le(m, KV.mems.len(s)) == True{} : Bool} -> {le(m, KV.mems.len(KV.mems.adds(xs, s))) == True{} : Bool}:
   match xs:
@@ -5727,22 +5791,6 @@ def le_big_new(had: Bool, +n: Nat, -t: KV.Trie<Unit>, -y: String) -> {Bool.not(h
     case False{}:
       e => le_refl(n)
 
-def le_ints_putn(fits: Bool, +n: Nat, -xs: KV.ITree, -y: String) -> {le(1n+n, KV.mems.len(KV.mems.ints.put(fits, n, xs, y))) == True{} : Bool}:
-  match fits:
-    case True{}:
-      le_refl(n)
-    case False{}:
-      le_refl(n)
-
-def le_ints_new(had: Bool, int: Bool, +n: Nat, -xs: KV.ITree, -y: String) -> {Bool.not(had) == True{} : Bool} -> {le(1n+n, KV.mems.len(KV.mems.ints.add(had, int, n, xs, y))) == True{} : Bool}:
-  match had int:
-    case True{} _:
-      e => Empty.absurd({le(1n+n, KV.mems.len(KV.mems.ints.add(True{}, int, n, xs, y))) == True{} : Bool}, false_true(e))
-    case False{} True{}:
-      e => le_ints_putn(Nat.is_lt(n, 512n), n, xs, y)
-    case False{} False{}:
-      e => le_refl(n)
-
 def sub_pos(a: Nat, b: Nat) -> {le(1n+b, a) == True{} : Bool} -> {Nat.is_eq(Nat.sub(a, b), 0n) == False{} : Bool}:
   match a b:
     case 0n _:
@@ -5755,9 +5803,6 @@ def sub_pos(a: Nat, b: Nat) -> {le(1n+b, a) == True{} : Bool} -> {Nat.is_eq(Nat.
 def sadd_adds(+x: String, +rest: List<&2, String>, +n: Nat, +t: KV.Trie<Unit>) -> {Bool.not(KV.has(Unit, t, x)) == True{} : Bool} -> {Nat.is_eq(Nat.sub(KV.mems.len(KV.mems.adds(rest, KV.mems.add(KV.MBig{n, t}, x))), n), 0n) == False{} : Bool}:
   g => sub_pos(KV.mems.len(KV.mems.adds(rest, KV.mems.add(KV.MBig{n, t}, x))), n)(len_adds_ge(rest, KV.mems.add(KV.MBig{n, t}, x), 1n+n)(le_big_new(KV.has(Unit, t, x), n, t, x)(g)))
 
-def sadd_adds_ints(+x: String, +rest: List<&2, String>, +n: Nat, +xs: KV.ITree) -> {Bool.not(KV.mems.ints.has(KV.ints.ok(x), x, xs)) == True{} : Bool} -> {Nat.is_eq(Nat.sub(KV.mems.len(KV.mems.adds(rest, KV.mems.add(KV.MInts{n, xs}, x))), n), 0n) == False{} : Bool}:
-  g => sub_pos(KV.mems.len(KV.mems.adds(rest, KV.mems.add(KV.MInts{n, xs}, x))), n)(len_adds_ge(rest, KV.mems.add(KV.MInts{n, xs}, x), 1n+n)(le_ints_new(KV.mems.ints.has(KV.ints.ok(x), x, xs), KV.ints.ok(x), n, xs, x)(g)))
-
 def sadd_of_over(b: Bool, +ms: List<&2, String>, -t: KV.Mems, -added: Nat) -> {b == False{} : Bool} -> {ch_over(ch_of(R.sadd.of(b, False{}, ms, t, added))) == True{} : Bool}:
   match b:
     case True{}:
@@ -5768,15 +5813,16 @@ def sadd_of_over(b: Bool, +ms: List<&2, String>, -t: KV.Mems, -added: Nat) -> {b
 def takes_madd(+x: String, +rest: List<&2, String>, +n: Nat, +t: KV.Trie<Unit>, -e: Nat, +now: Nat) -> {R.upd.takes(R.UMems{R.SWAdd{Con{x, rest}}}, Some{KV.Item{KV.VColl{KV.CMems{KV.MBig{n, t}}}, e}}) == True{} : Bool} -> {ch_over(ch_of(R.upd.v(R.UMems{R.SWAdd{Con{x, rest}}}, now, Some{KV.Item{KV.VColl{KV.CMems{KV.MBig{n, t}}}, e}}))) == True{} : Bool}:
   g => sadd_of_over(Nat.is_eq(Nat.sub(KV.mems.len(KV.mems.adds(rest, KV.mems.add(KV.MBig{n, t}, x))), n), 0n), Con{x, rest}, KV.mems.adds(rest, KV.mems.add(KV.MBig{n, t}, x)), Nat.sub(KV.mems.len(KV.mems.adds(rest, KV.mems.add(KV.MBig{n, t}, x))), n))(sadd_adds(x, rest, n, t)(g))
 
-def takes_madd_ints(+x: String, +rest: List<&2, String>, +n: Nat, +xs: KV.ITree, -e: Nat, +now: Nat) -> {R.upd.takes(R.UMems{R.SWAdd{Con{x, rest}}}, Some{KV.Item{KV.VColl{KV.CMems{KV.MInts{n, xs}}}, e}}) == True{} : Bool} -> {ch_over(ch_of(R.upd.v(R.UMems{R.SWAdd{Con{x, rest}}}, now, Some{KV.Item{KV.VColl{KV.CMems{KV.MInts{n, xs}}}, e}}))) == True{} : Bool}:
-  g => sadd_of_over(Nat.is_eq(Nat.sub(KV.mems.len(KV.mems.adds(rest, KV.mems.add(KV.MInts{n, xs}, x))), n), 0n), Con{x, rest}, KV.mems.adds(rest, KV.mems.add(KV.MInts{n, xs}, x)), Nat.sub(KV.mems.len(KV.mems.adds(rest, KV.mems.add(KV.MInts{n, xs}, x))), n))(sadd_adds_ints(x, rest, n, xs)(g))
-
 def takes_madd_s(s: KV.Mems, -e: Nat, +x: String, +rest: List<&2, String>, +now: Nat) -> {R.upd.takes(R.UMems{R.SWAdd{Con{x, rest}}}, Some{KV.Item{KV.VColl{KV.CMems{s}}, e}}) == True{} : Bool} -> {ch_over(ch_of(R.upd.v(R.UMems{R.SWAdd{Con{x, rest}}}, now, Some{KV.Item{KV.VColl{KV.CMems{s}}, e}}))) == True{} : Bool}:
   match s:
     case KV.MBig{n, t}:
       takes_madd(x, rest, n, t, e, now)
     case KV.MInts{n, xs}:
-      takes_madd_ints(x, rest, n, xs, e, now)
+      g => Empty.absurd({ch_over(ch_of(R.upd.v(R.UMems{R.SWAdd{Con{x, rest}}}, now, Some{KV.Item{KV.VColl{KV.CMems{KV.MInts{n, xs}}}, e}}))) == True{} : Bool}, false_true(g))
+    case KV.MSmall{n, b}:
+      g => Empty.absurd({ch_over(ch_of(R.upd.v(R.UMems{R.SWAdd{Con{x, rest}}}, now, Some{KV.Item{KV.VColl{KV.CMems{KV.MSmall{n, b}}}, e}}))) == True{} : Bool}, false_true(g))
+    case KV.MLong{n, ps}:
+      g => Empty.absurd({ch_over(ch_of(R.upd.v(R.UMems{R.SWAdd{Con{x, rest}}}, now, Some{KV.Item{KV.VColl{KV.CMems{KV.MLong{n, ps}}}, e}}))) == True{} : Bool}, false_true(g))
 
 def takes_madd_c(cl: KV.Coll, -e: Nat, +x: String, +rest: List<&2, String>, +now: Nat) -> {R.upd.takes(R.UMems{R.SWAdd{Con{x, rest}}}, Some{KV.Item{KV.VColl{cl}, e}}) == True{} : Bool} -> {ch_over(ch_of(R.upd.v(R.UMems{R.SWAdd{Con{x, rest}}}, now, Some{KV.Item{KV.VColl{cl}, e}}))) == True{} : Bool}:
   match cl:
@@ -7235,7 +7281,9 @@ def Laws.swap_reads(c1, c2, cs, db, j, e):
 # is one a key keeps, which reads back as written (num14_show). The file
 # after a history holds the entries of all its effects (aof_all); they
 # parse back to them, and run from an empty database they leave the
-# history's database, at time 0 (replay_all).
+# history's database, at time 0 (replay_all). The start reads the file a
+# window at a time, and makes of the windows what it made of the whole
+# file (Laws.load_windows, below: Windows).
 
 # Gluing
 # ------
@@ -9857,7 +9905,7 @@ def sub_self(n: Nat) -> {0n == Nat.sub(n, n) : Nat}:
     case 1n++p:
       sub_self(p)
 
-def has_none(b: Bool, +m: String) -> {False{} == KV.mems.ints.has(b, m, KV.ITip{}) : Bool}:
+def has_none(b: Bool, +m: String) -> {False{} == KV.mems.ints.has(b, m, "", 0n) : Bool}:
   match b:
     case True{}:
       {==}
@@ -16021,6 +16069,1051 @@ def Laws.load_cut(hist, n, c, d, e):
 def Laws.checked_replay(reqs, n, e):
   %Equal.sym(Maybe<&1, Nat & Nat>, A.check(A.marks(reqs), A.file.acts(A.parse_all(reqs)), n), None{}, e) : {A.checked.of(_, A.file.acts(A.parse_all(reqs)), n) == A.Replayed{A.replay(reqs, n)} : A.Replay}
   {==}
+
+# Windows
+# -------
+# The start reads its file a window at a time (Laws.load_windows). Two
+# facts make the windows the file. An entry read with more bytes after it
+# reads the same, and leaves them after what it left (ps_entry: each part
+# of the parser, a number line, a bulk, the bulks of an entry, reads with
+# more after it as it read without, PS), and it takes a byte at least
+# (SSuf), so that the loader's fuel, a string's length, lasts on any
+# string (lg_fuel). So the loader reads a ++ b as a's entries, then those
+# of what a left with b after it (load_cat), and the whole entries of the
+# windows, one window after another, are the file's. Then the start runs
+# each entry as it comes (A.win.ent), and what it holds after the
+# entries P is what untx, checked and replay make of P (WInv: with no
+# MULTI open, the databases P leaves, the check on P and P's number;
+# with one, the same of the entries untx keeps, K, and the entries after
+# them, held). One more entry keeps that (inv_step: a MULTI moves untx's
+# cut to itself, an EXEC takes it away, any other entry leaves it), the
+# check entry by entry is checked's (ck_all: why it stops at an entry is
+# why for that entry's act alone, why_at), and at the end the start
+# makes of what it holds what it made of the whole file (inv_done).
+
+# Reading with more after it
+# --------------------------
+
+# r is what s ends with
+def Suf(s: String, r: String) -> Type:
+  Exists(String, p => {s == p ++ r : String})
+
+# r is what s ends with, after its first char at least
+def SSuf(s: String, r: String) -> Type:
+  Exists(Char, c => Exists(String, p => {s == SCon{c, p ++ r} : String}))
+
+def suf_refl(-s: String) -> Suf(s, s):
+  (SNil{}, {==})
+
+def suf_cons(h: Char, -u: String, -r: String, sf: Suf(u, r)) -> Suf(SCon{h, u}, r):
+  (p, e) = sf
+  (SCon{h, p}, Equal.cong(String, String, z => SCon{h, z}, u, p ++ r, e))
+
+def suf_trans(-s: String, -r1: String, -r2: String, a: Suf(s, r1), b: Suf(r1, r2)) -> Suf(s, r2):
+  (+p1, e1) = a
+  (+p2, e2) = b
+  (p1 ++ p2, Equal.trans(String, s, p1 ++ r1, (p1 ++ p2) ++ r2, e1, Equal.trans(String, p1 ++ r1, p1 ++ (p2 ++ r2), (p1 ++ p2) ++ r2, Equal.cong(String, String, z => p1 ++ z, r1, p2 ++ r2, e2), Equal.sym(String, (p1 ++ p2) ++ r2, p1 ++ (p2 ++ r2), app_assoc(p1, p2, r2)))))
+
+def ss_cons(h: Char, -u: String, -r: String, sf: Suf(u, r)) -> SSuf(SCon{h, u}, r):
+  (p, e) = sf
+  (h, (p, Equal.cong(String, String, z => SCon{h, z}, u, p ++ r, e)))
+
+# A parse m of s, and m2 of s ++ t: when m reads x and leaves r, m2 reads
+# x and leaves r ++ t, and r is what s ends with
+def PS.of(-X: Data, s: String, t: String, p: X & String, m2: Maybe<&1, X & String>) -> Type:
+  (x, r) = p
+  {m2 == Some{(x, r ++ t)} : Maybe<&1, X & String>} & Suf(s, r)
+
+def PS(-X: Data, s: String, t: String, m: Maybe<&1, X & String>, m2: Maybe<&1, X & String>) -> Type:
+  match m:
+    case None{}:
+      Unit
+    case Some{p}:
+      PS.of(X, s, t, p, m2)
+
+# a parse of s2 is one of s1 when s1 ends with s2
+def ps_weak.go(-X: Data, -s1: String, -s2: String, -t: String, -x: X, -r: String, -m2: Maybe<&1, X & String>, sf: Suf(s1, s2), ps: {m2 == Some{(x, r ++ t)} : Maybe<&1, X & String>} & Suf(s2, r)) -> {m2 == Some{(x, r ++ t)} : Maybe<&1, X & String>} & Suf(s1, r):
+  (e, sf2) = ps
+  (e, suf_trans(s1, s2, r, sf, sf2))
+
+def ps_weak.of(-X: Data, -s1: String, -s2: String, -t: String, p: X & String, -m2: Maybe<&1, X & String>, sf: Suf(s1, s2)) -> PS.of(X, s2, t, p, m2) -> PS.of(X, s1, t, p, m2):
+  (x, r) = p
+  ps => ps_weak.go(X, s1, s2, t, x, r, m2, sf, ps)
+
+def ps_weak(-X: Data, -s1: String, -s2: String, -t: String, m: Maybe<&1, X & String>, -m2: Maybe<&1, X & String>, sf: Suf(s1, s2)) -> PS(X, s2, t, m, m2) -> PS(X, s1, t, m, m2):
+  match m:
+    case None{}:
+      ps => Unit{}
+    case Some{p}:
+      ps => ps_weak.of(X, s1, s2, t, p, m2, sf)(ps)
+
+def ps_cons(-X: Data, h: Char, -u: String, -t: String, m: Maybe<&1, X & String>, -m2: Maybe<&1, X & String>) -> PS(X, u, t, m, m2) -> PS(X, SCon{h, u}, t, m, m2):
+  ps_weak(X, SCon{h, u}, u, t, m, m2, (SCon{h, SNil{}}, {==}))
+
+def ps_numlf.of(b: Bool, -acc: Nat, c: Char, -u: String, -t: String) -> PS(Nat, SCon{c, u}, t, A.num.lf.of(b, acc, u), A.num.lf.of(b, acc, u ++ t)):
+  match b:
+    case True{}:
+      ({==}, (SCon{c, SNil{}}, {==}))
+    case False{}:
+      Unit{}
+
+def ps_numlf(-acc: Nat, u: String, -t: String) -> PS(Nat, u, t, A.num.lf(acc, u), A.num.lf(acc, u ++ t)):
+  match u:
+    case SNil{}:
+      Unit{}
+    case SCon{Chr{+x}, v}:
+      ps_numlf.of(U32.is_eq(x, 10), acc, Chr{x}, v, t)
+
+# a number line read with more after it reads the same
+def ps_num.c(+x: U32, +u: String, +acc: Nat, -t: String, dig: Bool, cr: Bool, ih: @a: Nat -> PS(Nat, u, t, A.num(u, a, A.ch(u)), A.num(u ++ t, a, A.ch(u ++ t)))) -> PS(Nat, SCon{Chr{x}, u}, t, A.num(SCon{Chr{x}, u}, acc, A.ch.of(x, dig, cr)), A.num(SCon{Chr{x}, u ++ t}, acc, A.ch.of(x, dig, cr))):
+  match dig cr:
+    case True{} _:
+      ps_cons(Nat, Chr{x}, u, t, A.num(u, Nat.add(Nat.mul(acc, 10n), U32.to_nat(U32.sub(x, 48))), A.ch(u)), A.num(u ++ t, Nat.add(Nat.mul(acc, 10n), U32.to_nat(U32.sub(x, 48))), A.ch(u ++ t)))(ih(Nat.add(Nat.mul(acc, 10n), U32.to_nat(U32.sub(x, 48)))))
+    case False{} True{}:
+      ps_cons(Nat, Chr{x}, u, t, A.num.lf(acc, u), A.num.lf(acc, u ++ t))(ps_numlf(acc, u, t))
+    case False{} False{}:
+      Unit{}
+
+def ps_num(s: String, +acc: Nat, -t: String) -> PS(Nat, s, t, A.num(s, acc, A.ch(s)), A.num(s ++ t, acc, A.ch(s ++ t))):
+  match s:
+    case SNil{}:
+      Unit{}
+    case SCon{Chr{+x}, +u}:
+      ps_num.c(x, u, acc, t, U32.is_lt(U32.sub(x, 48), 10), U32.is_eq(x, 13), a => ps_num(u, a, t))
+
+# a bulk's line end, and its "\r\n"
+def ps_bulklf.of(b: Bool, -arg: String, c: Char, -u: String, -t: String) -> PS(String, SCon{c, u}, t, A.bulk.lf.of(b, arg, u), A.bulk.lf.of(b, arg, u ++ t)):
+  match b:
+    case True{}:
+      ({==}, (SCon{c, SNil{}}, {==}))
+    case False{}:
+      Unit{}
+
+def ps_bulklf(-arg: String, u: String, -t: String) -> PS(String, u, t, A.bulk.lf(arg, u), A.bulk.lf(arg, u ++ t)):
+  match u:
+    case SNil{}:
+      Unit{}
+    case SCon{Chr{+x}, v}:
+      ps_bulklf.of(U32.is_eq(x, 10), arg, Chr{x}, v, t)
+
+def ps_bulkend.of(b: Bool, +arg: String, c: Char, +u: String, -t: String) -> PS(String, SCon{c, u}, t, A.bulk.end.of(b, arg, u), A.bulk.end.of(b, arg, u ++ t)):
+  match b:
+    case True{}:
+      ps_cons(String, c, u, t, A.bulk.lf(arg, u), A.bulk.lf(arg, u ++ t))(ps_bulklf(arg, u, t))
+    case False{}:
+      Unit{}
+
+def ps_bulkend(+arg: String, u: String, -t: String) -> PS(String, u, t, A.bulk.end(arg, u), A.bulk.end(arg, u ++ t)):
+  match u:
+    case SNil{}:
+      Unit{}
+    case SCon{Chr{+x}, +v}:
+      ps_bulkend.of(U32.is_eq(x, 13), arg, Chr{x}, v, t)
+
+# s's first n chars and the rest make s
+def take_drop(r: String, n: Nat) -> {r == String.take(r, n) ++ String.drop(r, n) : String}:
+  match r n:
+    case SNil{} _:
+      {==}
+    case SCon{h, u} 0n:
+      {==}
+    case SCon{h, u} 1n+p:
+      Equal.cong(String, String, z => SCon{h, z}, u, String.take(u, p) ++ String.drop(u, p), take_drop(u, p))
+
+# where something is left after s's first n chars, more after s changes
+# neither them nor what is left but by that more
+def take_more(r: String, n: Nat, -t: String, -c: Char, -d: String) -> {SCon{c, d} == String.drop(r, n) : String} -> {String.take(r, n) == String.take(r ++ t, n) : String}:
+  match r n:
+    case SNil{} _:
+      e => Empty.absurd({String.take(SNil{}, n) == String.take(SNil{} ++ t, n) : String}, scon_snil(c, d, e))
+    case SCon{h, u} 0n:
+      e => {==}
+    case SCon{h, u} 1n+p:
+      e => Equal.cong(String, String, z => SCon{h, z}, String.take(u, p), String.take(u ++ t, p), take_more(u, p, t, c, d)(e))
+
+def drop_more(r: String, n: Nat, -t: String, -c: Char, -d: String) -> {SCon{c, d} == String.drop(r, n) : String} -> {SCon{c, d ++ t} == String.drop(r ++ t, n) : String}:
+  match r n:
+    case SNil{} _:
+      e => Empty.absurd({SCon{c, d ++ t} == String.drop(SNil{} ++ t, n) : String}, scon_snil(c, d, e))
+    case SCon{h, u} 0n:
+      e => Equal.cong(String, String, z => z ++ t, SCon{c, d}, SCon{h, u}, e)
+    case SCon{h, u} 1n+p:
+      e => drop_more(u, p, t, c, d)(e)
+
+# what is left after s's first n chars is what s ends with
+def drop_suf.eq(r: String, n: Nat, -d: String, e: {d == String.drop(r, n) : String}) -> {r == String.take(r, n) ++ d : String}:
+  %Equal.sym(String, d, String.drop(r, n), e) : {r == String.take(r, n) ++ _ : String}
+  take_drop(r, n)
+
+def drop_suf(+r: String, +n: Nat, -d: String, e: {d == String.drop(r, n) : String}) -> Suf(r, d):
+  (String.take(r, n), drop_suf.eq(r, n, d, e))
+
+# a bulk's bytes and "\r\n", after its length's line: read with more
+# after them, the same
+def ps_body.d(-u: String, +r: String, +nn: Nat, -t: String, d: String, sf: Suf(u, r)) -> {d == String.drop(r, nn) : String} -> PS(String, u, t, A.bulk.end(String.take(r, nn), String.drop(r, nn)), A.bulk.end(String.take(r ++ t, nn), String.drop(r ++ t, nn))):
+  match d:
+    case SNil{}:
+      e =>
+        %e : PS(String, u, t, A.bulk.end(String.take(r, nn), _), A.bulk.end(String.take(r ++ t, nn), String.drop(r ++ t, nn)))
+        Unit{}
+    case SCon{+c, +d2}:
+      +e =>
+        %take_more(r, nn, t, c, d2)(e) : PS(String, u, t, A.bulk.end(String.take(r, nn), String.drop(r, nn)), A.bulk.end(_, String.drop(r ++ t, nn)))
+        %drop_more(r, nn, t, c, d2)(e) : PS(String, u, t, A.bulk.end(String.take(r, nn), String.drop(r, nn)), A.bulk.end(String.take(r, nn), _))
+        %e : PS(String, u, t, A.bulk.end(String.take(r, nn), _), A.bulk.end(String.take(r, nn), SCon{c, d2 ++ t}))
+        ps_weak(String, u, SCon{c, d2}, t, A.bulk.end(String.take(r, nn), SCon{c, d2}), A.bulk.end(String.take(r, nn), SCon{c, d2 ++ t}), suf_trans(u, r, SCon{c, d2}, sf, drop_suf(r, nn, SCon{c, d2}, e)))(ps_bulkend(String.take(r, nn), SCon{c, d2}, t))
+
+def ps_body.go(-u: String, +nn: Nat, +r: String, -t: String, -m2: Maybe<&1, Nat & String>, h: {m2 == Some{(nn, r ++ t)} : Maybe<&1, Nat & String>} & Suf(u, r)) -> PS(String, u, t, A.bulk.body(Some{(nn, r)}), A.bulk.body(m2)):
+  (e, sf) = h
+  %Equal.sym(Maybe<&1, Nat & String>, m2, Some{(nn, r ++ t)}, e) : PS(String, u, t, A.bulk.body(Some{(nn, r)}), A.bulk.body(_))
+  ps_body.d(u, r, nn, t, String.drop(r, nn), sf)({==})
+
+def ps_body.of(-u: String, p: Nat & String, -t: String, -m2: Maybe<&1, Nat & String>) -> PS.of(Nat, u, t, p, m2) -> PS(String, u, t, A.bulk.body(Some{p}), A.bulk.body(m2)):
+  (+nn, +r) = p
+  h => ps_body.go(u, nn, r, t, m2, h)
+
+def ps_body(-u: String, -t: String, m: Maybe<&1, Nat & String>, -m2: Maybe<&1, Nat & String>) -> PS(Nat, u, t, m, m2) -> PS(String, u, t, A.bulk.body(m), A.bulk.body(m2)):
+  match m:
+    case None{}:
+      h => Unit{}
+    case Some{p}:
+      h => ps_body.of(u, p, t, m2)(h)
+
+# a bulk read with more after it reads the same
+def ps_bulk.of(b: Bool, c: Char, +u: String, -t: String) -> PS(String, SCon{c, u}, t, A.bulk.of(b, u), A.bulk.of(b, u ++ t)):
+  match b:
+    case True{}:
+      ps_cons(String, c, u, t, A.bulk.body(A.num(u, 0n, A.ch(u))), A.bulk.body(A.num(u ++ t, 0n, A.ch(u ++ t))))(ps_body(u, t, A.num(u, 0n, A.ch(u)), A.num(u ++ t, 0n, A.ch(u ++ t)))(ps_num(u, 0n, t)))
+    case False{}:
+      Unit{}
+
+def ps_bulk(s: String, -t: String) -> PS(String, s, t, A.bulk(s), A.bulk(s ++ t)):
+  match s:
+    case SNil{}:
+      Unit{}
+    case SCon{Chr{+x}, +u}:
+      ps_bulk.of(U32.is_eq(x, 36), Chr{x}, u, t)
+
+# the bulks of an entry after the one just read: read with more after
+# them, the same
+def ps_bulks.z.go(-s: String, -x: String, -r: String, -t: String, -acc: List<&2, String>, -m2: Maybe<&1, String & String>, h: {m2 == Some{(x, r ++ t)} : Maybe<&1, String & String>} & Suf(s, r)) -> PS(List<&2, String>, s, t, A.bulks(0n, Some{(x, r)}, acc), A.bulks(0n, m2, acc)):
+  (e, sf) = h
+  %Equal.sym(Maybe<&1, String & String>, m2, Some{(x, r ++ t)}, e) : PS(List<&2, String>, s, t, A.bulks(0n, Some{(x, r)}, acc), A.bulks(0n, _, acc))
+  ({==}, sf)
+
+def ps_bulks.z(-s: String, p: String & String, -t: String, -acc: List<&2, String>, -m2: Maybe<&1, String & String>) -> PS.of(String, s, t, p, m2) -> PS(List<&2, String>, s, t, A.bulks(0n, Some{p}, acc), A.bulks(0n, m2, acc)):
+  (x, r) = p
+  h => ps_bulks.z.go(s, x, r, t, acc, m2, h)
+
+def ps_bulks.s.go(+j: Nat, -s: String, +x: String, +r: String, -t: String, +acc: List<&2, String>, -m2: Maybe<&1, String & String>, ih: @a: List<&2, String> -> PS(List<&2, String>, r, t, A.bulks(j, A.bulk(r), a), A.bulks(j, A.bulk(r ++ t), a)), h: {m2 == Some{(x, r ++ t)} : Maybe<&1, String & String>} & Suf(s, r)) -> PS(List<&2, String>, s, t, A.bulks(1n+j, Some{(x, r)}, acc), A.bulks(1n+j, m2, acc)):
+  (e, sf) = h
+  %Equal.sym(Maybe<&1, String & String>, m2, Some{(x, r ++ t)}, e) : PS(List<&2, String>, s, t, A.bulks(1n+j, Some{(x, r)}, acc), A.bulks(1n+j, _, acc))
+  ps_weak(List<&2, String>, s, r, t, A.bulks(j, A.bulk(r), x <> acc), A.bulks(j, A.bulk(r ++ t), x <> acc), sf)(ih(x <> acc))
+
+def ps_bulks.s(+j: Nat, -s: String, p: String & String, -t: String, +acc: List<&2, String>, -m2: Maybe<&1, String & String>, ih: @r: String -> @a: List<&2, String> -> PS(List<&2, String>, r, t, A.bulks(j, A.bulk(r), a), A.bulks(j, A.bulk(r ++ t), a))) -> PS.of(String, s, t, p, m2) -> PS(List<&2, String>, s, t, A.bulks(1n+j, Some{p}, acc), A.bulks(1n+j, m2, acc)):
+  (+x, +r) = p
+  h => ps_bulks.s.go(j, s, x, r, t, acc, m2, ih(r), h)
+
+def ps_bulks(k: Nat, -s: String, -t: String, +acc: List<&2, String>, m: Maybe<&1, String & String>, -m2: Maybe<&1, String & String>) -> PS(String, s, t, m, m2) -> PS(List<&2, String>, s, t, A.bulks(k, m, acc), A.bulks(k, m2, acc)):
+  match k m:
+    case 0n None{}:
+      h => Unit{}
+    case 0n Some{p}:
+      h => ps_bulks.z(s, p, t, acc, m2)(h)
+    case 1n+j None{}:
+      h => Unit{}
+    case 1n++j Some{p}:
+      h => ps_bulks.s(j, s, p, t, acc, m2, +r => +a => ps_bulks(j, r, t, a, A.bulk(r), A.bulk(r ++ t))(ps_bulk(r, t)))(h)
+
+# an entry's arguments after its count's line
+def ps_args(nn: Nat, +r: String, -t: String) -> PS(List<&2, String>, r, t, A.entry.args(nn, r), A.entry.args(nn, r ++ t)):
+  match nn:
+    case 0n:
+      ({==}, suf_refl(r))
+    case 1n+j:
+      ps_bulks(j, r, t, Nil{}, A.bulk(r), A.bulk(r ++ t))(ps_bulk(r, t))
+
+def ps_head.go(-u: String, +nn: Nat, +r: String, -t: String, -m2: Maybe<&1, Nat & String>, h: {m2 == Some{(nn, r ++ t)} : Maybe<&1, Nat & String>} & Suf(u, r)) -> PS(List<&2, String>, u, t, A.entry.head(Some{(nn, r)}), A.entry.head(m2)):
+  (e, sf) = h
+  %Equal.sym(Maybe<&1, Nat & String>, m2, Some{(nn, r ++ t)}, e) : PS(List<&2, String>, u, t, A.entry.head(Some{(nn, r)}), A.entry.head(_))
+  ps_weak(List<&2, String>, u, r, t, A.entry.args(nn, r), A.entry.args(nn, r ++ t), sf)(ps_args(nn, r, t))
+
+def ps_head.of(-u: String, p: Nat & String, -t: String, -m2: Maybe<&1, Nat & String>) -> PS.of(Nat, u, t, p, m2) -> PS(List<&2, String>, u, t, A.entry.head(Some{p}), A.entry.head(m2)):
+  (+nn, +r) = p
+  h => ps_head.go(u, nn, r, t, m2, h)
+
+def ps_head(-u: String, -t: String, m: Maybe<&1, Nat & String>, -m2: Maybe<&1, Nat & String>) -> PS(Nat, u, t, m, m2) -> PS(List<&2, String>, u, t, A.entry.head(m), A.entry.head(m2)):
+  match m:
+    case None{}:
+      h => Unit{}
+    case Some{p}:
+      h => ps_head.of(u, p, t, m2)(h)
+
+# An entry read with more after it reads the same, and leaves what s
+# ends with after its first char at least
+def PSE.of(s: String, t: String, p: List<&2, String> & String, m2: Maybe<&1, List<&2, String> & String>) -> Type:
+  (x, r) = p
+  {m2 == Some{(x, r ++ t)} : Maybe<&1, List<&2, String> & String>} & SSuf(s, r)
+
+def PSE(s: String, t: String, m: Maybe<&1, List<&2, String> & String>, m2: Maybe<&1, List<&2, String> & String>) -> Type:
+  match m:
+    case None{}:
+      Unit
+    case Some{p}:
+      PSE.of(s, t, p, m2)
+
+def pse_cons.go(c: Char, -u: String, -t: String, -x: List<&2, String>, -r: String, -m2: Maybe<&1, List<&2, String> & String>, h: {m2 == Some{(x, r ++ t)} : Maybe<&1, List<&2, String> & String>} & Suf(u, r)) -> {m2 == Some{(x, r ++ t)} : Maybe<&1, List<&2, String> & String>} & SSuf(SCon{c, u}, r):
+  (e, sf) = h
+  (e, ss_cons(c, u, r, sf))
+
+def pse_cons.of(c: Char, -u: String, -t: String, p: List<&2, String> & String, -m2: Maybe<&1, List<&2, String> & String>) -> PS.of(List<&2, String>, u, t, p, m2) -> PSE.of(SCon{c, u}, t, p, m2):
+  (x, r) = p
+  h => pse_cons.go(c, u, t, x, r, m2, h)
+
+def pse_cons(c: Char, -u: String, -t: String, m: Maybe<&1, List<&2, String> & String>, -m2: Maybe<&1, List<&2, String> & String>) -> PS(List<&2, String>, u, t, m, m2) -> PSE(SCon{c, u}, t, m, m2):
+  match m:
+    case None{}:
+      h => Unit{}
+    case Some{p}:
+      h => pse_cons.of(c, u, t, p, m2)(h)
+
+def ps_entry.of(b: Bool, c: Char, +u: String, -t: String) -> PSE(SCon{c, u}, t, A.entry.of(b, u), A.entry.of(b, u ++ t)):
+  match b:
+    case True{}:
+      pse_cons(c, u, t, A.entry.head(A.num(u, 0n, A.ch(u))), A.entry.head(A.num(u ++ t, 0n, A.ch(u ++ t))))(ps_head(u, t, A.num(u, 0n, A.ch(u)), A.num(u ++ t, 0n, A.ch(u ++ t)))(ps_num(u, 0n, t)))
+    case False{}:
+      Unit{}
+
+def ps_entry(s: String, -t: String) -> PSE(s, t, A.entry(s), A.entry(s ++ t)):
+  match s:
+    case SNil{}:
+      Unit{}
+    case SCon{Chr{+x}, +u}:
+      ps_entry.of(U32.is_eq(x, 42), Chr{x}, u, t)
+
+# The loader on a ++ b
+# ---------------------
+
+# r is what s ends with, after the first char of s at least, when m reads
+# an entry that leaves r
+def SH.of(s: String, p: List<&2, String> & String) -> Type:
+  (x, r) = p
+  SSuf(s, r)
+
+def SH(s: String, m: Maybe<&1, List<&2, String> & String>) -> Type:
+  match m:
+    case None{}:
+      Unit
+    case Some{p}:
+      SH.of(s, p)
+
+def pse_sh.go(-s: String, -t: String, -x: List<&2, String>, -r: String, -m2: Maybe<&1, List<&2, String> & String>, h: {m2 == Some{(x, r ++ t)} : Maybe<&1, List<&2, String> & String>} & SSuf(s, r)) -> SSuf(s, r):
+  (e, ss) = h
+  ss
+
+def pse_sh.of(-s: String, -t: String, p: List<&2, String> & String, -m2: Maybe<&1, List<&2, String> & String>) -> PSE.of(s, t, p, m2) -> SH.of(s, p):
+  (x, r) = p
+  h => pse_sh.go(s, t, x, r, m2, h)
+
+def pse_sh(-s: String, -t: String, m: Maybe<&1, List<&2, String> & String>, -m2: Maybe<&1, List<&2, String> & String>) -> PSE(s, t, m, m2) -> SH(s, m):
+  match m:
+    case None{}:
+      h => Unit{}
+    case Some{p}:
+      h => pse_sh.of(s, t, p, m2)(h)
+
+def sh_entry(+s: String) -> SH(s, A.entry(s)):
+  pse_sh(s, "", A.entry(s), A.entry(s ++ ""))(ps_entry(s, ""))
+
+def sh_of(+s: String, -x: List<&2, String>, -r: String, e: {A.entry(s) == Some{(x, r)} : Maybe<&1, List<&2, String> & String>}) -> SSuf(s, r):
+  %e : SH(s, _)
+  sh_entry(s)
+
+# what fuel a string has, what follows its first char and more has
+def le_ss(-s: String, +r: String, +f: Nat, ss: SSuf(s, r)) -> {le(String.length(s), 1n+f) == True{} : Bool} -> {le(String.length(r), f) == True{} : Bool}:
+  (c, q) = ss
+  (+p, e) = q
+  %Equal.sym(String, s, SCon{c, p ++ r}, e) : {le(String.length(_), 1n+f) == True{} : Bool} -> {le(String.length(r), f) == True{} : Bool}
+  le_suffix(p, r, f)
+
+# no fuel for a string that holds an entry
+def ss_le0(-s: String, -r: String, ss: SSuf(s, r)) -> {le(String.length(s), 0n) == True{} : Bool} -> Empty:
+  (c, q) = ss
+  (p, e) = q
+  %Equal.sym(String, s, SCon{c, p ++ r}, e) : {le(String.length(_), 0n) == True{} : Bool} -> Empty
+  ef => false_true(ef)
+
+def sh_le0(-s: String, p: List<&2, String> & String) -> SH.of(s, p) -> {le(String.length(s), 0n) == True{} : Bool} -> Empty:
+  (x, r) = p
+  ss => ss_le0(s, r, ss)
+
+def pse_le0.go(-s: String, -t: String, -x: List<&2, String>, -r: String, -m2: Maybe<&1, List<&2, String> & String>, h: {m2 == Some{(x, r ++ t)} : Maybe<&1, List<&2, String> & String>} & SSuf(s, r)) -> {le(String.length(s), 0n) == True{} : Bool} -> Empty:
+  (e, ss) = h
+  ss_le0(s, r, ss)
+
+def pse_le0(-s: String, -t: String, p: List<&2, String> & String, -m2: Maybe<&1, List<&2, String> & String>) -> PSE.of(s, t, p, m2) -> {le(String.length(s), 0n) == True{} : Bool} -> Empty:
+  (x, r) = p
+  h => pse_le0.go(s, t, x, r, m2, h)
+
+# entries read before: in front, reversed
+def pre(acc: List<&2, List<&2, String>>, l: List<&2, List<&2, String>> & String) -> List<&2, List<&2, String>> & String:
+  (es, r) = l
+  (List.reverse.go(&2, List<&2, String>, acc, es), r)
+
+def pre_cons(-x: List<&2, String>, -acc: List<&2, List<&2, String>>, l: List<&2, List<&2, String>> & String) -> {pre(x <> acc, l) == pre(acc, pre([x], l)) : List<&2, List<&2, String>> & String}:
+  (es, r) = l
+  {==}
+
+# the loader puts the entries it read before (acc) in front of those it
+# reads
+def lg_acc.s(+g: Nat, -s: String, p: List<&2, String> & String, +acc: List<&2, List<&2, String>>, ih1: @r: String -> @a: List<&2, List<&2, String>> -> {A.load.go(g, r, A.entry(r), a) == pre(a, A.load.go(g, r, A.entry(r), Nil{})) : List<&2, List<&2, String>> & String}, ih2: @r: String -> @a: List<&2, List<&2, String>> -> {A.load.go(g, r, A.entry(r), a) == pre(a, A.load.go(g, r, A.entry(r), Nil{})) : List<&2, List<&2, String>> & String}) -> {A.load.go(1n+g, s, Some{p}, acc) == pre(acc, A.load.go(1n+g, s, Some{p}, Nil{})) : List<&2, List<&2, String>> & String}:
+  (+x, +r) = p
+  Equal.trans(List<&2, List<&2, String>> & String, A.load.go(g, r, A.entry(r), x <> acc), pre(x <> acc, A.load.go(g, r, A.entry(r), Nil{})), pre(acc, A.load.go(g, r, A.entry(r), [x])),
+    ih1(r, x <> acc),
+    Equal.trans(List<&2, List<&2, String>> & String, pre(x <> acc, A.load.go(g, r, A.entry(r), Nil{})), pre(acc, pre([x], A.load.go(g, r, A.entry(r), Nil{}))), pre(acc, A.load.go(g, r, A.entry(r), [x])),
+      pre_cons(x, acc, A.load.go(g, r, A.entry(r), Nil{})),
+      Equal.cong(List<&2, List<&2, String>> & String, List<&2, List<&2, String>> & String, z => pre(acc, z), pre([x], A.load.go(g, r, A.entry(r), Nil{})), A.load.go(g, r, A.entry(r), [x]), Equal.sym(List<&2, List<&2, String>> & String, A.load.go(g, r, A.entry(r), [x]), pre([x], A.load.go(g, r, A.entry(r), Nil{})), ih2(r, [x])))))
+
+def lg_acc(f: Nat, -s: String, m: Maybe<&1, List<&2, String> & String>, +acc: List<&2, List<&2, String>>) -> {A.load.go(f, s, m, acc) == pre(acc, A.load.go(f, s, m, Nil{})) : List<&2, List<&2, String>> & String}:
+  match f m:
+    case 1n++g Some{p}:
+      lg_acc.s(g, s, p, acc, +r => +a => lg_acc(g, r, A.entry(r), a), +r => +a => lg_acc(g, r, A.entry(r), a))
+    case 0n _:
+      {==}
+    case 1n+g None{}:
+      {==}
+
+# with fuel for each of its bytes, the loader reads the same whatever its
+# fuel: an entry takes a byte at least
+def lg_fuel.s(+f2: Nat, +g2: Nat, -s: String, +acc: List<&2, List<&2, String>>, p: List<&2, String> & String, ih: @r: String -> @a: List<&2, List<&2, String>> -> {le(String.length(r), f2) == True{} : Bool} -> {le(String.length(r), g2) == True{} : Bool} -> {A.load.go(f2, r, A.entry(r), a) == A.load.go(g2, r, A.entry(r), a) : List<&2, List<&2, String>> & String}) -> SH.of(s, p) -> SH.of(s, p) -> {le(String.length(s), 1n+f2) == True{} : Bool} -> {le(String.length(s), 1n+g2) == True{} : Bool} -> {A.load.go(1n+f2, s, Some{p}, acc) == A.load.go(1n+g2, s, Some{p}, acc) : List<&2, List<&2, String>> & String}:
+  (x, +r) = p
+  ss1 => ss2 => ef => eg => ih(r, x <> acc)(le_ss(s, r, f2, ss1)(ef))(le_ss(s, r, g2, ss2)(eg))
+
+def lg_fuel(f: Nat, g: Nat, -s: String, +acc: List<&2, List<&2, String>>, m: Maybe<&1, List<&2, String> & String>) -> SH(s, m) -> SH(s, m) -> {le(String.length(s), f) == True{} : Bool} -> {le(String.length(s), g) == True{} : Bool} -> {A.load.go(f, s, m, acc) == A.load.go(g, s, m, acc) : List<&2, List<&2, String>> & String}:
+  match f g m:
+    case _ _ None{}:
+      sh1 => sh2 => ef => eg => Equal.trans(List<&2, List<&2, String>> & String, A.load.go(f, s, None{}, acc), (List.reverse.go(&2, List<&2, String>, acc, Nil{}), s), A.load.go(g, s, None{}, acc), cut_go_none(f, s, acc), Equal.sym(List<&2, List<&2, String>> & String, A.load.go(g, s, None{}, acc), (List.reverse.go(&2, List<&2, String>, acc, Nil{}), s), cut_go_none(g, s, acc)))
+    case 0n _ Some{p}:
+      sh1 => sh2 => ef => eg => Empty.absurd({A.load.go(0n, s, Some{p}, acc) == A.load.go(g, s, Some{p}, acc) : List<&2, List<&2, String>> & String}, sh_le0(s, p)(sh1)(ef))
+    case 1n+f2 0n Some{p}:
+      sh1 => sh2 => ef => eg => Empty.absurd({A.load.go(1n+f2, s, Some{p}, acc) == A.load.go(0n, s, Some{p}, acc) : List<&2, List<&2, String>> & String}, sh_le0(s, p)(sh2)(eg))
+    case 1n++f2 1n++g2 Some{p}:
+      sh1 => sh2 => ef => eg => lg_fuel.s(f2, g2, s, acc, p, +r => +a => lg_fuel(f2, g2, r, a, A.entry(r))(sh_entry(r))(sh_entry(r)))(sh1)(sh2)(ef)(eg)
+
+# where s starts with an entry, the loader reads it, then what follows
+def load_step.go(+s: String, +x: List<&2, String>, +r: String, -c: Char, +q: String, e: {A.entry(s) == Some{(x, r)} : Maybe<&1, List<&2, String> & String>}, es: {s == SCon{c, q ++ r} : String}) -> {A.load(s) == pre([x], A.load(r)) : List<&2, List<&2, String>> & String}:
+  %Equal.sym(Maybe<&1, List<&2, String> & String>, A.entry(s), Some{(x, r)}, e) : {A.load.go(String.length(s), s, _, Nil{}) == pre([x], A.load(r)) : List<&2, List<&2, String>> & String}
+  %Equal.sym(String, s, SCon{c, q ++ r}, es) : {A.load.go(String.length(_), s, Some{(x, r)}, Nil{}) == pre([x], A.load(r)) : List<&2, List<&2, String>> & String}
+  Equal.trans(List<&2, List<&2, String>> & String, A.load.go(String.length(q ++ r), r, A.entry(r), [x]), pre([x], A.load.go(String.length(q ++ r), r, A.entry(r), Nil{})), pre([x], A.load(r)),
+    lg_acc(String.length(q ++ r), r, A.entry(r), [x]),
+    Equal.cong(List<&2, List<&2, String>> & String, List<&2, List<&2, String>> & String, z => pre([x], z), A.load.go(String.length(q ++ r), r, A.entry(r), Nil{}), A.load(r), lg_fuel(String.length(q ++ r), String.length(r), r, Nil{}, A.entry(r))(sh_entry(r))(sh_entry(r))(le_suffix(q, r, String.length(q ++ r))(le_refl(String.length(q ++ r))))(le_refl(String.length(r)))))
+
+def load_step.of(+s: String, +x: List<&2, String>, +r: String, e: {A.entry(s) == Some{(x, r)} : Maybe<&1, List<&2, String> & String>}, ss: SSuf(s, r)) -> {A.load(s) == pre([x], A.load(r)) : List<&2, List<&2, String>> & String}:
+  (c, q) = ss
+  (+p, es) = q
+  load_step.go(s, x, r, c, p, e, es)
+
+def load_step(+s: String, +x: List<&2, String>, +r: String, +e: {A.entry(s) == Some{(x, r)} : Maybe<&1, List<&2, String> & String>}) -> {A.load(s) == pre([x], A.load(r)) : List<&2, List<&2, String>> & String}:
+  load_step.of(s, x, r, e, sh_of(s, x, r, e))
+
+# where s starts with no entry, the loader reads none
+def load_none(+s: String, e: {A.entry(s) == None{} : Maybe<&1, List<&2, String> & String>}) -> {A.load(s) == (Nil{}, s) : List<&2, List<&2, String>> & String}:
+  %Equal.sym(Maybe<&1, List<&2, String> & String>, A.entry(s), None{}, e) : {A.load.go(String.length(s), s, _, Nil{}) == (Nil{}, s) : List<&2, List<&2, String>> & String}
+  cut_go_none(String.length(s), s, Nil{})
+
+# the loader stops where no entry starts
+def lstop.s(+g: Nat, -s: String, +acc: List<&2, List<&2, String>>, p: List<&2, String> & String, ih: @r: String -> @a: List<&2, List<&2, String>> -> {le(String.length(r), g) == True{} : Bool} -> {A.entry(Pair.snd(List<&2, List<&2, String>>, String, A.load.go(g, r, A.entry(r), a))) == None{} : Maybe<&1, List<&2, String> & String>}) -> SH.of(s, p) -> {le(String.length(s), 1n+g) == True{} : Bool} -> {A.entry(Pair.snd(List<&2, List<&2, String>>, String, A.load.go(1n+g, s, Some{p}, acc))) == None{} : Maybe<&1, List<&2, String> & String>}:
+  (x, +r) = p
+  ss => ef => ih(r, x <> acc)(le_ss(s, r, g, ss)(ef))
+
+def lstop(f: Nat, +s: String, +acc: List<&2, List<&2, String>>, m: Maybe<&1, List<&2, String> & String>) -> {A.entry(s) == m : Maybe<&1, List<&2, String> & String>} -> SH(s, m) -> {le(String.length(s), f) == True{} : Bool} -> {A.entry(Pair.snd(List<&2, List<&2, String>>, String, A.load.go(f, s, m, acc))) == None{} : Maybe<&1, List<&2, String> & String>}:
+  match f m:
+    case _ None{}:
+      e => sh => ef =>
+        %Equal.sym(List<&2, List<&2, String>> & String, A.load.go(f, s, None{}, acc), (List.reverse.go(&2, List<&2, String>, acc, Nil{}), s), cut_go_none(f, s, acc)) : {A.entry(Pair.snd(List<&2, List<&2, String>>, String, _)) == None{} : Maybe<&1, List<&2, String> & String>}
+        e
+    case 0n Some{p}:
+      e => sh => ef => Empty.absurd({A.entry(Pair.snd(List<&2, List<&2, String>>, String, A.load.go(0n, s, Some{p}, acc))) == None{} : Maybe<&1, List<&2, String> & String>}, sh_le0(s, p)(sh)(ef))
+    case 1n++g Some{p}:
+      e => sh => ef => lstop.s(g, s, acc, p, +r => +a => lstop(g, r, a, A.entry(r))({==})(sh_entry(r)))(sh)(ef)
+
+def load_stops(+s: String) -> {A.entry(Pair.snd(List<&2, List<&2, String>>, String, A.load(s))) == None{} : Maybe<&1, List<&2, String> & String>}:
+  lstop(String.length(s), s, Nil{}, A.entry(s))({==})(sh_entry(s))(le_refl(String.length(s)))
+
+# entries, then what the loader reads after them
+def appl(es: List<&2, List<&2, String>>, l: List<&2, List<&2, String>> & String) -> List<&2, List<&2, String>> & String:
+  (es2, r2) = l
+  (List.append(&2, List<&2, String>, es, es2), r2)
+
+# what the loader reads of a, then of what it left with b after it
+def catl(l: List<&2, List<&2, String>> & String, b: String) -> List<&2, List<&2, String>> & String:
+  (es, r) = l
+  appl(es, A.load(r ++ b))
+
+def appl_nil(l: List<&2, List<&2, String>> & String) -> {appl(Nil{}, l) == l : List<&2, List<&2, String>> & String}:
+  (es, r) = l
+  {==}
+
+def pre_appl(-x: List<&2, String>, -es: List<&2, List<&2, String>>, l: List<&2, List<&2, String>> & String) -> {pre([x], appl(es, l)) == appl(x <> es, l) : List<&2, List<&2, String>> & String}:
+  (es2, r2) = l
+  {==}
+
+def pre_catl(-x: List<&2, String>, l: List<&2, List<&2, String>> & String, b: String) -> {pre([x], catl(l, b)) == catl(pre([x], l), b) : List<&2, List<&2, String>> & String}:
+  (es, r) = l
+  pre_appl(x, es, A.load(r ++ b))
+
+# a ++ b loads as a's entries, then those of what a left with b after it
+def lc.go(+f2: Nat, +a: String, +b: String, +x: List<&2, String>, +r: String, ih: {le(String.length(r), f2) == True{} : Bool} -> {A.load(r ++ b) == catl(A.load(r), b) : List<&2, List<&2, String>> & String}, +e: {A.entry(a) == Some{(x, r)} : Maybe<&1, List<&2, String> & String>}, h: {A.entry(a ++ b) == Some{(x, r ++ b)} : Maybe<&1, List<&2, String> & String>} & SSuf(a, r), ef: {le(String.length(a), 1n+f2) == True{} : Bool}) -> {A.load(a ++ b) == catl(A.load(a), b) : List<&2, List<&2, String>> & String}:
+  (+e2, ss) = h
+  Equal.trans(List<&2, List<&2, String>> & String, A.load(a ++ b), pre([x], A.load(r ++ b)), catl(A.load(a), b),
+    load_step(a ++ b, x, r ++ b, e2),
+    Equal.trans(List<&2, List<&2, String>> & String, pre([x], A.load(r ++ b)), pre([x], catl(A.load(r), b)), catl(A.load(a), b),
+      Equal.cong(List<&2, List<&2, String>> & String, List<&2, List<&2, String>> & String, z => pre([x], z), A.load(r ++ b), catl(A.load(r), b), ih(le_ss(a, r, f2, ss)(ef))),
+      Equal.trans(List<&2, List<&2, String>> & String, pre([x], catl(A.load(r), b)), catl(pre([x], A.load(r)), b), catl(A.load(a), b),
+        pre_catl(x, A.load(r), b),
+        Equal.cong(List<&2, List<&2, String>> & String, List<&2, List<&2, String>> & String, z => catl(z, b), pre([x], A.load(r)), A.load(a), Equal.sym(List<&2, List<&2, String>> & String, A.load(a), pre([x], A.load(r)), load_step(a, x, r, e))))))
+
+def lc.s(+f2: Nat, +a: String, +b: String, p: List<&2, String> & String, ih: @r: String -> {le(String.length(r), f2) == True{} : Bool} -> {A.load(r ++ b) == catl(A.load(r), b) : List<&2, List<&2, String>> & String}) -> {A.entry(a) == Some{p} : Maybe<&1, List<&2, String> & String>} -> PSE.of(a, b, p, A.entry(a ++ b)) -> {le(String.length(a), 1n+f2) == True{} : Bool} -> {A.load(a ++ b) == catl(A.load(a), b) : List<&2, List<&2, String>> & String}:
+  (+x, +r) = p
+  +e => h => ef => lc.go(f2, a, b, x, r, ih(r), e, h, ef)
+
+def lc(f: Nat, +a: String, +b: String, m: Maybe<&1, List<&2, String> & String>) -> {A.entry(a) == m : Maybe<&1, List<&2, String> & String>} -> PSE(a, b, m, A.entry(a ++ b)) -> {le(String.length(a), f) == True{} : Bool} -> {A.load(a ++ b) == catl(A.load(a), b) : List<&2, List<&2, String>> & String}:
+  match f m:
+    case _ None{}:
+      e => h => ef =>
+        %Equal.sym(List<&2, List<&2, String>> & String, A.load(a), (Nil{}, a), load_none(a, e)) : {A.load(a ++ b) == catl(_, b) : List<&2, List<&2, String>> & String}
+        Equal.sym(List<&2, List<&2, String>> & String, appl(Nil{}, A.load(a ++ b)), A.load(a ++ b), appl_nil(A.load(a ++ b)))
+    case 0n Some{p}:
+      e => h => ef => Empty.absurd({A.load(a ++ b) == catl(A.load(a), b) : List<&2, List<&2, String>> & String}, pse_le0(a, b, p, A.entry(a ++ b))(h)(ef))
+    case 1n++f2 Some{p}:
+      e => h => ef => lc.s(f2, a, b, p, +r => lc(f2, r, b, A.entry(r))({==})(ps_entry(r, b)))(e)(h)(ef)
+
+def load_cat(+a: String, +b: String) -> {A.load(a ++ b) == catl(A.load(a), b) : List<&2, List<&2, String>> & String}:
+  lc(String.length(a), a, b, A.entry(a))({==})(ps_entry(a, b))(le_refl(String.length(a)))
+
+# The check entry by entry
+# -------------------------
+
+# the check after the entries reqs, from ck, one entry at a time as the
+# start runs it
+def cks(reqs: List<&2, List<&2, String>>, +n: Nat, ck: A.Ck) -> A.Ck:
+  match reqs:
+    case Nil{}:
+      ck
+    case Con{+r, rest}:
+      cks(rest, n, A.ck.ent(A.mark(r), A.file.act(R.parse(r)), n, ck))
+
+# a check that stopped stays stopped
+def cks_stop(reqs: List<&2, List<&2, String>>, +n: Nat, -i: Nat, -w: String) -> {cks(reqs, n, A.CkStop{i, w}) == A.CkStop{i, w} : A.Ck}:
+  match reqs:
+    case Nil{}:
+      {==}
+    case Con{+r, rest}:
+      cks_stop(rest, n, i, w)
+
+def len_snoc(xs: List<&2, R.Act>, -a: R.Act) -> {List.length(&2, R.Act, List.append(&2, R.Act, xs, [a])) == 1n+List.length(&2, R.Act, xs) : Nat}:
+  match xs:
+    case Nil{}:
+      {==}
+    case Con{h, t}:
+      Equal.cong(Nat, Nat, z => 1n+z, List.length(&2, R.Act, List.append(&2, R.Act, t, [a])), 1n+List.length(&2, R.Act, t), len_snoc(t, a))
+
+def app_snoc(xs: List<&2, R.Act>, -a: R.Act, -ys: List<&2, R.Act>) -> {List.append(&2, R.Act, List.append(&2, R.Act, xs, [a]), ys) == List.append(&2, R.Act, xs, a <> ys) : List<&2, R.Act>}:
+  match xs:
+    case Nil{}:
+      {==}
+    case Con{h, t}:
+      Equal.cong(List<&2, R.Act>, List<&2, R.Act>, z => h <> z, List.append(&2, R.Act, List.append(&2, R.Act, t, [a]), ys), List.append(&2, R.Act, t, a <> ys), app_snoc(t, a, ys))
+
+# the parser's error of the act at pre's length
+def why_at1(pre: List<&2, R.Act>, -a: R.Act, -ys: List<&2, R.Act>) -> {A.why.at(List.length(&2, R.Act, pre), List.append(&2, R.Act, pre, a <> ys)) == A.why.at(0n, [a]) : String}:
+  match pre:
+    case Nil{}:
+      {==}
+    case Con{h, t}:
+      why_at1(t, a, ys)
+
+# why the check stops at an entry: the same in the file as for its act
+# alone
+def why_at(k: Nat, pre: List<&2, R.Act>, -a: R.Act, -ys: List<&2, R.Act>) -> {A.why(k, List.length(&2, R.Act, pre), List.append(&2, R.Act, pre, a <> ys)) == A.why(k, 0n, [a]) : String}:
+  match k:
+    case 0n:
+      {==}
+    case 1n:
+      why_at1(pre, a, ys)
+    case 2n:
+      {==}
+    case 3n:
+      {==}
+    case 4n:
+      {==}
+    case 5n:
+      {==}
+    case 6n:
+      {==}
+    case 7n:
+      {==}
+    case 8n:
+      {==}
+    case 9n:
+      {==}
+    case 10n+q:
+      {==}
+
+# the acts of entries, and what the check makes of them
+def acts_of(reqs: List<&2, List<&2, String>>) -> List<&2, R.Act>:
+  A.file.acts(A.parse_all(reqs))
+
+def ks_of(+reqs: List<&2, List<&2, String>>, +n: Nat) -> List<&2, A.Chk>:
+  A.chks(A.marks(reqs), A.file.acts(A.parse_all(reqs)), n)
+
+def ck_nil(+pre: List<&2, R.Act>, +n: Nat, o: Nat) -> {A.checked.of(A.check.go(Nil{}, List.length(&2, R.Act, pre), o), List.append(&2, R.Act, pre, Nil{}), n) == A.ck.end(A.CkGo{List.length(&2, R.Act, pre), o}, R.acts(List.append(&2, R.Act, pre, Nil{}), R.ds.empty(n))) : A.Replay}:
+  match o:
+    case 0n:
+      {==}
+    case 1n+m:
+      {==}
+
+# one entry of check c and act a, then the entries rest: the check from
+# entry i, the acts before (pre) and the open MULTI (o) as check.go has
+# them, is the start's, entry by entry
+def ck_con(c: A.Chk, +a: R.Act, +rest: List<&2, List<&2, String>>, +n: Nat, +pre: List<&2, R.Act>, o: Nat, ih: @p2: List<&2, R.Act> -> @o2: Nat -> {A.checked.of(A.check.go(ks_of(rest, n), List.length(&2, R.Act, p2), o2), List.append(&2, R.Act, p2, acts_of(rest)), n) == A.ck.end(cks(rest, n, A.CkGo{List.length(&2, R.Act, p2), o2}), R.acts(List.append(&2, R.Act, p2, acts_of(rest)), R.ds.empty(n))) : A.Replay}) -> {A.checked.of(A.check.go(c <> ks_of(rest, n), List.length(&2, R.Act, pre), o), List.append(&2, R.Act, pre, a <> acts_of(rest)), n) == A.ck.end(cks(rest, n, A.ck.go(c, a, List.length(&2, R.Act, pre), o)), R.acts(List.append(&2, R.Act, pre, a <> acts_of(rest)), R.ds.empty(n))) : A.Replay}:
+  match c o:
+    case A.ChkBad{k} _:
+      %Equal.sym(A.Ck, cks(rest, n, A.CkStop{List.length(&2, R.Act, pre), A.why(k, 0n, [a])}), A.CkStop{List.length(&2, R.Act, pre), A.why(k, 0n, [a])}, cks_stop(rest, n, List.length(&2, R.Act, pre), A.why(k, 0n, [a]))) : {A.checked.of(A.check.go(A.ChkBad{k} <> ks_of(rest, n), List.length(&2, R.Act, pre), o), List.append(&2, R.Act, pre, a <> acts_of(rest)), n) == A.ck.end(_, R.acts(List.append(&2, R.Act, pre, a <> acts_of(rest)), R.ds.empty(n))) : A.Replay}
+      Equal.cong(String, A.Replay, z => A.Refused{List.length(&2, R.Act, pre), z}, A.why(k, List.length(&2, R.Act, pre), List.append(&2, R.Act, pre, a <> acts_of(rest))), A.why(k, 0n, [a]), why_at(k, pre, a, acts_of(rest)))
+    case A.ChkMulti{} 0n:
+      %len_snoc(pre, a) : {A.checked.of(A.check.go(ks_of(rest, n), _, 1n+List.length(&2, R.Act, pre)), List.append(&2, R.Act, pre, a <> acts_of(rest)), n) == A.ck.end(cks(rest, n, A.CkGo{_, 1n+List.length(&2, R.Act, pre)}), R.acts(List.append(&2, R.Act, pre, a <> acts_of(rest)), R.ds.empty(n))) : A.Replay}
+      %app_snoc(pre, a, acts_of(rest)) : {A.checked.of(A.check.go(ks_of(rest, n), List.length(&2, R.Act, List.append(&2, R.Act, pre, [a])), 1n+List.length(&2, R.Act, pre)), _, n) == A.ck.end(cks(rest, n, A.CkGo{List.length(&2, R.Act, List.append(&2, R.Act, pre, [a])), 1n+List.length(&2, R.Act, pre)}), R.acts(_, R.ds.empty(n))) : A.Replay}
+      ih(List.append(&2, R.Act, pre, [a]), 1n+List.length(&2, R.Act, pre))
+    case A.ChkMulti{} 1n+m:
+      %Equal.sym(A.Ck, cks(rest, n, A.CkStop{List.length(&2, R.Act, pre), A.why(9n, 0n, [a])}), A.CkStop{List.length(&2, R.Act, pre), A.why(9n, 0n, [a])}, cks_stop(rest, n, List.length(&2, R.Act, pre), A.why(9n, 0n, [a]))) : {A.checked.of(A.check.go(A.ChkMulti{} <> ks_of(rest, n), List.length(&2, R.Act, pre), 1n+m), List.append(&2, R.Act, pre, a <> acts_of(rest)), n) == A.ck.end(_, R.acts(List.append(&2, R.Act, pre, a <> acts_of(rest)), R.ds.empty(n))) : A.Replay}
+      {==}
+    case A.ChkExec{} 0n:
+      %Equal.sym(A.Ck, cks(rest, n, A.CkStop{List.length(&2, R.Act, pre), A.why(10n, 0n, [a])}), A.CkStop{List.length(&2, R.Act, pre), A.why(10n, 0n, [a])}, cks_stop(rest, n, List.length(&2, R.Act, pre), A.why(10n, 0n, [a]))) : {A.checked.of(A.check.go(A.ChkExec{} <> ks_of(rest, n), List.length(&2, R.Act, pre), 0n), List.append(&2, R.Act, pre, a <> acts_of(rest)), n) == A.ck.end(_, R.acts(List.append(&2, R.Act, pre, a <> acts_of(rest)), R.ds.empty(n))) : A.Replay}
+      {==}
+    case A.ChkExec{} 1n+m:
+      %len_snoc(pre, a) : {A.checked.of(A.check.go(ks_of(rest, n), _, 0n), List.append(&2, R.Act, pre, a <> acts_of(rest)), n) == A.ck.end(cks(rest, n, A.CkGo{_, 0n}), R.acts(List.append(&2, R.Act, pre, a <> acts_of(rest)), R.ds.empty(n))) : A.Replay}
+      %app_snoc(pre, a, acts_of(rest)) : {A.checked.of(A.check.go(ks_of(rest, n), List.length(&2, R.Act, List.append(&2, R.Act, pre, [a])), 0n), _, n) == A.ck.end(cks(rest, n, A.CkGo{List.length(&2, R.Act, List.append(&2, R.Act, pre, [a])), 0n}), R.acts(_, R.ds.empty(n))) : A.Replay}
+      ih(List.append(&2, R.Act, pre, [a]), 0n)
+    case A.ChkRuns{} o:
+      %len_snoc(pre, a) : {A.checked.of(A.check.go(ks_of(rest, n), _, o), List.append(&2, R.Act, pre, a <> acts_of(rest)), n) == A.ck.end(cks(rest, n, A.CkGo{_, o}), R.acts(List.append(&2, R.Act, pre, a <> acts_of(rest)), R.ds.empty(n))) : A.Replay}
+      %app_snoc(pre, a, acts_of(rest)) : {A.checked.of(A.check.go(ks_of(rest, n), List.length(&2, R.Act, List.append(&2, R.Act, pre, [a])), o), _, n) == A.ck.end(cks(rest, n, A.CkGo{List.length(&2, R.Act, List.append(&2, R.Act, pre, [a])), o}), R.acts(_, R.ds.empty(n))) : A.Replay}
+      ih(List.append(&2, R.Act, pre, [a]), o)
+
+def ck_gen(reqs: List<&2, List<&2, String>>, +n: Nat, +pre: List<&2, R.Act>, o: Nat) -> {A.checked.of(A.check.go(ks_of(reqs, n), List.length(&2, R.Act, pre), o), List.append(&2, R.Act, pre, acts_of(reqs)), n) == A.ck.end(cks(reqs, n, A.CkGo{List.length(&2, R.Act, pre), o}), R.acts(List.append(&2, R.Act, pre, acts_of(reqs)), R.ds.empty(n))) : A.Replay}:
+  match reqs:
+    case Nil{}:
+      ck_nil(pre, n, o)
+    case Con{+r, +rest}:
+      ck_con(A.entry.chk(A.mark(r), A.act.code(A.file.act(R.parse(r)), n)), A.file.act(R.parse(r)), rest, n, pre, o, +p2 => o2 => ck_gen(rest, n, p2, o2))
+
+# the start's check, entry by entry, gives what checked gives
+def ck_all(+reqs: List<&2, List<&2, String>>, +n: Nat) -> {A.checked(reqs, n) == A.ck.end(cks(reqs, n, A.CkGo{0n, 0n}), A.replay(reqs, n)) : A.Replay}:
+  ck_gen(reqs, n, Nil{}, 0n)
+# What the start holds after each entry
+# -------------------------------------
+
+# a list reversed onto acc is the list reversed, then acc
+def rev_acc(xs: List<&2, List<&2, String>>, -acc: List<&2, List<&2, String>>) -> {List.reverse.go(&2, List<&2, String>, xs, acc) == List.append(&2, List<&2, String>, List.reverse.go(&2, List<&2, String>, xs, Nil{}), acc) : List<&2, List<&2, String>>}:
+  match xs:
+    case Nil{}:
+      {==}
+    case Con{h, +t}:
+      Equal.trans(List<&2, List<&2, String>>, List.reverse.go(&2, List<&2, String>, t, h <> acc), List.append(&2, List<&2, String>, List.reverse.go(&2, List<&2, String>, t, Nil{}), h <> acc), List.append(&2, List<&2, String>, List.reverse.go(&2, List<&2, String>, t, [h]), acc),
+        rev_acc(t, h <> acc),
+        Equal.sym(List<&2, List<&2, String>>, List.append(&2, List<&2, String>, List.reverse.go(&2, List<&2, String>, t, [h]), acc), List.append(&2, List<&2, String>, List.reverse.go(&2, List<&2, String>, t, Nil{}), h <> acc),
+          Equal.trans(List<&2, List<&2, String>>, List.append(&2, List<&2, String>, List.reverse.go(&2, List<&2, String>, t, [h]), acc), List.append(&2, List<&2, String>, List.append(&2, List<&2, String>, List.reverse.go(&2, List<&2, String>, t, Nil{}), [h]), acc), List.append(&2, List<&2, String>, List.reverse.go(&2, List<&2, String>, t, Nil{}), h <> acc),
+            Equal.cong(List<&2, List<&2, String>>, List<&2, List<&2, String>>, z => List.append(&2, List<&2, String>, z, acc), List.reverse.go(&2, List<&2, String>, t, [h]), List.append(&2, List<&2, String>, List.reverse.go(&2, List<&2, String>, t, Nil{}), [h]), rev_acc(t, [h])),
+            lapp_assoc_s(List.reverse.go(&2, List<&2, String>, t, Nil{}), [h], acc))))
+
+def drop_zero(xs: List<&2, List<&2, String>>) -> {List.drop(&2, List<&2, String>, xs, 0n) == xs : List<&2, List<&2, String>>}:
+  match xs:
+    case Nil{}:
+      {==}
+    case Con{h, t}:
+      {==}
+
+# K, then H, less K's entries: H
+def drop_app_len(K: List<&2, List<&2, String>>, +H: List<&2, List<&2, String>>) -> {List.drop(&2, List<&2, String>, List.append(&2, List<&2, String>, K, H), List.length(&2, List<&2, String>, K)) == H : List<&2, List<&2, String>>}:
+  match K:
+    case Nil{}:
+      drop_zero(H)
+    case Con{k, rest}:
+      drop_app_len(rest, H)
+
+def len_snoc_s(xs: List<&2, List<&2, String>>, -r: List<&2, String>) -> {List.length(&2, List<&2, String>, List.append(&2, List<&2, String>, xs, [r])) == 1n+List.length(&2, List<&2, String>, xs) : Nat}:
+  match xs:
+    case Nil{}:
+      {==}
+    case Con{h, t}:
+      Equal.cong(Nat, Nat, z => 1n+z, List.length(&2, List<&2, String>, List.append(&2, List<&2, String>, t, [r])), 1n+List.length(&2, List<&2, String>, t), len_snoc_s(t, r))
+
+# a mark of 3 or more reverts as no mark does
+def cg3(-q: Nat, x: List<&2, List<&2, String>>) -> {A.cut.go(x, 3n+q) == A.cut.go(x, 0n) : Maybe<&2, List<&2, List<&2, String>>>}:
+  match x:
+    case Nil{}:
+      {==}
+    case Con{y, rest}:
+      {==}
+
+# the check after P, then more
+def cks_app(P: List<&2, List<&2, String>>, -Q: List<&2, List<&2, String>>, +n: Nat, c: A.Ck) -> {cks(List.append(&2, List<&2, String>, P, Q), n, c) == cks(Q, n, cks(P, n, c)) : A.Ck}:
+  match P:
+    case Nil{}:
+      {==}
+    case Con{+r, rest}:
+      cks_app(rest, Q, n, A.ck.ent(A.mark(r), A.file.act(R.parse(r)), n, c))
+
+# the databases K then H leave: those H's acts leave after K's
+def replay_app(+K: List<&2, List<&2, String>>, +H: List<&2, List<&2, String>>, +n: Nat) -> {A.replay(List.append(&2, List<&2, String>, K, H), n) == R.acts(acts_of(H), A.replay(K, n)) : R.Ds}:
+  %parse_app(K, H) : {R.acts(A.file.acts(_), R.ds.empty(n)) == R.acts(acts_of(H), A.replay(K, n)) : R.Ds}
+  %fa_app(A.parse_all(K), A.parse_all(H)) : {R.acts(_, R.ds.empty(n)) == R.acts(acts_of(H), A.replay(K, n)) : R.Ds}
+  Equal.sym(R.Ds, R.acts(acts_of(H), A.replay(K, n)), R.acts(List.append(&2, R.Act, acts_of(K), acts_of(H)), R.ds.empty(n)), acts_app(acts_of(K), acts_of(H), R.ds.empty(n)))
+
+# the reversed entries of P, then r: r, then them
+def cg_snoc(+P: List<&2, List<&2, String>>, +r: List<&2, String>) -> {A.cut.go(List.reverse(&2, List<&2, String>, List.append(&2, List<&2, String>, P, [r])), 0n) == A.cut.go(List.reverse(&2, List<&2, String>, P), A.mark(r)) : Maybe<&2, List<&2, List<&2, String>>>}:
+  %rgo_app(P, [r], Nil{}) : {A.cut.go(_, 0n) == A.cut.go(List.reverse(&2, List<&2, String>, P), A.mark(r)) : Maybe<&2, List<&2, List<&2, String>>>}
+  {==}
+
+# What the start holds after the entries P (A.win.ent on each): with no
+# MULTI still open, the databases P leaves, the check on P and P's
+# number; with one, the entries untx keeps (K, before the MULTI), whose
+# databases, check and number it holds, and after them the entries held,
+# with the check on P and P's number
+# a conjunction whose proofs may be used many times
+def And(-A: Data, -B: Data) -> Data:
+  Sigma<&2, &2, A, _ => B>
+
+def InvAll(P: List<&2, List<&2, String>>, n: Nat, ds: R.Ds, ck: A.Ck, k: Nat) -> Data:
+  And({A.cut.go(List.reverse(&2, List<&2, String>, P), 0n) == None{} : Maybe<&2, List<&2, List<&2, String>>>}, And({ds == A.replay(P, n) : R.Ds}, And({ck == cks(P, n, A.CkGo{0n, 0n}) : A.Ck}, {k == List.length(&2, List<&2, String>, P) : Nat})))
+
+def InvTx(P: List<&2, List<&2, String>>, n: Nat, K: List<&2, List<&2, String>>, ds: R.Ds, ck: A.Ck, k: Nat, held: List<&2, List<&2, String>>, all: A.Ck, j: Nat) -> Data:
+  And({A.cut.go(List.reverse(&2, List<&2, String>, P), 0n) == Some{List.reverse(&2, List<&2, String>, K)} : Maybe<&2, List<&2, List<&2, String>>>}, And({P == List.append(&2, List<&2, String>, K, List.reverse(&2, List<&2, String>, held)) : List<&2, List<&2, String>>}, And({ds == A.replay(K, n) : R.Ds}, And({ck == cks(K, n, A.CkGo{0n, 0n}) : A.Ck}, And({k == List.length(&2, List<&2, String>, K) : Nat}, And({all == cks(P, n, A.CkGo{0n, 0n}) : A.Ck}, {j == List.length(&2, List<&2, String>, P) : Nat}))))))
+
+def WInv(P: List<&2, List<&2, String>>, n: Nat, w: A.Win) -> Type:
+  match w:
+    case A.WinAll{ds, ck, k}:
+      InvAll(P, n, ds, ck, k)
+    case A.WinTx{ds, ck, k, held, all, j}:
+      Exists(List<&2, List<&2, String>>, K => InvTx(P, n, K, ds, ck, k, held, all, j))
+
+def inv_new(+n: Nat) -> WInv(Nil{}, n, A.win.new(n)):
+  ({==}, ({==}, ({==}, {==})))
+
+# what the start makes of P, rest following, with no MULTI open
+def start_all(+P: List<&2, List<&2, String>>, -rest: String, +n: Nat, h1: {A.cut.go(List.reverse(&2, List<&2, String>, P), 0n) == None{} : Maybe<&2, List<&2, List<&2, String>>>}) -> {A.start.of((P, rest), n) == A.Start{A.checked(P, n), List.length(&2, List<&2, String>, P), Nil{}, rest} : A.Start}:
+  %Equal.sym(Maybe<&2, List<&2, List<&2, String>>>, A.cut.go(List.reverse(&2, List<&2, String>, P), 0n), None{}, h1) : {A.Start{A.checked(A.untx.of(_, P), n), List.length(&2, List<&2, String>, A.untx.of(_, P)), List.drop(&2, List<&2, String>, P, List.length(&2, List<&2, String>, A.untx.of(_, P))), rest} == A.Start{A.checked(P, n), List.length(&2, List<&2, String>, P), Nil{}, rest} : A.Start}
+  Equal.cong(List<&2, List<&2, String>>, A.Start, z => A.Start{A.checked(P, n), List.length(&2, List<&2, String>, P), z, rest}, List.drop(&2, List<&2, String>, P, List.length(&2, List<&2, String>, P)), Nil{}, drop_len(P))
+
+# and with a MULTI open after the entries K, the entries held after it
+def start_tx(+P: List<&2, List<&2, String>>, +K: List<&2, List<&2, String>>, +held: List<&2, List<&2, String>>, -rest: String, +n: Nat, h1: {A.cut.go(List.reverse(&2, List<&2, String>, P), 0n) == Some{List.reverse(&2, List<&2, String>, K)} : Maybe<&2, List<&2, List<&2, String>>>}, h2: {P == List.append(&2, List<&2, String>, K, List.reverse(&2, List<&2, String>, held)) : List<&2, List<&2, String>>}) -> {A.start.of((P, rest), n) == A.Start{A.checked(K, n), List.length(&2, List<&2, String>, K), List.reverse(&2, List<&2, String>, held), rest} : A.Start}:
+  %Equal.sym(Maybe<&2, List<&2, List<&2, String>>>, A.cut.go(List.reverse(&2, List<&2, String>, P), 0n), Some{List.reverse(&2, List<&2, String>, K)}, h1) : {A.Start{A.checked(A.untx.of(_, P), n), List.length(&2, List<&2, String>, A.untx.of(_, P)), List.drop(&2, List<&2, String>, P, List.length(&2, List<&2, String>, A.untx.of(_, P))), rest} == A.Start{A.checked(K, n), List.length(&2, List<&2, String>, K), List.reverse(&2, List<&2, String>, held), rest} : A.Start}
+  %Equal.sym(List<&2, List<&2, String>>, List.reverse(&2, List<&2, String>, List.reverse.go(&2, List<&2, String>, K, Nil{})), K, rev_rev_s(K)) : {A.Start{A.checked(_, n), List.length(&2, List<&2, String>, _), List.drop(&2, List<&2, String>, P, List.length(&2, List<&2, String>, _)), rest} == A.Start{A.checked(K, n), List.length(&2, List<&2, String>, K), List.reverse(&2, List<&2, String>, held), rest} : A.Start}
+  %Equal.sym(List<&2, List<&2, String>>, P, List.append(&2, List<&2, String>, K, List.reverse(&2, List<&2, String>, held)), h2) : {A.Start{A.checked(K, n), List.length(&2, List<&2, String>, K), List.drop(&2, List<&2, String>, _, List.length(&2, List<&2, String>, K)), rest} == A.Start{A.checked(K, n), List.length(&2, List<&2, String>, K), List.reverse(&2, List<&2, String>, held), rest} : A.Start}
+  Equal.cong(List<&2, List<&2, String>>, A.Start, z => A.Start{A.checked(K, n), List.length(&2, List<&2, String>, K), z, rest}, List.drop(&2, List<&2, String>, List.append(&2, List<&2, String>, K, List.reverse(&2, List<&2, String>, held)), List.length(&2, List<&2, String>, K)), List.reverse(&2, List<&2, String>, held), drop_app_len(K, List.reverse(&2, List<&2, String>, held)))
+
+def inv_done.all(+P: List<&2, List<&2, String>>, +n: Nat, -ds: R.Ds, -ck: A.Ck, -k: Nat, -rest: String, h: InvAll(P, n, ds, ck, k)) -> {A.Start{A.ck.end(ck, ds), k, Nil{}, rest} == A.start.of((P, rest), n) : A.Start}:
+  (h1, q1) = h
+  (h2, q2) = q1
+  (h3, h4) = q2
+  %Equal.sym(R.Ds, ds, A.replay(P, n), h2) : {A.Start{A.ck.end(ck, _), k, Nil{}, rest} == A.start.of((P, rest), n) : A.Start}
+  %Equal.sym(A.Ck, ck, cks(P, n, A.CkGo{0n, 0n}), h3) : {A.Start{A.ck.end(_, A.replay(P, n)), k, Nil{}, rest} == A.start.of((P, rest), n) : A.Start}
+  %Equal.sym(Nat, k, List.length(&2, List<&2, String>, P), h4) : {A.Start{A.ck.end(cks(P, n, A.CkGo{0n, 0n}), A.replay(P, n)), _, Nil{}, rest} == A.start.of((P, rest), n) : A.Start}
+  Equal.trans(A.Start, A.Start{A.ck.end(cks(P, n, A.CkGo{0n, 0n}), A.replay(P, n)), List.length(&2, List<&2, String>, P), Nil{}, rest}, A.Start{A.checked(P, n), List.length(&2, List<&2, String>, P), Nil{}, rest}, A.start.of((P, rest), n),
+    Equal.cong(A.Replay, A.Start, z => A.Start{z, List.length(&2, List<&2, String>, P), Nil{}, rest}, A.ck.end(cks(P, n, A.CkGo{0n, 0n}), A.replay(P, n)), A.checked(P, n), Equal.sym(A.Replay, A.checked(P, n), A.ck.end(cks(P, n, A.CkGo{0n, 0n}), A.replay(P, n)), ck_all(P, n))),
+    Equal.sym(A.Start, A.start.of((P, rest), n), A.Start{A.checked(P, n), List.length(&2, List<&2, String>, P), Nil{}, rest}, start_all(P, rest, n, h1)))
+
+def inv_done.tx(+P: List<&2, List<&2, String>>, +n: Nat, -ds: R.Ds, -ck: A.Ck, -k: Nat, +held: List<&2, List<&2, String>>, -all: A.Ck, -j: Nat, -rest: String, +K: List<&2, List<&2, String>>, h: InvTx(P, n, K, ds, ck, k, held, all, j)) -> {A.Start{A.ck.end(ck, ds), k, List.reverse(&2, List<&2, String>, held), rest} == A.start.of((P, rest), n) : A.Start}:
+  (h1, q1) = h
+  (h2, q2) = q1
+  (h3, q3) = q2
+  (h4, q4) = q3
+  (h5, q5) = q4
+  %Equal.sym(R.Ds, ds, A.replay(K, n), h3) : {A.Start{A.ck.end(ck, _), k, List.reverse(&2, List<&2, String>, held), rest} == A.start.of((P, rest), n) : A.Start}
+  %Equal.sym(A.Ck, ck, cks(K, n, A.CkGo{0n, 0n}), h4) : {A.Start{A.ck.end(_, A.replay(K, n)), k, List.reverse(&2, List<&2, String>, held), rest} == A.start.of((P, rest), n) : A.Start}
+  %Equal.sym(Nat, k, List.length(&2, List<&2, String>, K), h5) : {A.Start{A.ck.end(cks(K, n, A.CkGo{0n, 0n}), A.replay(K, n)), _, List.reverse(&2, List<&2, String>, held), rest} == A.start.of((P, rest), n) : A.Start}
+  Equal.trans(A.Start, A.Start{A.ck.end(cks(K, n, A.CkGo{0n, 0n}), A.replay(K, n)), List.length(&2, List<&2, String>, K), List.reverse(&2, List<&2, String>, held), rest}, A.Start{A.checked(K, n), List.length(&2, List<&2, String>, K), List.reverse(&2, List<&2, String>, held), rest}, A.start.of((P, rest), n),
+    Equal.cong(A.Replay, A.Start, z => A.Start{z, List.length(&2, List<&2, String>, K), List.reverse(&2, List<&2, String>, held), rest}, A.ck.end(cks(K, n, A.CkGo{0n, 0n}), A.replay(K, n)), A.checked(K, n), Equal.sym(A.Replay, A.checked(K, n), A.ck.end(cks(K, n, A.CkGo{0n, 0n}), A.replay(K, n)), ck_all(K, n))),
+    Equal.sym(A.Start, A.start.of((P, rest), n), A.Start{A.checked(K, n), List.length(&2, List<&2, String>, K), List.reverse(&2, List<&2, String>, held), rest}, start_tx(P, K, held, rest, n, h1, h2)))
+
+def inv_done.ex(+P: List<&2, List<&2, String>>, +n: Nat, -ds: R.Ds, -ck: A.Ck, -k: Nat, +held: List<&2, List<&2, String>>, -all: A.Ck, -j: Nat, -rest: String, h: Exists(List<&2, List<&2, String>>, K => InvTx(P, n, K, ds, ck, k, held, all, j))) -> {A.Start{A.ck.end(ck, ds), k, List.reverse(&2, List<&2, String>, held), rest} == A.start.of((P, rest), n) : A.Start}:
+  (+K, hk) = h
+  inv_done.tx(P, n, ds, ck, k, held, all, j, rest, K, hk)
+
+# what the start holds after P, rest following, gives what it made of
+# the whole of them
+def inv_done(+P: List<&2, List<&2, String>>, +n: Nat, w: A.Win, -rest: String) -> WInv(P, n, w) -> {A.win.done(w, rest) == A.start.of((P, rest), n) : A.Start}:
+  match w:
+    case A.WinAll{ds, ck, k}:
+      h => inv_done.all(P, n, ds, ck, k, rest, h)
+    case A.WinTx{ds, ck, k, +held, all, j}:
+      h => inv_done.ex(P, n, ds, ck, k, held, all, j, rest, h)
+
+# One more entry r, of mark m and act a: the parts of the state after it
+def c_ck(-m: Nat, -a: R.Act, +r: List<&2, String>, +n: Nat, -ck: A.Ck, +P: List<&2, List<&2, String>>, em: {m == A.mark(r) : Nat}, ea: {a == A.file.act(R.parse(r)) : R.Act}, h3: {ck == cks(P, n, A.CkGo{0n, 0n}) : A.Ck}) -> {A.ck.ent(m, a, n, ck) == cks(List.append(&2, List<&2, String>, P, [r]), n, A.CkGo{0n, 0n}) : A.Ck}:
+  %Equal.sym(Nat, m, A.mark(r), em) : {A.ck.ent(_, a, n, ck) == cks(List.append(&2, List<&2, String>, P, [r]), n, A.CkGo{0n, 0n}) : A.Ck}
+  %Equal.sym(R.Act, a, A.file.act(R.parse(r)), ea) : {A.ck.ent(A.mark(r), _, n, ck) == cks(List.append(&2, List<&2, String>, P, [r]), n, A.CkGo{0n, 0n}) : A.Ck}
+  %Equal.sym(A.Ck, ck, cks(P, n, A.CkGo{0n, 0n}), h3) : {A.ck.ent(A.mark(r), A.file.act(R.parse(r)), n, _) == cks(List.append(&2, List<&2, String>, P, [r]), n, A.CkGo{0n, 0n}) : A.Ck}
+  Equal.sym(A.Ck, cks(List.append(&2, List<&2, String>, P, [r]), n, A.CkGo{0n, 0n}), cks([r], n, cks(P, n, A.CkGo{0n, 0n})), cks_app(P, [r], n, A.CkGo{0n, 0n}))
+
+def c_len(-k: Nat, +P: List<&2, List<&2, String>>, -r: List<&2, String>, h4: {k == List.length(&2, List<&2, String>, P) : Nat}) -> {1n+k == List.length(&2, List<&2, String>, List.append(&2, List<&2, String>, P, [r])) : Nat}:
+  %Equal.sym(Nat, k, List.length(&2, List<&2, String>, P), h4) : {1n+_ == List.length(&2, List<&2, String>, List.append(&2, List<&2, String>, P, [r])) : Nat}
+  Equal.sym(Nat, List.length(&2, List<&2, String>, List.append(&2, List<&2, String>, P, [r])), 1n+List.length(&2, List<&2, String>, P), len_snoc_s(P, r))
+
+def c_ds(-a: R.Act, -ds: R.Ds, +r: List<&2, String>, +P: List<&2, List<&2, String>>, +n: Nat, ea: {a == A.file.act(R.parse(r)) : R.Act}, h: {ds == A.replay(P, n) : R.Ds}) -> {R.ds_of(R.act(a, ds)) == A.replay(List.append(&2, List<&2, String>, P, [r]), n) : R.Ds}:
+  %Equal.sym(R.Act, a, A.file.act(R.parse(r)), ea) : {R.ds_of(R.act(_, ds)) == A.replay(List.append(&2, List<&2, String>, P, [r]), n) : R.Ds}
+  %Equal.sym(R.Ds, ds, A.replay(P, n), h) : {R.ds_of(R.act(A.file.act(R.parse(r)), _)) == A.replay(List.append(&2, List<&2, String>, P, [r]), n) : R.Ds}
+  Equal.sym(R.Ds, A.replay(List.append(&2, List<&2, String>, P, [r]), n), R.acts(acts_of([r]), A.replay(P, n)), replay_app(P, [r], n))
+
+def c_run(+held: List<&2, List<&2, String>>, -ds: R.Ds, +K: List<&2, List<&2, String>>, -P: List<&2, List<&2, String>>, +n: Nat, h2: {P == List.append(&2, List<&2, String>, K, List.reverse(&2, List<&2, String>, held)) : List<&2, List<&2, String>>}, h3: {ds == A.replay(K, n) : R.Ds}) -> {A.win.run(held, ds) == A.replay(P, n) : R.Ds}:
+  %Equal.sym(R.Ds, ds, A.replay(K, n), h3) : {R.acts(acts_of(List.reverse(&2, List<&2, String>, held)), _) == A.replay(P, n) : R.Ds}
+  %Equal.sym(List<&2, List<&2, String>>, P, List.append(&2, List<&2, String>, K, List.reverse(&2, List<&2, String>, held)), h2) : {R.acts(acts_of(List.reverse(&2, List<&2, String>, held)), A.replay(K, n)) == A.replay(_, n) : R.Ds}
+  Equal.sym(R.Ds, A.replay(List.append(&2, List<&2, String>, K, List.reverse(&2, List<&2, String>, held)), n), R.acts(acts_of(List.reverse(&2, List<&2, String>, held)), A.replay(K, n)), replay_app(K, List.reverse(&2, List<&2, String>, held), n))
+
+# a MULTI after P: untx keeps P
+def c_cut1(+r: List<&2, String>, +P: List<&2, List<&2, String>>, em: {1n == A.mark(r) : Nat}) -> {A.cut.go(List.reverse(&2, List<&2, String>, List.append(&2, List<&2, String>, P, [r])), 0n) == Some{List.reverse(&2, List<&2, String>, P)} : Maybe<&2, List<&2, List<&2, String>>>}:
+  %Equal.sym(Maybe<&2, List<&2, List<&2, String>>>, A.cut.go(List.reverse(&2, List<&2, String>, List.append(&2, List<&2, String>, P, [r])), 0n), A.cut.go(List.reverse(&2, List<&2, String>, P), A.mark(r)), cg_snoc(P, r)) : {_ == Some{List.reverse(&2, List<&2, String>, P)} : Maybe<&2, List<&2, List<&2, String>>>}
+  %em : {A.cut.go(List.reverse(&2, List<&2, String>, P), _) == Some{List.reverse(&2, List<&2, String>, P)} : Maybe<&2, List<&2, List<&2, String>>>}
+  cg1(List.reverse(&2, List<&2, String>, P))
+
+# an EXEC after P: untx keeps all
+def c_cut2(+r: List<&2, String>, +P: List<&2, List<&2, String>>, em: {2n == A.mark(r) : Nat}) -> {A.cut.go(List.reverse(&2, List<&2, String>, List.append(&2, List<&2, String>, P, [r])), 0n) == None{} : Maybe<&2, List<&2, List<&2, String>>>}:
+  %Equal.sym(Maybe<&2, List<&2, List<&2, String>>>, A.cut.go(List.reverse(&2, List<&2, String>, List.append(&2, List<&2, String>, P, [r])), 0n), A.cut.go(List.reverse(&2, List<&2, String>, P), A.mark(r)), cg_snoc(P, r)) : {_ == None{} : Maybe<&2, List<&2, List<&2, String>>>}
+  %em : {A.cut.go(List.reverse(&2, List<&2, String>, P), _) == None{} : Maybe<&2, List<&2, List<&2, String>>>}
+  cg2(List.reverse(&2, List<&2, String>, P))
+
+# no mark after P: untx keeps what it kept of P
+def c_cut0(+r: List<&2, String>, +P: List<&2, List<&2, String>>, -x: Maybe<&2, List<&2, List<&2, String>>>, em: {0n == A.mark(r) : Nat}, h1: {A.cut.go(List.reverse(&2, List<&2, String>, P), 0n) == x : Maybe<&2, List<&2, List<&2, String>>>}) -> {A.cut.go(List.reverse(&2, List<&2, String>, List.append(&2, List<&2, String>, P, [r])), 0n) == x : Maybe<&2, List<&2, List<&2, String>>>}:
+  %Equal.sym(Maybe<&2, List<&2, List<&2, String>>>, A.cut.go(List.reverse(&2, List<&2, String>, List.append(&2, List<&2, String>, P, [r])), 0n), A.cut.go(List.reverse(&2, List<&2, String>, P), A.mark(r)), cg_snoc(P, r)) : {_ == x : Maybe<&2, List<&2, List<&2, String>>>}
+  %em : {A.cut.go(List.reverse(&2, List<&2, String>, P), _) == x : Maybe<&2, List<&2, List<&2, String>>>}
+  h1
+
+def c_cut3(-q: Nat, +r: List<&2, String>, +P: List<&2, List<&2, String>>, -x: Maybe<&2, List<&2, List<&2, String>>>, em: {3n+q == A.mark(r) : Nat}, h1: {A.cut.go(List.reverse(&2, List<&2, String>, P), 0n) == x : Maybe<&2, List<&2, List<&2, String>>>}) -> {A.cut.go(List.reverse(&2, List<&2, String>, List.append(&2, List<&2, String>, P, [r])), 0n) == x : Maybe<&2, List<&2, List<&2, String>>>}:
+  %Equal.sym(Maybe<&2, List<&2, List<&2, String>>>, A.cut.go(List.reverse(&2, List<&2, String>, List.append(&2, List<&2, String>, P, [r])), 0n), A.cut.go(List.reverse(&2, List<&2, String>, P), A.mark(r)), cg_snoc(P, r)) : {_ == x : Maybe<&2, List<&2, List<&2, String>>>}
+  %em : {A.cut.go(List.reverse(&2, List<&2, String>, P), _) == x : Maybe<&2, List<&2, List<&2, String>>>}
+  %Equal.sym(Maybe<&2, List<&2, List<&2, String>>>, A.cut.go(List.reverse(&2, List<&2, String>, P), 3n+q), A.cut.go(List.reverse(&2, List<&2, String>, P), 0n), cg3(q, List.reverse(&2, List<&2, String>, P))) : {_ == x : Maybe<&2, List<&2, List<&2, String>>>}
+  h1
+
+# held entries, then one more: held after it
+def c_held(+K: List<&2, List<&2, String>>, +held: List<&2, List<&2, String>>, +r: List<&2, String>, -P: List<&2, List<&2, String>>, h2: {P == List.append(&2, List<&2, String>, K, List.reverse(&2, List<&2, String>, held)) : List<&2, List<&2, String>>}) -> {List.append(&2, List<&2, String>, P, [r]) == List.append(&2, List<&2, String>, K, List.reverse(&2, List<&2, String>, r <> held)) : List<&2, List<&2, String>>}:
+  %Equal.sym(List<&2, List<&2, String>>, P, List.append(&2, List<&2, String>, K, List.reverse(&2, List<&2, String>, held)), h2) : {List.append(&2, List<&2, String>, _, [r]) == List.append(&2, List<&2, String>, K, List.reverse(&2, List<&2, String>, r <> held)) : List<&2, List<&2, String>>}
+  Equal.trans(List<&2, List<&2, String>>, List.append(&2, List<&2, String>, List.append(&2, List<&2, String>, K, List.reverse(&2, List<&2, String>, held)), [r]), List.append(&2, List<&2, String>, K, List.append(&2, List<&2, String>, List.reverse(&2, List<&2, String>, held), [r])), List.append(&2, List<&2, String>, K, List.reverse.go(&2, List<&2, String>, held, [r])),
+    lapp_assoc_s(K, List.reverse(&2, List<&2, String>, held), [r]),
+    Equal.cong(List<&2, List<&2, String>>, List<&2, List<&2, String>>, z => List.append(&2, List<&2, String>, K, z), List.append(&2, List<&2, String>, List.reverse(&2, List<&2, String>, held), [r]), List.reverse.go(&2, List<&2, String>, held, [r]), Equal.sym(List<&2, List<&2, String>>, List.reverse.go(&2, List<&2, String>, held, [r]), List.append(&2, List<&2, String>, List.reverse(&2, List<&2, String>, held), [r]), rev_acc(held, [r]))))
+
+# the parts of the state with no MULTI open
+def ia.cut(-P: List<&2, List<&2, String>>, -n: Nat, -ds: R.Ds, -ck: A.Ck, -k: Nat, h: InvAll(P, n, ds, ck, k)) -> {A.cut.go(List.reverse(&2, List<&2, String>, P), 0n) == None{} : Maybe<&2, List<&2, List<&2, String>>>}:
+  (x, q) = h
+  x
+
+def ia.ds(-P: List<&2, List<&2, String>>, -n: Nat, -ds: R.Ds, -ck: A.Ck, -k: Nat, h: InvAll(P, n, ds, ck, k)) -> {ds == A.replay(P, n) : R.Ds}:
+  (x, q) = h
+  (y, q2) = q
+  y
+
+def ia.ck(-P: List<&2, List<&2, String>>, -n: Nat, -ds: R.Ds, -ck: A.Ck, -k: Nat, h: InvAll(P, n, ds, ck, k)) -> {ck == cks(P, n, A.CkGo{0n, 0n}) : A.Ck}:
+  (x, q) = h
+  (y, q2) = q
+  (z, w) = q2
+  z
+
+def ia.k(-P: List<&2, List<&2, String>>, -n: Nat, -ds: R.Ds, -ck: A.Ck, -k: Nat, h: InvAll(P, n, ds, ck, k)) -> {k == List.length(&2, List<&2, String>, P) : Nat}:
+  (x, q) = h
+  (y, q2) = q
+  (z, w) = q2
+  w
+
+# after entries none of which is a MULTI still open: a MULTI is held,
+# untx keeping all before it
+def inv_all.multi(+a: R.Act, +r: List<&2, String>, +n: Nat, -ds: R.Ds, -ck: A.Ck, -k: Nat, +P: List<&2, List<&2, String>>, +em: {1n == A.mark(r) : Nat}, ea: {a == A.file.act(R.parse(r)) : R.Act}, +h: InvAll(P, n, ds, ck, k)) -> WInv(List.append(&2, List<&2, String>, P, [r]), n, A.WinTx{ds, ck, k, [r], A.ck.ent(1n, a, n, ck), 1n+k}):
+  (P, (c_cut1(r, P, em), ({==}, (ia.ds(P, n, ds, ck, k, h), (ia.ck(P, n, ds, ck, k, h), (ia.k(P, n, ds, ck, k, h), (c_ck(1n, a, r, n, ck, P, em, ea, ia.ck(P, n, ds, ck, k, h)), c_len(k, P, r, ia.k(P, n, ds, ck, k, h)))))))))
+
+# any other entry runs
+def inv_all.run(-m: Nat, +a: R.Act, +r: List<&2, String>, +n: Nat, -ds: R.Ds, -ck: A.Ck, -k: Nat, +P: List<&2, List<&2, String>>, c1: {A.cut.go(List.reverse(&2, List<&2, String>, List.append(&2, List<&2, String>, P, [r])), 0n) == None{} : Maybe<&2, List<&2, List<&2, String>>>}, em: {m == A.mark(r) : Nat}, +ea: {a == A.file.act(R.parse(r)) : R.Act}, +h: InvAll(P, n, ds, ck, k)) -> InvAll(List.append(&2, List<&2, String>, P, [r]), n, R.ds_of(R.act(a, ds)), A.ck.ent(m, a, n, ck), 1n+k):
+  (c1, (c_ds(a, ds, r, P, n, ea, ia.ds(P, n, ds, ck, k, h)), (c_ck(m, a, r, n, ck, P, em, ea, ia.ck(P, n, ds, ck, k, h)), c_len(k, P, r, ia.k(P, n, ds, ck, k, h)))))
+
+def inv_all(m: Nat, +a: R.Act, +r: List<&2, String>, +n: Nat, -ds: R.Ds, -ck: A.Ck, -k: Nat, +P: List<&2, List<&2, String>>) -> {m == A.mark(r) : Nat} -> {a == A.file.act(R.parse(r)) : R.Act} -> InvAll(P, n, ds, ck, k) -> WInv(List.append(&2, List<&2, String>, P, [r]), n, A.win.all(m, a, r, n, ds, ck, k)):
+  match m:
+    case 0n:
+      +em => ea => +h => inv_all.run(0n, a, r, n, ds, ck, k, P, c_cut0(r, P, None{}, em, ia.cut(P, n, ds, ck, k, h)), em, ea, h)
+    case 1n:
+      +em => ea => h => inv_all.multi(a, r, n, ds, ck, k, P, em, ea, h)
+    case 2n:
+      +em => ea => h => inv_all.run(2n, a, r, n, ds, ck, k, P, c_cut2(r, P, em), em, ea, h)
+    case 3n+q:
+      +em => ea => +h => inv_all.run(3n+q, a, r, n, ds, ck, k, P, c_cut3(q, r, P, None{}, em, ia.cut(P, n, ds, ck, k, h)), em, ea, h)
+
+# the parts of the state with a MULTI open
+def it.cut(-P: List<&2, List<&2, String>>, -n: Nat, -K: List<&2, List<&2, String>>, -ds: R.Ds, -ck: A.Ck, -k: Nat, -held: List<&2, List<&2, String>>, -all: A.Ck, -j: Nat, h: InvTx(P, n, K, ds, ck, k, held, all, j)) -> {A.cut.go(List.reverse(&2, List<&2, String>, P), 0n) == Some{List.reverse(&2, List<&2, String>, K)} : Maybe<&2, List<&2, List<&2, String>>>}:
+  (x0, q0) = h
+  x0
+
+def it.p(-P: List<&2, List<&2, String>>, -n: Nat, -K: List<&2, List<&2, String>>, -ds: R.Ds, -ck: A.Ck, -k: Nat, -held: List<&2, List<&2, String>>, -all: A.Ck, -j: Nat, h: InvTx(P, n, K, ds, ck, k, held, all, j)) -> {P == List.append(&2, List<&2, String>, K, List.reverse(&2, List<&2, String>, held)) : List<&2, List<&2, String>>}:
+  (x0, q0) = h
+  (x1, q1) = q0
+  x1
+
+def it.ds(-P: List<&2, List<&2, String>>, -n: Nat, -K: List<&2, List<&2, String>>, -ds: R.Ds, -ck: A.Ck, -k: Nat, -held: List<&2, List<&2, String>>, -all: A.Ck, -j: Nat, h: InvTx(P, n, K, ds, ck, k, held, all, j)) -> {ds == A.replay(K, n) : R.Ds}:
+  (x0, q0) = h
+  (x1, q1) = q0
+  (x2, q2) = q1
+  x2
+
+def it.ck(-P: List<&2, List<&2, String>>, -n: Nat, -K: List<&2, List<&2, String>>, -ds: R.Ds, -ck: A.Ck, -k: Nat, -held: List<&2, List<&2, String>>, -all: A.Ck, -j: Nat, h: InvTx(P, n, K, ds, ck, k, held, all, j)) -> {ck == cks(K, n, A.CkGo{0n, 0n}) : A.Ck}:
+  (x0, q0) = h
+  (x1, q1) = q0
+  (x2, q2) = q1
+  (x3, q3) = q2
+  x3
+
+def it.k(-P: List<&2, List<&2, String>>, -n: Nat, -K: List<&2, List<&2, String>>, -ds: R.Ds, -ck: A.Ck, -k: Nat, -held: List<&2, List<&2, String>>, -all: A.Ck, -j: Nat, h: InvTx(P, n, K, ds, ck, k, held, all, j)) -> {k == List.length(&2, List<&2, String>, K) : Nat}:
+  (x0, q0) = h
+  (x1, q1) = q0
+  (x2, q2) = q1
+  (x3, q3) = q2
+  (x4, q4) = q3
+  x4
+
+def it.all(-P: List<&2, List<&2, String>>, -n: Nat, -K: List<&2, List<&2, String>>, -ds: R.Ds, -ck: A.Ck, -k: Nat, -held: List<&2, List<&2, String>>, -all: A.Ck, -j: Nat, h: InvTx(P, n, K, ds, ck, k, held, all, j)) -> {all == cks(P, n, A.CkGo{0n, 0n}) : A.Ck}:
+  (x0, q0) = h
+  (x1, q1) = q0
+  (x2, q2) = q1
+  (x3, q3) = q2
+  (x4, q4) = q3
+  (x5, q5) = q4
+  x5
+
+def it.j(-P: List<&2, List<&2, String>>, -n: Nat, -K: List<&2, List<&2, String>>, -ds: R.Ds, -ck: A.Ck, -k: Nat, -held: List<&2, List<&2, String>>, -all: A.Ck, -j: Nat, h: InvTx(P, n, K, ds, ck, k, held, all, j)) -> {j == List.length(&2, List<&2, String>, P) : Nat}:
+  (x0, q0) = h
+  (x1, q1) = q0
+  (x2, q2) = q1
+  (x3, q3) = q2
+  (x4, q4) = q3
+  (x5, q5) = q4
+  q5
+
+# after a MULTI still open: a MULTI keeps all the entries before it and
+# holds itself
+def inv_tx.multi(+a: R.Act, +r: List<&2, String>, +n: Nat, -ds: R.Ds, -ck: A.Ck, -k: Nat, +held: List<&2, List<&2, String>>, -all: A.Ck, -j: Nat, +P: List<&2, List<&2, String>>, +em: {1n == A.mark(r) : Nat}, ea: {a == A.file.act(R.parse(r)) : R.Act}, +K: List<&2, List<&2, String>>, +hk: InvTx(P, n, K, ds, ck, k, held, all, j)) -> WInv(List.append(&2, List<&2, String>, P, [r]), n, A.WinTx{A.win.run(held, ds), all, j, [r], A.ck.ent(1n, a, n, all), 1n+j}):
+  (P, (c_cut1(r, P, em), ({==}, (c_run(held, ds, K, P, n, it.p(P, n, K, ds, ck, k, held, all, j, hk), it.ds(P, n, K, ds, ck, k, held, all, j, hk)), (it.all(P, n, K, ds, ck, k, held, all, j, hk), (it.j(P, n, K, ds, ck, k, held, all, j, hk), (c_ck(1n, a, r, n, all, P, em, ea, it.all(P, n, K, ds, ck, k, held, all, j, hk)), c_len(j, P, r, it.j(P, n, K, ds, ck, k, held, all, j, hk)))))))))
+
+# an EXEC keeps all of them and itself
+def inv_tx.exec(+a: R.Act, +r: List<&2, String>, +n: Nat, -ds: R.Ds, -ck: A.Ck, -k: Nat, +held: List<&2, List<&2, String>>, -all: A.Ck, -j: Nat, +P: List<&2, List<&2, String>>, +em: {2n == A.mark(r) : Nat}, +ea: {a == A.file.act(R.parse(r)) : R.Act}, +K: List<&2, List<&2, String>>, +hk: InvTx(P, n, K, ds, ck, k, held, all, j)) -> WInv(List.append(&2, List<&2, String>, P, [r]), n, A.WinAll{R.ds_of(R.act(a, A.win.run(held, ds))), A.ck.ent(2n, a, n, all), 1n+j}):
+  (c_cut2(r, P, em), (c_ds(a, A.win.run(held, ds), r, P, n, ea, c_run(held, ds, K, P, n, it.p(P, n, K, ds, ck, k, held, all, j, hk), it.ds(P, n, K, ds, ck, k, held, all, j, hk))), (c_ck(2n, a, r, n, all, P, em, ea, it.all(P, n, K, ds, ck, k, held, all, j, hk)), c_len(j, P, r, it.j(P, n, K, ds, ck, k, held, all, j, hk)))))
+
+# any other is held
+def inv_tx.hold.k(-m: Nat, +a: R.Act, +r: List<&2, String>, +n: Nat, -ds: R.Ds, -ck: A.Ck, -k: Nat, +held: List<&2, List<&2, String>>, -all: A.Ck, -j: Nat, +P: List<&2, List<&2, String>>, +K: List<&2, List<&2, String>>, c1: {A.cut.go(List.reverse(&2, List<&2, String>, List.append(&2, List<&2, String>, P, [r])), 0n) == Some{List.reverse(&2, List<&2, String>, K)} : Maybe<&2, List<&2, List<&2, String>>>}, em: {m == A.mark(r) : Nat}, ea: {a == A.file.act(R.parse(r)) : R.Act}, +hk: InvTx(P, n, K, ds, ck, k, held, all, j)) -> WInv(List.append(&2, List<&2, String>, P, [r]), n, A.WinTx{ds, ck, k, r <> held, A.ck.ent(m, a, n, all), 1n+j}):
+  (K, (c1, (c_held(K, held, r, P, it.p(P, n, K, ds, ck, k, held, all, j, hk)), (it.ds(P, n, K, ds, ck, k, held, all, j, hk), (it.ck(P, n, K, ds, ck, k, held, all, j, hk), (it.k(P, n, K, ds, ck, k, held, all, j, hk), (c_ck(m, a, r, n, all, P, em, ea, it.all(P, n, K, ds, ck, k, held, all, j, hk)), c_len(j, P, r, it.j(P, n, K, ds, ck, k, held, all, j, hk)))))))))
+
+def inv_tx.ex.multi(+a: R.Act, +r: List<&2, String>, +n: Nat, -ds: R.Ds, -ck: A.Ck, -k: Nat, +held: List<&2, List<&2, String>>, -all: A.Ck, -j: Nat, +P: List<&2, List<&2, String>>, +em: {1n == A.mark(r) : Nat}, ea: {a == A.file.act(R.parse(r)) : R.Act}, h: Exists(List<&2, List<&2, String>>, K => InvTx(P, n, K, ds, ck, k, held, all, j))) -> WInv(List.append(&2, List<&2, String>, P, [r]), n, A.WinTx{A.win.run(held, ds), all, j, [r], A.ck.ent(1n, a, n, all), 1n+j}):
+  (+K, hk) = h
+  inv_tx.multi(a, r, n, ds, ck, k, held, all, j, P, em, ea, K, hk)
+
+def inv_tx.ex.exec(+a: R.Act, +r: List<&2, String>, +n: Nat, -ds: R.Ds, -ck: A.Ck, -k: Nat, +held: List<&2, List<&2, String>>, -all: A.Ck, -j: Nat, +P: List<&2, List<&2, String>>, +em: {2n == A.mark(r) : Nat}, +ea: {a == A.file.act(R.parse(r)) : R.Act}, h: Exists(List<&2, List<&2, String>>, K => InvTx(P, n, K, ds, ck, k, held, all, j))) -> WInv(List.append(&2, List<&2, String>, P, [r]), n, A.WinAll{R.ds_of(R.act(a, A.win.run(held, ds))), A.ck.ent(2n, a, n, all), 1n+j}):
+  (+K, hk) = h
+  inv_tx.exec(a, r, n, ds, ck, k, held, all, j, P, em, ea, K, hk)
+
+def inv_tx.hold0(+a: R.Act, +r: List<&2, String>, +n: Nat, -ds: R.Ds, -ck: A.Ck, -k: Nat, +held: List<&2, List<&2, String>>, -all: A.Ck, -j: Nat, +P: List<&2, List<&2, String>>, +em: {0n == A.mark(r) : Nat}, ea: {a == A.file.act(R.parse(r)) : R.Act}, +K: List<&2, List<&2, String>>, +hk: InvTx(P, n, K, ds, ck, k, held, all, j)) -> WInv(List.append(&2, List<&2, String>, P, [r]), n, A.WinTx{ds, ck, k, r <> held, A.ck.ent(0n, a, n, all), 1n+j}):
+  inv_tx.hold.k(0n, a, r, n, ds, ck, k, held, all, j, P, K, c_cut0(r, P, Some{List.reverse(&2, List<&2, String>, K)}, em, it.cut(P, n, K, ds, ck, k, held, all, j, hk)), em, ea, hk)
+
+def inv_tx.hold3(-q: Nat, +a: R.Act, +r: List<&2, String>, +n: Nat, -ds: R.Ds, -ck: A.Ck, -k: Nat, +held: List<&2, List<&2, String>>, -all: A.Ck, -j: Nat, +P: List<&2, List<&2, String>>, +em: {3n+q == A.mark(r) : Nat}, ea: {a == A.file.act(R.parse(r)) : R.Act}, +K: List<&2, List<&2, String>>, +hk: InvTx(P, n, K, ds, ck, k, held, all, j)) -> WInv(List.append(&2, List<&2, String>, P, [r]), n, A.WinTx{ds, ck, k, r <> held, A.ck.ent(3n+q, a, n, all), 1n+j}):
+  inv_tx.hold.k(3n+q, a, r, n, ds, ck, k, held, all, j, P, K, c_cut3(q, r, P, Some{List.reverse(&2, List<&2, String>, K)}, em, it.cut(P, n, K, ds, ck, k, held, all, j, hk)), em, ea, hk)
+
+def inv_tx.ex.hold0(+a: R.Act, +r: List<&2, String>, +n: Nat, -ds: R.Ds, -ck: A.Ck, -k: Nat, +held: List<&2, List<&2, String>>, -all: A.Ck, -j: Nat, +P: List<&2, List<&2, String>>, +em: {0n == A.mark(r) : Nat}, ea: {a == A.file.act(R.parse(r)) : R.Act}, h: Exists(List<&2, List<&2, String>>, K => InvTx(P, n, K, ds, ck, k, held, all, j))) -> WInv(List.append(&2, List<&2, String>, P, [r]), n, A.WinTx{ds, ck, k, r <> held, A.ck.ent(0n, a, n, all), 1n+j}):
+  (+K, hk) = h
+  inv_tx.hold0(a, r, n, ds, ck, k, held, all, j, P, em, ea, K, hk)
+
+def inv_tx.ex.hold3(-q: Nat, +a: R.Act, +r: List<&2, String>, +n: Nat, -ds: R.Ds, -ck: A.Ck, -k: Nat, +held: List<&2, List<&2, String>>, -all: A.Ck, -j: Nat, +P: List<&2, List<&2, String>>, +em: {3n+q == A.mark(r) : Nat}, ea: {a == A.file.act(R.parse(r)) : R.Act}, h: Exists(List<&2, List<&2, String>>, K => InvTx(P, n, K, ds, ck, k, held, all, j))) -> WInv(List.append(&2, List<&2, String>, P, [r]), n, A.WinTx{ds, ck, k, r <> held, A.ck.ent(3n+q, a, n, all), 1n+j}):
+  (+K, hk) = h
+  inv_tx.hold3(q, a, r, n, ds, ck, k, held, all, j, P, em, ea, K, hk)
+
+def inv_tx(m: Nat, +a: R.Act, +r: List<&2, String>, +n: Nat, -ds: R.Ds, -ck: A.Ck, -k: Nat, +held: List<&2, List<&2, String>>, -all: A.Ck, -j: Nat, +P: List<&2, List<&2, String>>) -> {m == A.mark(r) : Nat} -> {a == A.file.act(R.parse(r)) : R.Act} -> Exists(List<&2, List<&2, String>>, K => InvTx(P, n, K, ds, ck, k, held, all, j)) -> WInv(List.append(&2, List<&2, String>, P, [r]), n, A.win.tx(m, a, r, n, ds, ck, k, held, all, j)):
+  match m:
+    case 0n:
+      +em => ea => h => inv_tx.ex.hold0(a, r, n, ds, ck, k, held, all, j, P, em, ea, h)
+    case 1n:
+      +em => ea => h => inv_tx.ex.multi(a, r, n, ds, ck, k, held, all, j, P, em, ea, h)
+    case 2n:
+      +em => +ea => h => inv_tx.ex.exec(a, r, n, ds, ck, k, held, all, j, P, em, ea, h)
+    case 3n+q:
+      +em => ea => h => inv_tx.ex.hold3(q, a, r, n, ds, ck, k, held, all, j, P, em, ea, h)
+
+# one more entry keeps what the start holds what it should
+def inv_at(m: Nat, +a: R.Act, +r: List<&2, String>, +n: Nat, w: A.Win, +P: List<&2, List<&2, String>>) -> {m == A.mark(r) : Nat} -> {a == A.file.act(R.parse(r)) : R.Act} -> WInv(P, n, w) -> WInv(List.append(&2, List<&2, String>, P, [r]), n, A.win.at(m, a, r, n, w)):
+  match w:
+    case A.WinAll{ds, ck, k}:
+      em => ea => h => inv_all(m, a, r, n, ds, ck, k, P)(em)(ea)(h)
+    case A.WinTx{ds, ck, k, +held, all, j}:
+      em => ea => h => inv_tx(m, a, r, n, ds, ck, k, held, all, j, P)(em)(ea)(h)
+
+def inv_step(w: A.Win, +r: List<&2, String>, +n: Nat, +P: List<&2, List<&2, String>>) -> WInv(P, n, w) -> WInv(List.append(&2, List<&2, String>, P, [r]), n, A.win.ent(w, r, n)):
+  inv_at(A.mark(r), A.file.act(R.parse(r)), r, n, w, P)({==})({==})
+
+# and so do the entries of a window
+def inv_ents(Q: List<&2, List<&2, String>>, +w: A.Win, +n: Nat, +P: List<&2, List<&2, String>>) -> WInv(P, n, w) -> WInv(List.append(&2, List<&2, String>, P, Q), n, A.win.ents(Q, w, n)):
+  match Q:
+    case Nil{}:
+      h =>
+        %Equal.sym(List<&2, List<&2, String>>, List.append(&2, List<&2, String>, P, Nil{}), P, app_nil_s(P)) : WInv(_, n, w)
+        h
+    case Con{+r, +rest}:
+      h =>
+        %lapp_assoc_s(P, [r], rest) : WInv(_, n, A.win.ents(rest, A.win.ent(w, r, n), n))
+        inv_ents(rest, A.win.ent(w, r, n), n, List.append(&2, List<&2, String>, P, [r]))(inv_step(w, r, n, P)(h))
+
+# One window after another
+# ------------------------
+
+def app_snil(s: String) -> {s ++ "" == s : String}:
+  match s:
+    case SNil{}:
+      {==}
+    case SCon{h, +t}:
+      Equal.cong(String, String, z => SCon{h, z}, t ++ "", t, app_snil(t))
+
+def appl_appl(+P: List<&2, List<&2, String>>, +es: List<&2, List<&2, String>>, l: List<&2, List<&2, String>> & String) -> {appl(P, appl(es, l)) == appl(List.append(&2, List<&2, String>, P, es), l) : List<&2, List<&2, String>> & String}:
+  (+es2, r2) = l
+  Equal.cong(List<&2, List<&2, String>>, List<&2, List<&2, String>> & String, z => (z, r2), List.append(&2, List<&2, String>, P, List.append(&2, List<&2, String>, es, es2)), List.append(&2, List<&2, String>, List.append(&2, List<&2, String>, P, es), es2), Equal.sym(List<&2, List<&2, String>>, List.append(&2, List<&2, String>, List.append(&2, List<&2, String>, P, es), es2), List.append(&2, List<&2, String>, P, List.append(&2, List<&2, String>, es, es2)), lapp_assoc_s(P, es, es2)))
+
+# what the loader leaves after a window holds no entry at its start
+def stop_of(+left: String, +x: String, l: List<&2, List<&2, String>> & String, el: {A.load(left ++ x) == l : List<&2, List<&2, String>> & String}) -> {A.entry(Pair.snd(List<&2, List<&2, String>>, String, l)) == None{} : Maybe<&1, List<&2, String> & String>}:
+  %el : {A.entry(Pair.snd(List<&2, List<&2, String>>, String, _)) == None{} : Maybe<&1, List<&2, String> & String>}
+  load_stops(left ++ x)
+
+# what the windows read after this one give, after the entries before
+# and this window's
+def wins_chain(+P: List<&2, List<&2, String>>, +left: String, +x: String, +b: String, +es1: List<&2, List<&2, String>>, +r1: String, el: {A.load(left ++ x) == (es1, r1) : List<&2, List<&2, String>> & String}) -> {appl(P, A.load(left ++ (x ++ b))) == appl(List.append(&2, List<&2, String>, P, es1), A.load(r1 ++ b)) : List<&2, List<&2, String>> & String}:
+  %app_assoc(left, x, b) : {appl(P, A.load(_)) == appl(List.append(&2, List<&2, String>, P, es1), A.load(r1 ++ b)) : List<&2, List<&2, String>> & String}
+  %Equal.sym(List<&2, List<&2, String>> & String, A.load((left ++ x) ++ b), catl(A.load(left ++ x), b), load_cat(left ++ x, b)) : {appl(P, _) == appl(List.append(&2, List<&2, String>, P, es1), A.load(r1 ++ b)) : List<&2, List<&2, String>> & String}
+  %Equal.sym(List<&2, List<&2, String>> & String, A.load(left ++ x), (es1, r1), el) : {appl(P, catl(_, b)) == appl(List.append(&2, List<&2, String>, P, es1), A.load(r1 ++ b)) : List<&2, List<&2, String>> & String}
+  appl_appl(P, es1, A.load(r1 ++ b))
+
+def wins_inv.nil(+w: A.Win, +left: String, +n: Nat, +P: List<&2, List<&2, String>>, h: WInv(P, n, w), e: {A.entry(left) == None{} : Maybe<&1, List<&2, String> & String>}) -> {A.wins.done(A.Wins{w, left}) == A.start.of(appl(P, A.load(left ++ "")), n) : A.Start}:
+  %Equal.sym(String, left ++ "", left, app_snil(left)) : {A.win.done(w, left) == A.start.of(appl(P, A.load(_)), n) : A.Start}
+  %Equal.sym(List<&2, List<&2, String>> & String, A.load(left), (Nil{}, left), load_none(left, e)) : {A.win.done(w, left) == A.start.of(appl(P, _), n) : A.Start}
+  %Equal.sym(List<&2, List<&2, String>>, List.append(&2, List<&2, String>, P, Nil{}), P, app_nil_s(P)) : {A.win.done(w, left) == A.start.of((_, left), n) : A.Start}
+  inv_done(P, n, w, left)(h)
+
+def wins_inv.l(+x: String, +ws2: List<&2, String>, +w: A.Win, +left: String, +n: Nat, +P: List<&2, List<&2, String>>, l: List<&2, List<&2, String>> & String, ih: @w2: A.Win -> @l2: String -> @P2: List<&2, List<&2, String>> -> WInv(P2, n, w2) -> {A.entry(l2) == None{} : Maybe<&1, List<&2, String> & String>} -> {A.wins.done(A.wins.feed(ws2, A.Wins{w2, l2}, n)) == A.start.of(appl(P2, A.load(l2 ++ A.cat(ws2))), n) : A.Start}) -> {A.load(left ++ x) == l : List<&2, List<&2, String>> & String} -> WInv(P, n, w) -> {A.wins.done(A.wins.feed(ws2, A.wins.load(w, l, n), n)) == A.start.of(appl(P, A.load(left ++ (x ++ A.cat(ws2)))), n) : A.Start}:
+  (+es1, +r1) = l
+  +el => h =>
+    Equal.trans(A.Start, A.wins.done(A.wins.feed(ws2, A.Wins{A.win.ents(es1, w, n), r1}, n)), A.start.of(appl(List.append(&2, List<&2, String>, P, es1), A.load(r1 ++ A.cat(ws2))), n), A.start.of(appl(P, A.load(left ++ (x ++ A.cat(ws2)))), n),
+      ih(A.win.ents(es1, w, n), r1, List.append(&2, List<&2, String>, P, es1))(inv_ents(es1, w, n, P)(h))(stop_of(left, x, (es1, r1), el)),
+      Equal.cong(List<&2, List<&2, String>> & String, A.Start, z => A.start.of(z, n), appl(List.append(&2, List<&2, String>, P, es1), A.load(r1 ++ A.cat(ws2))), appl(P, A.load(left ++ (x ++ A.cat(ws2)))), Equal.sym(List<&2, List<&2, String>> & String, appl(P, A.load(left ++ (x ++ A.cat(ws2)))), appl(List.append(&2, List<&2, String>, P, es1), A.load(r1 ++ A.cat(ws2))), wins_chain(P, left, x, A.cat(ws2), es1, r1, el))))
+
+# the windows after the entries P, what was left before them following
+def wins_inv(ws: List<&2, String>, +w: A.Win, +left: String, +n: Nat, +P: List<&2, List<&2, String>>) -> WInv(P, n, w) -> {A.entry(left) == None{} : Maybe<&1, List<&2, String> & String>} -> {A.wins.done(A.wins.feed(ws, A.Wins{w, left}, n)) == A.start.of(appl(P, A.load(left ++ A.cat(ws))), n) : A.Start}:
+  match ws:
+    case Nil{}:
+      h => e => wins_inv.nil(w, left, n, P, h, e)
+    case Con{+x, +ws2}:
+      h => e => wins_inv.l(x, ws2, w, left, n, P, A.load(left ++ x), +w2 => +l2 => +P2 => wins_inv(ws2, w2, l2, n, P2))({==})(h)
+
+def Laws.load_windows(ws, n):
+  Equal.trans(A.Start, A.windows(ws, n), A.start.of(appl(Nil{}, A.load(A.cat(ws))), n), A.start(A.cat(ws), n),
+    wins_inv(ws, A.win.new(n), "", n, Nil{})(inv_new(n))({==}),
+    Equal.cong(List<&2, List<&2, String>> & String, A.Start, z => A.start.of(z, n), appl(Nil{}, A.load(A.cat(ws))), A.load(A.cat(ws)), appl_nil(A.load(A.cat(ws)))))
 
 # Steps and their entries
 # -----------------------
