@@ -1069,7 +1069,7 @@ away.
 
 | file | lines of code | of them written by a generator | the laws import it |
 |---|---:|---:|---|
-| `src/map.bend` | 5,000 | 1,500 | yes |
+| `src/map.bend` | 5,700 | 1,500 | yes |
 | `src/redis.bend` | 18,000 | 6,000 | yes |
 | `src/batch.bend` | 84 |  | yes |
 | `src/aof.bend` | 1,300 |  | yes |

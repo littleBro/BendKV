@@ -10115,21 +10115,20 @@ strings as one too; OBJECT ENCODING, DUMP and the files say which.
   bytes or the quicklist's nodes, each its count of elements and its bytes (`QNs`): the
   first node and the last as numbers, and the nodes between in a node of their own
   (`QM`), two stacks dealt again as the pieces are. Each write moves them as
-  `quicklist.c` moves its nodes: a push goes into
-  the node at its end while that node's bytes, the element's length and 8 stay within
-  8 KB, else into a node of its own; a pop, LREM and LTRIM take elements out of their
-  nodes and drop the nodes they empty (LTRIM takes whole nodes off its ends, then reads
-  the elements it takes from the node it cuts; LREM's walk through the pieces notes
-  where it takes each element); LSET writes its element in its node, whatever its
-  size; LINSERT writes into its pivot's node when that has room, else at the node's end
-  into the next node or the one before, or into a node of its own, else splits the node
-  and merges the nodes around it that fit in 8 KB together. A payload or a file's list
-  keeps the nodes it came in (QUICKLIST, QUICKLIST_2), a linked list (LIST) takes the
-  nodes RPUSH makes, and either is a listpack when it is one node of 8 KB at most; a
-  ziplist (LIST_ZIPLIST, before Redis 3.2) stays a quicklist. DUMP writes a listpack as a
-  quicklist of one node, as Redis does. Before, every list was a quicklist (7.0's), and
-  DUMP wrote the nodes RPUSH would make of its elements, which were Redis's only for a
-  list made by RPUSH alone.
+  `quicklist.c` moves its nodes: a push goes into the node at its end while that node's
+  bytes, the element's length and 8 stay within 8 KB, else into a node of its own; a pop,
+  LREM and LTRIM take elements out of their nodes and drop the nodes they empty (LTRIM
+  takes whole nodes off its ends, then reads the elements it takes from the node it cuts;
+  LREM's walk through the pieces notes where it takes each element); LSET writes its
+  element in its node, whatever its size; LINSERT writes into its pivot's node when that
+  has room, else at the node's end into the next node or the one before, or into a node
+  of its own, else splits the node and merges the nodes around it that fit in 8 KB
+  together. A payload or a file's list keeps the nodes it came in (QUICKLIST,
+  QUICKLIST_2), a linked list (LIST) takes the nodes RPUSH makes, and either is a
+  listpack when it is one node of 8 KB at most; a ziplist (LIST_ZIPLIST, before Redis
+  3.2) stays a quicklist. DUMP writes a listpack as a quicklist of one node, as Redis
+  does. Before, every list was a quicklist (7.0's), and DUMP wrote the nodes RPUSH would
+  make of its elements, which were Redis's only for a list made by RPUSH alone.
 - **Sets.** BendKV already kept a set of at most 128 members of at most 64 bytes in one
   string, in the order its members came (section 3zzzs): Redis 7.2's listpack. OBJECT
   ENCODING now answers `listpack` for it (within `set-max-listpack-entries` and
@@ -10167,7 +10166,22 @@ DUMP, and SADD's sizing. Against 7.2.16 `list_test` (four seeds), `set_test`,
 `dump_test`, `rdb_test`, `aof_redis_test`, `sort_test`, `blocking_test`,
 `keyspace_test` and `multi_test` pass.
 
-**What it costs.** COSTS
+**What it costs** (PERFORMANCE.md, section 85: 8a4caf0's build against this change on
+it). Pipelined, as `make perfcheck` counts, LPUSH and RPUSH run 7.4 to 7.7% more
+instructions and LPOP and RPOP 12.4% more; one request at a time, 3.6 to 6.5% more, and
+LMOVE 8.7%: each write builds the list's node anew and drops the old one (`term_drop`,
+`span_fade`: about 550 of LPUSH's 880 more), and reads its element's bytes as a listpack
+holds them. LSET in the middle of 200,000 elements runs 29.9% more: it reads the element
+it replaces, for its bytes, and writes its node's bytes into the stack that holds the
+node. A read in the middle runs much less, LINDEX −70.6% and LRANGE −38.8%: the deque
+lies in the list's node now, where it was laid out in the value, and a read that borrows
+the list walks it in place; before, it sealed the fields it took apart and dropped them
+after (`term_drop` and `span_fade`, 99,000 of LINDEX's 180,000). LINSERT runs 1.5% more,
+LREM 0.3% less, and LTRIM 1 -2 19.3% less, as it turns the piece at the end it cuts once,
+which it read through on each call before. A list takes 96 bytes more, its node; a hash,
+a set or a sorted set 32 bytes less a key, as a collection's value is no longer as wide
+as a list's deque. GET, SET and INCR run as before (3,499, 4,292 and 4,605 instructions a
+request).
 
 ## 4. Where a request's time goes, and hiding the memory waits
 
