@@ -15,8 +15,9 @@ Then what BendKV refuses although Redis starts (what it cannot do: modules,
 ACL users from the configuration or a file, renamed commands, the
 background, a cluster, a replica, TLS,
 data it cannot read, a supervisor it cannot signal), each with its line;
-a unix socket and systemd's supervision, and IPv6's addresses, against
-Redis; and what is BendKV's own: --version, --help, the short form, the
+a unix socket and systemd's supervision, IPv6's addresses, and a script's
+sandbox under lua-enable-deprecated-api, against Redis; and what is
+BendKV's own: --version, --help, the short form, the
 log file, the pid file, protected mode and several addresses.
 
     python3 tests/start_test.py [--bin build/bendkv] [--redis redis-server]
@@ -215,7 +216,6 @@ REFUSED = [
     ("percentiles not numbers", ["--latency-tracking-info-percentiles", "x"], {}, None),
     ("a title template", ["--proc-title-template", "{nope}"], {}, None),
     ("a hostname", ["--cluster-announce-hostname", "a_b"], {}, None),
-    ("activedefrag", ["--activedefrag", "yes"], {}, None),
     ("a directory not there", ["--dir", "/nonexistent/x"], {}, None),
     ("a directory that is a file", ["--dir", "f"], {"f": "x"}, None),
     ("a log file that cannot open", ["--logfile", "/nonexistent/x.log"], {}, None),
@@ -294,6 +294,10 @@ BENDKV_REFUSES = [
     ("a cluster", ["--port", "{port}", "--cluster-enabled", "yes"], {}, {}, "BendKV has no cluster mode: set cluster-enabled no"),
     ("a replica", ["--port", "{port}", "--replicaof", "127.0.0.1", "1"], {}, {}, "BendKV cannot be a replica: replicaof must be no one"),
     ("TLS", ["--port", "{port}", "--tls-port", "1"], {}, {}, "BendKV has no TLS: set tls-port 0"),
+    # Redis built from its tarball, with its own jemalloc, starts with it;
+    # BendKV, which has no defragmentation, refuses it as a Redis built
+    # without that jemalloc does
+    ("activedefrag", ["--port", "{port}", "--activedefrag", "yes"], {}, {}, "Active defragmentation cannot be enabled: it requires a Redis server compiled with a modified Jemalloc like the one shipped by default with the Redis source distribution"),
     ("upstart", ["--port", "{port}", "--supervised", "auto"], {}, {"UPSTART_JOB": "x"}, "supervised by upstart, which BendKV cannot signal (it cannot stop itself): run it unsupervised"),
     ("a cut file, with aof-load-truncated no", ["--port", "{port}", "--appendonly", "yes", "--aof-load-truncated", "no"], {"appendonly.aof": "*3\r\n$3\r\nSET\r\n$1\r\na\r\n$1"}, {}, "Unexpected end of file reading the append only file appendonly.aof. You can: 1) Make a backup of your AOF file, then use ./redis-check-aof --fix <filename>. 2) Alternatively you can set the 'aof-load-truncated' configuration option to yes and restart the server."),
     ("a transaction left open, with aof-load-truncated no", ["--port", "{port}", "--appendonly", "yes", "--aof-load-truncated", "no"], {"appendonly.aof": "*1\r\n$5\r\nMULTI\r\n*3\r\n$3\r\nSET\r\n$1\r\na\r\n$1\r\n1\r\n"}, {}, "Unexpected end of file reading the append only file appendonly.aof. You can: 1) Make a backup of your AOF file, then use ./redis-check-aof --fix <filename>. 2) Alternatively you can set the 'aof-load-truncated' configuration option to yes and restart the server."),
@@ -399,8 +403,10 @@ def unix_seen(a, cmd, abstract=False):
         seen["systemd"] = grams
         out = s.text("out")
         seen["log"] = [l for l in ("Supervised by systemd. Please make sure you set appropriate values for TimeoutStartSec and TimeoutStopSec in your service unit.",
-                                   "The server is now ready to accept connections at s.sock",
+                                   "Ready to accept connections unix",
                                    "Removing the unix socket file.") if l in out]
+        if "compiled without libsystemd support" in out:
+            seen["no libsystemd"] = True
         return seen
     finally:
         s.stop()
@@ -432,11 +438,57 @@ def ipv6_seen(a, cmd, v6):
         s.stop()
 
 
+# What a Redis built with libsystemd tells systemd and logs of it
+# (redisSupervisedSystemd and main), the same in 7.2.16 as in 7.0.15. A
+# Redis built where pkg-config finds no libsystemd, as its Makefile builds
+# it then, cannot speak to systemd: its other answers are compared, these
+# are taken from its code.
+SYSTEMD_TOLD = ["STATUS=BendKV is loading...\n", "STATUS=Ready to accept connections\n", "READY=1\n", "STOPPING=1\n"]
+SYSTEMD_LOG = ["Supervised by systemd. Please make sure you set appropriate values for TimeoutStartSec and TimeoutStopSec in your service unit.",
+               "Ready to accept connections unix", "Removing the unix socket file."]
+
+
+def as_supervised(r):
+    if not r.pop("no libsystemd", False):
+        return r
+    return dict(r, systemd=SYSTEMD_TOLD, log=SYSTEMD_LOG)
+
+
+# a script's sandbox under lua-enable-deprecated-api, which only the start
+# sets: EVAL's state and the functions' keep newproxy, setfenv and getfenv
+# (yes) or leave them out (no), a library the start loads from its
+# append-only file as well
+DEPRECATED = "return {type(newproxy), type(setfenv), type(getfenv)}"
+
+
+def deprecated_seen(a, cmd, on):
+    lib = "#!lua name=d\nredis.register_function('d', function() %s end)" % DEPRECATED
+    s = Server(a, cmd, ["--port", "{port}", "--appendonly", "yes", "--lua-enable-deprecated-api", on],
+               {"appendonly.aof": resp("FUNCTION", "LOAD", lib)}, None, {})
+    try:
+        if s.up() is not None:
+            return {"exit": s.report()}
+        c = Client(s.port)
+        seen = {"get": c.ask("CONFIG", "GET", "lua-enable-deprecated-api"),
+                "eval": c.ask("EVAL", DEPRECATED, "0"),
+                "fcall": c.ask("FCALL", "d", "0"),
+                "set": c.ask("CONFIG", "SET", "lua-enable-deprecated-api", "no")}
+        c.close()
+        return seen
+    finally:
+        s.stop()
+
+
 def against_redis(a):
     ok = True
-    r, b = unix_seen(a, a.redis), unix_seen(a, a.bin)
+    for on in ("yes", "no"):
+        r, b = deprecated_seen(a, a.redis, on), deprecated_seen(a, a.bin, on)
+        ok &= check("lua-enable-deprecated-api %s, as Redis" % on,
+                    r == b and (r.get("eval") == [b"function"] * 3) == (on == "yes"),
+                    "redis %r\n      bendkv %r" % (r, b))
+    r, b = as_supervised(unix_seen(a, a.redis)), unix_seen(a, a.bin)
     ok &= check("a unix socket under systemd, as Redis", r == b and "mode" in r, "redis %r\n      bendkv %r" % (r, b))
-    r, b = unix_seen(a, a.redis, True), unix_seen(a, a.bin, True)
+    r, b = as_supervised(unix_seen(a, a.redis, True)), unix_seen(a, a.bin, True)
     ok &= check("systemd at an abstract name, as Redis", r == b and len(r.get("systemd", [])) >= 3,
                 "redis %r\n      bendkv %r" % (r, b))
     v6 = host_ipv6()
@@ -489,12 +541,14 @@ def own(a):
     ok &= check("two addresses, one count of clients", up and len(set(ids)) == 3, repr(ids))
     b.stop()
 
-    # the log's level: warnings only leaves out the notices
-    b = Server(a, a.bin, ["--port", "{port}", "--loglevel", "warning"], {}, None, {})
+    # the log's level: warnings only leaves out the notices (in 7.2, the
+    # start's lines too), and keeps a warning, maxmemory's below 1 MB
+    b = Server(a, a.bin, ["--port", "{port}", "--loglevel", "warning", "--maxmemory", "1000"], {}, None, {})
     up = b.up() is None
     out = b.text("out")
     ok &= check("loglevel warning leaves out the notices",
-                up and "Server initialized" in out and "Ready to accept" not in out, out)
+                up and "maxmemory value that is less than 1MB" in out and "Server initialized" not in out
+                and "Ready to accept" not in out, out)
     b.stop()
     return ok
 

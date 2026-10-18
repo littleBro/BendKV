@@ -5,11 +5,14 @@ BendKV is licensed under the Apache License, Version 2.0 (LICENSE). It
 includes the following third-party software, as its authors ship it, and
 code ported from it, under the licenses that come with it.
 
-deps/redis: the Lua engine of Redis 7.0.15 and three of Redis's helpers,
-built into the server for EVAL and its kin (src/lua/engine.c, which is
-ported from Redis's script_lua.c, eval.c and script.c).
+deps/redis: the Lua engine of Redis 7.2.16 and three of Redis's helpers,
+built into the server for EVAL, FUNCTION and their kin (src/lua/engine.c,
+which is ported from Redis's script_lua.c, eval.c, script.c,
+function_lua.c and functions.c), and the fpconv_dtoa with which Redis
+7.2.16 writes a double, built into the server too, and into the reference
+of tests/float_test.py (tests/float_ref.c).
 
-- Redis 7.0.15 (deps/redis/src: resp_parser.c, rand.c and their
+- Redis 7.2.16 (deps/redis/src: resp_parser.c, rand.c and their
   headers; server.h, a stand-in with what resp_parser.c takes from
   Redis's server.h and util.c), and Redis's changes to Lua: Copyright
   (c) 2006-2020, Salvatore Sanfilippo, and Copyright (c) 2009-2021, Redis
@@ -26,21 +29,22 @@ ported from Redis's script_lua.c, eval.c and script.c).
 - LuaBitOp (deps/redis/deps/lua/src/lua_bit.c): Copyright (C) 2008-2012
   Mike Pall. MIT License, in the file's header.
 - SHA-1 in C (deps/redis/src/sha1.c), by Steve Reid: public domain.
+- fpconv (deps/redis/deps/fpconv: fpconv_dtoa.c, fpconv_dtoa.h and
+  fpconv_powers.h, as Redis 7.2.16 ships them): Copyright (c) 2013-2019,
+  night-shift; Copyright (c) 2009, Florian Loitsch; and, in
+  fpconv_powers.h, Copyright (c) 2021, Redis Labs. Boost Software License
+  1.0: deps/redis/deps/fpconv/LICENSE.txt.
 
 deps/redis/src/config.h and solarisfixes.h are BendKV's: stand-ins for
-Redis's, which give sha1.c the byte order and nothing. Three changes to
-Lua and its libraries. Every conversion of a number to a C integer
+Redis's, which give sha1.c the byte order and nothing. One change to Lua
+and its libraries: every conversion of a number to a C integer
 (luaconf.h's lua_number2int and lua_number2integer, and casts in
 lstrlib.c, lua_struct.c, lua_cmsgpack.c and lua_cjson.c) goes through
 three functions added to luaconf.h, which give the results of Redis's
-x86-64 builds (gcc) where C leaves a plain cast undefined. Two fixes
-of Redis's, which Ubuntu 24.04's Redis 7.0.15 carries as it applies
-them: CVE-2024-31449 (lua_bit.c, Redis's commit 1f7c148) and
-CVE-2025-49844 (lparser.c, Redis's commit d5728cb). And luaH_getnum's
-test of an integer key against a table's array (ltable.c), which
-subtracted 1 from the key, as Redis 7.2's ltable.c writes it: the same
-answers, without the overflow that C leaves undefined for the smallest
-int.
+x86-64 builds (gcc) where C leaves a plain cast undefined. The rest is
+Redis 7.2.16's as it ships it, with its fixes of CVE-2024-31449
+(lua_bit.c), CVE-2025-49844 (lparser.c), CVE-2025-46817 (lbaselib.c) and
+CVE-2025-46819 (llex.c).
 
 Ported from Redis 7.0.15: BSD 3-Clause License (deps/redis/COPYING),
 Copyright (c) 2006-2020, Salvatore Sanfilippo, Copyright (c) 2009-2021,
@@ -103,6 +107,154 @@ License unless said otherwise:
   the public domain (CC0 1.0), or under the BSD 2-Clause License.
 - MurmurHash64A: Austin Appleby's MurmurHash2, 64-bit version, in the
   public domain, made endian-neutral by Redis.
+
+Ported from Redis 7.2.16: BSD 3-Clause License, Copyright (c) 2006-2020,
+Salvatore Sanfilippo, and the authors named in its files. Where Redis 7.2
+answers otherwise than 7.0, BendKV answers as Redis 7.2.16 does, and these
+parts of it are written from 7.2.16's sources:
+
+- Tools: tools/redis_ref.sh, which builds Redis 7.2.16 from its tarball
+  for the tests to compare with (nothing of Redis is kept here).
+- Tables: tools/data/redis-commands.json, COMMAND INFO and COMMAND DOCS of
+  Redis 7.2.16's commands (from src/commands/*.json, as a running server
+  answers them), and the tables tools/gen_commands.py writes from it into
+  src/command.bend, src/acl.bend and src/redis.bend.
+- Texts and fields: the HELP replies, CLIENT LIST's fields (networking.c),
+  INFO's fields and their order, its listeners and its debug section
+  (server.c, connection.c), LOLWUT's line, and the version HELLO, INFO and
+  Lua's redis.REDIS_VERSION give (src/redis.bend, src/info.bend,
+  src/session.bend, src/lua/engine.c).
+- Scripts: src/lua/engine.c, from script_lua.c, eval.c and function_lua.c
+  (the deprecated builtins and lua-enable-deprecated-api, the protection
+  of the basic types' metatables of CVE-2025-46818, redis.set_repl()'s
+  and redis.acl_check_cmd()'s checks, math.random outside a run, an
+  error's text on one line, Lua's numbers in redis.call) and util.c
+  (double2ll and d2string, for those numbers and a script's double
+  reply); src/server.bend, from script.c (a call's ACL failure) and
+  script_lua.c (SCRIPT KILL's line in the log); and src/rdb.bend, from
+  functions.c (FUNCTION RESTORE of the pre-GA format).
+- Blocked calls: a call that blocks counted when its client is unblocked
+  (served, its time up, or by CLIENT UNBLOCK), not when it blocks, and
+  never when its client goes while it waits but in WAIT (blocked.c's
+  updateStatsOnUnblock, server.c's call() and replication.c), in
+  src/info.bend and src/server.bend.
+- Configuration: tools/data/redis-configs.json, the parameters of
+  Redis 7.2.16's config.c, and the table tools/gen_config.py writes from
+  it into src/config.bend; the checks of cluster-announce-ip,
+  cluster-announce-human-nodename and locale-collate, as config.c's
+  isValidClusterAnnounceIp, cluster.c's isValidAuxChar and config.c's
+  updateLocaleCollate make them (src/config.bend, src/server.bend), and
+  loglevel's nothing (src/startup.bend).
+- Start and shutdown: the levels and texts of their lines in the log
+  (server.c's main and prepareForShutdown, and the listeners of socket.c
+  and unix.c), in src/server.bend.
+- Persistence: src/rdb.bend, from rdb.c, t_set.c and t_stream.c (RDB
+  version 11: sets as SET_LISTPACK, the order an intset's members take
+  when a set read from a file becomes a listpack, streams as
+  STREAM_LISTPACKS_3 with each consumer's active time, the formats of
+  7.0's and 4.0's release candidates refused); src/server.bend, from
+  rdb.c and server.c (the lines of a file that does not load or open, of
+  a save's write error and of a directory's sync).
+- Texts and checks: HELLO's order (networking.c's helloCommand: every
+  option read before any is done, then the last AUTH, NOAUTH's text, the
+  name and the protocol), NOPERM's texts and ACL DRYRUN's (acl.c's
+  getAclErrorMessage), XREAD's text for unbalanced streams and XSETID's
+  check against the greatest ID deleted (t_stream.c), and LPOS's range
+  for RANK (t_list.c), in src/session.bend, src/acl.bend,
+  src/server.bend and src/redis.bend.
+- ACL LOG's entry-id, timestamp-created and timestamp-last-updated, and
+  the count of entries made, which ACL LOG RESET keeps (acl.c), in
+  src/acl.bend.
+- Doubles: src/float.bend's f64.dtoa, ported from fpconv_dtoa.c and
+  fpconv_powers.h (Grisu2, under the Boost Software License 1.0 as
+  above), and its f64.show, from util.c's d2string and double2ll; and
+  which of them Redis writes a double with where (networking.c's
+  addReplyDouble, t_zset.c's zzlInsertAt, rio.c's rioWriteBulkDouble,
+  db.c's scan of a sorted set), in src/redis.bend, src/rdb.bend,
+  src/aof.bend, src/acl.bend and src/info.bend; and d2string and
+  double2ll in tests/float_ref.c.
+- XINFO STREAM FULL's active-time and XINFO CONSUMERS' inactive
+  (t_stream.c), in src/redis.bend and src/stream.bend.
+- New commands and options: CLIENT SETINFO, its checks and the library
+  CLIENT LIST shows, and CLIENT NO-TOUCH and its flag (networking.c's
+  clientSetinfoCommand, validateClientAttr, clientCommand and
+  catClientInfoString), with which a client's commands but TOUCH, and its
+  scripts' calls, leave the keys' access as it was (db.c's lookupKey);
+  ZRANK and ZREVRANK's WITHSCORE (t_zset.c's zrankGenericCommand); and
+  CLUSTER as Redis answers it with cluster support disabled (cluster.c's
+  clusterCommand), with its subcommands' arities from
+  tools/data/redis-commands.json, in src/redis.bend, src/server.bend,
+  src/session.bend and tools/gen_commands.py.
+- The event loop's statistics: INFO's eventloop_* fields, a cycle's
+  time, its commands' and the cron's, the longest cycle, the most
+  commands one ran, and the rates of cycles and of their time (server.c's
+  afterSleep, beforeSleep, serverCron and genRedisInfoString, latency.c's
+  durationAddSample), in src/info.bend, src/session.bend and
+  src/server.bend.
+- A blocking pop's timeout out of range (timeout.c's
+  getTimeoutFromObjectOrReply), in src/session.bend; the changes a pop
+  served by a push counts, as its command run again (blocked.c's
+  unblockClientOnKey), in src/server.bend; and the walks of a sparse
+  HyperLogLog's opcodes, which end at the first past the last register
+  (hyperloglog.c's hllSparseRegHisto, hllMerge and hllSparseToDense), in
+  src/hll.bend.
+- Encodings: lists as listpacks and quicklists, each node's count and
+  bytes moved as quicklist.c moves its nodes (_quicklistNodeAllowInsert,
+  _quicklistNodeAllowMerge, _quicklistInsert with its splits and merges,
+  quicklistReplaceEntry, quicklistDelRange) and turned as t_list.c's
+  listTypeTryConversion turns them, read and written as rdb.c's
+  rdbLoadObject and rdbSaveObject do (src/map.bend, src/rdb.bend); sets
+  as listpacks, sized by SADD's count of members as t_set.c's
+  setTypeCreate and setTypeMaybeConvert size them, and scanned whole
+  (src/map.bend, src/redis.bend); and OBJECT ENCODING of both
+  (src/session.bend).
+- The changes BITFIELD counts: each write that changed its field, or
+  each when the value grows (bitops.c's bitfieldGeneric), in
+  src/redis.bend and src/server.bend.
+- hll-sparse-max-bytes: the bytes past which a PFADD or a PFMERGE turns
+  a sparse HyperLogLog dense, read as the command runs (hyperloglog.c's
+  hllSparseSet), and PFSELFTEST's check of its sparse value below half
+  of them (pfselftestCommand), in src/redis.bend, src/hll.bend,
+  src/session.bend and src/server.bend.
+- Sorted sets sized by ZADD's pairs (t_zset.c's zsetTypeCreate and
+  zsetTypeMaybeConvert), and the destinations ZRANGESTORE makes
+  (zrangeResultBeginStore) and ZUNIONSTORE, ZINTERSTORE and ZDIFFSTORE
+  make (zunionInterDiffGenericCommand, zsetConvertToListpackIfNeeded),
+  in src/map.bend and src/redis.bend.
+- RANDOMKEY while a pause holds back writes: one of the keys whose time
+  has passed when every key of the database has one and none is there
+  (db.c's dbRandomKey and expireIfNeeded), in src/redis.bend,
+  src/session.bend and src/server.bend.
+- The limits of a client that must authenticate: a request of more than
+  10 arguments, or with a bulk of more than 16384 bytes, refused once its
+  line has come (networking.c's processMultibulkBuffer and
+  authRequired), in src/resp.bend and src/server.bend.
+- A client created as its connection is accepted, before the commands
+  other clients send after its connect (networking.c's
+  acceptCommonHandler and createClient), in src/server.bend.
+- WAITAOF and the replication's offset: WAITAOF's checks, its answers
+  and its waits (replication.c's waitaofCommand and
+  processClientsWaitingReplicas, blocked.c's blockForAofFsync and
+  replyToBlockedClientTimedOut), master_repl_offset counted with no
+  replica (replication.c's replicationFeedSlaves, server.c's
+  sendGetackToReplicas, call() and beforeSleep), and the offset known
+  synced to the disk (aof.c's flushAppendOnlyFile and
+  rewriteAppendOnlyFileBackground, bio.c's fsync jobs), in
+  src/redis.bend, src/session.bend, src/info.bend and src/server.bend.
+- The errors of the commands of strings on a key of another kind
+  (WRONGTYPE), counted in errorstats, failed_calls and
+  total_error_replies as any command's are, however the commands come
+  (object.c's checkType, networking.c's afterErrorReply and server.c's
+  call()), in src/redis.bend, src/server.bend and tools/gen_commands.py.
+- EXEC's array: its count, the commands queued, written before they
+  run, whatever replies follow (a SUBSCRIBE's, or none for a CLIENT
+  REPLY OFF or SKIP among them), and a client one of them closes, by
+  CLIENT KILL or by ACL DELUSER of its own user, answered whole before
+  it is closed, as the default user once its own is gone (multi.c's
+  execCommand, networking.c's clientCommand, resetClient and
+  prepareClientToWrite, acl.c's ACLFreeUserAndKillClients and
+  server.c's call()), in src/server.bend, src/redis.bend, src/resp.bend
+  and src/session.bend.
 
 Bend (bend-patches/): patches to the Bend compiler and its runtime
 (github.com/bendlang/bend at 1cce499, Bend 2.0.35), Copyright 2026

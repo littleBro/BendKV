@@ -23,7 +23,8 @@ every command; a blocking command held back, then waiting once the pause
 ends, and one that waited before it, whose time ends while it holds; the
 order in which the clients held back go on; a client held back whose
 connection closes, and one killed; errors of the parser, answered at
-once.
+once; RANDOMKEY while a pause of writes holds and every key has passed
+its time, which Redis 7.2 answers with one of them, and after it.
 
 A monitor made before a pause of every command ends it (Mon): no pause
 holds a monitor back, while a client made during such a pause would have
@@ -248,6 +249,15 @@ def scenarios(port, log):
         log("13 errors", a.cmd("SET", "x"), a.cmd("NOSUCHCOMMAND"), a.cmd("CLIENT", "NOSUCH"))
         log("13 unpause", mon.cmd("CLIENT", "UNPAUSE"))
     log("13 info", info_lines(r, "clients", ("blocked_clients",)))
+    # 14. RANDOMKEY while a pause of writes holds and every key has passed
+    # its time: Redis 7.2 answers one of them (dbRandomKey, after 100
+    # tries), as it deletes none, and none once the pause ends
+    r.cmd("FLUSHALL")
+    log("14 multi", r.cmd("MULTI"), r.cmd("SET", "rk", "v", "PX", "3"), r.cmd("CLIENT", "PAUSE", "100000", "WRITE"),
+        r.cmd("EXEC"))
+    time.sleep(0.05)
+    log("14 randomkey", r.cmd("RANDOMKEY"), r.cmd("EXISTS", "rk"), r.cmd("RANDOMKEY"))
+    log("14 unpause", r.cmd("CLIENT", "UNPAUSE"), r.cmd("RANDOMKEY"), r.cmd("EXISTS", "rk"))
     r.cmd("FLUSHALL")
     for c in (r, a, b):
         c.close()

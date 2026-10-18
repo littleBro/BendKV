@@ -73,14 +73,19 @@ type One is Data:
 
 # what a parse leaves for the next read: nothing; the bytes from the first
 # request not whole yet; or a long request read in part, with the bytes
-# from its bulk not whole yet. TailOf, a tail that holds a tail, is never
-# built: it makes Tail a node of its own, one word, as a String is, in
-# every step of a connection's loop that carries it.
+# from its bulk not whole yet. The tail of a client that has not
+# authenticated is TailAuth, whose next parse walks what comes for a
+# request past Redis's limits first; the bytes from the first such
+# request are held in TailHeld until the requests before them have run
+# (Clients that must authenticate, below). A tail that holds a tail makes
+# Tail a node of its own, one word, as a String is, in every step of a
+# connection's loop that carries it.
 type Tail is Data:
   TailNone{}
   TailBytes{s: String}
   TailPart{p: Part, s: String}
-  TailOf{t: Tail}
+  TailAuth{t: Tail}
+  TailHeld{t: Tail, msg: String}
 
 # a buffer's worth of requests: the complete ones, newest first (as the
 # parser meets them, each put before the ones it read already; the server
@@ -950,7 +955,9 @@ def tail.len(+t: Tail) -> Nat:
       String.length(r)
     case TailPart{p, +r}:
       String.length(r)
-    case TailOf{+u}:
+    case TailAuth{+u}:
+      tail.len(u)
+    case TailHeld{+u, m}:
       tail.len(u)
 
 # the bytes a tail holds: none, those of a request not whole yet, or
@@ -963,7 +970,9 @@ def tail.bytes(t: Tail) -> String:
       r
     case TailPart{p, r}:
       r
-    case TailOf{u}:
+    case TailAuth{u}:
+      tail.bytes(u)
+    case TailHeld{u, m}:
       tail.bytes(u)
 
 # the window of w bytes at index at, of a buffer of l bytes, and its parse
@@ -1087,8 +1096,324 @@ def parse_tail(t: Tail, s: String) -> Batch:
       parse_runs(r ++ s)
     case TailPart{p, r}:
       parse_part(p, r ++ s)
-    case TailOf{u}:
+    case TailAuth{u}:
       parse_tail(u, s)
+    case TailHeld{u, m}:
+      parse_tail(u, s)
+
+# Clients that must authenticate
+# ------------------------------
+# While a client must authenticate first (its server asks for a password,
+# and it has not given one), Redis 7.2.16 reads its requests with two
+# limits more (networking.c, processMultibulkBuffer, while authRequired):
+# a count past 10 arguments, or a bulk's length past 16384 bytes, is a
+# protocol error as soon as its line has come, before the bytes it
+# announces, and the connection closes after the error. Inline requests
+# have no such limits. What a client that has not authenticated sends is
+# walked for the first request that breaks a limit, through the lines
+# that have come, read as the parser reads them (line_at, len.read): a
+# line not whole, or not right, ends the walk, as the parser waits for it
+# or refuses it itself. Redis looks at each line once, when it has come:
+# the walk passes over the lines whole in a kept tail's bytes, looked at
+# (or let in) with them. The requests before that one are parsed as any
+# client's, and the tail kept as such a client's (TailAuth); the bytes
+# from it are held (TailHeld) until they have run, since an AUTH among
+# them may let it in, and the actor says whether the client must still
+# authenticate (server.bend, Clients that must authenticate): its server
+# may ask for no password now. Bytes let in are parsed at once, the tail
+# kept as such a client's still.
+
+# the first request a client that must authenticate may not send: none,
+# or the index where it starts, and its error
+type Lim is Data:
+  LimOk{}
+  LimBad{at: Nat, msg: String}
+
+# the walk's place: index j, in the request that starts at start, k of
+# whose bulks are left (none at a request's start, where start is j); or
+# its end
+type LimAt is Data:
+  LimAt{start: Nat, k: Nat, j: Nat}
+  LimEnd{r: Lim}
+
+def lim.mbulk() -> String:
+  "Protocol error: unauthenticated multibulk length"
+
+def lim.bulk() -> String:
+  "Protocol error: unauthenticated bulk length"
+
+# a count of n at the line from j to its '\r' at r: past 10 it breaks the
+# limit; 0 is an empty request, which the parser skips
+def lim.count.n(big: Bool, none: Bool, +n: Nat, +j: Nat, +r: Nat) -> LimAt:
+  match big none:
+    case True{} _:
+      LimEnd{LimBad{j, lim.mbulk()}}
+    case False{} True{}:
+      LimAt{2n+r, 0n, 2n+r}
+    case False{} False{}:
+      LimAt{j, n, 2n+r}
+
+# a count as array.count reads it: below 0 skipped, as Redis skips it;
+# none, or one past INT_MAX, the parser refuses; one whose line is not
+# new was looked at when it came
+def lim.count.of(neg: Bool, ok: Bool, new: Bool, +n: Nat, +j: Nat, +r: Nat) -> LimAt:
+  match neg ok:
+    case True{} _:
+      LimAt{2n+r, 0n, 2n+r}
+    case False{} False{}:
+      LimEnd{LimOk{}}
+    case False{} True{}:
+      lim.count.n(Bool.and(new, Nat.is_lt(10n, n)), Nat.is_eq(n, 0n), n, j, r)
+
+def lim.count(ll: R.LL, +j: Nat, +r: Nat, +old: Nat) -> LimAt:
+  match ll:
+    case R.LL{neg, +hi, +lo}:
+      lim.count.of(neg, R.ll.le(hi, lo, 2n, 147483647n), Nat.is_lt(old, 2n+r), Nat.add(Nat.mul(hi, 1000000000n), lo), j, r)
+    case R.LLBad{}:
+      LimEnd{LimOk{}}
+
+def lim.line.at(+s: String, +j: Nat, +old: Nat, ln: Line) -> LimAt:
+  match ln:
+    case LineAt{+r}:
+      lim.count(len.read(s, 1n+j, r), j, r, old)
+    case _:
+      LimEnd{LimOk{}}
+
+# after an inline request whose '\n' is at k: the next request, unless
+# none has come, or a NUL comes before it (inline.at)
+def lim.inline.at(found: Bool, nul: Bool, +k: Nat) -> LimAt:
+  match found nul:
+    case True{} False{}:
+      LimAt{1n+k, 0n, 1n+k}
+    case _ _:
+      LimEnd{LimOk{}}
+
+# a request at index j: its count's line ('*'), or an inline request,
+# which the limits leave alone, up to its '\n'
+def lim.req(star: Bool, +s: String, +j: Nat, +l: Nat, +old: Nat) -> LimAt:
+  match star:
+    case True{}:
+      lim.line.at(s, j, old, line_at(s, j, l))
+    case False{}:
+      +k = String.find(s, '\n', j)
+      lim.inline.at(Nat.is_lt(k, l), Nat.is_lt(String.find(s, Chr{0}, j), k), k)
+
+# the place after a bulk of the request at start, with m of its bulks
+# left after it: the next bulk, or the next request
+def lim.next(+m: Nat, +start: Nat, +next: Nat) -> LimAt:
+  match m:
+    case 0n:
+      LimAt{next, 0n, next}
+    case 1n+q:
+      LimAt{start, 1n+q, next}
+
+# after a bulk whose bytes and their "\r\n" end at next: a bulk not whole
+# yet ends the walk, as the parser waits for it
+def lim.after(whole: Bool, +start: Nat, +k: Nat, +next: Nat) -> LimAt:
+  match whole k:
+    case True{} 1n+m:
+      lim.next(m, start, next)
+    case _ _:
+      LimEnd{LimOk{}}
+
+# a bulk's length as head.len reads it (none, or one below 0 or past 512
+# MB, the parser refuses): past 16384 bytes it breaks the limit, when its
+# line is new
+def lim.len.of(ok: Bool, big: Bool, +start: Nat, +k: Nat, +next: Nat, +l: Nat) -> LimAt:
+  match ok big:
+    case False{} _:
+      LimEnd{LimOk{}}
+    case True{} True{}:
+      LimEnd{LimBad{start, lim.bulk()}}
+    case True{} False{}:
+      lim.after(Nat.is_le(next, l), start, k, next)
+
+def lim.len(ll: R.LL, +start: Nat, +k: Nat, +r: Nat, +l: Nat, +old: Nat) -> LimAt:
+  match ll:
+    case R.LL{neg, +hi, +lo}:
+      lim.len.of(Bool.and(Bool.not(neg), R.ll.le(hi, lo, 0n, 536870912n)), Bool.and(Nat.is_lt(old, 2n+r), Nat.is_lt(16384n, lo)), start, k, 4n+Nat.add(r, lo), l)
+    case R.LLBad{}:
+      LimEnd{LimOk{}}
+
+# a bulk's line at index j, in the request at start, k of whose bulks
+# are left: its '$' and its length, once the line has come
+def lim.bulk.at(dollar: Bool, +s: String, +start: Nat, +k: Nat, +j: Nat, +l: Nat, +old: Nat, ln: Line) -> LimAt:
+  match dollar ln:
+    case True{} LineAt{+r}:
+      lim.len(len.read(s, 1n+j, r), start, k, r, l, old)
+    case _ _:
+      LimEnd{LimOk{}}
+
+# a step of the walk at index j: the end of what has come, a request's
+# start, or one of its bulks
+def lim.step(more: Bool, +s: String, +l: Nat, +old: Nat, +start: Nat, +k: Nat, +j: Nat) -> LimAt:
+  match more k:
+    case False{} _:
+      LimEnd{LimOk{}}
+    case True{} 0n:
+      lim.req(U32.is_eq(String.code_at(s, j), 42), s, j, l, old)
+    case True{} 1n+m:
+      lim.bulk.at(U32.is_eq(String.code_at(s, j), 36), s, start, 1n+m, j, l, old, line_at(s, j, l))
+
+# the walk from a place on: each step goes a byte on at least, so the
+# bytes of s are enough fuel
+def lim.go(fuel: Nat, +s: String, +l: Nat, +old: Nat, a: LimAt) -> Lim:
+  match fuel a:
+    case _ LimEnd{r}:
+      r
+    case 0n LimAt{start, k, j}:
+      LimOk{}
+    case 1n+f LimAt{+start, +k, +j}:
+      lim.go(f, s, l, old, lim.step(Nat.is_lt(j, l), s, l, old, start, k, j))
+
+# the first request of s a client that must authenticate may not send,
+# the lines whole in its first old bytes looked at before
+def lim.of(+s: String, +old: Nat) -> Lim:
+  +l = String.length(s)
+  lim.go(1n+l, s, l, old, LimAt{0n, 0n, 0n})
+
+# whether an argument of a long request read in part is past 16384
+# bytes (it was read before its client had to authenticate: a RESET came
+# before it)
+def lim.args(xs: List<&2, String>) -> Bool:
+  match xs:
+    case Nil{}:
+      False{}
+    case Con{+x, rest}:
+      Bool.or(Nat.is_lt(16384n, String.length(x)), lim.args(rest))
+
+# a long request read in part, its bulk not whole yet at index 0 of s:
+# its count (its name, the arguments before, that bulk and more after
+# it), the arguments it has, then the walk from that bulk on
+def lim.part.of(over: Bool, long: Bool, +more: Nat, +s: String) -> Lim:
+  match over long:
+    case True{} _:
+      LimBad{0n, lim.mbulk()}
+    case False{} True{}:
+      LimBad{0n, lim.bulk()}
+    case False{} False{}:
+      +l = String.length(s)
+      lim.go(1n+l, s, l, 0n, LimAt{0n, 1n+more, 0n})
+
+def lim.part(p: Part, +s: String) -> Lim:
+  match p:
+    case Part{id, nm, +more, +acc, at, need, raw}:
+      lim.part.of(Nat.is_lt(10n, 2n+Nat.add(List.length(&2, String, acc), more)), lim.args(nm <> acc), more, s)
+    case PartOf{q}:
+      lim.part(q, s)
+
+# the walk of a long request read in part kept as such a client's, from
+# its bulk not whole yet at index 0 of s on: its count and arguments, and
+# the lines whole in the first old bytes, were looked at when they came
+def lim.part.from(p: Part, +s: String, +old: Nat) -> Lim:
+  match p:
+    case Part{id, nm, +more, acc, at, need, raw}:
+      +l = String.length(s)
+      lim.go(1n+l, s, l, old, LimAt{0n, 1n+more, 0n})
+    case PartOf{q}:
+      lim.part.from(q, s, old)
+
+# the request a tail holds, as a client that must authenticate may send
+# it: one its lines came for before the client had to (a RESET before
+# them), or held bytes it may not send
+def lim.held(t: Tail) -> Lim:
+  match t:
+    case TailBytes{+r}:
+      lim.of(r, 0n)
+    case TailPart{p, +r}:
+      lim.part(p, r)
+    case TailHeld{u, m}:
+      LimBad{0n, m}
+    case _:
+      LimOk{}
+
+# a parse for a client that must authenticate: the requests before the
+# first it may not send, and the bytes from it, held with its error
+def auth.held(b: Batch, h: Tail, msg: String) -> Batch:
+  match b:
+    case Batch{reqs, tl, r, err, need, raw}:
+      Batch{reqs, tl, TailHeld{h, msg}, err, 0n, raw}
+
+# all the requests, the tail kept as such a client's
+def auth.kept(b: Batch) -> Batch:
+  match b:
+    case Batch{reqs, tl, rest, err, need, raw}:
+      Batch{reqs, tl, TailAuth{rest}, err, need, raw}
+
+def auth.cut(lim: Lim, +s: String) -> Batch:
+  match lim:
+    case LimOk{}:
+      auth.kept(parse_runs(s))
+    case LimBad{+at, msg}:
+      +l = String.length(s)
+      auth.held(parse_runs(String.slice(s, 0n, at)), TailBytes{String.slice(s, at, Nat.sub(l, at))}, msg)
+
+# a long request read in part that breaks a limit is held whole, as the
+# first request of what came; one after it is held from where it starts
+def auth.part.cut(first: Bool, +p: Part, +s: String, +at: Nat, msg: String) -> Batch:
+  match first:
+    case True{}:
+      Batch{Nil{}, 0, TailHeld{TailPart{p, s}, msg}, None{}, 0n, SNil{}}
+    case False{}:
+      +l = String.length(s)
+      auth.held(parse_part(p, String.slice(s, 0n, at)), TailBytes{String.slice(s, at, Nat.sub(l, at))}, msg)
+
+def auth.part(lim: Lim, +p: Part, +s: String) -> Batch:
+  match lim:
+    case LimOk{}:
+      auth.kept(parse_part(p, s))
+    case LimBad{+at, msg}:
+      auth.part.cut(Nat.is_eq(at, 0n), p, s, at, msg)
+
+# the requests of what the last parse left (t) and what came since (s),
+# for a client that has not authenticated
+def parse_auth(t: Tail, s: String) -> Batch:
+  match t:
+    case TailNone{}:
+      +x = s
+      auth.cut(lim.of(x, 0n), x)
+    case TailBytes{+r}:
+      +x = r ++ s
+      auth.cut(lim.of(x, String.length(r)), x)
+    case TailPart{+p, +r}:
+      +x = r ++ s
+      auth.part(lim.part.from(p, x, String.length(r)), p, x)
+    case TailAuth{u}:
+      parse_auth(u, s)
+    case TailHeld{u, m}:
+      auth.kept(parse_tail(u, s))
+
+# the tail of a client that must authenticate: the request it holds,
+# held with its error when it breaks a limit
+def tail.must(lim: Lim, t: Tail) -> Tail:
+  match lim:
+    case LimOk{}:
+      TailAuth{t}
+    case LimBad{at, msg}:
+      TailAuth{TailHeld{t, msg}}
+
+def tail.must.of(+t: Tail) -> Tail:
+  tail.must(lim.held(t), t)
+
+# a tail after an answer to a client that has not authenticated
+# (AnsAuth), kept as such a client's: the bytes it held, let in when the
+# client need not authenticate, else held still; and when it must, the
+# request a tail holds looked at (one its lines came for before the
+# client had to: a RESET before them)
+def tail.auth(must: Bool, t: Tail) -> Tail:
+  match must t:
+    case False{} TailHeld{u, m}:
+      TailHeld{u, m}
+    case False{} TailAuth{u}:
+      TailAuth{u}
+    case False{} u:
+      TailAuth{u}
+    case True{} TailHeld{u, m}:
+      TailAuth{TailHeld{u, m}}
+    case True{} TailAuth{u}:
+      tail.must.of(u)
+    case True{} u:
+      tail.must.of(u)
 
 # Arguments as sent
 # ------------------
@@ -1359,6 +1684,8 @@ def encode_onto(rs: List<&2, R.Reply>, out: String) -> String:
       agg_into("*", List.length(&2, R.Reply, xs), encode_onto(xs, encode_onto(rest, out)))
     case Con{R.RRaw{s}, rest}:
       s ++ encode_onto(rest, out)
+    case Con{R.RArrayN{+n, xs}, rest}:
+      agg_into("*", n, encode_onto(xs, encode_onto(rest, out)))
 
 # RESP3 (Redis's networking.c): a null, and a null array, as _; a double
 # after a comma; a map's pairs counted after %, a set's items after ~, a
@@ -1408,6 +1735,8 @@ def encode3_onto(rs: List<&2, R.Reply>, out: String) -> String:
       encode3_onto(xs, encode3_onto(rest, out))
     case Con{R.RRaw{s}, rest}:
       s ++ encode3_onto(rest, out)
+    case Con{R.RArrayN{+n, xs}, rest}:
+      agg_into("*", n, encode3_onto(xs, encode3_onto(rest, out)))
 
 def encode(r: R.Reply) -> String:
   encode_onto([r], SNil{})

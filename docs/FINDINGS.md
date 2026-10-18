@@ -7320,7 +7320,8 @@ logged in as a user that may run nothing.
 arguments, or with a bulk of more than 16 KB, from a client that must authenticate
 (networking.c, `unauthenticated multibulk length` and `unauthenticated bulk length`), and
 closes it. BendKV has never had these limits: unit/auth's test of them, which runs once
-its `external:skip` tag is taken off, waits for the error until its timeout.
+its `external:skip` tag is taken off, waits for the error until its timeout (section
+3zzzzn brings them, as Redis 7.2.16 reads them).
 
 A command inside EXEC that closes its own client (CLIENT KILL of its own id, and now ACL
 DELUSER of its own user) loses EXEC's whole reply, and the commands after it do not run.
@@ -9149,6 +9150,82 @@ its weight is 2^48, past a Nat, and the server stops. Nothing read six; the firs
 version of a stream's times did, and stopped at the first payload with a pending entry.
 The times are read as two words of four bytes, and the comment says five.
 
+## 3zzzv. Scripts as Redis 7.2.16 runs them
+
+**What changed** (#128, kind I: `deps/redis`, `src/lua/engine.c`, `src/server.bend`,
+`src/rdb.bend`). Scripts and functions answer as Redis 7.2.16's do, but for what waits on
+the move's other kinds (below).
+- **The Lua.** `deps/redis` is 7.2.16's Lua and helpers, as Redis ships them but for the
+  casts of numbers to integers (section 3zzzd). What 7.2 brings: `unpack`'s count of
+  results checked without an overflow (`lbaselib.c`, CVE-2025-46817); the lexer's long
+  brackets (`llex.c`, CVE-2025-46819); sizes as `size_t` in cjson's and strbuf's appends.
+  `lua_bit.c`, `lparser.c` and `ltable.c` were 7.2's already (section 3zzzd).
+- **The sandbox.**
+  - `newproxy`, `setfenv` and `getfenv` leave the globals. Redis lets them back with
+    `lua-enable-deprecated-api yes`, a hidden parameter that only the start sets, `no` by
+    default. BendKV reads it as the start does, before any Lua state is made
+    (`Engine.deprecated`): EVAL's state and the functions' both keep them or both leave
+    them out, a library loaded from the files at the start too (`tests/start_test.py`).
+  - The metatables of the basic types are read-only, as the globals are (CVE-2025-46818).
+    A string's is the one Lua sets, and `getmetatable('').__index.upper = f` now fails
+    with "Attempt to modify a readonly table", in EVAL's state and in the functions'.
+- **Texts and checks.**
+  - `redis.set_repl()` called with another count than one: "redis.set_repl() requires
+    one argument." (7.0 said two).
+  - `redis.acl_check_cmd` checks the command's arity: "Wrong number of args for
+    redis.acl_check_cmd()". The engine asks the server, which answers `!` when the arity
+    does not allow the call's words (kind 4 of `src/script.bend`).
+  - A call that ACL refuses fails with "ACL failure in script: " and Redis's text for the
+    refusal, not verbose (`getAclErrorMessage`): "User <user> has no permissions to run
+    the '<command>' command", "No permissions to access a key" or "No permissions to
+    access a channel" (`sc.acl.why`). The user is the caller's, the command its full
+    name (`config|get`).
+  - An error a script raises goes out on one line, `\r` and `\n` as spaces
+    (`addReplyErrorSdsExSafe`), as an error it returns did already.
+  - FUNCTION RESTORE refuses a library in the format of 7.0's release candidates (type
+    246): "Pre-GA function format not supported" (`lib.kind`). An RDB file's library in
+    that format stops the start, as Redis 7.2.16's does (kind E: section 3zzzzc).
+  - SCRIPT KILL's line in the log is a notice (`*`), not a warning (`#`).
+- **Lua's numbers** (with kind C's `fpconv_dtoa`, section 3zzzzh).
+  - A number passed to `redis.call` is written as `luaArgsToRedisArgv` writes it. An
+    integer that a long long holds within 2^62 is written as one (`double2ll`); any other
+    as `fpconv_dtoa` writes it. So `3.14` and `0.1`, where 7.0's `%.17g` gave
+    `3.1400000000000001`; `-0` is `0`, and a NaN is `fpconv_dtoa`'s `-nan` (0/0 on x86-64).
+  - A script's `{double=...}` reply is `d2string`'s, as `addReplyDouble` writes it, in RESP2
+    and RESP3: `0.1`, `nan`, `-0`.
+  - The engine calls the vendored `fpconv_dtoa.c` (`sc_double2ll` and `sc_d2string` in
+    `src/lua/engine.c`). One change from 7.2.16: its `double2ll` casts a NaN to a long long
+    before it compares, which C leaves undefined. The port tests the range first.
+- **What was so already.**
+  - Time stands still while a script runs, as 7.2's `commandTimeSnapshot` holds it:
+    TIME, SET's EX and PX, EXPIRE, TTL and the keys' expiry all read the group's time.
+  - FUNCTION LIST's unknown argument was on one line. The lines of SCRIPT HELP and
+    FUNCTION HELP are 7.2.16's, and the memory of scripts and functions is counted as
+    7.2.16's `dictMemUsage` counts it.
+  - 7.2 no longer checks that `math.random` and `math.randomseed` run in a script, and
+    no script reaches them outside one: a library's load has no `math`.
+- **What waits on the other kinds.**
+  - A blocking command in a script. 7.2.16's table drops `noscript` from BLPOP and the
+    other blocking commands (kind A). A script's call already runs as EXEC runs what it
+    queued, without waiting (`sc.run.call`), so it needs only the table.
+  - `redis.REDIS_VERSION` and `REDIS_VERSION_NUM`, and HELP's last line, "Print this
+    help." (kind A).
+  - Lua's numbers in `redis.call`, and a script's double, in `fpconv_dtoa`'s form (kind C,
+    done: above).
+  - The order of pushes, and the keys that a script's reads track (kind F, done in
+    section 3zzzzg).
+
+**Tests.** `script_test` and `function_test`, against 7.2.16. Each line that differs
+belongs to another kind: the version and HELP's last line (A), Lua's doubles (C), the
+pushes and tracking (F), NOPERM's texts (G), ACL LOG's new fields and CLIENT LIST's
+`lib-name` and `lib-ver` (B and H), FUNCTION DUMP's version and the RESTORE of a payload
+of version 11 (E). Once A, E, F, G and H were in, function_test passed against 7.2.16,
+and script_test differed in Lua's doubles alone (C); a blocking command in a script ran
+as in MULTI with A's table, nothing more. With C's `fpconv_dtoa`, script_test passes too.
+
+**What it costs.** Nothing on a request's path: the metatables are protected when a state
+is made, and the texts are made only for an error or a refusal.
+
 ## 3zzzw. Lists in pieces, as a quicklist of listpacks
 
 **What was left** (section 3zh). A list was a deque of two stacks of its elements: a cell
@@ -9610,6 +9687,990 @@ node's entries around, and the keyspace drops the old version.
 - The writes in place (PERFORMANCE 84): the stream taken out of the keyspace while a
   write runs, which needs every write of a stream to write its stream back, the writes
   that change nothing too, with no effect; XDEL's walk from the newest entry, in place.
+
+## 3zzzzb. Blocked calls counted as Redis 7.2.16 counts them
+
+**What changed** (#128, kind H: `src/info.bend`, `src/server.bend`, `src/session.bend`). Redis 7.2
+counts a call that blocks when its client is unblocked. It counts it in `updateStatsOnUnblock`, or
+in `call()` when a key serves the client and the command runs again. Redis 7.0 counted it when it
+blocked. BendKV now counts as 7.2 does:
+- **While its client waits**, the call is in no count. INFO commandstats shows nothing of it, and
+  `total_commands_processed` has not counted it.
+- **When its client is unblocked**, the call counts once. That holds when a key serves it, when its
+  time is up, and when CLIENT UNBLOCK unblocks it. It counts in `calls` and in
+  `total_commands_processed`. Its share of the window's time goes to `usec` and to the latency
+  histogram, and the slow log takes it.
+- **Failed calls.** An error reply (an UNBLOCKED error, a WRONGTYPE) counts the call failed.
+  CLIENT UNBLOCK with TIMEOUT does not; 7.0 counted every call it unblocked failed.
+- **A client that goes while it waits** leaves its call uncounted: its connection closed, or
+  CLIENT KILL closed it. WAIT is the exception, and so is a SAVE that waits for its save. Redis
+  7.2's `freeClient` counts only WAIT's, through `unblockClientWaitingReplicas`.
+- **The window's share** (section 3zzz). A blocked call's share stays with its client (`Wt`), as
+  before, and goes to `usec` once. 7.0 counted it twice: when the call ran, and again when the
+  client was unblocked.
+
+**Not copied.** In 7.2.16, 8.10.2 and Valkey 9.1.2, CLIENT UNBLOCK with ERROR counts a WAIT twice
+(`docs/UPSTREAM.md`, bug 4). BendKV counts it once, failed. `admin_test` checks this on BendKV
+alone, and compares the rest with 7.2.16.
+
+**What it costs.** Nothing on a request's path: the counts only move from the moment a client blocks
+to the moment it is unblocked. A client may go while the window still holds its call; then the
+call is taken out of the window (`fresh.drop`), one walk of the window's entries for each such
+client.
+
+## 3zzzzc. RDB 11, as Redis 7.2.16 writes and reads it
+
+**What changed** (#128, kind E: `src/rdb.bend`, `src/map.bend`, `src/server.bend`). DUMP
+and RESTORE, FUNCTION DUMP and RESTORE, SAVE, BGSAVE and the start write and read the
+format as 7.2.16's `rdb.c` does.
+- **The version** is 11 (`rdbver`): a payload's version and a file's `REDIS0011`, with
+  `redis-ver` 7.2.16 among the file's AUX fields. Versions 1 to 11 are read; a payload of
+  12 is "DUMP payload version or checksum are wrong", a file of 12 "Can't handle RDB
+  format version 12".
+- **Sets.** A set kept as a listpack (section 3zzzs) is written as SET_LISTPACK (20), its
+  members in their order; an intset is INTSET (11) still, a table SET (2). Type 20 is
+  read as a listpack when it has 128 members at most (7.2's reader checks no member's
+  length there), as a table past that; a member twice is corrupt. Type 2, which 7.0 wrote
+  for every set of strings, is read as 7.2's `rdbLoadObject` builds it: an intset while
+  the members are integers, and at the first that is not, a listpack if the intset had
+  fewer than 128 members and no member so far is longer than 64 bytes, its integers
+  first, sorted, then the rest in the file's order (`set.order`); a table past those
+  limits, or for more than 512 members. That order is SMEMBERS's and SSCAN's.
+- **Streams** are STREAM_LISTPACKS_3 (21). Each consumer has an active time after its
+  seen time, the last time it read or claimed an entry: none (−1, eight 0xFF bytes) for
+  one that has done neither (`KV.XAct`: `XActNone`, `XActAt`). A stream of type 19
+  (7.0's) gives each consumer its seen time for its active time, as 7.2's reader does.
+  The commands that set the active time and show it (XINFO CONSUMERS' `inactive`) are
+  the streams' (`src/stream.bend`): the value only keeps it.
+- **What 7.2.16 reads no more.** A library as 7.0's release candidates wrote it
+  (FUNCTION, 246) stops a load: "Pre-release function format not supported." (FUNCTION
+  RESTORE refuses it too: section 3zzzv); so does a module's value of type 6 (4.0's
+  release candidates): "Pre-release module format not supported". BendKV read both
+  before, as 7.0.15 did; the readers of the old library go.
+- **Lines in the log.** A file that does not load ends with "Fatal error loading the DB,
+  check server logs. Exiting." (7.0 named `errno`'s text); one that is there but does
+  not open first says "Fatal error: can't open the RDB file dump.rdb for reading: ...".
+  A save's write error is "Write error while saving DB to the disk(...)"; a directory
+  that does not sync after the rename is "Failed to fsync directory while saving DB:
+  ...", the save failed and its file in place.
+- **A bug not copied.** RESTORE with a time to live near 2^63 ms overflows its sum with
+  the clock, and 7.2.16 makes a key that its cycle of expiries deletes a moment later,
+  where 7.0.15 makes none: bug 5 of [UPSTREAM.md](UPSTREAM.md). BendKV makes none, and
+  `dump_test` holds it to 7.0.15's replies there.
+
+**Tests.** `dump_test`, `stream_dump_test` and `rdb_test` take 7.2.16's payloads, versions
+and lines: a payload of version 10 or 9 is still restored, 12 refused; type 19's
+payloads are made from 7.2's by the test (`older`), with the shapes of entries that 7.2
+no longer makes (XSETID below the greatest ID deleted) left out. Against 7.2.16 what still
+differs is other kinds': OBJECT ENCODING of lists and sets (D), the doubles of sorted
+sets (C); in `stream_write_test`, XSETID below the greatest ID deleted (G).
+
+**What it costs.** Nothing on a request's path. A save writes a packed set as one string,
+the listpack, where 7.0's format took a string for each member; a consumer takes 8 more
+bytes in the file and a word in the value.
+
+## 3zzzzd. Texts, checks and ACL LOG's fields of Redis 7.2.16
+
+**What changed** (#128, kinds G and H: `src/session.bend`, `src/acl.bend`, `src/server.bend`,
+`src/redis.bend`).
+- **HELLO** reads all its options before it does any, as 7.2's `helloCommand` does:
+  - An option it does not know, or a name unfit for a client, answers its error, and nothing
+    changes.
+  - Then the last AUTH logs the client in, once. A WRONGPASS stops the HELLO there. The ACL LOG
+    counts that AUTH alone (`hello.who`).
+  - Then a client that is not authenticated gets NOAUTH, whose text now says
+    `HELLO <proto> AUTH <user> <pass>`.
+  - Last, the last SETNAME names the client and the protocol changes.
+  - 7.0 did each option as it read it: an AUTH logged in, and a SETNAME named the client, before
+    a later option failed.
+- **NOPERM** names the user and the command: `User alice has no permissions to run the 'incr'
+  command`. A key or a channel is not named: `No permissions to access a key`, `... a channel`.
+  ACL DRYRUN's texts name the user, and the command, the key or the channel
+  (`getAclErrorMessage`, verbose). EXEC's text for a call that ACL refuses since it was queued
+  is unchanged.
+- **XREAD** names the command in its text for unbalanced streams: `Unbalanced 'xread' list of
+  streams`.
+- **XSETID** refuses an ID below the greatest one deleted from the stream ("smaller than current
+  max_deleted_entry_id"), before its other checks of the stream. The proof of XSETID's change
+  (`xsetid_chk_old`) has one more case, for the new error; no law changed.
+- **LPOS** refuses RANK LLONG_MIN as out of range (-LONG_MAX to LONG_MAX). 7.0 negated it, which
+  wraps in C, and BendKV read every match from the last element then.
+- **ACL LOG** gives `entry-id`, `timestamp-created` and `timestamp-last-updated` with each entry:
+  - `entry-id` is the number of entries made before it. The log keeps that count, and ACL LOG
+    RESET keeps it too (`ACLLogEntryCount`).
+  - `timestamp-created` is the time the entry was made; `timestamp-last-updated` is the last time
+    it counted an event.
+
+**Tests.**
+- `session_test`, `auth_test`, `monitor_test` and `acl_test` pass against 7.2.16. `list_test`'s
+  LPOS lines pass too.
+- `acl_test` and `script_test` (with `function_test`, which uses its helper) read an entry's
+  times as whether they are times in ms, the last update not before the creation. They read its
+  entry-id less the least of its reply's, since a test runs on servers that other tests have
+  used.
+- `numbers_test` and `diff_test` keep LSET's index within 32 bits on the paired side: 7.2.16
+  takes a larger one modulo 2^32 (`docs/UPSTREAM.md`, bug 1). `numbers_test` checks that BendKV
+  answers such an index is out of range.
+
+**What it costs.** Nothing on a request's path: the texts are made for an error alone, and HELLO
+and ACL LOG are not on the fast way.
+
+## 3zzzze. CONFIG's parameters, as Redis 7.2.16 has them
+
+**What changed** (#128, kind D: `tools/gen_config.py`, `src/config.bend`, `src/startup.bend`,
+`src/server.bend`). The table of parameters is 7.2.16's, 184 of them where 7.0.15 had 178,
+read from its `config.c` by the generator. The generator leaves out the parameters of a build
+with `LOG_REQ_RES` (the log of requests and replies of Redis's own tests), which a release
+build does not have.
+- **New:** `set-max-listpack-entries` (128) and `set-max-listpack-value` (64);
+  `locale-collate`; `cluster-announce-human-nodename`; and two hidden ones,
+  `cluster-ping-interval` and `lua-enable-deprecated-api` (immutable, `no`: section 3zzzv).
+- **Changed:**
+  - `aof-disable-auto-gc` is hidden: CONFIG GET of a pattern skips it, its name finds it.
+  - `loglevel` takes `nothing`, at which the log takes no line, the logo neither.
+  - `cluster-announce-ip` is checked: empty, or an address as `inet_pton` reads one.
+    IPv4 is four numbers of 0 to 255, none with a zero before its digits. IPv6 is RFC 4291's
+    text form: eight groups of hex digits, or fewer with one `::` for one group of zeros or
+    more, the last two groups possibly an IPv4 address. Anything else is "Cluster announce
+    IP must be a valid IPv4 or IPv6 address" (`text.ip`).
+  - `cluster-announce-human-nodename` takes no control byte and none of
+    `!#$%&()*+:;<>?@[]^{|}~,= "'\`, the bytes the cluster's file of nodes uses as
+    delimiters: "Announced human node name contained invalid character" (`text.aux`).
+- **locale-collate** names the locale in which SORT's ALPHA compares. BendKV compares
+  bytes, as the C locales do, so it takes those alone: empty, `C`, `POSIX`, `C.UTF-8`
+  (`AppLocale`). A CONFIG SET of another fails once the values are checked, as Redis's
+  `updateLocaleCollate` fails for a locale its system lacks ("Invalid locale name"); a
+  start with one stops ("Failed to configure LOCALE for invalid locale name."). The law of
+  CONFIG SET, that one that succeeds stores the value its check gave, holds as before: its
+  proof takes the new case (`sg.loc`).
+- **appendfsync**: 7.2's apply drains the thread that syncs the file when it becomes
+  `always` (`updateAppendFsync`); BendKV's writer has nothing to drain.
+
+**Tests.** `config_test` against 7.2.16, with cases for each new check: addresses right and
+wrong, names, locales, `loglevel nothing`, the hidden parameter by name and by pattern.
+`CONFIG SET tls-port` crashes 7.2.16 built without TLS (bug 3 of
+[UPSTREAM.md](UPSTREAM.md)), so the test sends it to BendKV alone and holds it to 7.0.15's
+refusal. `activedefrag yes` too goes to BendKV alone: the reference, built from its tarball
+with Redis's own jemalloc, turns it on, where the Redis 7.0.15 of Ubuntu (with the system's
+jemalloc) refused it, and BendKV, which has no defragmentation, refuses it as that one did.
+
+**What it costs.** Nothing on a request's path: the checks run on CONFIG SET.
+
+## 3zzzzf. The start's and the shutdown's lines, as Redis 7.2.16 writes them
+
+**What changed** (#128: `src/server.bend`). Redis 7.2 logs the start's lines as notices,
+not warnings: the banner, the version, "Configuration loaded" and "Server initialized"
+(the warning that no file was named stays a warning). "User requested shutdown..." is a
+notice as well. "Ready to accept connections" names the kind of each listener, a line for
+each, `tcp` then `unix`; the unix socket's own line ("The server is now ready to accept
+connections at ...") is gone. A TCP port in use stops the start with "Failed listening
+on port N (tcp), aborting.". So `loglevel warning` now leaves the whole start out, but
+for its warnings.
+
+**Tests.** `start_test` against 7.2.16; its check of `loglevel warning` looks for
+maxmemory's warning, which stays. The reference built from its tarball has no systemd
+support where `pkg-config` finds no libsystemd (Redis's Makefile links it only then): it
+logs that it cannot speak to systemd and tells it nothing. For such a reference, the two
+cases under systemd compare the rest and take what systemd is told and the log's lines
+from Redis's code (`redisSupervisedSystemd` and `main`), which 7.2.16 has as 7.0.15 had
+it.
+
+**What it costs.** Nothing.
+
+## 3zzzzg. Pushes after the reply, as Redis 7.2.16 sends them
+
+**What changed** (#128, kind F: `src/server.bend`, Own pushes). Redis 7.0 wrote a push
+to the client whose command ran as the command ran: before the command's reply, among
+EXEC's replies, before a script's reply. Redis 7.2 keeps such pushes for the end of the
+call (`afterCommand`, from `pending_push_messages`), and BendKV now does too.
+- **What waits.** The current client's messages on a channel it subscribed to (RESP3),
+  its keyspace events and the invalidations it gets as a redirect wait in Pub/Sub's
+  `own`; its own invalidations wait in the tracking's `pend`, as they already did.
+  After the command's reply the first go out, then the second (`bg.own.after`, then
+  `bg.trk.after`). For the commands of a transaction they come after EXEC's array, and
+  for a script's calls after the script's reply (`sc.pend`).
+- **The current client** is the batch's client; while a script runs, its caller
+  (`trk.cur` gives the caller for the script client's id 0); while a blocked pop runs
+  again, the client served, whose invalidations, its own and those it gets as a
+  redirect, wait for its reply (`iv.route.me`), and what the client whose command
+  served it gets waits for that client. The pushes kept wait aside while the clients a
+  command served are served (`pd.aside`), and while a busy script's group runs other
+  clients' requests (`sc.busy.group`), so that no other command takes them.
+- **Found on the way.**
+  - PUBLISH to its own channel inside EXEC put its pushes in EXEC's array and counted
+    them there (`*5` for three replies).
+  - The keyspace events of EXEC's commands never reached their own client.
+  - A served pop's keyspace events reached the client whose command served it before
+    that command's reply.
+  - CONFIG SET notify-keyspace-events, and a client's first subscription, counted from
+    the next batch: Pub/Sub's classes of events were set again only at a batch's end
+    (`ps.tune`), where Redis reads the parameter and the channels at each event. So a
+    pipeline that set the classes, or subscribed, and then wrote heard nothing of that
+    write; so did one in a transaction. That differed from Redis 7.0.15 as from 7.2.16.
+    Now a CONFIG SET, a SUBSCRIBE and a PSUBSCRIBE set the classes again at once, in a
+    batch and in EXEC (`ps.classes`; The classes of events within a batch).
+- **Tracking.**
+  - A blocked pop that is served runs its command again in Redis 7.2. So BLPOP and BRPOP
+    signal the key they popped from, as BLMPOP and the sorted sets' pops did, and BLMOVE
+    and BRPOPLPUSH signal their source after their destination (`ps.trk.served.go`). In
+    BCAST mode the change is the served client's, which NOLOOP leaves out for it.
+  - A script's call that only reads remembers its own keys for the caller, as Redis
+    7.2's `call()` remembers them for the current client (`trackingRememberKeys`). The
+    script's KEYS are no longer used: a key the script reads undeclared is tracked, a
+    declared one it does not read is not. Scr's `ks` is gone.
+
+**Tests.** Against 7.2.16:
+- resp3_test: two new scenarios, a transaction and a script that publish and write to
+  their own client, and pops served to a pusher and to a served client that both
+  subscribe. Its five scenarios of a client's own pushes pass; in 7.0's order they fail.
+- tracking_test: a redirect's own write in a transaction, a served BLMOVE in BCAST
+  mode, and a redirect to the client served; "redirects" and "served pops" pass.
+- script_test: "10 pipelines" and "12 tracking" pass.
+- resp3_test's "the classes of events set within a pipeline" and pubsub_test's "19
+  pipeline" and "19 transaction": the classes and the subscriptions counted from the next
+  command of their pipeline and their transaction. They pass; before, they failed.
+- The other differential tests that pushes and tracking touch (blocking, multi, pubsub,
+  client, monitor, pause, function, acl, keyspace, list, info, stats, the streams'), and
+  the file tests, differ from 7.2.16 in the same lines as before kind F: none of them
+  is kind F's.
+
+**What it costs.** After each command of the general way, a look at Pub/Sub's `own`
+(`bg.own.has`); nothing on the fast way, which makes no such push. perfcheck's GET, SET
+and INCR count 3,508, 4,299 and 4,621 instructions, against 3,507, 4,302 and 4,616 for
+kind I's build (5d523c6), counted alike; with 100 clients in BLPOP, 3,611 and 4,455
+against 3,618 and 4,460. The classes of events set again within a batch add a test of
+each command's key to the general way (`ev.key`), and nothing to the fast way: GET and SET
+count 3,504 and 4,299 with kind C in, 3,610 and 4,456 with 100 clients in BLPOP.
+
+## 3zzzzh. Doubles as Redis 7.2.16 writes them
+
+**What changed** (#128, kind C: `src/float.bend`, and the places that write a double in
+`src/redis.bend`, `src/rdb.bend`, `src/aof.bend`, `src/acl.bend` and `src/info.bend`).
+- **Where Redis 7.2 writes a double, and how.**
+  - A reply (`addReplyDouble`) and a sorted set's listpack (`zzlInsertAt`) take `d2string`:
+    `nan`, `inf`, `-inf`, `0` or `-0`; an integral double of magnitude 2^62 at most
+    (`double2ll`) as its integer; any other as `fpconv_dtoa` writes it. In 7.0, a reply was
+    `%.17g`, and `d2string` ended in `%.17g` too. So ZSCORE, WITHSCORES, ZINCRBY, ZADD INCR
+    and the rest now answer `0.1` where 7.0 answered `0.10000000000000001`, and
+    `123456789012345680` where it answered `1.2345678901234568e+17`. MEMORY STATS's ratios
+    and ACL LOG's `age-seconds` are replies too.
+  - The AOF rewrite (`rioWriteBulkDouble`) takes `fpconv_dtoa` alone, with no integer of its
+    own: a score of 100000000 is `1e+8` in a rewritten file and `100000000` in a reply.
+  - As in 7.0: ZSCAN of a sorted set kept as a table (`ld2string`: `%.17Lg`), GEO's
+    distances (`fixedpoint_d2string`), its coordinates and INCRBYFLOAT (`%.17Lf`).
+- **`fpconv_dtoa`** is Florian Loitsch's Grisu2, in night-shift's C, which Redis 7.2 vendors
+  in `deps/fpconv`. BendKV vendors the same files (`deps/redis/deps/fpconv`, Boost Software
+  License 1.0: NOTICE); the Makefile builds them into the server, for the Lua engine's
+  numbers, which are the scripting kinds'. Grisu2 finds digits that read back as the double:
+  few, though not always the fewest. It lays out n digits whose last is at 10^K:
+  - as an integer, with K '0's after them, when K ≥ 0 and the first digit's exponent is
+    below n + 7 (`10000000`, but `1e+8`);
+  - as a fraction when K < 0, and K > -7 or that exponent is below 4 in magnitude
+    (`0.000001`, but `1e-7`);
+  - else as `d.ddde±X`, with no leading '0' in X (`1e+22`, `5e-324`), and 18 digits at most
+    (17 for a negative number).
+- **In Bend** (`src/float.bend`, section Grisu2) the C is ported step for step.
+  - None of Grisu2's sums, products and shifts passes 2^64 (of a product it keeps the high
+    half), so none wraps in C, and exact arithmetic gives C's results.
+  - A 64-bit integer is a `U64`: its high and low 32 bits, two Nats. A product goes by
+    16-bit pieces, so that no Nat passes 2^48. The first port used the file's big integers
+    (lists of 24-bit limbs), and wrote a double 2 to 4 times slower than the `%.17g` it
+    replaces; the halves make it faster than `%.17g` (below).
+  - A Python model of the same steps matched the C on 3 million random doubles and on the
+    edges of every exponent first. The bounds it saw (two steps to find the cached power,
+    six for `round_digit`, 16 digits in the second loop) set the Bend loops' fuel, with room.
+  - `F.f64.show` is `d2string` now, for replies and listpacks alike (it was `%.17g`, with
+    `f64.show_lp` for listpacks). `F.f64.dtoa` is `fpconv_dtoa`; `F.f64.show_g` is `%.17g`,
+    for ZSCAN.
+- **XINFO** shows a consumer's active time, which kind E keeps (section 3zzzzc):
+  `active-time` in STREAM FULL, and `inactive` in CONSUMERS (now less it; −1 for none).
+
+**Tests.** `float_test` also writes doubles given by their bits: random ones, integers and
+their neighbours, short decimals, subnormals, every exponent's edges, NaNs, infinities and
+zeros. Each is written as `d2string` and as `fpconv_dtoa` write it. Its reference
+(`tests/float_ref.c`) is built with the vendored `fpconv_dtoa.c` and has 7.2.16's `d2string`.
+Six seeds of it pass, about 9,400 doubles by their bits.
+- Against 7.2.16, `zset_test`, `geo_test`, `numbers_test`, `diff_test` (1,000 rounds),
+  `sort_test`, `keyspace_test`, `stream_read_test`, `stream_dump_test`, `acl_test` and
+  `admin_test` pass, and so does `rewrite_test`, whose rewritten file has each score as
+  `fpconv_dtoa` writes it. What still differs there is other kinds': the encodings of sets
+  (`zset_test`'s OBJECT ENCODING, `dump_test`, `aof_redis_test`: kind D) and the order of
+  RESP3's pushes (`resp3_test`: kind F).
+- `stream_read_test` reads `inactive` as it reads `idle`: now less a time, each server at its
+  own now, within 2 s (and -1 only as -1).
+
+**What it costs.** A double is written faster than before, most of all one far from 1
+(redis-benchmark, pipelines of 16, 20 clients, requests a second):
+
+| | `%.17g` (before) | Grisu2 |
+|---|---:|---:|
+| ZSCORE of 0.1 | 257 thousand | 560 thousand |
+| ZSCORE of 3.141592653589793 (17 digits) | 239 thousand | 271 thousand |
+| ZSCORE of 1e-300 | 6 thousand | 725 thousand |
+| ZRANGE 0 -1 WITHSCORES, 100 random scores | 2,233 | 2,599 |
+
+`%.17g` made the exact decimal value of the double, whose digits grow with its exponent;
+Grisu2 makes 17 digits at most from 64-bit integers. An integral score (ZSCORE of 1) takes
+the integer's path, as before. DUMP writes a small sorted set's scores with `d2string`
+too.
+
+## 3zzzzi. Redis 7.2.16's new commands and options, and HyperLogLog's last difference
+
+**What changed** (#128, kinds B and J: `src/redis.bend`, `src/server.bend`,
+`src/session.bend`, `tools/gen_commands.py`).
+- **CLIENT SETINFO LIB-NAME|LIB-VER value** (`clientSetinfoCommand`), the option in any
+  case.
+  - A value is bytes from `!` to `~` up to its first NUL (`validateClientAttr`); any other
+    is `<option> cannot contain spaces, newlines or special characters.`, and another
+    option is `Unrecognized option '<option>'`. An empty value clears the field.
+  - CLIENT LIST and INFO show the library as `lib-name=` and `lib-ver=`, up to the first
+    NUL, as `%s` prints them; RESET keeps it.
+  - The registry keeps it with what else a client set of itself (`Clf`: NO-EVICT,
+    NO-TOUCH and the library), which takes NO-EVICT's place in the client's record, as a
+    node of its own (What it costs, below).
+- **CLIENT NO-TOUCH ON|OFF**: `T` in CLIENT LIST's flags, after `e`; RESET turns it off.
+  - Redis's `lookupKey` leaves a key's access time and LFU counter as they were for such
+    a client's commands, but TOUCH's (in a transaction too: TOUCH is the command then).
+  - BendKV's fast way marks a batch's keys before the batch runs. So while some client
+    has NO-TOUCH on (Ps's bit 18), every batch takes the general way. There a no-touch
+    client's calls mark their keys as they run, TOUCH's alone. The bit is set as a client
+    turns NO-TOUCH on, and looked for again in the registry as one turns it off, resets or
+    goes.
+  - A batch that holds a CLIENT NO-TOUCH marks its keys as its calls run too, so that a
+    pipeline of CLIENT NO-TOUCH ON and GET leaves the GET's key as it was, as in Redis.
+  - A script's calls mark no key while the script's caller has NO-TOUCH on: Redis 7.2.16's
+    `lookupKey` asks whether the caller's command, EVAL or FCALL, is TOUCH, so the
+    script's TOUCH leaves its key as it was too.
+  - Otherwise a script's call now marks its key as it runs, the first key of the call as
+    BendKV marks a request's. Before, a script's calls marked no key, whoever ran it, where
+    7.0.15 and 7.2.16 mark each key they look up.
+  - A first version kept the other clients on the fast way, with a look in the registry
+    for each batch's client. That cost every GET 39 instructions (1.1%), so the bit sends
+    every batch to the general way instead, and the fast way pays nothing for it while no
+    client has it on.
+- **ZRANK and ZREVRANK key member [WITHSCORE]** (`zrankGenericCommand`).
+  - More than four arguments are the command's own error, a failed call: the table's
+    arity, -3, lets them pass.
+  - A fourth that is not WITHSCORE is a syntax error. Both are answered before the key is
+    looked for.
+  - With WITHSCORE: the rank and the score (`addReplyDouble`), or a null array.
+- **CLUSTER.** BendKV runs no cluster.
+  - Redis 7.2.16 with `cluster-enabled no` answers each of CLUSTER's 28 subcommands, HELP
+    and MYSHARDID among them, `This instance has cluster support disabled`, once its arity
+    passes: a failed call, after NOAUTH and ACL's checks.
+  - An unknown subcommand is refused (`unknown subcommand '…'. Try CLUSTER HELP.`), and so
+    is a wrong number of arguments (`'cluster|<subcommand>'`).
+  - The parser needs the subcommands' arities before the statistics' block that holds the
+    others', so `tools/gen_commands.py` writes them into the dispatch block
+    (`cluster.arity`).
+  - COMMAND, ACL and INFO's commandstats know CLUSTER and its subcommands from 7.2.16's
+    table, as they know the rest.
+- **HyperLogLog's last difference** (kind J) is a bug of every version: bug 6 of
+  `docs/UPSTREAM.md`.
+  - A sparse value whose opcodes end within an XZERO makes Redis read the byte after the
+    value's end.
+  - 7.0.15 and 7.2.16 find different bytes there. A split of the XZERO leaves its last
+    byte past the end, and 7.2's greedy growth of the buffer writes a NUL over it, which
+    turns on the sizes of jemalloc's classes.
+  - BendKV keeps its reading: 0 as a command starts, the split's byte within the command.
+    `hll_test` counts the commands answered otherwise on such a value, without failing
+    (one in its 3,000 random rounds), and sets both servers to Redis's values after one.
+    It checks BendKV's reading of one such value alone.
+
+**Tests.** Against 7.2.16 these pass:
+- `client_test`'s new scenarios: NO-TOUCH's flag and errors; its keys' OBJECT FREQ (with
+  `lfu-log-factor` 0, so that each access steps the counter) and OBJECT IDLETIME, in a
+  pipeline, in MULTI and in scripts (EVAL, EVAL_RO, in MULTI too), and TOUCH's;
+  SETINFO's fields, errors and RESET; the statistics of both;
+- `zset_test`'s WITHSCORE cases: the scripted ones, the reads of every size, the random
+  rounds;
+- `admin_test`'s CLUSTER: each subcommand, wrong numbers of arguments, unknown ones, in
+  MULTI, and their statistics;
+- `command_test`, which reads COMMAND INFO and DOCS of the new subcommands and of
+  CLUSTER's;
+- `hll_test`, on three seeds, and on 7.0.15 too.
+
+**What it costs.** Nothing while no client has NO-TOUCH on: under callgrind here GET costs
+3,499 instructions a request, SET 4,292 and INCR 4,608, against 3,500, 4,293 and 4,610
+before.
+- A first version laid `Clf`'s four words out in the client's record. The segments that
+  carry a registry's entry taken apart (the tracking's invalidations, CLIENT LIST's lines)
+  grew by 3 words, and the work loop's register bank with them, from 50 to 53 (section
+  3zzzd).
+- That cost every request 8 to 11 instructions (GET 3,509, SET 4,301, INCR 4,621). All of
+  them were in the entry of the work loop and in its application of closures
+  (`WL_FID_ENTER`, `WL_FID_CLO_APPLY`): 10 and 12 instructions more at each of the loop's
+  steps, which reloaded more registers from the stack.
+- `ClfOf`, never built, makes `Clf` a node of its own, one word, and the bank is 50 again.
+## 3zzzzj. The event loop's cycles, as Redis 7.2.16 times them
+
+**What Redis does** (7.2.16's `server.c` and `latency.c`).
+- A cycle of its event loop starts in `afterSleep`, once the wait for events returns
+  (`el_start`, and the commands' count then, `el_cmd_cnt_start`), and ends in
+  `beforeSleep`, before the next wait. Its time goes to `duration_stats`'
+  `EL_DURATION_TYPE_EL` (`durationAddSample`: a count, a sum and the longest), and the
+  most commands one cycle ran to `el_cmd_cnt_max`.
+- `call()` adds each call's time to `EL_DURATION_TYPE_CMD`, but a call within another
+  (`execution_nesting`). `beforeSleep` adds the AOF's flush to `EL_DURATION_TYPE_AOF`, and
+  serverCron's time with its own work, the AOF's flush and the writes to clients aside, to
+  `EL_DURATION_TYPE_CRON`.
+- serverCron samples every 100 ms the cycles a second (`STATS_METRIC_EL_CYCLE`, over the
+  time) and the us a cycle took (`STATS_METRIC_EL_DURATION`, over the cycles since the
+  last sample). INFO shows the mean of each one's last 16 samples.
+- INFO stats has `eventloop_cycles`, `eventloop_duration_sum`,
+  `eventloop_duration_cmd_sum` and the two rates. INFO debug, only when it is named, has
+  `eventloop_duration_aof_sum`, `eventloop_duration_cron_sum`, `eventloop_duration_max`
+  and `eventloop_cmd_per_cycle_max`. CONFIG RESETSTAT zeroes them all
+  (`resetServerStats`).
+- The events Redis serves while a script runs (`processEventsWhileBlocked`) are no cycle
+  of their own: the script's cycle holds them, and their commands.
+
+**What BendKV does** (`src/info.bend`'s `El`, kept in `src/session.bend`'s `Mm`;
+`src/server.bend`'s Timing).
+- A group of the actor, the requests it takes from its channel at once, is a cycle.
+  `group_at` and `group_from` read the clock as it starts (the reading its first window
+  starts from) and the commands' count then, and `grp.cycle` reads both again once the
+  group is made. A group that evicts starts its cycle before its eviction, as Redis's
+  cycle holds its evictions.
+- The engine's run of a group's scripts, after the group (`db_group.drive`,
+  `aof_group.drive.from`), makes the group's cycle as much longer, and its calls are the
+  cycle's commands (`grp.more`), as Redis's cycle holds the script it runs. A busy group,
+  served while a script runs (`sc.busy.of`), is no cycle (`group_busy`).
+- A tick's window (the sweep of expired keys and the cron's work) is the cron's time, and
+  a cycle's time but its ticks' is its commands'. The cycle's ticks' time is counted in
+  `El` itself (`cc`), not read as the cycle starts.
+- The cron's sample (`mm.sample`, with Info's) samples the cycles a second and the us a
+  cycle took. After the start and after CONFIG RESETSTAT the first sample sets the base
+  alone, as Redis's `trackInstantaneousMetric` does while its base is 0.
+- A cycle's commands are the count's growth over it: none when CONFIG RESETSTAT made it
+  smaller, as Redis counts them only when the count grew.
+- Where BendKV differs:
+  - `eventloop_duration_cmd_sum` holds the actor's own work around the calls, where
+    Redis's holds its calls' alone;
+  - the sends of a group's replies and its writes to the append-only file, in the IO
+    around the group (`db_group`, `aof_group`), are not timed in its cycle, where Redis's
+    cycle holds both; `eventloop_duration_aof_sum` reads 0;
+  - the cron's time is its ticks'.
+
+**Three first versions**, each a lesson in how the compiler lays out and copies the
+server's state.
+- The first read the server's statistics as a cycle starts (`grp.info`) and held them
+  while the cycle ran. Each change of them in the group then copied their node, since a
+  node held twice cannot change in place. That cost every request about 150 instructions
+  under callgrind (GET 3,648 against 3,499 before): `term_drop` 53 more, and the copies of
+  `info.one` with their reference counts (`span_fade`, `ctr_take`, `ctr_own_slow`) the
+  rest.
+- The second read the count and the cron's time as numbers, but within the call that ran
+  the group: `grp.cycle(c, grp.ncmds(x), grp.crons(x), group_all(…, x, …))`. There the
+  compiler runs the group first, and keeps the group as it started for the reads after
+  it (a `term_keep` on each of its 13 words). So the group ran on a server held twice,
+  and each SET copied its path in the keyspace: SET 8,656 instructions a request, INCR
+  9,125, three to four times the misses, and a quarter of the prefetches lost.
+- The third read them in statements of their own, before that call (its compiled
+  `group_at` keeps no word of the group), and kept `El` in Info (in `Inst`). A request
+  cost 45 instructions more at pipelines of 16 (GET 3,546), and 1,705 more alone in its
+  group (GET 19,181 against 17,476 without pipelining). Info is a node of 65 words, its
+  records of one constructor laid out inside it, and a change of any of its fields reads
+  and writes all of them (`ctr_take`, then the rebuild): the cycle's change cost about
+  300 instructions. And the cron's time, read as the cycle starts through `inst.el`, kept
+  four of Info's words (`slot_keep`, which wraps each in a reference count), after which
+  the group's first changes of Info cost about 900 instructions more (`info.one` 368,
+  `term_drop` 261, `span_fade` 143, `slot_keep` 88).
+- Now `El` is kept in `Mm`, a node of 15 words that changes rarely otherwise, and the
+  cycle's ticks' time is counted in `El`, so that only the commands' count is read from
+  Info, as a number, as the cycle starts and as it ends.
+
+**Tests.** `info_test` checks on each server what Redis 7.2.16's `tests/unit/info.tcl`
+checks of the fields (its tests "stats: eventloop metrics", "instantaneous metrics" and
+"debug metrics"). It also checks the fields after CONFIG RESETSTAT, a pipeline of 100
+commands in one cycle, and a script of 200 calls whose cycle is as long as the script
+ran. It passes against 7.2.16 and against BendKV.
+
+**What it costs.** About 220 instructions a cycle under callgrind, so that a request pays
+them whole only alone in its group:
+- At pipelines of 16 from 20 clients (`tools/perf_guard.sh`), GET costs 3,501
+  instructions a request, SET 4,301 and INCR 4,609, against 3,499, 4,292 and 4,608 before.
+- Without pipelining, one client, a request to a group: GET 17,697, SET 18,837 and INCR
+  19,209, against 17,476, 18,607 and 18,960 (1.3% more). Of the 221 more for GET, 160
+  are `grp.cycle`'s (the clock's reading, the count's, `Mm`'s and `El`'s changes), 46 the
+  continuation that holds the cycle's start while the group runs, 11 `clock_gettime`.
+
+## 3zzzzk. Redis 7.2.16's own test suite, and what it found
+
+`tools/redis_suite.py` runs Redis 7.2.16's `tests/unit` in its external mode, against
+redis-server 7.2.16 and against BendKV, as it ran 7.0.15's (docs/COMPATIBILITY.md).
+7.2.16's suite runs 1,905 tests in this mode, where 7.0.15's ran 1,757, and Redis passes
+1,812 of them (1,677). BendKV passed 1,657 at first (91.4%), and passes 1,676 (92.5%)
+since the six changes below.
+
+**A HyperLogLog's walks read to its end.** unit/hyperloglog has a test of the fix of
+CVE-2025-32023: a sparse HyperLogLog of 32 MB of ZERO opcodes, 64 registers each, and a
+VAL after them, which PFCOUNT and PFDEBUG GETREG must answer with INVALIDOBJ. BendKV
+answered so, as its walks of the opcodes (the histogram of PFCOUNT, the merge of PFCOUNT
+of several keys and PFMERGE, the turn to dense) found the registers past 16,384; but
+they read on to the value's end, by `String.code_at`, which finds a byte of a String of
+several chunks by walking its chunks from the first. 1 MB of zeros took 1.5 s, the
+test's 32 MB would have taken half an hour a walk, and the unit stopped at the suite's
+limit of 60 s, 13 of its 27 tests passed. Each opcode holds a register at least, so of
+opcodes that hold 16,384 there are 16,384 at most, and the 16,385th, if any, passes the
+last register, where Redis's walks end: a walk now reads `sp.most(v)` opcodes, the
+length plus one or 16,385, whichever is less (src/hll.bend). Its answer is the same, as
+the registers only add up. PFCOUNT of the 32 MB takes 8 ms, and the unit passes 25 of
+its 27 (the other two set `hll-sparse-max-bytes`, below).
+`hll_test` sets four values whose opcodes pass the last register, one of them 4 MB of
+ZEROs, compares six commands on each with Redis, and fails one not answered within 5 s.
+PFDEBUG DECODE still walks every opcode, as Redis's does.
+
+**BLPOP's timeout past LLONG_MAX.** Redis 7.2.16 finds out of range a timeout in seconds
+whose ms pass LLONG_MAX (unit/type/list: `BLPOP blist1 0x7FFFFFFFFFFFFF`), where 7.0.15
+took it to a long long, which x87 makes its least, and answered "timeout is negative".
+BendKV answers "ERR timeout is out of range" so, an infinity too (`blk.ll`, `blk.inf`
+in src/session.bend); -inf and NaN stay negative. Redis 7.2.16 also finds out of range a
+timeout that the time now (in ms) takes past LLONG_MAX, BLPOP's, WAIT's and CLIENT
+PAUSE's; BendKV, whose parse of a timeout does not read the time, lets such a timeout,
+one of more than 292 million years, wait (README).
+
+**The changes a served pop counts.** Redis 7.2.16 serves a blocked client by running
+its command again (`unblockClientOnKey`, `processCommandAndResetClient`), so that a pop
+served by a push counts its changes as its call does: unit/type/list's "BLPOP/BLMOVE
+should increase dirty" expects 2 for an LPUSH that serves a BLPOP. 7.0.15 counted none
+for BLPOP, BRPOP, BLMOVE and BRPOPLPUSH served so, and BendKV counted as 7.0.15 did.
+`dirty.served` (src/server.bend) now counts by the command's rule, as for a call that
+runs at once: one for BLPOP, BRPOP, BLMOVE, BRPOPLPUSH, BZPOPMIN and BZPOPMAX, the
+elements for BLMPOP and BZMPOP. `blocking_test` serves each of the six against Redis
+and compares `rdb_changes_since_last_save` after it.
+
+**The changes BITFIELD counts.** Redis 7.2.16 counts a write of BITFIELD (a SET or an
+INCRBY that no FAIL stops) as a change when it changes its field's bits, or whatever it
+writes when the value grows (`bitfieldGeneric`), where 7.0.15 counted each; SETBIT
+counted so already in 7.0.15, and BendKV with it. unit/bitops's "SETBIT/BITFIELD only
+increase dirty when the value changed" expects no change for a BITFIELD SET of the
+value already there. The run of BITFIELD's operations counts them now as it makes the
+value (`BfRun`'s `n`, src/redis.bend), and the weight of a call (`R.bitfield.changes`)
+is that count, its rule the weight of a call that answered (src/server.bend).
+`bitfield_test` compares the changes each of its commands counts with Redis, a SETBIT
+among them now and then.
+
+**hll-sparse-max-bytes.** Redis turns a sparse HyperLogLog dense once a PFADD or a
+PFMERGE would grow it past `hll-sparse-max-bytes` (`hllSparseSet`), as the parameter is
+when the command runs, and PFSELFTEST requires its sparse value sparse below half of it;
+BendKV turned it dense past 3,000 bytes, the default, whatever the parameter said, and
+unit/hyperloglog's "Change hll-sparse-max-bytes" and "Hyperloglog promote to dense well
+in different hll-sparse-max-bytes" failed. The bytes now come with the command: PFADD's
+`HAdd` and PFMERGE's act `APfMerge` carry them (src/redis.bend), the parser gives PFADD
+the default, the session gives PFMERGE's act and PFSELFTEST the parameter as it is (the
+server's `Mm` keeps it as a number, read at the start and by each CONFIG SET), and the
+actor gives it to a PFADD that runs the general way (`bg.cmd.run`, in EXEC and a
+script's calls too). While the parameter is not 3,000, Ps's bit 15 keeps every batch on
+the general way, as the fast way runs a PFADD as the parser made it: the fast way pays
+nothing for the parameter, and a server whose parameter is not the default runs every
+command one at a time. The laws see a command that carries its bytes, so none changes. A
+PFADD or a PFMERGE of an append-only file that Redis wrote loads with the default: a law
+reads a file's acts from its commands alone, and BendKV's own file logs both as the SETs
+they make. `hll_test` sets the parameter from 0 to 20,000 bytes and adds to a value
+until it turns dense, lowers it under a sparse value, merges sparse values under three,
+and sets it in the batch of a PFADD, in MULTI and before a script's PFADD, each against
+Redis.
+
+**RANDOMKEY during a pause.** While a pause holds back writes, Redis 7.2.16 deletes no
+key whose time has passed (`expireIfNeeded` answers it expired and leaves it), and
+`dbRandomKey`, which tries a key at random until one is there, answers the key it tries
+a hundredth time when every key of the database has a time to live: so a database whose
+keys have all passed their times answers one of them, where BendKV answered nil, and
+unit/pause's "Test the randomkey command will not cause the server to get into an
+infinite loop during the client pause write" failed. RANDOMKEY (`SRandomKey`) now
+carries whether a pause holds, which the server sets on the general way, where every
+batch runs while one holds (`bg.cmd.run`), and the session answers a key there at now,
+or, while a pause holds and none is, one of every key the database holds, read at time
+0, where every key is there (`randomkey.of`). The laws see a command that carries its
+flag, so none changes. A database where some keys are there and others have passed their
+times answers one that is there, where Redis's hundred tries may land on those that
+passed. `pause_test` runs the suite's test against Redis: a SET with PX 3 and a pause of
+writes in one transaction, RANDOMKEY once the time has passed, then again once the pause
+ends.
+
+**What it did not change.** Of the 136 tests Redis passes and BendKV does not, the new
+ones of 7.2.16:
+- unit/pubsub's three tests of a client that publishes to itself, in a transaction and
+  in a script: the test of streams' events before them stops at XGROUP before it closes
+  its client, subscribed to every channel, so that each PUBLISH counts one receiver more,
+  and the replies of the next tests come one late. Run without that test, they pass.
+- unit/other's test of every HELP subcommand, which asks MODULE's, and unit/dump's and
+  unit/type/set's new tests, which read the replication stream.
+
+unit/pubsub's PUNSUBSCRIBE without arguments, which a client sends without waiting for
+its reply before another client publishes, failed in the first run, three units at once,
+and passed in the second and alone: each connection reaches the actor on its own, so the
+PUBLISH may run first. It passed against 7.0.15.
+## 3zzzzl. Lists and sets as Redis 7.2.16 holds them
+
+**What changed** (#128, kind D: `src/map.bend`, `src/rdb.bend`, `src/redis.bend`,
+`src/session.bend`). Redis 7.2 holds a small list as a listpack and a small set of
+strings as one too; OBJECT ENCODING, DUMP and the files say which.
+- **Lists.** A list is a listpack until a write would take it past 8 KB, then a quicklist
+  of nodes of 8 KB, and a listpack again when a write that takes elements out leaves one
+  node of 4 KB at most (`t_list.c`'s `listTypeTryConversion`). Which one Redis holds
+  shows in OBJECT ENCODING, and the nodes in DUMP and the files, which write each node as
+  a listpack: so BendKV keeps them. `Deq` (map.bend), now a node of its own, holds the
+  elements as before (their pieces of 2,048 bytes, section 3zzzw) and the listpack's
+  bytes or the quicklist's nodes, each its count of elements and its bytes (`QNs`): the
+  first node and the last as numbers, and the nodes between in a node of their own
+  (`QM`), two stacks dealt again as the pieces are. Each write moves them as
+  `quicklist.c` moves its nodes: a push goes into the node at its end while that node's
+  bytes, the element's length and 8 stay within 8 KB, else into a node of its own; a pop,
+  LREM and LTRIM take elements out of their nodes and drop the nodes they empty (LTRIM
+  takes whole nodes off its ends, then reads the elements it takes from the node it cuts;
+  LREM's walk through the pieces notes where it takes each element); LSET writes its
+  element in its node, whatever its size; LINSERT writes into its pivot's node when that
+  has room, else at the node's end into the next node or the one before, or into a node
+  of its own, else splits the node and merges the nodes around it that fit in 8 KB
+  together. A payload or a file's list keeps the nodes it came in (QUICKLIST,
+  QUICKLIST_2), a linked list (LIST) takes the nodes RPUSH makes, and either is a
+  listpack when it is one node of 8 KB at most; a ziplist (LIST_ZIPLIST, before Redis
+  3.2) stays a quicklist. DUMP writes a listpack as a quicklist of one node, as Redis
+  does. Before, every list was a quicklist (7.0's), and DUMP wrote the nodes RPUSH would
+  make of its elements, which were Redis's only for a list made by RPUSH alone.
+- **Sets.** BendKV already kept a set of at most 128 members of at most 64 bytes in one
+  string, in the order its members came (section 3zzzs): Redis 7.2's listpack. OBJECT
+  ENCODING now answers `listpack` for it (within `set-max-listpack-entries` and
+  `set-max-listpack-value` as they are), and SSCAN answers its members at once, in their
+  order, with cursor 0, as Redis's SSCAN of a listpack does; the walk that answered a
+  small set as a trie of its members would (`KV.ss.scan`) is gone. SADD sizes its set
+  by the count of its members first, as `setTypeCreate` and `setTypeMaybeConvert` do:
+  more than 128 of them (more than 512 integers) make a hashtable at once, whether they
+  are there already or come twice (`sadd.from`; the proofs of SADD take it).
+
+**Where BendKV differs** (README's Lists and Sets, and COMPATIBILITY). Redis makes a few
+turns where its append-only file has nothing: an LSET of an index the list does not
+have and an LINSERT whose pivot is not there turn a listpack that the element would take
+past 8 KB into a quicklist, an LTRIM that takes nothing turns a quicklist of one node of
+4 KB at most into a listpack (only a list read from a ziplist is one), and an SADD that
+adds nothing turns a set into a hashtable by the count of its members. A file that
+replays the writes would not make them again, and `log_replay` and `recover` say that it
+does, so BendKV leaves those values as they were. LMOVE pops and pushes as SPEC.bend's
+LMOVE does, whose meaning stays: it counts an integer taken from a quicklist by its
+length toward the destination's 8 KB (Redis counts none), and checks a list moved onto
+itself for 4 KB after the pop (Redis after the push). SORT's STORE makes its list as
+RPUSH does, where Redis makes it a listpack when it is one node. An element of 1 GB or
+more is kept in a node as any other (Redis's plain node). `list-max-listpack-size` and
+`list-compress-depth` move no limit, and `set-max-listpack-*` only what OBJECT ENCODING
+answers.
+
+**Tests.** `list_test` checks OBJECT ENCODING and DUMP, byte for byte (Redis with
+`rdbcompression no`), after each step of the turns either way, at 8 KB and a byte, for
+pushes of one element and of many (integers of each width), pops with and without a
+count, LTRIM, LREM, LSET, LINSERT into a node, next to it, alone and splitting it, moves
+and payloads read by each server; and its random commands check both now and then.
+A list that parts from Redis's right after one of the commands above is followed apart
+until the two meet again. `set_test` compares a listpack's SMEMBERS in order and its
+DUMP, and SADD's sizing. Against 7.2.16, `list_test` passes with four seeds, and `make
+test` but for what other kinds hold (client_test's NO-TOUCH with OBJECT FREQ, and
+`master_repl_offset` and ROLE's offset, which WAITAOF's offset gives).
+
+**What it costs** (PERFORMANCE.md, section 85: 8a4caf0's build against this change on
+it). Pipelined, as `make perfcheck` counts, LPUSH and RPUSH run 7.4 to 7.7% more
+instructions and LPOP and RPOP 12.4% more; one request at a time, 3.6 to 6.5% more, and
+LMOVE 8.7%: each write builds the list's node anew and drops the old one (`term_drop`,
+`span_fade`: about 550 of LPUSH's 880 more), and reads its element's bytes as a listpack
+holds them. LSET in the middle of 200,000 elements runs 29.9% more: it reads the element
+it replaces, for its bytes, and writes its node's bytes into the stack that holds the
+node. A read in the middle runs much less, LINDEX −70.6% and LRANGE −38.8%: the deque
+lies in the list's node now, where it was laid out in the value, and a read that borrows
+the list walks it in place; before, it sealed the fields it took apart and dropped them
+after (`term_drop` and `span_fade`, 99,000 of LINDEX's 180,000). LINSERT runs 1.5% more,
+LREM 0.3% less, and LTRIM 1 -2 19.3% less, as it turns the piece at the end it cuts once,
+which it read through on each call before. A list takes 96 bytes more, its node; a hash,
+a set or a sorted set 32 bytes less a key, as a collection's value is no longer as wide
+as a list's deque. GET, SET and INCR run as before: 3,504, 4,298 and 4,611 instructions a
+request merged with 5a2ff7c, which counts 3,501, 4,301 and 4,609.
+
+## 3zzzzm. Sorted sets sized by ZADD's pairs, as Redis 7.2.16 sizes them
+
+**What differed.** A differential run against Redis 7.2.16 (`diff_test`, seed 1)
+answered ZSCAN of a sorted set with scores of 0 where Redis's were -0. A ZADD of 130
+pairs, of 94 members, had made the key. Redis 7.2 sizes a sorted set by a ZADD's pairs
+before it adds them, duplicates counted (`t_zset.c`'s `zsetTypeCreate` for a key not
+there, `zsetTypeMaybeConvert` for a listpack): more than 128 make a skiplist however
+many members they hold. Redis 7.0 grew a listpack an element at a time, as BendKV did,
+and turned it a skiplist at its 129th member. A listpack keeps an integral score as an
+integer and a skiplist keeps the double, so a skiplist answers -0 where a listpack
+answers 0, and OBJECT ENCODING tells them apart.
+
+**What changed** (`src/map.bend`, `src/redis.bend`, `src/aof.bend`, `proof/SPEC.bend`,
+`proof/PROOF.bend`).
+- `KV.zset.large` makes a small sorted set large with the same elements, and
+  `zadd.sized` makes ZADD's sorted set large before its pairs when they are more than
+  128. GEOADD's points are ZADD's pairs, as in Redis.
+- A STORE writes its destination as the ZADD of its elements on a key not there
+  (`ZWNew`), which now sizes it, so each STORE gives that ZADD its elements as Redis
+  would leave them. ZRANGESTORE sizes its destination by a range of ranks, and starts a
+  range of scores or members as a listpack (`zrangeResultBeginStore`), whose first
+  elements, up to the 128th and up to the first member past 64 bytes, keep a -0 as 0
+  (`zq.stored`). ZUNIONSTORE, ZINTERSTORE and ZDIFFSTORE make a skiplist, turned a
+  listpack only when it holds at most 128 elements and no member past 64 bytes
+  (`zsetConvertToListpackIfNeeded`): their first element of such a member comes first in
+  the ZADD (`zop.stored`), so that a destination with one is a skiplist from its first
+  pair. Before this change a STORE of more than 128 elements lost the sign of a -0
+  score, and one with a long member lost it in the elements before that member.
+- The spec's STOREs read their elements as `R.zop.stored` and `R.zq.stored` give them,
+  and no law changes. The proofs of ZADD's change start from the sized sorted set: the
+  sizing leaves a large one as it is (`big_sized_of`), and under XX a ZADD adds nothing
+  to the sized empty one (`zadd_xx_sized`).
+- Left as it was: a ZADD of more than 128 pairs that adds and changes nothing leaves a
+  listpack as it was, where Redis's turns a skiplist all the same, as BendKV leaves
+  untouched the key of a write that changes nothing.
+
+`zset_test` adds ZADDs of 128, 129 and 130 pairs (of 94 members) on a key not there and
+on a listpack, GEOADDs of 128 and 130 points, and ZRANGESTORE by rank, by score with and
+without LIMIT, and by member in reverse, from a skiplist of 200 elements and from one
+with a member of 70 bytes, then ZUNIONSTORE, ZINTERSTORE and ZDIFFSTORE, each read by
+its encoding and its scores of -0, against Redis.
+
+## 3zzzzn. The limits of a client that must authenticate
+
+**What differed.** While a client must authenticate (`authRequired`: its server's
+default user takes a password, or is off, and the client has not authenticated), Redis
+7.2.16 reads its requests with two limits more (`networking.c`,
+`processMultibulkBuffer`). A count past 10 arguments is refused with "Protocol error:
+unauthenticated multibulk length", and a bulk's length past 16384 bytes with "Protocol
+error: unauthenticated bulk length", as soon as their lines have come, before the bytes
+they announce; the connection closes after the error. Redis looks at each line once, as
+it comes, after the requests before it have run: an AUTH earlier in the same write lets
+a long request in, a RESET makes the limits apply to the next one, and a count taken
+while the server asked for no password stays taken once it asks for one. Inline
+requests have none. BendKV read such requests whole and answered them NOAUTH, and a
+count's line alone, or a long bulk's, left its connection waiting for bytes it would
+only refuse.
+
+**What changed** (`src/resp.bend`, `src/server.bend`).
+- The actor's answer to a client that has not authenticated (it came while a password
+  was set, or a RESET came since) is `AnsAuth`, with whether it must authenticate now,
+  and its connection keeps its tail as such a client's (`P.TailAuth`).
+- Such a tail's next parse first walks what came for the first request past a limit
+  (`P.lim.of`), through the lines that have come, read as the parser reads them
+  (`line_at`, `len.read`); a line not whole, or not right, ends the walk, as the parser
+  waits for it or refuses it itself. The walk passes over the lines the tail held
+  whole, looked at (or let in) when they came.
+- The requests before that one are parsed and run as any client's, and the bytes from
+  it are held (`P.TailHeld`). The answer to them says whether the client may send them
+  after all, and so does the actor's answer to `Must` when there is no request before
+  them: an AUTH among them, or a server that asks for no password now, lets them in. A
+  client that must authenticate is answered the error, and its connection ends as at
+  any protocol error; one let in has the held bytes parsed at once, its tail kept as
+  such a client's.
+- After a batch whose RESET made its client need a password, the request its tail holds
+  is looked at too, and a long request read in part is walked from its bulk not whole
+  yet, with its count and the arguments it has.
+
+**What it costs.** Every other client's answer is `Ans`, which leaves the tail as it is:
+its connection matches the tail once more after each answer, and the parse matches it
+once more, about 2 instructions a request under callgrind. perfcheck counts GET 3,506,
+SET 4,297 and INCR 4,614 instructions a request, against 3,499, 4,297 and 4,613 for the
+build before.
+The new paths reach `conn_batch` and `conn_put` through the defs that called them
+already (`conn_more`, and `conn_ans` again for an `AnsAuth`): a def called from a second
+place is entered through the work loop (section 8), and a first build that called the
+two from new places paid about 4 instructions a request for each.
+
+**Where BendKV differs.** A RESET followed, in the same read, by a whole request past a
+limit: BendKV parsed that request before the RESET ran, and answers it NOAUTH, where
+Redis refuses it with the protocol error. A client with a subscription is read without
+the limits; it can have one without authenticating only while its server asks for no
+password, and Redis limits it again once its server asks for one. And Redis also cuts
+off such a client once its replies not yet written pass 1024 bytes (unit/auth's test of
+an output buffer limited), which needs the accounting of output buffers BendKV does not
+have yet.
+
+`auth_test`'s scenario 13 runs against Redis: a count's line alone and a request of 11
+arguments, one of 10, a bulk's line past 16384 bytes before the bytes and with them, a
+bulk of 16384 bytes, an inline request of 13 words, requests before one past a limit, an
+AUTH, a failed AUTH and HELLO's AUTH before one in the same write, a RESET before a
+count's line and before a long request read in part, and a client that came while a
+password was set: once the password is removed, a request past a limit and the count's
+line of another, and once it is set again, the rest of that request (NOAUTH) and a
+count's line (refused). Redis's unit/auth, run with its `external:skip` tag taken off as
+section 3zzzh ran unit/acl, passes its test of these limits: 6 of the 7 tests Redis
+passes there.
+
+## 3zzzzo. A client joins as its connection is taken
+
+**What differed.** Redis creates a client as it accepts its connection
+(`acceptCommonHandler`, `createClient`), and a client created while its server asks for
+no password is authenticated from then on (`clientSetDefaultAuth`). BendKV's accept loop
+spawned the connection's task, and the client joined the actor's registry (`Join`) only
+once that task ran, so a command another client sent right after the connect could reach
+the actor first. A client that connected while a password was set, just before another
+client removed it with `CONFIG SET requirepass ""`, was created authenticated, and once
+the password came back it was answered where Redis answers NOAUTH: two of the three such
+clients of `auth_test`'s scenario 15, on the build before this change.
+
+**What changed** (`src/server.bend`). The accept loop opens the connection's channel,
+reads its addresses (`TCP.name`) and sends `Join` itself (`conn_join.at`) before it
+takes the next connection, and the connection's task waits for the answer
+(`conn_start`). The loop runs on the event loop's thread, which takes the listener's
+readiness and the clients' sockets' in the order they come, as Redis's loop does: a
+client's `Join` reaches the actor before any command sent once it has connected.
+
+**What it costs.** Nothing on a request's path: the accept loop does the channel, the
+addresses and the send that the connection's task did. perfcheck: GET 3,505, SET 4,295
+and INCR 4,608 instructions a request (3,506, 4,297 and 4,614 before).
+
+`auth_test`'s scenario 15 runs it against Redis: three clients, each connected just
+before another removes the password and sets it again, then a GET from each (NOAUTH).
+
+## 3zzzzp. WAITAOF and the replication's offset, as Redis 7.2.16 counts them
+
+**What was missing.** WAITAOF, new in Redis 7.2, was an unknown command (go-redis's test
+of it failed so), and INFO's `master_repl_offset` and ROLE's offset were 0 where Redis
+7.2 counts them with no replica (`info_test` parted from Redis once a WAIT had waited:
+section 3zzzzl). Redis 7.2 counts into the offset each command it propagates while the
+append-only file is on: `replicationFeedSlaves`, with no replica and no backlog to feed,
+adds one, so that WAITAOF can tell what the file has synced. A transaction's MULTI and
+EXEC count; a SELECT does not, as the function counts before it would select a database.
+It counts one more at the end of each cycle of the event loop in which a client began to
+wait in WAIT or WAITAOF, for the GETACK it sends its replicas then
+(`sendGetackToReplicas`; while a pause of writes holds, at the pause's end).
+`fsynced_reploff` is the offset known to be on the disk: 0 at the start with the file
+on, -1 without; with `appendfsync always` the offset after each cycle's fsync, with
+`everysec` the one the background fsync was asked at, and with `no` the one the old
+incremental file is synced at as a rewrite begins. Each client keeps the offset after
+its last command that propagated something (`c->woff`), and `WAITAOF numlocal
+numreplicas timeout` waits until `fsynced_reploff` passes it and as many replicas have
+acknowledged it, or until its time is up, then answers both counts.
+
+**What changed** (`src/info.bend`, `src/session.bend`, `src/redis.bend`,
+`src/server.bend`, `tools/gen_commands.py`, `tests/admin_test.py`).
+- `Rof` (info.bend) holds the file's bytes, which `IInfo` held before, the offset (a
+  `Big`: a long long's count may pass 2^48), the offset synced, each client's offset by
+  its id, the cycle of the last GETACK, and one a pause holds.
+- The file's writer counts a group's commands as it writes them (`ents.out`): one for an
+  entry of one effect, a transaction's effects and its MULTI and EXEC, one for each
+  FUNCTION command's entry, none for a SELECT. A client that wrote in the group gets one
+  past the offset before the group's entries as its own: the file is synced only between
+  groups, so that a sync covers that offset when it covers the client's last entry, and
+  no count is added to a write as it runs. A script's writes count for its caller (the
+  script's client is 0), and a served pop for its client (below).
+- WAITAOF is parsed as Redis parses it, its errors in Redis's order (numlocal,
+  numreplicas, the timeout, then a numlocal with no file). In MULTI, or when it asks for
+  nothing it lacks, the session answers it at once, in MULTI with the offset its client
+  had when EXEC began (Redis sets `c->woff` after EXEC's call). Otherwise its client
+  waits, as a WAIT's does (`BlkAof`, parser code 221); the clients that wait for a sync
+  are looked at at a tick and once the syncer has synced, while one may be served so,
+  and their time up and CLIENT UNBLOCK answer them with what they have.
+- A client that begins to wait in WAIT or WAITAOF counts a GETACK, once a cycle (El's
+  count of cycles), kept while a pause of writes holds and counted when it ends, by its
+  time or CLIENT UNPAUSE.
+- The syncs: with `always`, after each group's write; with `everysec`, the syncer asks
+  the actor for the offset before it syncs (`SyncAsk`, answered once the group the ask
+  came in is written) and tells it once it has (`Synced`), so that the clients that wait
+  are served then, not at the next tick; with `no`, as a rewrite takes a new incremental
+  file, and, in the single file BendKV runs without a directory, as the rewritten file,
+  synced, replaces it.
+- ROLE gives the offset.
+
+**Where BendKV differs** (README.md, The server).
+- The offset counts a group's commands once the group is written, so that an INFO or a
+  ROLE in the group of writes before it gives the offset before them, where Redis counts
+  each command as it runs. No test of Redis's reads it so, and an exact offset there
+  would have the session count each command's entries as it runs it.
+- A DEL of a key not there is logged (Transactions; BITOP and SORT's STORE of nothing
+  log one of their destination), so it counts, and a WAITAOF after it waits for its
+  sync, where Redis's answers at once.
+- A client served by a write while it waits in a blocking pop waits for its pop in its
+  next WAIT or WAITAOF. Redis leaves that client's offset at its writes before the pop,
+  so that its WAITAOF answers 1 before the pop is synced and its WAIT counts replicas
+  that never got the pop, in 7.0.15, 7.2.16, 8.10.2 and Valkey 9.1.2 alike
+  (docs/UPSTREAM.md, bug 9): `admin_test`'s WAITAOF after a served BLPOP found it.
+- CLIENT UNBLOCK with ERROR counts a WAITAOF once, as it counts a WAIT (bug 4).
+
+**Tests.** `admin_test` compares with Redis ROLE's offset and INFO's, the offset's steps
+for a WAIT and a WAITAOF that wait and for those answered at once, WAITAOF's errors (22
+cases), its answers without the file, in MULTI and when its time is up, its client in
+CLIENT LIST, CLIENT UNBLOCK both ways, a pipeline of them, and, on servers of their own
+with the file on, for each `appendfsync`: the offset after each of 16 groups of commands
+(writes, transactions, scripts, SELECT, PUBLISH, FLUSHALL, and WAIT and WAITAOF
+themselves), WAITAOF's answers after them, and, with `no`, its answers to a client of
+each way a write reaches the file (a script, a transaction, FUNCTION LOAD, a plain
+write) and around a rewrite. The waits it checks on BendKV alone (bug 4) it
+runs on Redis too, unchecked, so that `info_test` finds the two offsets equal.
+go-redis's test of WAITAOF passes, and is off the known failures (COMPATIBILITY.md:
+450 of 463).
+
+**What it costs** (PERFORMANCE.md, section 86). The fast way runs as it did: GET, SET and
+INCR within an instruction of their counts before, and within 5 with 100 clients in
+BLPOP. With the file on, a SET runs 4.1%
+fewer instructions than before and an INCR 3.3% fewer: the writer walks a group's entries
+once, encoding each as it takes it apart, where it walked them for their arguments, then
+again for their database. A first version cost a SET 13.6% more instead: its count read
+the FUNCTION entries' list after encoding it, so Bend made the encoder borrow its list
+in every caller, and each caller freed the list in a walk of its own (section 7's trap;
+the encoder's generated C takes its list with `ctr_take` before and peeks into it with
+`term_peek` in that version).
+
+## 3zzzzq. The errors of the commands of strings, counted
+
+**What differed** (#105). The fast way looks at a batch's replies for errors only where a
+call may fail as it runs (`RISKY` in `tools/gen_commands.py`, `R.code.risky`), and the
+commands of strings were left out when values took kinds (section 3zf): GET, SET with
+GET, GETSET, GETDEL, APPEND, STRLEN, GETRANGE, SUBSTR, GETBIT, SETBIT, BITOP and
+BITFIELD_RO on a key of another kind answer WRONGTYPE as Redis does, and a batch of them
+counted none of those errors. INFO's errorstats had no WRONGTYPE for them, their
+commands' `failed_calls` stayed 0, and so did `total_error_replies`; in MULTI, and in a
+script, where each call is counted as it runs, they counted.
+
+**What changed** (`tools/gen_commands.py`, `src/redis.bend`, `src/server.bend`). The
+twelve are risky now, so a batch of them has its replies looked at, as a batch of INCRs
+or of a collection's commands has. The look (`R.errs.one`) takes the batch's run and
+reckons its code only for an error reply, and a batch of a command that changes nothing
+(GET) counts no errors for its changes (`dirty.quick`).
+
+**What it costs.** The look, about 20 instructions a request of a GET or a SET without a
+pipeline: perfcheck counts GET 3,526, SET 4,324 and INCR 4,613 (3,505, 4,295 and 4,608
+before). SET's walk for its changes (rule 3) is still a walk of its own, after the look.
+
+`tests/stats_test.py` runs the twelve on a key that holds a list against Redis 7.2.16:
+one at a time, in pipelines of one command and of several, and in MULTI.
+
+## 3zzzzr. EXEC's array, as Redis writes it
+
+**What differed** (#101). Redis's execCommand writes EXEC's array's count first, the
+number of commands queued, then runs them all; each reply goes out as its client's flags
+let it at that moment. BendKV gathered the replies and counted those it had:
+- a command that closes its own client (ACL DELUSER of its user, CLIENT KILL of itself
+  with SKIPME no) made EXEC answer nothing, and the commands after it did not run.
+  Redis answers the count and the replies up to that command's, runs the rest with their
+  replies dropped (CLIENT_CLOSE_AFTER_REPLY), and closes the client once EXEC's reply is
+  out; after ACL DELUSER the client is the default user's (ACLFreeUserAndKillClients), so
+  the commands after it run as that user;
+- a CLIENT REPLY OFF among the commands dropped EXEC's whole array, where Redis sends the
+  count and the replies before it;
+- a CLIENT REPLY SKIP among them skipped the next command's reply in EXEC, where Redis
+  skips the reply of the command after EXEC (CLIENT_REPLY_SKIP_NEXT becomes a skip only
+  once EXEC ends);
+- a SUBSCRIBE of several channels among them answers each channel: Redis's count stays
+  the number of commands, and BendKV counted the replies.
+
+**What changed** (`src/server.bend`, `src/redis.bend`, `src/resp.bend`). EXEC's array is
+`R.RArrayN`, whose header is a count of its own, the number of commands queued. The run
+of EXEC's commands keeps what they did to their client (`Xc`): after a command that
+closed it, its quit is undone and its replies are off, so the commands after it run and
+their replies are dropped, and the client closes after EXEC's reply; a skip of the next
+reply is kept for the command after EXEC. EXEC's reply goes out as the client's mode was
+before EXEC. ACL DELUSER of the client's own user makes the client the default user's
+(`bg.gone.self`).
+
+**What it costs.** Nothing on a request's path: perfcheck counts GET 3,519, SET 4,316 and
+INCR 4,610 instructions a request (3,527, 4,320 and 4,613 before).
+
+**Where BendKV differs.** A client whose replies are off as its EXEC comes (a CLIENT
+REPLY OFF before its MULTI), and whose transaction turns them on again, gets from Redis
+the replies from that CLIENT REPLY ON on, with no array's count before them; BendKV
+sends none of them, as EXEC's reply goes out whole or not at all.
+
+`tests/multi_test.py`'s scenario 13 runs these against Redis 7.2.16, EXEC's bytes
+compared. The three cases of #101, and those of #77 (pushes in a transaction, which the
+pushes after the reply of section 3zzzzg had already put after EXEC's array), answer as
+Redis does.
 
 ## 4. Where a request's time goes, and hiding the memory waits
 

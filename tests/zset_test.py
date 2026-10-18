@@ -7,6 +7,11 @@ sets whose key's time has passed, then random commands on a few keys
 (the operations of several sorted sets, STOREs and ZMPOP among them),
 replies compared one by one.
 
+Among the sizes, ZADDs of more than 128 pairs, on a key not there and on
+a listpack, which Redis 7.2 makes a skiplist however many members they
+hold, and the destinations ZRANGESTORE, ZUNIONSTORE and ZINTERSTORE make
+of them, read by their encodings and their scores of -0.
+
 Elements are in order of score, then member, on both servers, and those
 replies are compared as they are. ZSCAN of a skiplist answers in the
 order of each server's own table, so its whole walk is compared by the
@@ -140,6 +145,19 @@ zcard nokey
 zrank z a
 zrevrank z a
 zrank z nope
+zrank z a withscore
+zrevrank z a WITHSCORE
+zrank z c withscore
+zrank z nope withscore
+zrevrank z nope withscore
+zrank nokey a withscore
+zrevrank nokey a withscore
+zrank nokey a
+zrank z a withscores
+zrank z a withscore x
+zrevrank z a withscore x
+zrank z
+zrank z a x y z
 zincrby z 2.5 b
 zincrby z inf b
 zincrby z -inf b
@@ -258,6 +276,10 @@ zpopmin s
 zrem s a
 zremrangebyrank s 0 1
 zrank s a
+zrank s a withscore
+zrevrank s a withscore
+zrank s a bad
+zrank s a withscore extra
 type lex
 zmscore lex a e nope
 zmscore nokey a
@@ -520,6 +542,53 @@ def sizes(b, r):
         same(b, r, cmd)
 
 
+# ZADD sizes its sorted set by its pairs, as Redis 7.2 does (t_zset.c's
+# zsetTypeCreate and zsetTypeMaybeConvert): more than 128, duplicates
+# counted, make it a skiplist however many members they hold, and a
+# skiplist keeps a score of -0 (GEOADD's points as ZADD's pairs);
+# ZRANGESTORE sizes its destination by a range of ranks, and starts it as
+# a listpack for a range of scores or members, where its first elements
+# keep a -0 as 0 up to the 128th or the first member past 64 bytes; the
+# other STOREs make a skiplist, which keeps a -0, turned a listpack only
+# when it holds at most 128 elements and no member past 64 bytes
+def sized(b, r):
+    dup = [x for i in range(130) for x in (b"-0" if i % 3 == 0 else b"%d" % (i % 5), b"d%d" % (i % 94))]
+    alt = [x for i in range(200) for x in (b"-0" if i % 2 == 0 else b"0", b"f%03d" % i)]
+    lng = alt[:22] + [b"-0", b"f010" + b"x" * 70] + alt[22:]
+    pts = [x for i in range(130) for x in (b"%.4f" % (13 + i / 1000), b"%.4f" % (38 + i / 1000), b"p%d" % i)]
+    for cmd in ([b"ZADD", b"sz1"] + dup, [b"OBJECT", b"ENCODING", b"sz1"], [b"ZCARD", b"sz1"],
+                [b"ZSCORE", b"sz1", b"d0"], [b"ZSCORE", b"sz1", b"d3"], [b"ZRANGE", b"sz1", b"0", b"-1", b"WITHSCORES"],
+                [b"ZSCAN", b"sz1", b"0"],
+                [b"ZADD", b"sz2"] + [x for i in range(128) for x in (b"-0", b"e%d" % i)],
+                [b"OBJECT", b"ENCODING", b"sz2"], [b"ZSCORE", b"sz2", b"e5"],
+                [b"ZADD", b"sz2", b"CH"] + [x for i in range(128) for x in (b"1", b"e%d" % i)] + [b"-0", b"e0"],
+                [b"OBJECT", b"ENCODING", b"sz2"], [b"ZSCORE", b"sz2", b"e0"], [b"ZSCORE", b"sz2", b"e1"],
+                [b"ZADD", b"sz3", b"XX"] + alt, [b"EXISTS", b"sz3"], [b"ZADD", b"sz3"] + alt,
+                [b"OBJECT", b"ENCODING", b"sz3"], [b"ZSCORE", b"sz3", b"f000"],
+                [b"ZRANGESTORE", b"sr1", b"sz3", b"0", b"-1"], [b"OBJECT", b"ENCODING", b"sr1"],
+                [b"ZSCORE", b"sr1", b"f000"], [b"ZSCORE", b"sr1", b"f198"],
+                [b"ZRANGESTORE", b"sr2", b"sz3", b"-inf", b"+inf", b"BYSCORE"], [b"OBJECT", b"ENCODING", b"sr2"],
+                [b"ZSCORE", b"sr2", b"f000"], [b"ZSCORE", b"sr2", b"f126"], [b"ZSCORE", b"sr2", b"f128"],
+                [b"ZSCORE", b"sr2", b"f198"],
+                [b"ZRANGESTORE", b"sr3", b"sz3", b"+", b"-", b"BYLEX", b"REV"], [b"ZSCORE", b"sr3", b"f198"],
+                [b"ZSCORE", b"sr3", b"f070"], [b"ZSCORE", b"sr3", b"f000"],
+                [b"ZRANGESTORE", b"sr4", b"sz3", b"0", b"99"], [b"OBJECT", b"ENCODING", b"sr4"],
+                [b"ZSCORE", b"sr4", b"f000"],
+                [b"ZRANGESTORE", b"sr5", b"sz3", b"-inf", b"+inf", b"BYSCORE", b"LIMIT", b"10", b"150"],
+                [b"ZSCORE", b"sr5", b"f010"], [b"ZSCORE", b"sr5", b"f150"],
+                [b"ZADD", b"sz4"] + lng, [b"ZRANGESTORE", b"sr6", b"sz4", b"-inf", b"+inf", b"BYSCORE"],
+                [b"OBJECT", b"ENCODING", b"sr6"], [b"ZSCORE", b"sr6", b"f008"], [b"ZSCORE", b"sr6", b"f010"],
+                [b"ZSCORE", b"sr6", b"f010" + b"x" * 70], [b"ZSCORE", b"sr6", b"f012"],
+                [b"ZUNIONSTORE", b"su1", b"1", b"sz3"], [b"OBJECT", b"ENCODING", b"su1"], [b"ZSCORE", b"su1", b"f000"],
+                [b"ZINTERSTORE", b"su2", b"2", b"sz3", b"sr1", b"WEIGHTS", b"1", b"0"], [b"ZSCORE", b"su2", b"f002"],
+                [b"GEOADD", b"sg1"] + pts, [b"OBJECT", b"ENCODING", b"sg1"], [b"ZCARD", b"sg1"],
+                [b"GEOADD", b"sg2"] + pts[:3 * 128], [b"OBJECT", b"ENCODING", b"sg2"],
+                [b"ZADD", b"sl1", b"-0", b"a", b"-0", b"b", b"1", b"y" * 70, b"-0", b"c"], [b"ZSCORE", b"sl1", b"c"],
+                [b"ZUNIONSTORE", b"sl2", b"1", b"sl1"], [b"OBJECT", b"ENCODING", b"sl2"], [b"ZSCORE", b"sl2", b"c"],
+                [b"ZDIFFSTORE", b"sl3", b"1", b"sl1"], [b"ZRANGE", b"sl3", b"0", b"-1", b"WITHSCORES"]):
+        same(b, r, cmd)
+
+
 # reads of a sorted set at a step: its elements, scores and ranks, its
 # ranges by rank, score and member, ZSCAN and its encoding (a range by
 # member and ZSCAN only of a listpack: Redis answers those of a skiplist
@@ -532,6 +601,8 @@ def wide_reads(b, r, key, ms, rng):
     for m in rng.sample(ms, min(3, len(ms))) + [b"nope"]:
         for name in (b"ZSCORE", b"ZRANK", b"ZREVRANK"):
             same(b, r, [name, key, m])
+        for name in (b"ZRANK", b"ZREVRANK"):
+            same(b, r, [name, key, m, b"WITHSCORE"])
     if run(r, [b"OBJECT", b"ENCODING", key]) == (b"$", b"listpack"):
         for cmd in ([b"ZRANGEBYLEX", key, b"[m", b"(n"], [b"ZLEXCOUNT", key, b"-", b"+"], [b"ZSCAN", key, b"0", b"COUNT", b"1000"]):
             same(b, r, cmd)
@@ -662,7 +733,8 @@ def rand_cmd(r):
     if k < 0.86:
         return [b"ZSCAN", key, b"0"] + r.choice([[], [b"COUNT", b"2"], [b"MATCH", b"*1*"], [b"MATCH", b"[ab]"]])
     return r.choice([[b"ZCARD", key], [b"ZSCORE", key, m()], [b"ZMSCORE", key, m(), m()], [b"ZRANK", key, m()],
-                     [b"ZREVRANK", key, m()], [b"ZCOUNT", key, rnd_zbound(r), rnd_zbound(r)],
+                     [b"ZREVRANK", key, m()], [b"ZRANK", key, m(), b"WITHSCORE"], [b"ZREVRANK", key, m(), b"WITHSCORE"],
+                     [b"ZCOUNT", key, rnd_zbound(r), rnd_zbound(r)],
                      [b"ZLEXCOUNT", lk, rnd_zlex(r), rnd_zlex(r)], [b"TYPE", key], [b"EXISTS", key], [b"TTL", key],
                      [b"OBJECT", b"ENCODING", key], [b"ZRANGE", key, b"0", b"-1", b"WITHSCORES"]])
 
@@ -680,6 +752,7 @@ def main():
     for cmd in SCRIPT:
         same(b, rd, cmd)
     sizes(b, rd)
+    sized(b, rd)
     wide(b, rd)
     expired(b, rd)
     r = random.Random(a.seed)

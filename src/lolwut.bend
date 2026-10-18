@@ -539,7 +539,7 @@ def five.go(+cols: Nat, +per: Nat, +rows: Nat, +st: U32) -> String:
   +s = sch.rows(rows, Sch{Nil{}, st}, 0n, per, side, pad, rows, w, h)
   +hc = Nat.div(Nat.add(h, 3n), 4n)
   +wc = Nat.div(w, 2n)
-  rd.rows(hc, Nat.sub(Nat.mul(hc, wc), 1n), Nat.mul(Nat.sub(hc, 1n), 4n), wc, h, (srt(sch.px(s)), "\nGeorg Nees - schotter, plotter on paper, 1968. Redis ver. 7.0.15\n"))
+  rd.rows(hc, Nat.sub(Nat.mul(hc, wc), 1n), Nat.mul(Nat.sub(hc, 1n), 4n), wc, h, (srt(sch.px(s)), "\nGeorg Nees - schotter, plotter on paper, 1968. Redis ver. 7.2.16\n"))
 
 def five(+args: List<&2, String>, +seed: U32) -> String:
   match args:
@@ -673,7 +673,7 @@ def sky.rows(cy: Nat, +y: Nat, +cw: Nat, +ch: Nat, +bs: List<&2, Sky>, acc: Stri
       sky.rows(r, Nat.sub(y, 1n), cw, ch, bs, sky.row(cw, Nat.add(cw, 15n), y, ch, bs, nl.if(Nat.is_ne(Nat.add(y, 1n), ch), acc)))
 
 def six.end() -> String:
-  "\nDedicated to the 8 bit game developers of past and present.\nOriginal 8 bit image from Plaguemon by hikikomori. Redis ver. 7.0.15\n"
+  "\nDedicated to the 8 bit game developers of past and present.\nOriginal 8 bit image from Plaguemon by hikikomori. Redis ver. 7.2.16\n"
 
 def six.front(p: List<&2, Sky> & U32, +cw: Nat, +ch: Nat) -> String:
   (bs, st) = p

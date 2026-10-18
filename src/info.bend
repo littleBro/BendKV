@@ -66,6 +66,22 @@ def big.show(+b: Big) -> String:
     case IBig{+hi, +lo}:
       big.show.if(Nat.is_lt(0n, hi), hi, lo)
 
+# the count's last 12 digits (the commands' count as a cycle of the
+# event loop starts: info.ncmds)
+def big.lo(+b: Big) -> Nat:
+  match b:
+    case IBig{hi, +lo}:
+      lo
+
+# whether a count is at most another, and the greater of two
+def big.le(+a: Big, +b: Big) -> Bool:
+  match a b:
+    case IBig{+ah, +al} IBig{+bh, +bl}:
+      Bool.or(Nat.is_lt(ah, bh), Bool.and(Nat.is_eq(ah, bh), Nat.is_le(al, bl)))
+
+def big.max(+a: Big, +b: Big) -> Big:
+  Bool.pick(Big, big.le(a, b), b, a)
+
 # a - b for counts at most 10^12 apart
 def big.diff(+a: Big, +b: Big) -> Nat:
   match a b:
@@ -631,6 +647,16 @@ def truns.of(rs: List<&2, Nat>, acc: List<&2, TRun>) -> List<&2, TRun>:
     case Con{r, rest}:
       TRun{r, 0n, HT0{}} <> truns.of(rest, acc)
 
+# a call of the window as a run that took no time, before acc; none for a
+# call whose client waits (blk): it counts once its client is unblocked
+# (stats.served), as Redis 7.2 counts a blocked call (updateStatsOnUnblock)
+def truns.call(blk: Bool, +r: Nat, acc: List<&2, TRun>) -> List<&2, TRun>:
+  match blk:
+    case True{}:
+      acc
+    case False{}:
+      TRun{r, 0n, HT0{}} <> acc
+
 # the window's runs since its CONFIG RESETSTAT, newest first, before acc,
 # as runs that took no time
 def fresh.truns(fs: List<&2, Fresh>, acc: List<&2, TRun>) -> List<&2, TRun>:
@@ -642,7 +668,7 @@ def fresh.truns(fs: List<&2, Fresh>, acc: List<&2, TRun>) -> List<&2, TRun>:
     case Con{FRuns{rs}, rest}:
       truns.of(rs, fresh.truns(rest, acc))
     case Con{FCall{r, id, arg, blk}, rest}:
-      TRun{r, 0n, HT0{}} <> fresh.truns(rest, acc)
+      truns.call(blk, r, fresh.truns(rest, acc))
     case Con{FNamed{id, arg, blk}, rest}:
       fresh.truns(rest, acc)
     case Con{FSlow{id, us, code, arg}, rest}:
@@ -1371,8 +1397,9 @@ def win.job(log: Bool, +id: Nat, +us: Nat, +code: Nat, arg: Arg, js: List<&2, Sl
       js
 
 # a call of the general way (run r, of one call or of one refused) timed,
-# of client id, with arguments arg: a call that blocked (blk) has its
-# share in usec only, kept with its client
+# of client id, with arguments arg: a call that blocked (blk) counts
+# nothing yet, its share kept with its client until it is unblocked
+# (stats.served)
 def win.call(+cnt: Bool, +r: Nat, +id: Nat, +arg: Arg, +blk: Bool, +s: Nat, +trk: Bool, +son: Bool, +slt: Nat, w: Win) -> Win:
   match w:
     case Win{cur, pend, wt, js, +x, pos, fast, slow}:
@@ -1383,7 +1410,7 @@ def win.call(+cnt: Bool, +r: Nat, +id: Nat, +arg: Arg, +blk: Bool, +s: Nat, +trk
       +key = R.code.key(code)
       +fa = R.stat.fast(key)
       +log = Bool.and(Bool.and(son, Bool.not(blk)), Bool.and(Nat.is_lt(0n, k), Bool.and(Nat.is_le(slt, us), Bool.not(R.stat.noslow(key)))))
-      win.put(cnt, TRun{r, us, trun.h(Bool.and(cnt, Bool.and(trk, Bool.not(blk))), s, k, m)}, cur, pend, win.wt(blk, id, code, us, arg, wt), win.job(log, id, us, code, arg, js), Nat.sub(x, m), pos, win.fast(fa, us, fast), win.slow(fa, us, slow))
+      win.put(Bool.and(cnt, Bool.not(blk)), TRun{r, us, trun.h(Bool.and(cnt, trk), s, k, m)}, cur, pend, win.wt(blk, id, code, us, arg, wt), win.job(log, id, us, code, arg, js), Nat.sub(x, m), pos, win.fast(fa, us, fast), win.slow(fa, us, slow))
     case WinOf{w0}:
       win.call(cnt, r, id, arg, blk, s, trk, son, slt, w0)
 
@@ -1498,6 +1525,31 @@ def fresh.unblk(fs: List<&2, Fresh>, +id: Nat) -> List<&2, Fresh>:
     case Con{FReset{}, rest}:
       FReset{} <> fresh.unblk(rest, id)
 
+# the window's call of client id that blocked, as a call of none (its
+# client gone while it waited, which Redis 7.2 counts no call of)
+def fresh.drop(fs: List<&2, Fresh>, +id: Nat) -> List<&2, Fresh>:
+  match fs:
+    case Nil{}:
+      Nil{}
+    case Con{FCall{+r, +j, arg, +blk}, rest}:
+      +hit = Bool.and(blk, Nat.is_eq(j, id))
+      FCall{Bool.pick(Nat, hit, R.run.of(R.run.code(r), 0n), r), j, arg, Bool.and(blk, Bool.not(hit))} <> fresh.drop(rest, id)
+    case Con{FRun{r}, rest}:
+      FRun{r} <> fresh.drop(rest, id)
+    case Con{FNamed{j, arg, blk}, rest}:
+      FNamed{j, arg, blk} <> fresh.drop(rest, id)
+    case Con{FRuns{rs}, rest}:
+      FRuns{rs} <> fresh.drop(rest, id)
+    case Con{FSlow{j, us, code, arg}, rest}:
+      FSlow{j, us, code, arg} <> fresh.drop(rest, id)
+    case Con{FReset{}, rest}:
+      FReset{} <> fresh.drop(rest, id)
+
+def stats.drop(st: Stats, +id: Nat) -> Stats:
+  match st:
+    case Stats{es, fresh, cur, pend, errs, total}:
+      Stats{es, fresh.drop(fresh, id), cur, pend, errs, total}
+
 def served.slow(log: Bool, +id: Nat, +us: Nat, +code: Nat, arg: Arg, fs: List<&2, Fresh>) -> List<&2, Fresh>:
   match log:
     case True{}:
@@ -1510,14 +1562,16 @@ def served.of(p: TRun & List<&2, TRun>, es: List<&2, Ent>, fresh: List<&2, Fresh
   Stats{es, fresh, cur, pend, errs, total}
 
 # the statistics after client id is served (m: the call it blocked with,
-# kept: Wt): its share to usec again, and to the histogram while
-# latency-tracking is on; its entry, when the slow log takes it, in the
-# window, for the window's order; with none kept, its call blocked in the
-# window, which times it as one that did not block
+# kept: Wt): the call counted, with its share in usec, and in the
+# histogram while latency-tracking is on; its entry, when the slow log
+# takes it, in the window, for the window's order; with none kept, its
+# call blocked in the window, which times it as one that did not block.
+# Redis 7.2 counts a blocked call so, when its client is unblocked
+# (updateStatsOnUnblock), and not when it blocks, as 7.0 did
 def stats.served(m: Maybe<&2, Wt>, st: Stats, +cf: TCfg, +id: Nat) -> Stats:
   match m st:
     case Some{Wt{j, +code, +us, arg}} Stats{es, fresh, cur, pend, errs, total}:
-      served.of(timed.run(R.run.of(code, 0n), us, tcfg.trk(cf), us, 1n, 0n, (cur, pend)), es, served.slow(Bool.and(tcfg.son(cf), Bool.and(Nat.is_le(tcfg.slt(cf), us), Bool.not(R.stat.noslow(R.code.key(code))))), id, us, code, arg, fresh), errs, total)
+      served.of(timed.run(R.run.of(code, 1n), us, tcfg.trk(cf), us, 1n, 0n, (cur, pend)), es, served.slow(Bool.and(tcfg.son(cf), Bool.and(Nat.is_le(tcfg.slt(cf), us), Bool.not(R.stat.noslow(R.code.key(code))))), id, us, code, arg, fresh), errs, total)
     case None{} Stats{es, fresh, cur, pend, errs, total}:
       Stats{es, fresh.unblk(fresh, id), cur, pend, errs, total}
 
@@ -1546,56 +1600,83 @@ def boot.start(+b: Boot) -> U32:
 # cache's (scc); and of functions, as the actor read them after the last
 # change of the libraries (FUNCTION LOAD, DELETE, FLUSH, RESTORE, or the
 # start): how many functions (fnn) and libraries (fnl), the bytes of the
-# functions' Lua state (fvm) and of their records (fmo). CnOf, a count
-# that holds a count, is never built: it makes Cn a node of its own, one
-# word of Info.
+# functions' Lua state (fvm) and of their records (fmo); and the keys
+# that clients wait on, each with its database once (bk: Redis 7.2's
+# total_blocking_keys), as the actor counted them for the last INFO; and
+# the calls ACL refused since the start, as Redis 7.2 counts them by the
+# reason of their ACL LOG entry (acl_access_denied_*: an AUTH that failed,
+# da; a command, dc; a key, dk; a channel, dh), which CONFIG RESETSTAT
+# leaves as they are. CnOf, a count that holds a count, is never built:
+# it makes Cn a node of its own, one word of Info.
 type Cn is Data:
-  Cn{blk: Nat, tmo: Nat, tc: Nat, tk: Nat, ti: Nat, tp: Nat, scn: Nat, scm: Nat, scc: Nat, fnn: Nat, fnl: Nat, fvm: Nat, fmo: Nat}
+  Cn{blk: Nat, tmo: Nat, tc: Nat, tk: Nat, ti: Nat, tp: Nat, scn: Nat, scm: Nat, scc: Nat, fnn: Nat, fnl: Nat, fvm: Nat, fmo: Nat, bk: Nat, da: Nat, dc: Nat, dk: Nat, dh: Nat}
   CnOf{c: Cn}
 
 def cn.zero() -> Cn:
-  Cn{0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n}
+  Cn{0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n}
 
 def cn.waits(c: Cn, +n: Nat, +t: Nat) -> Cn:
   match c:
-    case Cn{b, o, tc, tk, ti, tp, sn, sm, sc, fn, fl, fv, fm}:
-      Cn{n, t, tc, tk, ti, tp, sn, sm, sc, fn, fl, fv, fm}
+    case Cn{b, o, tc, tk, ti, tp, sn, sm, sc, fn, fl, fv, fm, bk, da, dc, dk, dh}:
+      Cn{n, t, tc, tk, ti, tp, sn, sm, sc, fn, fl, fv, fm, bk, da, dc, dk, dh}
     case CnOf{x}:
       cn.waits(x, n, t)
 
 def cn.trk(c: Cn, +a: Nat, +b: Nat, +d: Nat, +e: Nat) -> Cn:
   match c:
-    case Cn{n, t, tc, tk, ti, tp, sn, sm, sc, fn, fl, fv, fm}:
-      Cn{n, t, a, b, d, e, sn, sm, sc, fn, fl, fv, fm}
+    case Cn{n, t, tc, tk, ti, tp, sn, sm, sc, fn, fl, fv, fm, bk, da, dc, dk, dh}:
+      Cn{n, t, a, b, d, e, sn, sm, sc, fn, fl, fv, fm, bk, da, dc, dk, dh}
     case CnOf{x}:
       cn.trk(x, a, b, d, e)
 
 def cn.scripts(c: Cn, +k: Nat, +m: Nat, +e: Nat) -> Cn:
   match c:
-    case Cn{n, t, tc, tk, ti, tp, sn, sm, sc, fn, fl, fv, fm}:
-      Cn{n, t, tc, tk, ti, tp, k, m, e, fn, fl, fv, fm}
+    case Cn{n, t, tc, tk, ti, tp, sn, sm, sc, fn, fl, fv, fm, bk, da, dc, dk, dh}:
+      Cn{n, t, tc, tk, ti, tp, k, m, e, fn, fl, fv, fm, bk, da, dc, dk, dh}
     case CnOf{x}:
       cn.scripts(x, k, m, e)
 
 def cn.funcs(c: Cn, +a: Nat, +b: Nat, +d: Nat, +e: Nat) -> Cn:
   match c:
-    case Cn{n, t, tc, tk, ti, tp, sn, sm, sc, fn, fl, fv, fm}:
-      Cn{n, t, tc, tk, ti, tp, sn, sm, sc, a, b, d, e}
+    case Cn{n, t, tc, tk, ti, tp, sn, sm, sc, fn, fl, fv, fm, bk, da, dc, dk, dh}:
+      Cn{n, t, tc, tk, ti, tp, sn, sm, sc, a, b, d, e, bk, da, dc, dk, dh}
     case CnOf{x}:
       cn.funcs(x, a, b, d, e)
+
+def cn.bkeys(c: Cn, +k: Nat) -> Cn:
+  match c:
+    case Cn{n, t, tc, tk, ti, tp, sn, sm, sc, fn, fl, fv, fm, bk, da, dc, dk, dh}:
+      Cn{n, t, tc, tk, ti, tp, sn, sm, sc, fn, fl, fv, fm, k, da, dc, dk, dh}
+    case CnOf{x}:
+      cn.bkeys(x, k)
+
+# one more call refused for the reason w of its ACL LOG entry ("auth",
+# "command", "key" or "channel")
+def cn.denied(c: Cn, +w: String) -> Cn:
+  match c:
+    case Cn{n, t, tc, tk, ti, tp, sn, sm, sc, fn, fl, fv, fm, bk, +da, +dc, +dk, +dh}:
+      +a = String.eq(w, "auth")
+      +b = String.eq(w, "command")
+      +k = String.eq(w, "key")
+      Cn{n, t, tc, tk, ti, tp, sn, sm, sc, fn, fl, fv, fm, bk, Bool.pick(Nat, a, 1n+da, da), Bool.pick(Nat, b, 1n+dc, dc), Bool.pick(Nat, k, 1n+dk, dk),
+        Bool.pick(Nat, Bool.or(Bool.or(a, b), k), dh, 1n+dh)}
+    case CnOf{x}:
+      cn.denied(x, w)
 
 # a count of c: 0 the clients that wait, 1 those with a time, 2 those
 # that track, 3 the table's keys, 4 its ids, 5 the prefixes, 6 the
 # scripts cached, 7 the Lua state's bytes, 8 the cache's, 9 the
 # functions, 10 the libraries, 11 the functions' Lua state's bytes, 12
-# their records'
+# their records', 13 the keys that clients wait on, 14 to 17 the calls
+# ACL refused (an AUTH, a command, a key, a channel)
 def cn.at(+c: Cn, +i: Nat) -> Nat:
   match c:
-    case Cn{+n, +t, +tc, +tk, +ti, +tp, +sn, +sm, +sc, +fn, +fl, +fv, +fm}:
+    case Cn{+n, +t, +tc, +tk, +ti, +tp, +sn, +sm, +sc, +fn, +fl, +fv, +fm, +bk, +da, +dc, +dk, +dh}:
       Bool.pick(Nat, Nat.is_eq(i, 0n), n, Bool.pick(Nat, Nat.is_eq(i, 1n), t, Bool.pick(Nat, Nat.is_eq(i, 2n), tc,
       Bool.pick(Nat, Nat.is_eq(i, 3n), tk, Bool.pick(Nat, Nat.is_eq(i, 4n), ti, Bool.pick(Nat, Nat.is_eq(i, 5n), tp,
       Bool.pick(Nat, Nat.is_eq(i, 6n), sn, Bool.pick(Nat, Nat.is_eq(i, 7n), sm, Bool.pick(Nat, Nat.is_eq(i, 8n), sc,
-      Bool.pick(Nat, Nat.is_eq(i, 9n), fn, Bool.pick(Nat, Nat.is_eq(i, 10n), fl, Bool.pick(Nat, Nat.is_eq(i, 11n), fv, fm))))))))))))
+      Bool.pick(Nat, Nat.is_eq(i, 9n), fn, Bool.pick(Nat, Nat.is_eq(i, 10n), fl, Bool.pick(Nat, Nat.is_eq(i, 11n), fv, Bool.pick(Nat, Nat.is_eq(i, 12n), fm, Bool.pick(Nat, Nat.is_eq(i, 13n), bk,
+      Bool.pick(Nat, Nat.is_eq(i, 14n), da, Bool.pick(Nat, Nat.is_eq(i, 15n), dc, Bool.pick(Nat, Nat.is_eq(i, 16n), dk, dh)))))))))))))))))
     case CnOf{+x}:
       cn.at(x, i)
 
@@ -2263,6 +2344,219 @@ def rdb.point(+r: Rdb, +s: Nat) -> Maybe<&2, Pt>:
 def rdb.sched.go(+r: Rdb, +s: Nat) -> Bool:
   Bool.and(bgs.sched(rdb.bg(r)), rdb.retry(r, s))
 
+# The append-only file's account and the replication's offset (Rof): the
+# bytes in the file (aof_current_size); whether the server appends to a
+# file; the offset of the replication stream, Redis 7.2.16's
+# master_repl_offset with no replica (a count that may pass 2^48, as a
+# long long goes on: Big): one for each command written to the file,
+# MULTI and EXEC among them and no SELECT (replicationFeedSlaves counts
+# each command it feeds to no replica, before it would select a database
+# for one), and one for each cycle of the event loop in which a client
+# began to wait in WAIT or WAITAOF (the REPLCONF GETACK Redis sends then,
+# gk: the last one's cycle, one past El's count of the cycles before it),
+# kept while a pause holds for the pause's end (ask); the offset known
+# synced to the disk (fsynced_reploff, 0 at the start); each client's
+# offset after its last write (c->woff), by its id, a client that wrote
+# in a group given one past the offset before the group's entries (the
+# file is synced between groups, so that this offset and the one after
+# the client's own entry are synced together: WAITAOF); the offset of the
+# client whose EXEC runs, as it was before the EXEC (Redis sets c->woff
+# after EXEC's call); whether a client may wait in WAITAOF for a sync
+# (aw); and the offset when the syncer last asked for it (sa: everysec,
+# server.bend's The append-only file). RofOf, never built, makes Rof a
+# node of its own: one word of Info
+type Rof is Data:
+  Rof{n: Nat, on: Bool, off: Big, synced: Big, ask: Bool, wo: KV.Trie<Big>, xw: Big, aw: Bool, gk: Nat, sa: Big}
+  RofOf{r: Rof}
+
+def rof.new() -> Rof:
+  Rof{0n, False{}, big.zero(), big.zero(), False{}, KV.empty(Big), big.zero(), False{}, 0n, big.zero()}
+
+def rof.n(+r: Rof) -> Nat:
+  match r:
+    case Rof{+n, on, off, sy, ask, wo, xw, aw, gk, sa}:
+      n
+    case RofOf{+x}:
+      rof.n(x)
+
+def rof.on(+r: Rof) -> Bool:
+  match r:
+    case Rof{n, +on, off, sy, ask, wo, xw, aw, gk, sa}:
+      on
+    case RofOf{+x}:
+      rof.on(x)
+
+def rof.off(+r: Rof) -> Big:
+  match r:
+    case Rof{n, on, +off, sy, ask, wo, xw, aw, gk, sa}:
+      off
+    case RofOf{+x}:
+      rof.off(x)
+
+def rof.synced(+r: Rof) -> Big:
+  match r:
+    case Rof{n, on, off, +sy, ask, wo, xw, aw, gk, sa}:
+      sy
+    case RofOf{+x}:
+      rof.synced(x)
+
+def rof.asked(+r: Rof) -> Bool:
+  match r:
+    case Rof{n, on, off, sy, +ask, wo, xw, aw, gk, sa}:
+      ask
+    case RofOf{+x}:
+      rof.asked(x)
+
+def rof.xw(+r: Rof) -> Big:
+  match r:
+    case Rof{n, on, off, sy, ask, wo, +xw, aw, gk, sa}:
+      xw
+    case RofOf{+x}:
+      rof.xw(x)
+
+def rof.gk(+r: Rof) -> Nat:
+  match r:
+    case Rof{n, on, off, sy, ask, wo, xw, aw, +gk, sa}:
+      gk
+    case RofOf{+x}:
+      rof.gk(x)
+
+def rof.woff.of(m: Maybe<&2, Big>) -> Big:
+  match m:
+    case Some{w}:
+      w
+    case None{}:
+      big.zero()
+
+def rof.woff(+r: Rof, +id: Nat) -> Big:
+  match r:
+    case Rof{n, on, off, sy, ask, +wo, xw, aw, gk, sa}:
+      rof.woff.of(KV.get(Big, wo, Nat.show(id)))
+    case RofOf{+x}:
+      rof.woff(x, id)
+
+# whether a client may wait in WAITAOF for a sync
+def rof.due(+r: Rof) -> Bool:
+  match r:
+    case Rof{n, on, off, sy, ask, wo, xw, +aw, gk, sa}:
+      aw
+    case RofOf{+x}:
+      rof.due(x)
+
+# k bytes appended to the file, of c commands; the file of k bytes, at the
+# start or after a rewrite
+def rof.put(r: Rof, +k: Nat, +c: Nat) -> Rof:
+  match r:
+    case Rof{n, on, off, sy, ask, wo, xw, aw, gk, sa}:
+      Rof{Nat.add(n, k), on, big.add(off, c), sy, ask, wo, xw, aw, gk, sa}
+    case RofOf{x}:
+      rof.put(x, k, c)
+
+def rof.size(r: Rof, +k: Nat) -> Rof:
+  match r:
+    case Rof{n, on, off, sy, ask, wo, xw, aw, gk, sa}:
+      Rof{k, True{}, off, sy, ask, wo, xw, aw, gk, sa}
+    case RofOf{x}:
+      rof.size(x, k)
+
+# a client began to wait in WAIT or WAITAOF in the cycle cyc: a GETACK
+# counted, unless one was in the cycle (now), or kept for the end of the
+# pause that holds (held); and the pause's end, which counts the one kept
+# (Redis sends it at the first cycle's end with no pause)
+def rof.getack.of(held: Bool, now: Bool, r: Rof, +cyc: Nat) -> Rof:
+  match held now r:
+    case True{} _ Rof{n, on, off, sy, ask, wo, xw, aw, gk, sa}:
+      Rof{n, on, off, sy, True{}, wo, xw, aw, gk, sa}
+    case False{} True{} r0:
+      r0
+    case False{} False{} Rof{n, on, off, sy, ask, wo, xw, aw, gk, sa}:
+      Rof{n, on, big.add(off, 1n), sy, False{}, wo, xw, aw, 1n+cyc, sa}
+    case h t RofOf{x}:
+      rof.getack.of(h, t, x, cyc)
+
+def rof.getack(r: Rof, +held: Bool, +cyc: Nat) -> Rof:
+  +x = r
+  rof.getack.of(held, Nat.is_eq(rof.gk(x), 1n+cyc), x, cyc)
+
+def rof.unpaused.of(go: Bool, r: Rof, +cyc: Nat) -> Rof:
+  match go r:
+    case True{} Rof{n, on, off, sy, ask, wo, xw, aw, +gk, sa}:
+      Rof{n, on, big.add(off, Bool.pick(Nat, Nat.is_eq(gk, 1n+cyc), 0n, 1n)), sy, False{}, wo, xw, aw, 1n+cyc, sa}
+    case _ r0:
+      r0
+
+def rof.unpaused(r: Rof, +cyc: Nat) -> Rof:
+  +x = r
+  rof.unpaused.of(rof.asked(x), x, cyc)
+
+# the file synced to the disk up to all it was written (with always,
+# and before a rewrite takes another incremental file); the syncer's ask
+# (everysec), and its sync, of all that was written when it asked (none
+# goes back)
+def rof.sync.all(r: Rof) -> Rof:
+  match r:
+    case Rof{n, on, +off, sy, ask, wo, xw, aw, gk, sa}:
+      Rof{n, on, off, big.max(sy, off), ask, wo, xw, aw, gk, sa}
+    case RofOf{x}:
+      rof.sync.all(x)
+
+def rof.sync.ask(r: Rof) -> Rof:
+  match r:
+    case Rof{n, on, +off, sy, ask, wo, xw, aw, gk, sa}:
+      Rof{n, on, off, sy, ask, wo, xw, aw, gk, off}
+    case RofOf{x}:
+      rof.sync.ask(x)
+
+def rof.sync.done(r: Rof) -> Rof:
+  match r:
+    case Rof{n, on, off, sy, ask, wo, xw, aw, gk, +sa}:
+      Rof{n, on, off, big.max(sy, sa), ask, wo, xw, aw, gk, sa}
+    case RofOf{x}:
+      rof.sync.done(x)
+
+# a client's write in the group (with the file on), the client gone, and
+# the offset of an EXEC's client before it (with the file on)
+def rof.mine(r: Rof, +id: Nat) -> Rof:
+  match r:
+    case Rof{n, True{}, +off, sy, ask, wo, xw, aw, gk, sa}:
+      Rof{n, True{}, off, sy, ask, KV.set(Big, wo, Nat.show(id), big.add(off, 1n)), xw, aw, gk, sa}
+    case Rof{n, False{}, off, sy, ask, wo, xw, aw, gk, sa}:
+      Rof{n, False{}, off, sy, ask, wo, xw, aw, gk, sa}
+    case RofOf{x}:
+      rof.mine(x, id)
+
+def rof.left(r: Rof, +id: Nat) -> Rof:
+  match r:
+    case Rof{n, on, off, sy, ask, wo, xw, aw, gk, sa}:
+      Rof{n, on, off, sy, ask, KV.del(Big, wo, Nat.show(id)), xw, aw, gk, sa}
+    case RofOf{x}:
+      rof.left(x, id)
+
+def rof.xw.set(r: Rof, +id: Nat) -> Rof:
+  match r:
+    case Rof{n, True{}, off, sy, ask, +wo, xw, aw, gk, sa}:
+      Rof{n, True{}, off, sy, ask, wo, rof.woff.of(KV.get(Big, wo, Nat.show(id))), aw, gk, sa}
+    case Rof{n, False{}, off, sy, ask, wo, xw, aw, gk, sa}:
+      Rof{n, False{}, off, sy, ask, wo, xw, aw, gk, sa}
+    case RofOf{x}:
+      rof.xw.set(x, id)
+
+# a client began to wait in WAITAOF for a sync; and the clients that wait
+# looked at, whether one is left that a sync may serve
+def rof.aw(r: Rof) -> Rof:
+  match r:
+    case Rof{n, on, off, sy, ask, wo, xw, aw, gk, sa}:
+      Rof{n, on, off, sy, ask, wo, xw, True{}, gk, sa}
+    case RofOf{x}:
+      rof.aw(x)
+
+def rof.walked(r: Rof, +left: Bool) -> Rof:
+  match r:
+    case Rof{n, on, off, sy, ask, wo, xw, aw, gk, sa}:
+      Rof{n, on, off, sy, ask, wo, xw, left, gk, sa}
+    case RofOf{x}:
+      rof.walked(x, left)
+
 # everything INFO shows that the parameters and the keys do not: the
 # start, the last facts, the counts, the rates, the peak of memory, the
 # connections taken before the last CONFIG RESETSTAT, the size of the
@@ -2275,7 +2569,7 @@ def rdb.sched.go(+r: Rdb, +s: Nat) -> Bool:
 # the timing's state, the runs not yet counted and the RDB file's account
 # are nodes of their own (Tim, TRun, Rdb)
 type Info is Data:
-  IInfo{boot: Boot, live: Live, cnt: Count, inst: Inst, peak: Nat, conns0: Nat, aof0: Nat, aof: Nat, st: Stats, ex: Exp, rw: Rws, tm: Tim, rdb: Rdb}
+  IInfo{boot: Boot, live: Live, cnt: Count, inst: Inst, peak: Nat, conns0: Nat, aof0: Nat, aof: Rof, st: Stats, ex: Exp, rw: Rws, tm: Tim, rdb: Rdb}
 
 # CONFIG RESETSTAT counts the keys the sweeps and eviction delete and the
 # time past maxmemory again (Redis's stat_expiredkeys, stat_evictedkeys
@@ -2351,13 +2645,13 @@ def live.conns(+l: Live) -> Nat:
 
 # the server's facts at its start
 def info.new(+b: Boot, +l: Live) -> Info:
-  IInfo{b, l, count.zero(), IInst{live.ms(l), count.zero(), samples.zero(), samples.zero(), samples.zero()}, live.heap(l), 0n, 0n, 0n, stats.zero(), IExp{Nil{}, 0n, 0n, 0n, 0n}, rws.zero(), tim.new(), rdb.new(U32.to_nat(boot.start(b)))}
+  IInfo{b, l, count.zero(), IInst{live.ms(l), count.zero(), samples.zero(), samples.zero(), samples.zero()}, live.heap(l), 0n, 0n, rof.new(), stats.zero(), IExp{Nil{}, 0n, 0n, 0n, 0n}, rws.zero(), tim.new(), rdb.new(U32.to_nat(boot.start(b)))}
 
 # the append-only file the server restored at its start, of size bytes
 def info.restored(i: Info, +size: Nat) -> Info:
   match i:
     case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
-      IInfo{b, l, c, inst, pk, c0, size, size, st, ex, rw, tm, rf}
+      IInfo{b, l, c, inst, pk, c0, size, rof.size(a, size), st, ex, rw, tm, rf}
 
 # a batch's commands, the bytes it came in and the bytes of its replies
 def count.add(c: Count, +n: Nat, +inb: Nat, +outb: Nat) -> Count:
@@ -2395,7 +2689,89 @@ def info.erred(i: Info, +m: String) -> Info:
 def info.aof(i: Info, +n: Nat) -> Info:
   match i:
     case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
-      IInfo{b, l, c, inst, pk, c0, a0, Nat.add(a, n), st, ex, rw, tm, rf}
+      IInfo{b, l, c, inst, pk, c0, a0, rof.put(a, n, 0n), st, ex, rw, tm, rf}
+
+# the bytes and the commands of a group's entries appended to the file
+def info.aof.put(i: Info, +n: Nat, +k: Nat) -> Info:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
+      IInfo{b, l, c, inst, pk, c0, a0, rof.put(a, n, k), st, ex, rw, tm, rf}
+
+# the replication's offset and the file's sync (Rof)
+def info.off(+i: Info) -> Big:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, +a, st, ex, rw, tm, rf}:
+      rof.off(a)
+
+def info.synced(+i: Info) -> Big:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, +a, st, ex, rw, tm, rf}:
+      rof.synced(a)
+
+def info.aof.on(+i: Info) -> Bool:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, +a, st, ex, rw, tm, rf}:
+      rof.on(a)
+
+def info.woff(+i: Info, +id: Nat) -> Big:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, +a, st, ex, rw, tm, rf}:
+      rof.woff(a, id)
+
+def info.xw(+i: Info) -> Big:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, +a, st, ex, rw, tm, rf}:
+      rof.xw(a)
+
+def info.aof.due(+i: Info) -> Bool:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, +a, st, ex, rw, tm, rf}:
+      rof.due(a)
+
+def info.getack(i: Info, +held: Bool, +cyc: Nat) -> Info:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
+      IInfo{b, l, c, inst, pk, c0, a0, rof.getack(a, held, cyc), st, ex, rw, tm, rf}
+
+def info.unpaused(i: Info, +cyc: Nat) -> Info:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
+      IInfo{b, l, c, inst, pk, c0, a0, rof.unpaused(a, cyc), st, ex, rw, tm, rf}
+
+def info.sync.ask(i: Info) -> Info:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
+      IInfo{b, l, c, inst, pk, c0, a0, rof.sync.ask(a), st, ex, rw, tm, rf}
+
+def info.sync.done(i: Info) -> Info:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
+      IInfo{b, l, c, inst, pk, c0, a0, rof.sync.done(a), st, ex, rw, tm, rf}
+
+def info.sync.all(i: Info) -> Info:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
+      IInfo{b, l, c, inst, pk, c0, a0, rof.sync.all(a), st, ex, rw, tm, rf}
+
+def info.mine(i: Info, +id: Nat) -> Info:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
+      IInfo{b, l, c, inst, pk, c0, a0, rof.mine(a, id), st, ex, rw, tm, rf}
+
+def info.xw.set(i: Info, +id: Nat) -> Info:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
+      IInfo{b, l, c, inst, pk, c0, a0, rof.xw.set(a, id), st, ex, rw, tm, rf}
+
+def info.aw(i: Info) -> Info:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
+      IInfo{b, l, c, inst, pk, c0, a0, rof.aw(a), st, ex, rw, tm, rf}
+
+def info.walked(i: Info, +left: Bool) -> Info:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
+      IInfo{b, l, c, inst, pk, c0, a0, rof.walked(a, left), st, ex, rw, tm, rf}
 
 # the rewrite of the file (Rws): its record; one started at ms; one
 # scheduled; the one that ran ended well at ms, the file of size bytes
@@ -2419,7 +2795,7 @@ def info.rw.later(i: Info) -> Info:
 def info.rw.done(i: Info, +size: Nat, +ms: Nat) -> Info:
   match i:
     case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
-      IInfo{b, l, c, inst, pk, c0, size, size, st, ex, rws.end(rw, True{}, ms), tm, rf}
+      IInfo{b, l, c, inst, pk, c0, size, rof.size(a, size), st, ex, rws.end(rw, True{}, ms), tm, rf}
 
 def info.rw.stop(i: Info) -> Info:
   match i:
@@ -2535,13 +2911,13 @@ def info.bg.later(i: Info) -> Info:
     case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
       IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rdb.bg.later(rf)}
 
-def info.bg.taken.of(p: Maybe<&2, List<&2, R.Db>> & Rdb, b: Boot, l: Live, c: Count, inst: Inst, +pk: Nat, +c0: Nat, +a0: Nat, +a: Nat, st: Stats, ex: Exp, rw: Rws, tm: Tim) -> Maybe<&2, List<&2, R.Db>> & Info:
+def info.bg.taken.of(p: Maybe<&2, List<&2, R.Db>> & Rdb, b: Boot, l: Live, c: Count, inst: Inst, +pk: Nat, +c0: Nat, +a0: Nat, a: Rof, st: Stats, ex: Exp, rw: Rws, tm: Tim) -> Maybe<&2, List<&2, R.Db>> & Info:
   (m, rf) = p
   (m, IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf})
 
 def info.bg.taken(i: Info) -> Maybe<&2, List<&2, R.Db>> & Info:
   match i:
-    case IInfo{b, l, c, inst, +pk, +c0, +a0, +a, st, ex, rw, tm, rf}:
+    case IInfo{b, l, c, inst, +pk, +c0, +a0, a, st, ex, rw, tm, rf}:
       info.bg.taken.of(rdb.bg.taken(rf), b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm)
 
 def info.bg.wrote(i: Info, +k: Nat) -> Info:
@@ -2568,7 +2944,7 @@ def info.bg.drop(i: Info, +now: Nat) -> Info:
 def info.aof.size(+i: Info) -> Nat:
   match i:
     case IInfo{b, l, c, inst, pk, c0, a0, +a, st, ex, rw, tm, rf}:
-      a
+      rof.n(a)
 
 def info.aof.base(+i: Info) -> Nat:
   match i:
@@ -2586,6 +2962,16 @@ def live.waits(l: Live, +n: Nat, +t: Nat) -> Live:
   match l:
     case ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, cn}:
       ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, cn.waits(cn, n, t)}
+
+def live.bkeys(l: Live, +k: Nat) -> Live:
+  match l:
+    case ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, cn}:
+      ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, cn.bkeys(cn, k)}
+
+def live.denied(l: Live, +w: String) -> Live:
+  match l:
+    case ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, cn}:
+      ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, cn.denied(cn, w)}
 
 def live.trk(l: Live, +a: Nat, +b: Nat, +d: Nat, +e: Nat) -> Live:
   match l:
@@ -2645,6 +3031,18 @@ def info.blocked(i: Info, +n: Nat, +t: Nat) -> Info:
     case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
       IInfo{b, live.waits(l, n, t), c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}
 
+# the keys that clients wait on, k of them
+def info.bkeys(i: Info, +k: Nat) -> Info:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
+      IInfo{b, live.bkeys(l, k), c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}
+
+# a call ACL refused, for the reason w of its ACL LOG entry
+def info.denied(i: Info, +w: String) -> Info:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
+      IInfo{b, live.denied(l, w), c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}
+
 # the tracking's counts (CLIENT TRACKING): the clients that track, the
 # table's keys and its clients' ids, the BCAST prefixes
 def info.tracking(i: Info, +a: Nat, +b: Nat, +d: Nat, +e: Nat) -> Info:
@@ -2701,6 +3099,111 @@ def info.tick(i: Info, +ms: Nat) -> Info:
   match i:
     case IInfo{b, l, +c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
       IInfo{b, l, c, inst.tick(inst, c, ms), pk, c0, a0, a, stats.fold(st), ex, rw, tm, rf}
+
+# the event loop's cycles, as Redis 7.2.16's duration_stats count them
+# (durationAddSample): each group of the actor is one (server.bend,
+# Timing), from the clock's reading as it starts to the one after it
+# ends, and the scripts the engine runs after it (el.more); its time but
+# its ticks' is its commands' (cmd), its ticks' the cron's (cron, and cc
+# the cycle's that runs); the longest cycle, and the most commands one
+# ran (INFO's debug section); the last cycle's time, and the commands'
+# count as it started (its last 12 digits: info.ncmds); and for the
+# cron's samples, the time of the last one in ms (0: none since the
+# start or CONFIG RESETSTAT, whose next sample only sets the base, as
+# Redis's trackInstantaneousMetric does), the cycles and their time then,
+# and the last 16 samples of the cycles a second and of the us a cycle
+# took, newest first (Redis's STATS_METRIC_EL_CYCLE and
+# STATS_METRIC_EL_DURATION). Kept with the server's own (session.bend:
+# Mm, a node of 15 words that a cycle changes cheaply), not in Info,
+# whose node of 65 words each change of it reads and writes whole. ElOf,
+# never built, makes El a node of its own
+type El is Data:
+  El{cyc: Nat, sum: Nat, cmd: Nat, cron: Nat, cc: Nat, max: Nat, cmax: Nat, last: Nat, ln: Nat, lt: Nat, lc: Nat, ls: Nat, ec: List<&2, Nat>, ed: List<&2, Nat>}
+  ElOf{e: El}
+
+def el.zero() -> El:
+  El{0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, samples.zero(), samples.zero()}
+
+# the cycles before this one
+def el.cyc(+e: El) -> Nat:
+  match e:
+    case El{+cyc, sum, cmd, cron, cc, max, cmax, last, ln, lt, lc, ls, ec, ed}:
+      cyc
+    case ElOf{+x}:
+      el.cyc(x)
+
+# a cycle of d us that ran n commands, the commands' count n0 as it
+# started (its ticks' time is the cron's, not the commands')
+def el.cycle(e: El, +d: Nat, +n: Nat, +n0: Nat) -> El:
+  match e:
+    case El{cyc, sum, cmd, cron, +cc, max, cmax, last, ln, lt, lc, ls, ec, ed}:
+      El{Nat.add(cyc, 1n), Nat.add(sum, d), Nat.add(cmd, Nat.sub(d, Nat.min(d, cc))), cron, 0n, Nat.max(max, d), Nat.max(cmax, n), d, n0, lt, lc, ls, ec, ed}
+    case ElOf{x}:
+      el.cycle(x, d, n, n0)
+
+# the last cycle d us longer, the commands' count n1 now: the scripts of
+# its group that the engine ran after it (server.bend: grp.more), their
+# time its commands', their calls its commands
+def el.more(e: El, +d: Nat, +n1: Nat) -> El:
+  match e:
+    case El{cyc, sum, cmd, cron, cc, max, cmax, +last, +ln, lt, lc, ls, ec, ed}:
+      +l = Nat.add(last, d)
+      El{cyc, Nat.add(sum, d), Nat.add(cmd, d), cron, cc, Nat.max(max, l), Nat.max(cmax, Nat.sub(n1, ln)), l, ln, lt, lc, ls, ec, ed}
+    case ElOf{x}:
+      el.more(x, d, n1)
+
+# a tick that took d us
+def el.cron(e: El, +d: Nat) -> El:
+  match e:
+    case El{cyc, sum, cmd, cron, cc, max, cmax, last, ln, lt, lc, ls, ec, ed}:
+      El{cyc, sum, cmd, Nat.add(cron, d), Nat.add(cc, d), max, cmax, last, ln, lt, lc, ls, ec, ed}
+    case ElOf{x}:
+      el.cron(x, d)
+
+# the cron's sample at ms since 1970: the cycles a second, and the us a
+# cycle took, since the last sample (Redis 7.2.16's
+# trackInstantaneousMetric of STATS_METRIC_EL_CYCLE over the time, and
+# of STATS_METRIC_EL_DURATION over the cycles); with no sample before,
+# the base alone
+def el.sample.c(first: Bool, +n: Nat, +t: Nat, ec: List<&2, Nat>) -> List<&2, Nat>:
+  match first:
+    case True{}:
+      ec
+    case False{}:
+      rate(n, t) <> take15(15n, ec)
+
+def el.sample.d(first: Bool, +n: Nat, +s: Nat, ed: List<&2, Nat>) -> List<&2, Nat>:
+  match first:
+    case True{}:
+      ed
+    case False{}:
+      Bool.pick(Nat, Nat.is_lt(0n, n), Nat.div(s, n), 0n) <> take15(15n, ed)
+
+def el.sample(e: El, +ms: Nat) -> El:
+  match e:
+    case El{+cyc, +sum, cmd, cron, cc, max, cmax, last, ln, +lt, +lc, +ls, ec, ed}:
+      +f = Nat.is_eq(lt, 0n)
+      +n = Nat.sub(cyc, lc)
+      El{cyc, sum, cmd, cron, cc, max, cmax, last, ln, ms, cyc, sum, el.sample.c(f, n, Nat.sub(ms, lt), ec), el.sample.d(f, n, Nat.sub(sum, ls), ed)}
+    case ElOf{x}:
+      el.sample(x, ms)
+
+# CONFIG RESETSTAT: all again, as Redis's resetServerStats zeroes
+# duration_stats, el_cmd_cnt_max and the samples
+def el.reset(e: El) -> El:
+  match e:
+    case El{cyc, sum, cmd, cron, cc, max, cmax, last, ln, lt, lc, ls, ec, ed}:
+      el.zero()
+    case ElOf{x}:
+      el.reset(x)
+
+# the commands' count, its last 12 digits, as a cycle of the event loop
+# starts (El): a number, so that no part of the server is held while the
+# cycle runs (one held would be copied by each change of it)
+def info.ncmds(+i: Info) -> Nat:
+  match i:
+    case IInfo{b, l, ICount{+cmds, inb, outb}, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
+      big.lo(cmds)
 
 # CONFIG RESETSTAT: the counts, the rates and the statistics start again,
 # as Redis's resetServerStats, resetCommandTableStats and
@@ -2831,17 +3334,24 @@ def info.blk(i: Info) -> Info:
     case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
       IInfo{b, l, c, inst, pk, c0, a0, a, stats.blk(st), ex, rw, tm, rf}
 
-# the client of id served after it waited, or unblocked by CLIENT UNBLOCK
-# (stats.served); gone, the call it blocked with is forgotten
+# the client of id served after it waited, its time up, or unblocked by
+# CLIENT UNBLOCK: its call counted (stats.served, and in
+# total_commands_processed); gone, the call it blocked with is forgotten,
+# and dropped, never counted
 def info.served(i: Info, +id: Nat) -> Info:
   match i:
     case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, +tm, rf}:
-      IInfo{b, l, c, inst, pk, c0, a0, a, stats.served(wt.get(tim.wt(tm), id), st, tim.cf(tm), id), ex, rw, tim.unwait(tm, id), rf}
+      IInfo{b, l, count.add(c, 1n, 0n, 0n), inst, pk, c0, a0, a, stats.served(wt.get(tim.wt(tm), id), st, tim.cf(tm), id), ex, rw, tim.unwait(tm, id), rf}
+
+def info.drop(i: Info, +id: Nat) -> Info:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
+      IInfo{b, l, c, inst, pk, c0, a0, a, stats.drop(st, id), ex, rw, tim.unwait(tm, id), rf}
 
 def info.gone(i: Info, +id: Nat) -> Info:
   match i:
     case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
-      IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tim.unwait(tm, id), rf}
+      IInfo{b, l, c, inst, pk, c0, a0, rof.left(a, id), st, ex, rw, tim.unwait(tm, id), rf}
 
 # a call of d us at at (s since 1970), its arguments xs, its client's
 # address and name, for the slow log (Timing)
@@ -3118,6 +3628,25 @@ def lat.stats.of(on: Bool, +st: Stats, +items: List<&2, C.CItem>) -> String:
 def kv(+k: String, +v: String) -> String:
   k ++ ":" ++ v ++ "\r\n"
 
+# the event loop's lines of INFO's stats (El)
+def el.stats(+e: El) -> String:
+  match e:
+    case El{+cyc, +sum, +cmd, cron, cc, max, cmax, last, ln, lt, lc, ls, +ec, +ed}:
+      kv("eventloop_cycles", Nat.show(cyc)) ++ kv("eventloop_duration_sum", Nat.show(sum)) ++
+      kv("eventloop_duration_cmd_sum", Nat.show(cmd)) ++ kv("instantaneous_eventloop_cycles_per_sec", Nat.show(mean(ec))) ++
+      kv("instantaneous_eventloop_duration_usec", Nat.show(mean(ed)))
+    case ElOf{+x}:
+      el.stats(x)
+
+# and of its debug section: the AOF's time is not told apart (0)
+def el.debug(+e: El) -> String:
+  match e:
+    case El{cyc, sum, cmd, +cron, cc, +max, +cmax, last, ln, lt, lc, ls, ec, ed}:
+      kv("eventloop_duration_aof_sum", "0") ++ kv("eventloop_duration_cron_sum", Nat.show(cron)) ++
+      kv("eventloop_duration_max", Nat.show(max)) ++ kv("eventloop_cmd_per_cycle_max", Nat.show(cmax))
+    case ElOf{+x}:
+      el.debug(x)
+
 def cfg(+items: List<&2, C.CItem>, +name: String) -> String:
   C.config.get_value(items, name)
 
@@ -3128,18 +3657,36 @@ def flag(b: Bool) -> String:
     case False{}:
       "0"
 
+# the listeners, as Redis 7.2 lists them (getListensInfoString): TCP's
+# while port is not 0, with bind's addresses as they are written (a '-'
+# too), then the unix socket's when there is one. Redis lists only as
+# many of bind's addresses as it listens on, the first ones; BendKV lists
+# them all. None can change while the server runs.
+def listen.binds(ws: List<&2, String>) -> String:
+  match ws:
+    case Nil{}:
+      ""
+    case Con{w, rest}:
+      ",bind=" ++ w ++ listen.binds(rest)
+
+def listeners(+items: List<&2, C.CItem>) -> String:
+  +port = cfg(items, "port")
+  +unix = cfg(items, "unixsocket")
+  Bool.pick(String, String.eq(port, "0"), "", "listener0:name=tcp" ++ listen.binds(C.words(cfg(items, "bind"))) ++ ",port=" ++ port ++ "\r\n") ++
+  Bool.pick(String, String.is_empty(unix), "", "listener1:name=unix,bind=" ++ unix ++ "\r\n")
+
 def sec.server(+items: List<&2, C.CItem>, +b: Boot, +l: Live) -> String:
   match b l:
     case IBoot{+os, +pid, +run, +replid, +exe, +conf, sysmem, +start, heap0, key} ILive{+secs, +usec, ut, st, mut, mst, rss, heap, act, conns, clients, cn}:
       +up = Bool.pick(U32, U32.is_le(start, secs), U32.sub(secs, start), 0)
-      "# Server\r\n" ++ kv("redis_version", "7.0.15") ++ kv("redis_git_sha1", "00000000") ++ kv("redis_git_dirty", "0") ++
+      "# Server\r\n" ++ kv("redis_version", "7.2.16") ++ kv("redis_git_sha1", "00000000") ++ kv("redis_git_dirty", "0") ++
       kv("redis_build_id", "0000000000000000") ++ kv("redis_mode", "standalone") ++ kv("os", os) ++ kv("arch_bits", "64") ++
       kv("monotonic_clock", "POSIX clock_gettime") ++ kv("multiplexing_api", "epoll") ++ kv("atomicvar_api", "c11-builtin") ++
       kv("gcc_version", "0.0.0") ++ kv("process_id", pid) ++ kv("process_supervised", "no") ++ kv("run_id", run) ++
       kv("tcp_port", cfg(items, "port")) ++ kv("server_time_usec", U32.show(secs) ++ pad(U32.show(usec), 6n)) ++
       kv("uptime_in_seconds", U32.show(up)) ++ kv("uptime_in_days", U32.show(U32.div(up, 86400))) ++
       kv("hz", cfg(items, "hz")) ++ kv("configured_hz", cfg(items, "hz")) ++ kv("lru_clock", U32.show(U32.and(secs, 16777215))) ++
-      kv("executable", exe) ++ kv("config_file", conf) ++ kv("io_threads_active", "0")
+      kv("executable", exe) ++ kv("config_file", conf) ++ kv("io_threads_active", "0") ++ listeners(items)
 
 def sec.clients(+items: List<&2, C.CItem>, +l: Live) -> String:
   match l:
@@ -3147,7 +3694,8 @@ def sec.clients(+items: List<&2, C.CItem>, +l: Live) -> String:
       "# Clients\r\n" ++ kv("connected_clients", Nat.show(clients)) ++ kv("cluster_connections", "0") ++
       kv("maxclients", cfg(items, "maxclients")) ++ kv("client_recent_max_input_buffer", "0") ++
       kv("client_recent_max_output_buffer", "0") ++ kv("blocked_clients", Nat.show(cn.at(cn, 0n))) ++ kv("tracking_clients", Nat.show(cn.at(cn, 2n))) ++
-      kv("clients_in_timeout_table", Nat.show(cn.at(cn, 1n)))
+      kv("clients_in_timeout_table", Nat.show(cn.at(cn, 1n))) ++ kv("total_blocking_keys", Nat.show(cn.at(cn, 13n))) ++
+      kv("total_blocking_keys_on_nokey", "0")
 
 # memory: used_memory is what the heap's live values hold (IO.heap, as
 # zmalloc counts what Redis allocated), from which maxmemory evicts;
@@ -3278,7 +3826,7 @@ def sec.persistence(+items: List<&2, C.CItem>, +rf: Rdb, +a0: Nat, +a: Nat, +rw:
   kv("aof_last_cow_size", "0") ++ kv("module_fork_in_progress", "0") ++ kv("module_fork_last_cow_size", "0") ++
   sec.aof(on, a0, a, rws.sched(rw))
 
-def sec.stats.go(c: Count, inst: Inst, +conns: Nat, +errs: String, +expired: Nat, +ex: Exp, +now: Nat, +l: Live) -> String:
+def sec.stats.go(c: Count, inst: Inst, +conns: Nat, +errs: String, +expired: Nat, +ex: Exp, +now: Nat, +l: Live, +el: El) -> String:
   match c inst:
     case ICount{+cmds, +inb, +outb} IInst{ms, last, +sc, +si, +so}:
       "# Stats\r\n" ++ kv("total_connections_received", Nat.show(conns)) ++ kv("total_commands_processed", big.show(cmds)) ++
@@ -3298,7 +3846,10 @@ def sec.stats.go(c: Count, inst: Inst, +conns: Nat, +errs: String, +expired: Nat
       kv("tracking_total_items", Nat.show(live.cn(l, 4n))) ++ kv("tracking_total_prefixes", Nat.show(live.cn(l, 5n))) ++ kv("unexpected_error_replies", "0") ++
       kv("total_error_replies", errs) ++ kv("dump_payload_sanitizations", "0") ++ kv("total_reads_processed", "0") ++
       kv("total_writes_processed", "0") ++ kv("io_threaded_reads_processed", "0") ++ kv("io_threaded_writes_processed", "0") ++
-      kv("reply_buffer_shrinks", "0") ++ kv("reply_buffer_expands", "0")
+      kv("reply_buffer_shrinks", "0") ++ kv("reply_buffer_expands", "0") ++ el.stats(el) ++
+      kv("acl_access_denied_auth", Nat.show(live.cn(l, 14n))) ++
+      kv("acl_access_denied_cmd", Nat.show(live.cn(l, 15n))) ++ kv("acl_access_denied_key", Nat.show(live.cn(l, 16n))) ++
+      kv("acl_access_denied_channel", Nat.show(live.cn(l, 17n)))
 
 def sec.good(on: Bool) -> String:
   match on:
@@ -3307,11 +3858,11 @@ def sec.good(on: Bool) -> String:
     case False{}:
       ""
 
-def sec.replication(+items: List<&2, C.CItem>, +replid: String) -> String:
+def sec.replication(+items: List<&2, C.CItem>, +replid: String, +off: Big) -> String:
   "# Replication\r\n" ++ kv("role", "master") ++ kv("connected_slaves", "0") ++
   sec.good(Bool.and(Bool.not(String.eq(cfg(items, "min-replicas-to-write"), "0")), Bool.not(String.eq(cfg(items, "min-replicas-max-lag"), "0")))) ++
   kv("master_failover_state", "no-failover") ++ kv("master_replid", replid) ++
-  kv("master_replid2", "0000000000000000000000000000000000000000") ++ kv("master_repl_offset", "0") ++
+  kv("master_replid2", "0000000000000000000000000000000000000000") ++ kv("master_repl_offset", big.show(off)) ++
   kv("second_repl_offset", "-1") ++ kv("repl_backlog_active", "0") ++ kv("repl_backlog_size", cfg(items, "repl-backlog-size")) ++
   kv("repl_backlog_first_byte_offset", "0") ++ kv("repl_backlog_histlen", "0")
 
@@ -3345,6 +3896,7 @@ def sec.keyspace(dbs: List<&2, R.Db>) -> String:
 # As Redis's genInfoSectionDict picks them: none named is the default
 # ones; "default" adds them, "all" is every section but the modules'
 # own, "everything" every one; any other name, case aside, is a section.
+# Redis 7.2's debug comes last, and only when it is named.
 
 type Sel is Data:
   ISel{all: Bool, every: Bool, names: List<&2, String>}
@@ -3378,6 +3930,13 @@ def sel.has(+s: Sel, +name: String) -> Bool:
   match s:
     case ISel{all, every, +names}:
       Bool.or(all, C.text.member(names, name))
+
+# a section that "all" and "everything" leave out: only its name picks
+# it (Redis 7.2's debug)
+def sel.named(+s: Sel, +name: String) -> Bool:
+  match s:
+    case ISel{all, every, +names}:
+      C.text.member(names, name)
 
 # Redis puts an empty line between sections
 def join(xs: List<&2, String>, +acc: String) -> String:
@@ -3453,21 +4012,21 @@ def info.seed(+i: Info) -> U32:
 def on.persistence(on: Bool, +items: List<&2, C.CItem>, +i: Info, +now: Nat) -> String:
   match on i:
     case True{} IInfo{b, l, c, inst, pk, c0, +a0, +a, st, ex, +rw, tm, +rf}:
-      sec.persistence(items, rf, a0, a, rw, now)
+      sec.persistence(items, rf, a0, rof.n(a), rw, now)
     case False{} _:
       ""
 
-def on.stats(on: Bool, +i: Info, +now: Nat) -> String:
+def on.stats(on: Bool, +i: Info, +now: Nat, +el: El) -> String:
   match on i:
     case True{} IInfo{b, +l, +c, +inst, pk, +c0, a0, a, +st, +ex, rw, tm, rf}:
-      sec.stats.go(c, inst, Nat.sub(live.conns(l), c0), stats.total(st), exp.n(ex), ex, now, l)
+      sec.stats.go(c, inst, Nat.sub(live.conns(l), c0), stats.total(st), exp.n(ex), ex, now, l, el)
     case False{} _:
       ""
 
 def on.replication(on: Bool, +items: List<&2, C.CItem>, +i: Info) -> String:
   match on i:
-    case True{} IInfo{+b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
-      sec.replication(items, boot.replid(b))
+    case True{} IInfo{+b, l, c, inst, pk, c0, a0, +a, st, ex, rw, tm, rf}:
+      sec.replication(items, boot.replid(b), rof.off(a))
     case False{} _:
       ""
 
@@ -3515,15 +4074,16 @@ def on.head(on: Bool, +head: String) -> String:
     case False{}:
       ""
 
-# INFO [section ...]: the text of the sections asked for
-def text(args: List<&2, String>, +items: List<&2, C.CItem>, +i: Info, +ds: R.Ds) -> String:
+# INFO [section ...]: the text of the sections asked for, the event
+# loop's cycles el (El) with the rest
+def text(args: List<&2, String>, +items: List<&2, C.CItem>, +i: Info, +el: El, +ds: R.Ds) -> String:
   +s = sel.of(args)
   join([
     on.server(sel.has(s, "server"), items, i),
     on.clients(sel.has(s, "clients"), items, i),
     on.memory(sel.has(s, "memory"), items, i),
     on.persistence(sel.has(s, "persistence"), items, i, R.ds.now(ds)),
-    on.stats(sel.has(s, "stats"), i, R.ds.now(ds)),
+    on.stats(sel.has(s, "stats"), i, R.ds.now(ds), el),
     on.replication(sel.has(s, "replication"), items, i),
     on.cpu(sel.has(s, "cpu"), i),
     on.head(Bool.or(sel.has(s, "module_list"), sel.has(s, "modules")), "# Modules\r\n"),
@@ -3531,7 +4091,8 @@ def text(args: List<&2, String>, +items: List<&2, C.CItem>, +i: Info, +ds: R.Ds)
     on.errstats(sel.has(s, "errorstats"), i),
     on.latstats(sel.has(s, "latencystats"), items, i),
     on.head(sel.has(s, "cluster"), "# Cluster\r\n" ++ kv("cluster_enabled", "0")),
-    on.keyspace(sel.has(s, "keyspace"), ds)], "")
+    on.keyspace(sel.has(s, "keyspace"), ds),
+    on.head(sel.named(s, "debug"), "# Debug\r\n" ++ el.debug(el))], "")
 
 # MEMORY STATS and MEMORY DOCTOR
 # ------------------------------
@@ -3556,7 +4117,7 @@ def mem.pct(+a: Nat, +b: Nat) -> F.Fl:
   F.fl.div(F.fmt.f(), F.fl.mul(F.fmt.f(), mem.f(a), mem.f(100n)), mem.f(b))
 
 def mem.dbl(x: F.Fl) -> R.Reply:
-  R.RDbl{F.fl.show_g(F.fl.to(F.fmt.d(), x))}
+  R.RDbl{F.f64.show(F.f64.of(F.fl.to(F.fmt.d(), x)))}
 
 # a - b, signed (ssize_t)
 def mem.diff(+a: Nat, +b: Nat) -> R.Int:

@@ -21,7 +21,23 @@ each kind of error from a client that must authenticate, one at a time
 and pipelined, then once it has; a failed AUTH; HELLO without AUTH;
 RESET with a password and without; a password removed and set again; a
 pipeline that sets the password and goes on; a transaction with errors
-of each kind; a subscribed client's errors; and the counts of INFO.
+of each kind; a subscribed client's errors; the limits of a client that
+must authenticate; the counts of INFO; and clients that connect just
+before another removes the password, each created as it connects
+(createClient, at accept), so while there was one.
+
+The limits, as Redis 7.2.16 reads a request while its client must
+authenticate (processMultibulkBuffer): a count past 10 arguments, or a
+bulk's length past 16384 bytes, is a protocol error as soon as its line
+has come, and the connection closes. The scenarios: the line alone, and
+the request whole; 10 arguments and 16384 bytes, which pass; an inline
+request, which has no limits; requests before one past a limit; an AUTH,
+a failed AUTH and HELLO's AUTH before it, in the same write; a RESET
+before it, and before a long one read in part; and a client that came
+while the password was set, once it is removed (a request past a limit,
+and the count's line of another) and once it is set again (the rest of
+that request, whose line Redis took while there was no password, then
+another count's line).
 
     python3 tests/auth_test.py --bendkv 6380 --redis 6390
 """
@@ -75,6 +91,20 @@ def counts(r):
     lines = r.cmd("INFO", "commandstats").splitlines() + r.cmd("INFO", "errorstats").splitlines()
     return sorted(",".join(p for p in l.split(",") if not p.startswith(("usec=", "usec_per_call=")))
                   for l in lines if l.startswith(("cmdstat_", "errorstat_")))
+
+
+def until_closed(c, timeout=1.0):
+    """The replies a client gets until its connection closes ("closed"),
+    or none comes for a while ("open"); a long one as its length."""
+    out = []
+    while True:
+        try:
+            x = c.read(timeout)
+        except (EOFError, ConnectionError):
+            return out + ["closed"]
+        if x == "TIMEOUT":
+            return out + ["open"]
+        out.append(len(x) if isinstance(x, str) and len(x) > 100 else kind(x))
 
 
 def scenarios(port, log):
@@ -137,8 +167,49 @@ def scenarios(port, log):
     s = Client(port, db=None)
     log("12 sub", s.cmd("AUTH", "pw"), s.cmd("SUBSCRIBE", "ch"), s.cmd("PING", "a", "b"), s.cmd("SET", "k", "v", "EX", "abc"), s.cmd("SET", "k"),
         s.cmd("NOSUCH"), s.cmd("PING"), s.cmd("RESET"), s.cmd("GET", "k"))
-    # 13. the counts of INFO
-    log("13 counts", counts(r))
+    # 13. the limits of a client that must authenticate
+    eleven = ["DEL"] + ["d%d" % i for i in range(10)]
+    ten = ["DEL"] + ["d%d" % i for i in range(9)]
+    for name, data in (("13 count line", b"*11\r\n"), ("13 eleven", enc(eleven)), ("13 ten", enc(ten)),
+                       ("13 bulk line", b"*2\r\n$4\r\nECHO\r\n$16385\r\n"),
+                       ("13 bulk line first", b"*1\r\n$16385\r\n" + b"y" * 100),
+                       ("13 bulk 16385", enc(["ECHO", "x" * 16385])), ("13 bulk 16384", enc(["ECHO", "x" * 16384])),
+                       ("13 inline", b"DEL " + b" ".join(b"i%d" % i for i in range(12)) + b"\r\n"),
+                       ("13 after others", enc(["PING"]) + enc(["GET", "k"]) + enc(eleven) + enc(["PING"])),
+                       ("13 auth first", enc(["AUTH", "pw"]) + enc(eleven) + enc(["ECHO", "x" * 20000])),
+                       ("13 bad auth", enc(["AUTH", "bad"]) + enc(eleven)),
+                       ("13 hello auth", enc(["HELLO", "2", "AUTH", "default", "pw"]) + enc(eleven))):
+        q = Client(port, db=None)
+        q.raw(data)
+        log(name, until_closed(q))
+        q.close()
+    for name, data in (("13 reset", b"*11\r\n"),
+                       ("13 reset long", b"*2\r\n$4\r\nECHO\r\n$20000\r\n" + b"x" * 3000)):
+        z = Client(port, db=None)
+        log(name, z.cmd("AUTH", "pw"))
+        z.raw(enc(["RESET"]) + data)
+        log(name, until_closed(z))
+        z.close()
+    v = Client(port, db=None)
+    log("13 before", v.cmd("GET", "k"))
+    log("13 nopass", r.cmd("CONFIG", "SET", "requirepass", ""))
+    v.raw(enc(eleven) + b"*11\r\n")
+    log("13 nopass", until_closed(v))
+    log("13 again", r.cmd("CONFIG", "SET", "requirepass", "pw"))
+    v.raw(enc(eleven)[len(b"*11\r\n"):])
+    log("13 again", until_closed(v))
+    v.raw(b"*11\r\n")
+    log("13 again", until_closed(v))
+    v.close()
+    # 14. the counts of INFO
+    log("14 counts", counts(r))
+    # 15. clients that connect just before the password is removed: each
+    # came while there was one, and must authenticate once it is set again
+    for _ in range(3):
+        j = Client(port, db=None)
+        log("15 join", r.cmd("CONFIG", "SET", "requirepass", ""), r.cmd("CONFIG", "SET", "requirepass", "pw"),
+            j.cmd("GET", "k"))
+        j.close()
     r.cmd("CONFIG", "SET", "requirepass", "")
     for c in (r, a, n, m, u, w, x, y, s):
         c.close()

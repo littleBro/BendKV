@@ -1,6 +1,6 @@
 # Lua scripting: the engine
 # =========================
-# The engine of EVAL, EVALSHA, SCRIPT and FUNCTION is Redis 7.0.15's own
+# The engine of EVAL, EVALSHA, SCRIPT and FUNCTION is Redis 7.2.16's own
 # Lua (deps/lua), built into the program by src/lua/engine.c, which
 # declares the effects below. Bend drives a script as an automaton of
 # steps, each a word and a string (the word's layout is in engine.c):
@@ -17,7 +17,9 @@
 #   a log line (kind 3), redis.log's, its level in bits 12 to 15, answered
 #     with Engine.next(1, "");
 #   an ACL check (kind 4): a command's arguments as a request, answered
-#     with ":1" when the command is known and ":0" when it is not.
+#     with ":1" when the caller's user may run it and ":0" when it may not,
+#     "-" when the command is not known and "!" when its arity does not
+#     allow the request's number of words.
 #
 # FUNCTION and FCALL run on the same engine, in a Lua state of their own:
 # an FCALL is a run of a function (Engine.start), FUNCTION LOAD and
@@ -55,6 +57,13 @@ def Engine.start(sha: String, keys: String, args: String, word: U32) -> IO(Step)
 # the next step, after a reply (0, its bytes), a go-ahead (1) or a
 # kill (2)
 def Engine.next(word: U32, data: String) -> IO(Step):
+  import "./lua/engine.c"
+  import "./lua/engine.js"
+
+# lua-enable-deprecated-api, which only the start sets (immutable): whether
+# the Lua states made from then on keep newproxy, setfenv and getfenv (on:
+# 1) or leave them out (0, as by default)
+def Engine.deprecated(on: U32) -> IO(Unit):
   import "./lua/engine.c"
   import "./lua/engine.js"
 

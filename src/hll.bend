@@ -889,13 +889,25 @@ def hist.sp(k: Nat, at: Nat, g: Nat, +d: U32, o: Op, +v: String, +p: Nat, +idx: 
                   +p2 = Nat.add(p, op.step(c))
                   hist.sp(q, 0n, hist.g(U32.from_nat(val)), hist.d(U32.from_nat(val), U32.from_nat(len)), op.at(v, p2, 0), v, p2, Nat.add(idx, len), h0, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18, h19, h20, h21, h22, h23, h24, h25)
 
+# the opcodes a walk of v reads at most: each holds a register or more,
+# so that of opcodes that hold 16384 there are 16384 at most, and the
+# 16385th, if any, passes the last register, where the fix of
+# CVE-2025-32023 ends Redis's walks (7.2.16's, and 7.0.15's as Ubuntu
+# ships it); a walk that read on would find the same, as the registers
+# only add up, but in time that grows with the square of v's length, as
+# String.code_at finds a byte of a String of several chunks by walking
+# its chunks from the first (1 MB of zeros took 1.5 s, and the 32 MB of
+# a test of Redis 7.2.16 would take half an hour a walk)
+def sp.most(+v: String) -> Nat:
+  Nat.min(Nat.add(String.length(v), 1n), 16385n)
+
 # whether the opcodes hold 16384 registers (hllMerge, hllSparseToDense),
 # i the registers before p: an opcode that would pass the last register
 # ends the walk, and makes them invalid, as the fix of CVE-2025-32023 has
-# it (Redis 7.0.15 as Ubuntu ships it, which the tests compare with;
-# before it, the zeros ran on, and a VAL past the last register ended
-# the walk where the opcodes were valid if it ended at 16384); so they
-# are valid when their runs add up to 16384
+# it (Redis 7.2.16, and 7.0.15 as Ubuntu ships it; before it, the zeros
+# ran on, and a VAL past the last register ended the walk where the
+# opcodes were valid if it ended at 16384); so they are valid when their
+# runs add up to 16384, which k = sp.most(v) steps find
 def sp.valid(k: Nat, o: Op, +v: String, +p: Nat, +i: Nat, +pe: U32) -> Bool:
   match k:
     case 0n:
@@ -943,11 +955,11 @@ def sp.pairs(k: Nat, o: Op, +v: String, +p: Nat, +i: Nat, +pe: U32) -> List<&2, 
 
 # the registers of a valid sparse v, as words
 def sp.words(+v: String, a: List<&2, U32>, +pe: U32) -> List<&2, U32>:
-  ws.add(a, sp.pairs(Nat.add(String.length(v), 1n), op.at(v, 16n, pe), v, 16n, 0n, pe))
+  ws.add(a, sp.pairs(sp.most(v), op.at(v, 16n, pe), v, 16n, 0n, pe))
 
 # whether the opcodes of a sparse v hold 16384 registers
 def sp.ok(+v: String, +pe: U32) -> Bool:
-  sp.valid(Nat.add(String.length(v), 1n), op.at(v, 16n, pe), v, 16n, 0n, pe)
+  sp.valid(sp.most(v), op.at(v, 16n, pe), v, 16n, 0n, pe)
 
 def sp.dense.of(ok: Bool, +v: String, +pe: U32) -> Maybe<&2, String>:
   match ok:
@@ -1512,7 +1524,7 @@ def count.new(sparse: Bool, +v: String) -> Count:
   match sparse:
     case True{}:
       +f = flat(v)
-      count.sp(hist.sp(Nat.add(Nat.mul(String.length(f), 2n), 2n), 1n, 0n, 0, op.at(f, 16n, 0), f, 16n, 0n, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0))
+      count.sp(hist.sp(Nat.mul(sp.most(f), 2n), 1n, 0n, 0, op.at(f, 16n, 0), f, 16n, 0n, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0))
     case False{}:
       CntNew{est(d.hist(v))}
 
@@ -1673,7 +1685,7 @@ def hist.ps(k: Nat, at: Nat, g: Nat, +d: U32, +ps: List<&2, RV>, +n: Nat, +h0: U
 def acc.sp.s(ok: Bool, +v: String, +ps: List<&2, RV>) -> Acc:
   match ok:
     case True{}:
-      AccS{ps.max(ps, sp.pairs(Nat.add(String.length(v), 1n), op.at(v, 16n, 0), v, 16n, 0n, 0))}
+      AccS{ps.max(ps, sp.pairs(sp.most(v), op.at(v, 16n, 0), v, 16n, 0n, 0))}
     case False{}:
       AccBad{}
 
@@ -1827,7 +1839,8 @@ def merge(+v: String, a: Acc, +mx: Nat) -> Maybe<&2, String>:
 # and 10,000 elements added to a dense HyperLogLog and to a sparse one
 # (Redis: ten million), whose counts at 1, 10, 100, 1000 and 10,000 must
 # agree, stay within 6 standard errors of the truth (1 at 10), and the
-# sparse one sparse below 1500 elements (hll-sparse-max-bytes / 2).
+# sparse one sparse below hm / 2 elements, hm the bytes it may grow to
+# (hll-sparse-max-bytes, as Redis's sparse one grows to it).
 # Random numbers come from xorshift with a fixed seed: Redis's rand()
 # gives other ones, which the checks pass all the same.
 
@@ -1886,8 +1899,8 @@ def st.v(o: AddOut) -> String:
     case AddErr{ch, v}:
       v
 
-def st.add1(+v: String, +e: String) -> String:
-  st.v(add(False{}, v, 3000n, [e]))
+def st.add1(+v: String, +e: String, +hm: Nat) -> String:
+  st.v(add(False{}, v, hm, [e]))
 
 def count.w(c: Count) -> W:
   match c:
@@ -1910,20 +1923,20 @@ def st.cnt(+v: String) -> Nat:
 def st.diff(+a: Nat, +b: Nat) -> Nat:
   Bool.pick(Nat, Nat.is_lt(a, b), Nat.sub(b, a), Nat.sub(a, b))
 
-# the checks at checkpoint j: the sparse one sparse below 1500, the
+# the checks at checkpoint j: the sparse one sparse below hm / 2, the
 # counts agreeing, the dense one's within ceil(1.04 / 128 * 6 * j) of j
 # (1 at 10)
-def st.check(+j: Nat, +d: String, +sv: String) -> Maybe<&2, String>:
+def st.check(+j: Nat, +d: String, +sv: String, +hm: Nat) -> Maybe<&2, String>:
   +cd = st.cnt(d)
   +err = st.diff(j, cd)
   +mx = Bool.pick(Nat, Nat.is_eq(j, 10n), 1n, Nat.div(Nat.add(Nat.mul(624n, j), 12799n), 12800n))
-  Bool.pick(Maybe<&2, String>, Bool.and(Nat.is_lt(j, 1500n), Bool.not(is_sparse(sv))), Some{"TESTFAILED sparse encoding not used"},
+  Bool.pick(Maybe<&2, String>, Bool.and(Nat.is_lt(j, Nat.div(hm, 2n)), Bool.not(is_sparse(sv))), Some{"TESTFAILED sparse encoding not used"},
   Bool.pick(Maybe<&2, String>, Nat.is_ne(cd, st.cnt(sv)), Some{"TESTFAILED dense/sparse disagree"},
   Bool.pick(Maybe<&2, String>, Nat.is_lt(mx, err), Some{"TESTFAILED Too big error. card:" ++ Nat.show(j) ++ " abserr:" ++ Nat.show(err)}, None{})))
 
 # elements j on, k of them, added to the dense d and the sparse sv: err,
 # what the last checkpoint found; chk, whether j is the next one (cp)
-def st.add(k: Nat, err: Maybe<&2, String>, chk: Bool, +j: Nat, +d: String, +sv: String, +cp: Nat) -> Maybe<&2, String>:
+def st.add(k: Nat, err: Maybe<&2, String>, chk: Bool, +j: Nat, +d: String, +sv: String, +cp: Nat, +hm: Nat) -> Maybe<&2, String>:
   match k:
     case 0n:
       err
@@ -1935,14 +1948,15 @@ def st.add(k: Nat, err: Maybe<&2, String>, chk: Bool, +j: Nat, +d: String, +sv: 
           match chk:
             case False{}:
               +e = st.ele(j)
-              st.add(q, None{}, Nat.is_eq(Nat.add(j, 1n), cp), Nat.add(j, 1n), st.add1(d, e), st.add1(sv, e), cp)
+              st.add(q, None{}, Nat.is_eq(Nat.add(j, 1n), cp), Nat.add(j, 1n), st.add1(d, e, hm), st.add1(sv, e, hm), cp, hm)
             case True{}:
               +e = st.ele(j)
-              +d2 = st.add1(d, e)
-              +s2 = st.add1(sv, e)
+              +d2 = st.add1(d, e, hm)
+              +s2 = st.add1(sv, e, hm)
               +cp2 = Nat.mul(cp, 10n)
-              st.add(q, st.check(j, d2, s2), Nat.is_eq(Nat.add(j, 1n), cp2), Nat.add(j, 1n), d2, s2, cp2)
+              st.add(q, st.check(j, d2, s2, hm), Nat.is_eq(Nat.add(j, 1n), cp2), Nat.add(j, 1n), d2, s2, cp2, hm)
 
-# PFSELFTEST: none when every check passes, else what failed
-def selftest() -> Maybe<&2, String>:
-  st.or(st.or(st.cycle(2463534242), st.cycle(88675123)), st.add(10000n, None{}, True{}, 1n, st.dense0() ++ zeros(12288n), fresh(), 1n))
+# PFSELFTEST with hll-sparse-max-bytes at hm: none when every check
+# passes, else what failed
+def selftest(+hm: Nat) -> Maybe<&2, String>:
+  st.or(st.or(st.cycle(2463534242), st.cycle(88675123)), st.add(10000n, None{}, True{}, 1n, st.dense0() ++ zeros(12288n), fresh(), 1n, hm))

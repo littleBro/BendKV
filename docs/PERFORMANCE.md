@@ -8754,3 +8754,121 @@ SET 3,900 and HSET 10,900 alike. Their cost is the same on a stream of 100, 10,0
 per request, +0.8% to +0.9% from the baseline, as the reads' build counted (3,484, 4,246
 and 4,588); last-level misses 2.83, 3.14 and 3.32; with 100 clients in BLPOP, +3.1% and
 +3.6%.
+
+## 85. Lists and sets as Redis 7.2.16 holds them
+
+FINDINGS 3zzzzl. "Before" is the build of 8a4caf0, the integration branch this change was
+made on, and "now" this change on it; each pair ran side by side on the same machine
+(four cores, shared with other work), under callgrind with the save points off (`--save
+""`: a save writes its file from the server's own process, and its instructions would
+count among the requests').
+
+**Instructions, one request at a time** (as `tools/colls.sh` counts: one client, the whole
+request; a list `l` of 100,000 elements and `q` of 200,000, made by RPUSH a hundred
+elements a command, and 1,000 lists `k:<n>` of ten elements, listpacks):
+
+| command | before | now | |
+|---|---:|---:|---:|
+| LLEN l | 19,663 | 19,513 | −0.8% |
+| LINDEX l 0 | 21,990 | 21,597 | −1.8% |
+| LINDEX q 100000 | 180,243 | 53,073 | −70.6% |
+| LRANGE l 0 99 | 123,516 | 123,184 | −0.3% |
+| LRANGE q 100000 100099 | 311,357 | 190,440 | −38.8% |
+| LSET q 100000 y | 400,515 | 520,360 | +29.9% |
+| LPUSH l xyz | 26,807 | 27,816 | +3.8% |
+| RPUSH l xyz | 26,868 | 27,828 | +3.6% |
+| LPOP l | 22,790 | 23,803 | +4.4% |
+| RPOP l | 22,293 | 23,746 | +6.5% |
+| LPUSH l v0000001 | 27,203 | 28,658 | +5.3% |
+| LPUSH n:<random> xyz (a new list) | 24,348 | 24,632 | +1.2% |
+| LPUSH k:<n> xyz (a listpack) | 26,461 | 27,331 | +3.3% |
+| LPOP k:<n> (a listpack) | 24,176 | 25,114 | +3.9% |
+| LRANGE k:<n> 0 -1 | 34,619 | 34,407 | −0.6% |
+| LMOVE l m LEFT RIGHT | 32,299 | 35,113 | +8.7% |
+| LINSERT q BEFORE e100000 z | 65,410,307 | 66,392,191 | +1.5% |
+| LREM q 1 z | 30,507,428 | 30,403,855 | −0.3% |
+| LTRIM l 1 -2 | 43,424 | 35,036 | −19.3% |
+
+A list kept to its last thousand elements (LPUSH, then LTRIM 0 999, a list of 1,000
+elements of 9 bytes, from a Python client) ran 33,257 instructions a command before and
+32,084 now (−3.5%), and LTRIM 1 -2 after pushes and pops at both ends 44,258 and 38,191
+(−13.7%): LTRIM now turns the piece at the end it cuts to start there once, which it read
+through on each call before. Those runs, from a Python client, move by up to 20% from
+one run to the next, so their counts are rough.
+
+**Instructions, pipelined** (`tools/callgrind_req.sh`, 20 clients at a depth of 16, as
+`make perfcheck` counts; redis-benchmark's one list, `mylist`, of elements of 3 bytes):
+
+| test | before | now | |
+|---|---:|---:|---:|
+| LPUSH | 11,945 | 12,824 | +7.4% |
+| RPUSH | 11,899 | 12,814 | +7.7% |
+| LPOP | 8,059 | 9,059 | +12.4% |
+| RPOP | 8,035 | 9,029 | +12.4% |
+| LRANGE_100 | 126,013 | 126,048 | +0.0% |
+
+Of LPUSH's 880 more instructions, about 550 are `term_drop` and `span_fade` (the list's
+node built anew and the old one dropped) and 62 `str_digits_at` (an element's bytes in a
+listpack read its digits); LPOP's 1,000 go the same way.
+
+**Memory** (`used_memory` before and after the lists are written by RPUSH, a thousand
+elements a command, the last row by LPUSH, one element a command; the elements of 8
+bytes but in the second row): bytes an element, or a list where it says so.
+
+| lists × elements | Redis 7.2.16 | before | now |
+|---|---:|---:|---:|
+| 2 × 500,000 | 10.1 | 9.3 | 9.3 |
+| 100 × 10,000, elements of 30 bytes | 32.3 | 32.0 | 32.1 |
+| 10,000 × 100 | 10.9 | 13.4 | 14.3 |
+| 100,000 × 10, a list | 178 | 366 | 462 |
+| 100,000 × 3, a list | 106 | 270 | 366 |
+| 100,000 × 1, a list | 90 | 254 | 350 |
+| 1 × 20,000, pushed one at a time | 12.7 | 9.4 | 9.5 |
+
+A key of 100,000 of each kind, one field, member or element (bytes a key):
+
+| | Redis 7.2.16 | before | now |
+|---|---:|---:|---:|
+| SET k v | 74 | 118 | 118 |
+| HSET k f v | 82 | 189 | 157 |
+| SADD k m | 82 | 189 | 157 |
+| ZADD k 1 m | 82 | 205 | 173 |
+| RPUSH k v | 82 | 237 | 333 |
+
+A list's node holds the deque's six words and the nodes' five numbers and their tag: 96
+bytes a list. A collection's value was as wide as a list's deque, six words, whatever its
+kind; with the deque in the list's node it is as wide as the widest of the others, and
+every hash, set and sorted set takes 32 bytes less.
+
+**`make perfcheck`** (merged with 5a2ff7c): GET, SET and INCR 3,504, 4,298 and 4,611
+instructions per request, as the integration branch counts them (3,501, 4,301 and 4,609);
+with 100 clients in BLPOP, +3.1% and +3.4%.
+
+## 86. WAITAOF and the replication's offset
+
+FINDINGS 3zzzzp. "Before" is the build of 93e2462, the integration branch this change was
+made on, and "now" this change on it, under callgrind (`tools/callgrind_req.sh`, 20
+clients at a depth of 16, as `make perfcheck` counts), the save points off.
+
+| test | before | now | |
+|---|---:|---:|---:|
+| GET | 3,505 | 3,504 | −0.0% |
+| SET | 4,296 | 4,297 | +0.0% |
+| INCR | 4,611 | 4,611 | 0.0% |
+| GET, 100 clients in BLPOP | 3,617 | 3,612 | −0.1% |
+| SET, 100 clients in BLPOP | 4,451 | 4,453 | +0.0% |
+| SET, the append-only file on | 8,989 | 8,621 | −4.1% |
+| INCR, the append-only file on | 12,545 | 12,130 | −3.3% |
+
+With the file on (`--appendonly yes`, `appendfsync everysec`), the writer now walks a
+group's entries once, each encoded as it is taken apart (`ents.out`), where it walked
+them for their arguments (`A.ents.args`) and again for their database (`A.ents.sel`):
+of SET's 368 fewer instructions, 248 are the second walk's loops, 102 `slot_keep` and
+67 `List.append`. The counts of "now" hold the offset's count and each writing client's
+offset, set by its id in a trie (`ents.mine` and `rof.mine`, about 20 instructions a
+write besides the trie's own).
+
+A first version ran SET with the file on at 10,214 instructions (+13.6%) and INCR at
+13,668 (+9.0%): it read the FUNCTION entries' list after encoding it, so Bend made
+`A.encode.onto` borrow its list in every caller, and each caller freed the list in a
+walk of its own, 766 instructions a SET in `term_drop` (FINDINGS 7).

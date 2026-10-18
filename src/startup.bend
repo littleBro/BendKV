@@ -21,7 +21,7 @@ def version() -> String:
   "0.1.0"
 
 def version.line() -> String:
-  "BendKV server v=" ++ version() ++ " redis=7.0.15 bits=64"
+  "BendKV server v=" ++ version() ++ " redis=7.2.16 bits=64"
 
 def usage() -> String:
   "Usage: ./bendkv [/path/to/redis.conf] [options] [-]\n" ++
@@ -555,9 +555,11 @@ def date(+secs: U32, +us: U32) -> String:
 def log.char(+level: U32) -> String:
   Bool.pick(String, U32.is_eq(level, 0), ".", Bool.pick(String, U32.is_eq(level, 1), "-", Bool.pick(String, U32.is_eq(level, 2), "*", "#")))
 
-# loglevel's value as a level
+# loglevel's value as a level: past warning, nothing (LL_NOTHING) is
+# logged
 def log.level(+v: String) -> U32:
-  Bool.pick(U32, String.eq(v, "debug"), 0, Bool.pick(U32, String.eq(v, "verbose"), 1, Bool.pick(U32, String.eq(v, "warning"), 3, 2)))
+  Bool.pick(U32, String.eq(v, "debug"), 0, Bool.pick(U32, String.eq(v, "verbose"), 1,
+    Bool.pick(U32, String.eq(v, "warning"), 3, Bool.pick(U32, String.eq(v, "nothing"), 4, 2))))
 
 # role: 'C' before the server is up (Redis's pid is not yet set then), 'M'
 # after
@@ -684,7 +686,7 @@ def unix.perm(+items: List<&2, C.CItem>) -> U32:
 # mode, its port and its pid
 def logo(+port: String, +pid: U32) -> String:
   "\n" ++
-  "                BendKV " ++ version() ++ " (Redis 7.0.15 commands) 64 bit\n" ++
+  "                BendKV " ++ version() ++ " (Redis 7.2.16 commands) 64 bit\n" ++
   "                Running in standalone mode\n" ++
   "                Port: " ++ port ++ "\n" ++
   "                PID: " ++ U32.show(pid) ++ "\n"

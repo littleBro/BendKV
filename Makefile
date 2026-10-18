@@ -7,7 +7,7 @@
 # make bench (needs redis-benchmark), make perfcheck (instructions, misses
 # and prefetches per request against a baseline; needs valgrind and
 # objdump), make suite (Redis's own
-# test suite; needs a Redis 7.0.15 source tree in REDIS_SRC, its
+# test suite; needs a Redis 7.2.16 source tree in REDIS_SRC, its
 # redis-server on the PATH, and tclsh), make clients (the test suites of
 # redis-py and go-redis; needs python3, go, and PyPI and the Go module
 # proxy). Everything needs Bend with
@@ -64,16 +64,15 @@ verdict:
 build: build/bendkv
 
 # The emitted C is compiled here rather than by Bend, with the Lua engine
-# beside it: Redis 7.0.15's Lua and three of its helpers (deps/redis,
-# vendored as Redis ships them but for their casts of numbers, two
-# fixes of CVEs and Redis 7.2's test of a table's index: NOTICE,
-# built once into build/deps with Redis's flags),
+# beside it: Redis 7.2.16's Lua, three of its helpers and its fpconv_dtoa
+# (deps/redis, vendored as Redis ships them but for Lua's casts of
+# numbers: NOTICE, built once into build/deps with Redis's flags),
 # whose headers src/lua/engine.c includes (tools/sanitize.sh and
 # tools/pgo_build.sh build the same sources with their own flags)
-DEPS_SRC = $(wildcard deps/redis/deps/lua/src/*.c) $(wildcard deps/redis/src/*.c)
+DEPS_SRC = $(wildcard deps/redis/deps/lua/src/*.c) $(wildcard deps/redis/src/*.c) $(wildcard deps/redis/deps/fpconv/*.c)
 DEPS_OBJ = $(patsubst %.c,build/deps/%.o,$(notdir $(DEPS_SRC)))
-DEPS_H = $(wildcard deps/redis/deps/lua/src/*.h) $(wildcard deps/redis/src/*.h)
-DEPS_INC = -I deps/redis/deps/lua/src -I deps/redis/src
+DEPS_H = $(wildcard deps/redis/deps/lua/src/*.h) $(wildcard deps/redis/src/*.h) $(wildcard deps/redis/deps/fpconv/*.h)
+DEPS_INC = -I deps/redis/deps/lua/src -I deps/redis/src -I deps/redis/deps/fpconv
 DEPS_FLAGS = $(DEPS_INC) -DENABLE_CJSON_GLOBAL -DREDIS_STATIC= -DLUA_USE_MKSTEMP -D_GNU_SOURCE
 
 build/deps/%.o: deps/redis/deps/lua/src/%.c $(DEPS_H)
@@ -81,6 +80,10 @@ build/deps/%.o: deps/redis/deps/lua/src/%.c $(DEPS_H)
 	$(BEND_CC) -std=c11 -O3 -c $< $(DEPS_FLAGS) -o $@
 
 build/deps/%.o: deps/redis/src/%.c $(DEPS_H)
+	mkdir -p build/deps
+	$(BEND_CC) -std=c11 -O3 -c $< $(DEPS_FLAGS) -o $@
+
+build/deps/%.o: deps/redis/deps/fpconv/%.c $(DEPS_H)
 	mkdir -p build/deps
 	$(BEND_CC) -std=c11 -O3 -c $< $(DEPS_FLAGS) -o $@
 

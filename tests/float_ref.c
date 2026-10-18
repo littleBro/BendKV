@@ -1,14 +1,19 @@
-// float_ref.c: what Redis 7.0.15 does with a number's text on x86-64,
-// with glibc's strtod, strtold and printf: string2d and "%.17g" for a
-// double (the score of a sorted set), string2ld and ld2string's
-// LD_STR_HUMAN for a long double (INCRBYFLOAT), as util.c has them. The
+// float_ref.c: what Redis does with a number's text on x86-64, with
+// glibc's strtod, strtold and printf: string2d and "%.17g" for a double
+// (the score of a sorted set), string2ld and ld2string's LD_STR_HUMAN for
+// a long double (INCRBYFLOAT), as 7.0.15's util.c has them; and how Redis
+// 7.2.16 writes a double: d2string and double2ll (its util.c), and the
+// fpconv_dtoa of its deps/fpconv, which this program is built with. The
 // reference of tests/float_test.py.
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
 #include <ctype.h>
+#include <limits.h>
+#include <stdint.h>
 #include <math.h>
+#include "fpconv_dtoa.h"
 
 #define MAX_LONG_DOUBLE_CHARS 5*1024
 
@@ -58,6 +63,41 @@ static int ld2human(char *buf, size_t len, long double value) {
     buf[l] = '\0';
     return l;
 }
+// Redis 7.2.16's double2ll and d2string (util.c)
+static int double2ll(double d, long long *out) {
+    if (d < (double)(-LLONG_MAX/2) || d > (double)(LLONG_MAX/2))
+        return 0;
+    long long ll = d;
+    if (ll == d) {
+        *out = ll;
+        return 1;
+    }
+    return 0;
+}
+static int d2string(char *buf, size_t len, double value) {
+    if (isnan(value)) {
+        len = snprintf(buf,len,"nan");
+    } else if (isinf(value)) {
+        if (value < 0)
+            len = snprintf(buf,len,"-inf");
+        else
+            len = snprintf(buf,len,"inf");
+    } else if (value == 0) {
+        if (1.0/value < 0)
+            len = snprintf(buf,len,"-0");
+        else
+            len = snprintf(buf,len,"0");
+    } else {
+        long long lvalue;
+        if (double2ll(value, &lvalue))
+            len = snprintf(buf,len,"%lld",lvalue);
+        else {
+            len = fpconv_dtoa(value, buf);
+            buf[len] = '\0';
+        }
+    }
+    return len;
+}
 static void showd(double d) {
     if (isnan(d)) printf("nan"); else printf("%.17g", d);
 }
@@ -86,6 +126,14 @@ int main(int argc, char **argv) {
             double x, y;
             if (!string2d(a, strlen(a), &x) || !string2d(b, strlen(b), &y)) printf("ERR");
             else showd(line[0] == 'a' ? x + y : x * y);
+        } else if (!strcmp(line, "w")) {
+            uint64_t bits = strtoull(a, NULL, 16);
+            double d; memcpy(&d, &bits, 8);
+            char buf[64];
+            d2string(buf, sizeof buf, d);
+            printf("%s | ", buf);
+            int n = fpconv_dtoa(d, buf); buf[n] = 0;
+            printf("%s", buf);
         } else if (!strcmp(line, "al")) {
             long double x, y;
             if (!string2ld(a, strlen(a), &x) || !string2ld(b, strlen(b), &y)) printf("ERR");
