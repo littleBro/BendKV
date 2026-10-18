@@ -10944,6 +10944,94 @@ that waited in XREAD or XREADGROUP. The client libraries' suites: go-redis passe
 test of XRead, which waits, and so all 463 of the tests Redis passes; redis-py 2,768 of
 2,772 in each protocol, as before.
 
+## 3zzzzv. Streams' walks, read in place
+
+**What there is.** Section 87 of PERFORMANCE.md left three next steps for the streams'
+groups: a walk that reads a node's entries in place, a group's write planned once, and
+XWSet's change told which entries the stream holds. The walks now read in place and cut
+at their start, and a group's write no longer runs its reads twice for nothing. XWSet
+still asks of each entry it names whether the stream holds it, as the file's script asks
+when it is replayed; with the walks cut at their start, that takes a few heads. Nothing
+that the commands answer, change, log or count changed.
+
+**How it is built** (`src/stream.bend`, with `src/redis.bend`, `src/map.bend` and
+`src/rdb.bend`).
+- **A walk in place.** A node keeps its entries the newest first. A walk forwards turned
+  the list around (a new list, each entry taken), and a walk backwards took each entry it
+  read. Both now read the entries where they lie: the node is found in the stream's tree
+  by a descent that borrows it, and lent to the walk, which carries its bounds and its
+  node in its state, so that a step holds the entry it is at and nothing else. A walk
+  forwards goes down the list by a recursion and visits the entries on its way back up,
+  the oldest first. An entry's fields are read from a copy of its bytes, made for the
+  entries the walk takes alone.
+- **A walk cut at its start.** A node's live entries' IDs grow, the oldest first: XADD
+  writes an ID past the stream's last, and XSETID moves the last ID no lower than the
+  last live entry, so that an entry made after a live one has a greater ID; rdb.bend
+  checks it of each node it reads. Every live entry older than one before a walk's start
+  is then before the start too. A walk forwards that starts past a node's master ID reads
+  the node's newest entry first: when that entry is live and before the start, the node
+  holds nothing the walk takes, and the walk passes it whole; when the start seems nearer
+  the newest entry than the master ID (by their times, or by their sequences when the
+  times are the same), the walk goes down from the newest, reading each head, to the
+  first live entry before the start, which it passes with the older ones, and then takes
+  or passes the entries above it, the oldest first; else it goes from the oldest, as
+  before. The walk takes the same entries each way; the guess decides how many heads it
+  reads. A look for one ID (whether the stream holds an entry, an entry of a group's
+  history) is such a walk.
+- **A head read in six bytes.** Most entries' heads are three integers of 7 bits (the
+  flags and the ID's differences from the master's), each a byte below 128 and its
+  backlen, 1. Such a head is read from the entry's first six bytes; any other the way
+  section 3zzzzt made, which `tests/stream_check.bend` checks against the slow way as
+  before.
+- **A group's write that runs its reads once.** XREADGROUP's act served its key again
+  for its change and built again the reply of its entries, which nothing read: it now
+  serves the key for the words of its change alone, its walks reading IDs alone. XCLAIM's
+  and XAUTOCLAIM's count of changes ran their plans again with their replies, each
+  claimed entry's fields read again: it now runs the plan without the reply.
+- **A group changed in place.** A group's writes read each field of the group apart
+  (`xgroup.pel`, `xgroup.cons`) and built a group of them, so that each change copied
+  the path it took in the group's trees of pending entries and of consumers, and dropped
+  the old path with the old group. A write now matches the group once and moves its
+  fields into the group it makes: a group that a write made itself (a step of XWSet's
+  words, of XCLAIM's, of XAUTOCLAIM's) changes where it lies, and a group the stream
+  holds is copied at its first change.
+- **A tree's size read in place.** XINFO's replies read the sizes of a stream's trees
+  from the results of calls (`KV.xns.size(X.xstream.nodes(x))`). The compiler makes a
+  parameter owned for every caller when one call passes it a value that no one else
+  holds, so each size a walk read took the tree it was given: a tree the keyspace holds
+  was copied, each time, and the copy dropped. XINFO reads them in place now
+  (`xs.nnodes`, `xgroup.npel`, `xcon.nids`), and every size is read borrowed.
+
+The compiler's inference of ownership, a lesson for BendKV's code: a parameter is
+borrowed until one call passes it a value no one else holds, or until its function keeps
+it across a call down (a parameter saved in a continuation is taken; a field read from a
+lent value is not). Either makes the parameter owned for all its callers, which then copy
+what they pass. The walk down from a node's newest entry keeps the entry it is at as a
+field of the list it walks, which the node lends, for that reason; its first version kept
+it as a parameter, and every walk forwards took its node's entries.
+
+The proofs are as before but for XCLAIM's and XAUTOCLAIM's plans, whose new argument the
+proof of their change names. No law changed.
+
+**What it costs** (PERFORMANCE.md, section 89). Nothing on the fast way. Instructions a
+request on a stream of 2,000 entries, before and now (Redis 7.2.16): XREADGROUP of a new
+entry 593,000 and 251,000 (56,000), its history of ten 1,858,000 and 766,000 (89,000),
+XCLAIM of one entry 798,000 and 256,000 (75,000), XAUTOCLAIM of ten 2,991,000 and
+1,017,000 (157,000), XRANGE of ten from a node's middle 226,000 and 139,000 (71,000). A
+read that starts at a node's last entry, as XREAD of a stream's last entry does, takes
+44,000 where it took 230,000; Redis takes 72,000, as its iterator walks the node from its
+first entry. Under redis-benchmark, on a stream of 100,000 entries: XREADGROUP of a new
+entry runs 28,600 times a second (10,800 before, Redis 163,000), its history of ten
+10,700 (3,640; 99,600), XCLAIM of one entry 21,900 (7,410; 110,000), XAUTOCLAIM of ten
+7,820 (2,130; 71,200), XRANGE of ten from a node's middle 74,400 (37,600; 158,000), and
+XREAD of the stream's last entry 196,000 (33,200), faster than Redis's 149,000.
+
+**Tests.** Against Redis 7.2.16, nothing differs: `tests/stream_read_test.py` (28,880
+checks), `tests/stream_group_test.py` (32,233), `tests/stream_write_test.py` (32,582),
+`tests/stream_dump_test.py` (3,036) and `tests/stream_block_test.py` (91 lines);
+`tests/stream_aof_test.py` and `tests/stream_group_aof_test.py` pass, and
+`tests/stream_check.bend` reads 3,856 heads alike both ways, 3,424 of them the fast way.
+
 ## 4. Where a request's time goes, and hiding the memory waits
 
 With the eight patches, BendKV ran fewer instructions on GET and SET than Redis, missed

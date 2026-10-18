@@ -19327,10 +19327,10 @@ def xv.first(es: List<&2, X.XE>) -> Reply:
 
 # XINFO STREAM's fields that both forms answer
 def xv.info.head(+x: KV.XStream) -> List<&2, Reply>:
-  [RBulk{"length"}, r_int(KV.xstream.len(x)), RBulk{"radix-tree-keys"}, r_int(KV.xns.size(X.xstream.nodes(x))), RBulk{"radix-tree-nodes"}, r_int(X.xs.rax(x)), RBulk{"last-generated-id"}, xv.id(X.xstream.last(x)), RBulk{"max-deleted-entry-id"}, xv.id(X.xstream.maxdel(x)), RBulk{"entries-added"}, xv.ll(X.xstream.added(x)), RBulk{"recorded-first-entry-id"}, xv.id(X.xstream.first(x))]
+  [RBulk{"length"}, r_int(KV.xstream.len(x)), RBulk{"radix-tree-keys"}, r_int(X.xs.nnodes(x)), RBulk{"radix-tree-nodes"}, r_int(X.xs.rax(x)), RBulk{"last-generated-id"}, xv.id(X.xstream.last(x)), RBulk{"max-deleted-entry-id"}, xv.id(X.xstream.maxdel(x)), RBulk{"entries-added"}, xv.ll(X.xstream.added(x)), RBulk{"recorded-first-entry-id"}, xv.id(X.xstream.first(x))]
 
 def xv.info.plain(+x: KV.XStream) -> Reply:
-  RMap{List.append(&2, Reply, xv.info.head(x), [RBulk{"groups"}, r_int(KV.xgs.size(X.xstream.groups(x))), RBulk{"first-entry"}, xv.first(X.xs.range(x, X.xid.zero(), X.xid.max(), 1n, False{})), RBulk{"last-entry"}, xv.first(X.xs.range(x, X.xid.zero(), X.xid.max(), 1n, True{}))])}
+  RMap{List.append(&2, Reply, xv.info.head(x), [RBulk{"groups"}, r_int(X.xs.ngroups(x)), RBulk{"first-entry"}, xv.first(X.xs.range(x, X.xid.zero(), X.xid.max(), 1n, False{})), RBulk{"last-entry"}, xv.first(X.xs.range(x, X.xid.zero(), X.xid.max(), 1n, True{}))])}
 
 # XINFO STREAM FULL's pending entries of a group, and of a consumer
 def xv.nack.full(+n: KV.XNack) -> Reply:
@@ -19436,7 +19436,7 @@ def xv.info.stream(+sub: String, args: List<&2, String>, +x: KV.XStream) -> Repl
 
 # XINFO GROUPS
 def xv.group.info(+x: KV.XStream, +g: KV.XGroup) -> Reply:
-  RMap{[RBulk{"name"}, RBulk{KV.xgroup.name(g)}, RBulk{"consumers"}, r_int(KV.xcs.size(X.xgroup.cons(g))), RBulk{"pending"}, r_int(KV.xpl.size(X.xgroup.pel(g))), RBulk{"last-delivered-id"}, xv.id(X.xgroup.last(g)), RBulk{"entries-read"}, xv.read.cnt(X.xgroup.read(g)), RBulk{"lag"}, xv.lag(X.xs.lag(x, g))]}
+  RMap{[RBulk{"name"}, RBulk{KV.xgroup.name(g)}, RBulk{"consumers"}, r_int(X.xgroup.ncons(g)), RBulk{"pending"}, r_int(X.xgroup.npel(g)), RBulk{"last-delivered-id"}, xv.id(X.xgroup.last(g)), RBulk{"entries-read"}, xv.read.cnt(X.xgroup.read(g)), RBulk{"lag"}, xv.lag(X.xs.lag(x, g))]}
 
 def xv.groups.info(gs: List<&2, KV.XGroup>, +x: KV.XStream) -> List<&2, Reply>:
   match gs:
@@ -19448,7 +19448,7 @@ def xv.groups.info(gs: List<&2, KV.XGroup>, +x: KV.XStream) -> List<&2, Reply>:
 # XINFO CONSUMERS: each consumer's idle time, now less its seen time (0
 # for one past now), and, as Redis 7.2 adds it, its inactive time
 def xv.con.info(+c: KV.XCon, +now: Nat) -> Reply:
-  RMap{[RBulk{"name"}, RBulk{KV.xcon.name(c)}, RBulk{"pending"}, r_int(KV.xis.size(X.xcon.ids(c))), RBulk{"idle"}, r_int(Nat.sub(now, X.xcon.seen(c))), RBulk{"inactive"}, xv.inactive(X.xcon.active(c), now)]}
+  RMap{[RBulk{"name"}, RBulk{KV.xcon.name(c)}, RBulk{"pending"}, r_int(X.xcon.nids(c)), RBulk{"idle"}, r_int(Nat.sub(now, X.xcon.seen(c))), RBulk{"inactive"}, xv.inactive(X.xcon.active(c), now)]}
 
 def xv.cons.info(cs: List<&2, KV.XCon>, +now: Nat) -> List<&2, Reply>:
   match cs:
@@ -21913,7 +21913,7 @@ def xset.words(+g: KV.XGroup, +c: String, +seen: Nat, a: KV.XAct, ns: List<&2, X
 def xdelcon.con(m: Maybe<&2, KV.XCon>, +g: KV.XGroup, +ws: List<&2, String>, +x: KV.XStream) -> Out:
   match m:
     case Some{+c}:
-      Out{r_int(KV.xis.size(X.xcon.ids(c))), CStream{XWDelCon{ws}, X.xs.gdelcon(x, g, c)}}
+      Out{r_int(X.xcon.nids(c)), CStream{XWDelCon{ws}, X.xs.gdelcon(x, g, c)}}
     case None{}:
       Out{r_int(0n), CKeep{}}
 
@@ -22261,54 +22261,63 @@ def xcl.reply(ids: List<&2, KV.XId>, +justid: Bool, +x: KV.XStream, acc: List<&2
     case Con{+id, rest}:
       xcl.reply(rest, justid, x, xcl.one(justid, id, x) <> acc)
 
-def xcl.done(s: X.XCs, a: KV.XAct, +made: Bool, +justid: Bool, +c: String, +bump: Bool, +x: KV.XStream, +now: Nat) -> XPlan:
+# the claimed entries' reply, none made for a plan's count alone (bare,
+# whose reply nothing reads)
+def xcl.r(bare: Bool, got: List<&2, KV.XId>, +justid: Bool, +x: KV.XStream) -> Reply:
+  match bare:
+    case True{}:
+      RNullA{}
+    case False{}:
+      RArray{xcl.reply(got, justid, x, Nil{})}
+
+def xcl.done(s: X.XCs, a: KV.XAct, +made: Bool, +justid: Bool, +c: String, +bump: Bool, +bare: Bool, +x: KV.XStream, +now: Nat) -> XPlan:
   match s:
     case X.XCs{+g3, +ns, +got}:
       +k = List.length(&2, X.XSn, ns)
       +n = Nat.add(Nat.add(xg.made(made), k), Bool.pick(Nat, Bool.and(bump, Nat.is_eq(k, 0n)), 1n, 0n))
-      XPlanSet{RArray{xcl.reply(got, justid, x, Nil{})}, xset.words(g3, c, now, xg.active(Bool.not(List.is_empty(&2, KV.XId, got)), a, now), ns), n}
+      XPlanSet{xcl.r(bare, got, justid, x), xset.words(g3, c, now, xg.active(Bool.not(List.is_empty(&2, KV.XId, got)), a, now), ns), n}
 
-def xcl.fin(s: XSeen, +force: Bool, +justid: Bool, +dt: Nat, r: Maybe<&2, KV.XN>, +mi: Nat, ids: List<&2, KV.XId>, +c: String, +bump: Bool, +x: KV.XStream, +now: Nat) -> XPlan:
+def xcl.fin(s: XSeen, +force: Bool, +justid: Bool, +dt: Nat, r: Maybe<&2, KV.XN>, +mi: Nat, ids: List<&2, KV.XId>, +c: String, +bump: Bool, +bare: Bool, +x: KV.XStream, +now: Nat) -> XPlan:
   match s:
     case XSeen{a, +made, +g2}:
-      xcl.done(X.xg.claim(ids, x, force, c, mi, dt, r, justid, now, X.XCs{g2, Nil{}, Nil{}}), a, made, justid, c, bump, x, now)
+      xcl.done(X.xg.claim(ids, x, force, c, mi, dt, r, justid, now, X.XCs{g2, Nil{}, Nil{}}), a, made, justid, c, bump, bare, x, now)
 
 # XCLAIM's plan once its words read: LASTID past the group's last makes
 # it the last, then each ID claimed (X.xg.claim); one change counted for
 # a consumer made, each pending entry claimed or gone, and, for none of
 # those, a last ID moved
-def xcl.go(o: XCo, +mi: Nat, ids: List<&2, KV.XId>, +g: KV.XGroup, +c: String, +x: KV.XStream, +now: Nat) -> XPlan:
+def xcl.go(o: XCo, +mi: Nat, ids: List<&2, KV.XId>, +g: KV.XGroup, +c: String, +bare: Bool, +x: KV.XStream, +now: Nat) -> XPlan:
   match o:
     case XCo{+force, +justid, +dt, r, +lastid}:
       +bump = Cmp.is_gt(KV.xid.cmp(lastid, X.xgroup.last(g)))
       +g1 = X.xgroup.mk(g, Bool.pick(KV.XId, bump, lastid, X.xgroup.last(g)), X.xgroup.read(g), X.xgroup.pel(g), X.xgroup.cons(g))
-      xcl.fin(xg.seen(g1, c, now), force, justid, dt, r, mi, ids, c, bump, x, now)
+      xcl.fin(xg.seen(g1, c, now), force, justid, dt, r, mi, ids, c, bump, bare, x, now)
     case XCoBad{e}:
       XPlanNone{e}
 
-def xcl.ids(i: XCi, +mi: Nat, +g: KV.XGroup, +c: String, +x: KV.XStream, +now: Nat) -> XPlan:
+def xcl.ids(i: XCi, +mi: Nat, +g: KV.XGroup, +c: String, +bare: Bool, +x: KV.XStream, +now: Nat) -> XPlan:
   match i:
     case XCi{ids, +rest}:
-      xcl.go(xco.read(rest, now), mi, ids, g, c, x, now)
+      xcl.go(xco.read(rest, now), mi, ids, g, c, bare, x, now)
 
-def xcl.idle(m: Maybe<&2, Nat>, +ws: List<&2, String>, +g: KV.XGroup, +c: String, +x: KV.XStream, +now: Nat) -> XPlan:
+def xcl.idle(m: Maybe<&2, Nat>, +ws: List<&2, String>, +g: KV.XGroup, +c: String, +bare: Bool, +x: KV.XStream, +now: Nat) -> XPlan:
   match m:
     case Some{+mi}:
-      xcl.ids(xci.go(ws, X.xids.head(ws), Nil{}), mi, g, c, x, now)
+      xcl.ids(xci.go(ws, X.xids.head(ws), Nil{}), mi, g, c, bare, x, now)
     case None{}:
       XPlanNone{e_xclaimidle()}
 
-def xcl.of(m: Maybe<&2, KV.XGroup>, +k: String, +gn: String, +c: String, +t: String, +ws: List<&2, String>, +x: KV.XStream, +now: Nat) -> XPlan:
+def xcl.of(m: Maybe<&2, KV.XGroup>, +k: String, +gn: String, +c: String, +t: String, +ws: List<&2, String>, +bare: Bool, +x: KV.XStream, +now: Nat) -> XPlan:
   match m:
     case Some{+g}:
-      xcl.idle(xc.of(ll.read(t)), ws, g, c, x, now)
+      xcl.idle(xc.of(ll.read(t)), ws, g, c, bare, x, now)
     case None{}:
       XPlanNone{e_xnogroup(k, gn)}
 
-def xclaim.plan(+k: String, +ws: List<&2, String>, +x: KV.XStream, +now: Nat) -> XPlan:
+def xclaim.plan(+k: String, +ws: List<&2, String>, +bare: Bool, +x: KV.XStream, +now: Nat) -> XPlan:
   match ws:
     case Con{+g, Con{+c, Con{+t, +rest}}}:
-      xcl.of(X.xs.group(x, g), k, g, c, t, rest, x, now)
+      xcl.of(X.xs.group(x, g), k, g, c, t, rest, bare, x, now)
     case _:
       XPlanNone{e_xres()}
 
@@ -22325,23 +22334,31 @@ def xau.gone(ids: List<&2, KV.XId>, acc: List<&2, Reply>) -> List<&2, Reply>:
 # the next pending entry's ID (0-0 for none), the entries claimed (IDs
 # with JUSTID) and the IDs gone; one change counted for a consumer made
 # and each entry claimed or gone
-def xau.fin(w: X.XAw, a: KV.XAct, +made: Bool, +justid: Bool, +c: String, +x: KV.XStream, +now: Nat) -> XPlan:
+# XAUTOCLAIM's reply, none made for a plan's count alone (xcl.r)
+def xau.r(bare: Bool, +next: KV.XId, got: List<&2, KV.XId>, gone: List<&2, KV.XId>, +justid: Bool, +x: KV.XStream) -> Reply:
+  match bare:
+    case True{}:
+      RNullA{}
+    case False{}:
+      RArray{[xv.id(next), RArray{xcl.reply(got, justid, x, Nil{})}, RArray{xau.gone(gone, Nil{})}]}
+
+def xau.fin(w: X.XAw, a: KV.XAct, +made: Bool, +justid: Bool, +c: String, +bare: Bool, +x: KV.XStream, +now: Nat) -> XPlan:
   match w:
     case X.XAw{X.XAc{+g3, +ns, +got, +gone, left, e}, +next}:
       +n = Nat.add(xg.made(made), List.length(&2, X.XSn, ns))
-      XPlanSet{RArray{[xv.id(next), RArray{xcl.reply(got, justid, x, Nil{})}, RArray{xau.gone(gone, Nil{})}]}, xset.words(g3, c, now, xg.active(Bool.not(List.is_empty(&2, KV.XId, got)), a, now), ns), n}
+      XPlanSet{xau.r(bare, next, got, gone, justid, x), xset.words(g3, c, now, xg.active(Bool.not(List.is_empty(&2, KV.XId, got)), a, now), ns), n}
 
-def xau.walk(s: XSeen, +mi: Nat, +st: KV.XId, +cnt: Nat, +justid: Bool, +c: String, +x: KV.XStream, +now: Nat) -> XPlan:
+def xau.walk(s: XSeen, +mi: Nat, +st: KV.XId, +cnt: Nat, +justid: Bool, +c: String, +bare: Bool, +x: KV.XStream, +now: Nat) -> XPlan:
   match s:
     case XSeen{a, +made, +g2}:
       +tries = Nat.mul(cnt, 10n)
       +nks = X.xs.pending(X.xgroup.pel(g2), None{}, st, X.xid.max(), Nat.add(tries, 1n), X.XINone{}, now)
-      xau.fin(X.xg.auto(nks, tries, x, c, mi, justid, now, X.XAc{g2, Nil{}, Nil{}, Nil{}, cnt, False{}}), a, made, justid, c, x, now)
+      xau.fin(X.xg.auto(nks, tries, x, c, mi, justid, now, X.XAc{g2, Nil{}, Nil{}, Nil{}, cnt, False{}}), a, made, justid, c, bare, x, now)
 
-def xau.of(m: Maybe<&2, KV.XGroup>, a: XAu, +k: String, +x: KV.XStream, +now: Nat) -> XPlan:
+def xau.of(m: Maybe<&2, KV.XGroup>, a: XAu, +k: String, +bare: Bool, +x: KV.XStream, +now: Nat) -> XPlan:
   match m a:
     case Some{+g} XAu{gn, +c, +mi, +st, +cnt, +j}:
-      xau.walk(xg.seen(g, c, now), mi, st, cnt, j, c, x, now)
+      xau.walk(xg.seen(g, c, now), mi, st, cnt, j, c, bare, x, now)
     case None{} XAu{+gn, c, mi, st, cnt, j}:
       XPlanNone{e_xnogroup(k, gn)}
     case _ XAuBad{e}:
@@ -22354,9 +22371,9 @@ def xau.group(a: XAu, +x: KV.XStream) -> Maybe<&2, KV.XGroup>:
     case XAuBad{e}:
       None{}
 
-def xautoclaim.plan(+k: String, +ws: List<&2, String>, +x: KV.XStream, +now: Nat) -> XPlan:
+def xautoclaim.plan(+k: String, +ws: List<&2, String>, +bare: Bool, +x: KV.XStream, +now: Nat) -> XPlan:
   +a = xau.read(ws)
-  xau.of(xau.group(a, x), a, k, x, now)
+  xau.of(xau.group(a, x), a, k, bare, x, now)
 
 # a write whose errors name its key k, of kind c (3 SETID, 5
 # CREATECONSUMER, 6 DELCONSUMER, 7 XCLAIM, 8 XAUTOCLAIM), on x at now:
@@ -22382,12 +22399,14 @@ def xgk.group(+ws: List<&2, String>) -> String:
     case Nil{}:
       ""
 
-def xkeyed.plan(+c: Nat, +k: String, +ws: List<&2, String>, +x: KV.XStream, +now: Nat) -> XPlan:
+# (bare: for the changes counted alone, XCLAIM's and XAUTOCLAIM's replies
+# not made)
+def xkeyed.plan(+c: Nat, +k: String, +ws: List<&2, String>, +bare: Bool, +x: KV.XStream, +now: Nat) -> XPlan:
   match c:
     case 7n:
-      xclaim.plan(k, ws, x, now)
+      xclaim.plan(k, ws, bare, x, now)
     case 8n:
-      xautoclaim.plan(k, ws, x, now)
+      xautoclaim.plan(k, ws, bare, x, now)
     case _:
       +gn = xgk.group(ws)
       xgk.of(X.xs.group(x, gn), c, k, gn, ws, x, now)
@@ -22470,7 +22489,7 @@ def xwrite(op: XWrite, +fresh: Bool, +x: KV.XStream, +now: Nat) -> Out:
     case XWAck{+ws}:
       xack.run(ws, x)
     case XWKeyed{+c, +k, +ws}:
-      xplan.out(xkeyed.plan(c, k, ws, x, now), x)
+      xplan.out(xkeyed.plan(c, k, ws, False{}, x, now), x)
     case XWSet{+ws}:
       xset.fin(xset.read(ws), ws, x)
     case XWDelCon{+ws}:
@@ -25465,59 +25484,78 @@ def xgr.he(es: List<&2, X.XHe>, acc: List<&2, Reply>) -> List<&2, Reply>:
 def xgr.pair(+k: String, es: List<&2, Reply>) -> Maybe<&2, Reply>:
   Some{RKPair{[RBulk{k}, RArray{es}]}}
 
+# a key's reply of the entries hs (xgr.he), none for its words alone
+# (bare: the act's serving, xgr.cmd, and the count of its changes)
+def xgr.hist.r(bare: Bool, +k: String, hs: List<&2, X.XHe>) -> Maybe<&2, Reply>:
+  match bare:
+    case True{}:
+      None{}
+    case False{}:
+      xgr.pair(k, xgr.he(hs, Nil{}))
+
 # the history of consumer c past id
-def xgr.hist(h: X.XHs, a: KV.XAct, +made: Bool, +g: KV.XGroup, +c: String, +k: String, +now: Nat) -> XGk:
+def xgr.hist(h: X.XHs, a: KV.XAct, +made: Bool, +bare: Bool, +g: KV.XGroup, +c: String, +k: String, +now: Nat) -> XGk:
   match h:
     case X.XHs{hs, ns}:
-      XGk{xgr.pair(k, xgr.he(hs, Nil{})), xset.words(g, c, now, a, ns), Nat.add(xg.made(made), 1n)}
+      XGk{xgr.hist.r(bare, k, hs), xset.words(g, c, now, a, ns), Nat.add(xg.made(made), 1n)}
+
+# a key's reply of the new entries es, none for its words alone
+def xgr.fresh.r(bare: Bool, +k: String, es: List<&2, X.XE>) -> Maybe<&2, Reply>:
+  match bare:
+    case True{}:
+      None{}
+    case False{}:
+      xgr.pair(k, xv.entries(es))
 
 # new entries: served when the stream's last live entry (top) is past the
 # group's last ID
-def xgr.fresh.at(d: X.XDv, +es: List<&2, X.XE>, a: KV.XAct, +made: Bool, +noack: Bool, +g: KV.XGroup, +c: String, +k: String, +now: Nat) -> XGk:
+def xgr.fresh.at(d: X.XDv, +es: List<&2, X.XE>, a: KV.XAct, +made: Bool, +noack: Bool, +bare: Bool, +g: KV.XGroup, +c: String, +k: String, +now: Nat) -> XGk:
   match d:
     case X.XDv{+last, rd, ns}:
       +g2 = X.xgroup.mk(g, last, rd, X.xgroup.pel(g), X.xgroup.cons(g))
       +got = Bool.and(Bool.not(noack), Bool.not(List.is_empty(&2, X.XE, es)))
-      XGk{xgr.pair(k, xv.entries(es)), xset.words(g2, c, now, xg.active(got, a, now), ns), Nat.add(xg.made(made), 1n)}
+      XGk{xgr.fresh.r(bare, k, es), xset.words(g2, c, now, xg.active(got, a, now), ns), Nat.add(xg.made(made), 1n)}
 
-def xgr.fresh.go(+es: List<&2, X.XE>, a: KV.XAct, +made: Bool, +noack: Bool, +g: KV.XGroup, +c: String, +k: String, +x: KV.XStream, +now: Nat) -> XGk:
-  xgr.fresh.at(X.xg.deliver(es, x, noack, now, X.XDv{X.xgroup.last(g), X.xgroup.read(g), Nil{}}), es, a, made, noack, g, c, k, now)
+def xgr.fresh.go(+es: List<&2, X.XE>, a: KV.XAct, +made: Bool, +noack: Bool, +bare: Bool, +g: KV.XGroup, +c: String, +k: String, +x: KV.XStream, +now: Nat) -> XGk:
+  xgr.fresh.at(X.xg.deliver(es, x, noack, now, X.XDv{X.xgroup.last(g), X.xgroup.read(g), Nil{}}), es, a, made, noack, bare, g, c, k, now)
 
-def xgr.fresh.if(go: Bool, a: KV.XAct, +made: Bool, +count: Nat, +noack: Bool, +g: KV.XGroup, +c: String, +k: String, +x: KV.XStream, +now: Nat) -> XGk:
+# (for its words alone, the entries' IDs alone)
+def xgr.fresh.if(go: Bool, a: KV.XAct, +made: Bool, +count: Nat, +noack: Bool, +bare: Bool, +g: KV.XGroup, +c: String, +k: String, +x: KV.XStream, +now: Nat) -> XGk:
   match go:
     case True{}:
-      xgr.fresh.go(X.xs.range(x, xv.after(X.xgroup.last(g)), X.xid.max(), count, False{}), a, made, noack, g, c, k, x, now)
+      xgr.fresh.go(X.xs.walk(x, xv.after(X.xgroup.last(g)), X.xid.max(), count, False{}, bare), a, made, noack, bare, g, c, k, x, now)
     case False{}:
       XGk{None{}, xset.words(g, c, now, a, Nil{}), xg.made(made)}
 
-def xgr.fresh(m: Maybe<&2, KV.XId>, a: KV.XAct, +made: Bool, +count: Nat, +noack: Bool, +g: KV.XGroup, +c: String, +k: String, +x: KV.XStream, +now: Nat) -> XGk:
+def xgr.fresh(m: Maybe<&2, KV.XId>, a: KV.XAct, +made: Bool, +count: Nat, +noack: Bool, +bare: Bool, +g: KV.XGroup, +c: String, +k: String, +x: KV.XStream, +now: Nat) -> XGk:
   match m:
     case Some{+top}:
-      xgr.fresh.if(Cmp.is_gt(KV.xid.cmp(top, X.xgroup.last(g))), a, made, count, noack, g, c, k, x, now)
+      xgr.fresh.if(Cmp.is_gt(KV.xid.cmp(top, X.xgroup.last(g))), a, made, count, noack, bare, g, c, k, x, now)
     case None{}:
       XGk{None{}, xset.words(g, c, now, a, Nil{}), xg.made(made)}
 
-def xgr.serve(s: XSeen, i: XGid, +count: Nat, +noack: Bool, +c: String, +k: String, +x: KV.XStream, +now: Nat) -> XGk:
+def xgr.serve(s: XSeen, i: XGid, +count: Nat, +noack: Bool, +bare: Bool, +c: String, +k: String, +x: KV.XStream, +now: Nat) -> XGk:
   match s i:
     case XSeen{a, +made, +g} XGidAt{+id}:
-      xgr.hist(X.xg.history(X.xg.of.con(X.xgroup.con(g, c), g, xv.after(id), count, now), x, now, X.XHs{Nil{}, Nil{}}), a, made, g, c, k, now)
+      xgr.hist(X.xg.history(X.xg.of.con(X.xgroup.con(g, c), g, xv.after(id), count, now), x, now, bare, X.XHs{Nil{}, Nil{}}), a, made, bare, g, c, k, now)
     case XSeen{a, +made, +g} XGidNew{}:
-      xgr.fresh(X.xs.top(x), a, made, count, noack, g, c, k, x, now)
+      xgr.fresh(X.xs.top(x), a, made, count, noack, bare, g, c, k, x, now)
     case _ XGidBad{r}:
       XGkNone{}
 
-def xgr.key.g(m: Maybe<&2, KV.XGroup>, +x: KV.XStream, +c: String, +s: String, +count: Nat, +noack: Bool, +k: String, +now: Nat) -> XGk:
+def xgr.key.g(m: Maybe<&2, KV.XGroup>, +x: KV.XStream, +c: String, +s: String, +count: Nat, +noack: Bool, +bare: Bool, +k: String, +now: Nat) -> XGk:
   match m:
     case Some{+g}:
-      xgr.serve(xg.seen(g, c, now), xgr.id(s), count, noack, c, k, x, now)
+      xgr.serve(xg.seen(g, c, now), xgr.id(s), count, noack, bare, c, k, x, now)
     case None{}:
       XGkNone{}
 
-# key k served (its entry m) at now
-def xgr.key(m: Maybe<&2, KV.Item<KV.Val>>, +k: String, +g: String, +c: String, +s: String, +count: Nat, +noack: Bool, +now: Nat) -> XGk:
+# key k served (its entry m) at now; bare: its words alone, with no reply
+# made and IDs alone read
+def xgr.key(m: Maybe<&2, KV.Item<KV.Val>>, +k: String, +g: String, +c: String, +s: String, +count: Nat, +noack: Bool, +bare: Bool, +now: Nat) -> XGk:
   match m:
     case Some{KV.Item{KV.VColl{KV.CStream{+x}}, e}}:
-      xgr.key.g(X.xs.group(x, g), x, c, s, count, noack, k, now)
+      xgr.key.g(X.xs.group(x, g), x, c, s, count, noack, bare, k, now)
     case _:
       XGkNone{}
 
@@ -25617,15 +25655,16 @@ def xgr.step(r: XGk, +k: String, +later: Bool, rs: List<&2, Reply>, +n: Nat, +d:
     case XGkNone{}:
       XGf{rs, n, d}
 
-def xgr.fold(ks: List<&2, String>, ids: List<&2, String>, +g: String, +c: String, +count: Nat, +noack: Bool, f: XGf) -> XGf:
+def xgr.fold(ks: List<&2, String>, ids: List<&2, String>, +g: String, +c: String, +count: Nat, +noack: Bool, +bare: Bool, f: XGf) -> XGf:
   match ks ids f:
     case Con{+k, +krest} Con{+s, irest} XGf{rs, +n, +d}:
-      xgr.fold(krest, irest, g, c, count, noack, xgr.step(xgr.key(db.ent(d, k), k, g, c, s, count, noack, db.now(d)), k, xgr.later(krest, k), rs, n, d))
+      xgr.fold(krest, irest, g, c, count, noack, bare, xgr.step(xgr.key(db.ent(d, k), k, g, c, s, count, noack, bare, db.now(d)), k, xgr.later(krest, k), rs, n, d))
     case _ _ f0:
       f0
 
-def xgr.run(+ws: List<&2, String>, +g: String, +c: String, +count: Nat, +noack: Bool, +d: Db) -> XGf:
-  xgr.fold(xgr.keys(ws), xgr.ids(ws), g, c, count, noack, XGf{Nil{}, 0n, d})
+# (bare: no replies made, for the changes counted alone)
+def xgr.run(+ws: List<&2, String>, +g: String, +c: String, +count: Nat, +noack: Bool, +bare: Bool, +d: Db) -> XGf:
+  xgr.fold(xgr.keys(ws), xgr.ids(ws), g, c, count, noack, bare, XGf{Nil{}, 0n, d})
 
 def xgr.err(+ws: List<&2, String>, +g: String, +d: Db) -> Maybe<&2, Reply>:
   xgr.chk(xgr.keys(ws), xgr.ids(ws), None{}, g, d)
@@ -25651,7 +25690,7 @@ def xgr.reply.of(m: Maybe<&2, Reply>, +ws: List<&2, String>, +g: String, +c: Str
     case Some{e}:
       e
     case None{}:
-      xgr.reply.fin(xgr.run(ws, g, c, count, noack, d))
+      xgr.reply.fin(xgr.run(ws, g, c, count, noack, False{}, d))
 
 # XREADGROUP's reply on the database d (the focus, before its acts)
 def xgr.reply(q: XGq, +d: Db) -> Reply:
@@ -25719,7 +25758,7 @@ def xgr.dsum(ks: List<&2, String>, ids: List<&2, String>, +g: String, +c: String
 def xgr.dirty.go(twice: Bool, +ws: List<&2, String>, +g: String, +c: String, +count: Nat, +noack: Bool, +d: Db) -> Nat:
   match twice:
     case True{}:
-      xgr.dirty.fin(xgr.run(ws, g, c, count, noack, d))
+      xgr.dirty.fin(xgr.run(ws, g, c, count, noack, True{}, d))
     case False{}:
       xgr.dsum(xgr.keys(ws), xgr.ids(ws), g, c, d, 0n)
 
@@ -25751,7 +25790,7 @@ def xgr.waits.of(m: Maybe<&2, Reply>, +ws: List<&2, String>, +g: String, +c: Str
     case Some{e}:
       False{}
     case None{}:
-      xgr.waits.fin(xgr.run(ws, g, c, count, noack, d))
+      xgr.waits.fin(xgr.run(ws, g, c, count, noack, False{}, d))
 
 def xgr.waits(q: XGq, +d: Db) -> Bool:
   match q:
@@ -25781,12 +25820,13 @@ def xgr.cmd.of(m: Maybe<&2, Reply>, r: XGk, +k: String) -> Cmd:
       Bad{e_xres()}
 
 # the command of the act of its i-th key, on the database d as the acts
-# before it left it: none (an error) for any key's error
+# before it left it: none (an error) for any key's error; the key served
+# for its words alone
 def xgr.cmd(q: XGq, +i: Nat, +d: Db) -> Cmd:
   match q:
     case XGq{+g, +c, +count, +b, +noack, +ws}:
       +k = xgr.nth(xgr.keys(ws), i)
-      xgr.cmd.of(xgr.err.b(b, ws, g, d), xgr.key(db.ent(d, k), k, g, c, xgr.nth(xgr.ids(ws), i), count, noack, db.now(d)), k)
+      xgr.cmd.of(xgr.err.b(b, ws, g, d), xgr.key(db.ent(d, k), k, g, c, xgr.nth(xgr.ids(ws), i), count, noack, True{}, db.now(d)), k)
     case XGqOf{y}:
       xgr.cmd(y, i, d)
 

@@ -7001,9 +7001,27 @@ def xn.add.of(+hi: Nat, +lo: Nat) -> XN:
   +c = Nat.is_le(e, lo)
   xn.wrap(Nat.add(hi, Bool.pick(Nat, c, 1n, 0n)), Bool.pick(Nat, c, Nat.sub(lo, e), lo))
 
-# a + b mod 2^64
+# the sum s of two numbers below 10^14, itself when it is below 10^14 too
+def xn.add.small(lt: Bool, +s: Nat) -> XN:
+  match lt:
+    case True{}:
+      XS{s}
+    case False{}:
+      xn.add.of(0n, s)
+
+# a + b mod 2^64 (two below 10^14, as an entry's ID and its node's master
+# ID mostly are, with no carry to look for)
 def xn.add(+a: XN, +b: XN) -> XN:
-  xn.add.of(Nat.add(xn.hi(a), xn.hi(b)), Nat.add(xn.lo(a), xn.lo(b)))
+  match a b:
+    case XS{+x} XS{+y}:
+      +s = Nat.add(x, y)
+      xn.add.small(Nat.is_lt(s, xn.e14()), s)
+    case XS{+x} XL{+h, +l}:
+      xn.add.of(h, Nat.add(x, l))
+    case XL{+h, +l} XS{+y}:
+      xn.add.of(h, Nat.add(l, y))
+    case XL{+h, +l} XL{+g, +k}:
+      xn.add.of(Nat.add(h, g), Nat.add(l, k))
 
 def xn.neg.of(le: Bool, +h: Nat, +l: Nat) -> XN:
   match le:

@@ -371,10 +371,10 @@ translation stays in the trusted base.
   Redis file that holds a trim by `~` with LIMIT, which Redis writes as `=` with LIMIT
   (sections 3zzzu, 3zzzy and 3zzzza of [docs/FINDINGS.md](docs/FINDINGS.md)); XINFO
   STREAM takes time with the stream's nodes, as it counts the radix tree's nodes where
-  Redis keeps the count, the ranges take 3 to 5 times Redis's time, the writes 3 to 12
-  times, and the groups' reads and claims 17 to 34 times, as a walk that starts inside a
-  node reads its entries from the node's first (sections 82, 84 and 87 of
-  [docs/PERFORMANCE.md](docs/PERFORMANCE.md)).
+  Redis keeps the count, the ranges take about twice Redis's time (a read of a stream's
+  last entry less than Redis's), the writes 3 to 12 times, and the groups' reads and
+  claims 5 to 9 times, as a group's write walks its stream again and copies its group
+  (sections 82, 84, 87 and 89 of [docs/PERFORMANCE.md](docs/PERFORMANCE.md)).
 - **Clients that wait:** BLPOP, BRPOP, BLMOVE, BRPOPLPUSH, BLMPOP, BZPOPMIN, BZPOPMAX
   and BZMPOP, their timeouts (seconds, a double; 0 waits for ever) read as Redis reads
   them, with its errors. A command that finds nothing to pop makes its client wait, and
@@ -1185,7 +1185,7 @@ away.
 | `src/server.bend` | 15,000 |  | no |
 | `src/sha.bend` | 120 |  | no |
 | `src/startup.bend` | 460 |  | no |
-| `src/stream.bend` | 1,400 |  | no |
+| `src/stream.bend` | 1,700 |  | no |
 | `proof/LAWS.bend` | 920 | 20 |  |
 | `proof/SPEC.bend` | 370 |  |  |
 | `proof/PROOF.bend` | 18,000 | 2,800 |  |

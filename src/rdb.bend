@@ -730,8 +730,48 @@ type LpR is Data:
   LpFin{t: String}
   LpBad{}
 
+# An entry's kind by its first byte x: 0 a 7-bit integer, 1 a string of
+# 6 bits' length, 2 a 13-bit integer, 3 a string of 12 bits' length, 4 to
+# 7 an integer of 16, 24, 32 or 64 bits, 8 a string of 32 bits' length,
+# 9 the end, 10 no entry; a match at each step (lt: x below the step's
+# bound), so that the bytes most entries begin with take one comparison
+def lp.kind.top(le: Bool, +x: Nat) -> Nat:
+  match le:
+    case True{}:
+      Bool.pick(Nat, Nat.is_eq(x, 240n), 8n, Nat.sub(x, 237n))
+    case False{}:
+      Bool.pick(Nat, Nat.is_eq(x, 255n), 9n, 10n)
+
+def lp.kind.s12(lt: Bool, +x: Nat) -> Nat:
+  match lt:
+    case True{}:
+      3n
+    case False{}:
+      lp.kind.top(Nat.is_le(x, 244n), x)
+
+def lp.kind.i13(lt: Bool, +x: Nat) -> Nat:
+  match lt:
+    case True{}:
+      2n
+    case False{}:
+      lp.kind.s12(Nat.is_lt(x, 240n), x)
+
+def lp.kind.s6(lt: Bool, +x: Nat) -> Nat:
+  match lt:
+    case True{}:
+      1n
+    case False{}:
+      lp.kind.i13(Nat.is_lt(x, 224n), x)
+
+def lp.kind.of(lt: Bool, +x: Nat) -> Nat:
+  match lt:
+    case True{}:
+      0n
+    case False{}:
+      lp.kind.s6(Nat.is_lt(x, 192n), x)
+
 def lp.kind(+x: Nat) -> Nat:
-  Bool.pick(Nat, Nat.is_lt(x, 128n), 0n, Bool.pick(Nat, Nat.is_lt(x, 192n), 1n, Bool.pick(Nat, Nat.is_lt(x, 224n), 2n, Bool.pick(Nat, Nat.is_lt(x, 240n), 3n, Bool.pick(Nat, Nat.is_eq(x, 240n), 8n, Bool.pick(Nat, Nat.is_le(x, 244n), Nat.sub(x, 237n), Bool.pick(Nat, Nat.is_eq(x, 255n), 9n, 10n)))))))
+  lp.kind.of(Nat.is_lt(x, 128n), x)
 
 def lp.val(+k: Nat, +sz: Nat, m: Maybe<&1, Nat & String>) -> Maybe<&1, LpE & String>:
   match m:

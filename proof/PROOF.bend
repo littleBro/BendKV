@@ -11381,7 +11381,7 @@ def xw_old_good(op: R.XWrite, +x0: KV.XStream, -e: Nat, +now: Nat) -> Good(Some{
     case R.XWAck{+ws}:
       xack_old(ws, x0, e)
     case R.XWKeyed{+c, +k, +ws}:
-      xplan_good(R.xkeyed.plan(c, k, ws, x0, now), x0, e)
+      xplan_good(R.xkeyed.plan(c, k, ws, False{}, x0, now), x0, e)
     case R.XWSet{+ws}:
       xset_good(ws, x0, e)
     case R.XWDelCon{+ws}:
