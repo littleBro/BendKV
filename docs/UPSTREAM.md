@@ -24,7 +24,8 @@ Bug 5 turned up later, when RDB 11 came in on the branch of 7.2.16, and was repl
 7.0.15 and 7.2.16 only. Bug 6 turned up as the last difference of HyperLogLog's test, and
 was replayed on all four. Bugs 7 and 8 were differences from 7.0.15 that BendKV already
 kept (`docs/FINDINGS.md`, sections 3zzk and 3zzzb), replayed on all four as the documents
-moved to 7.2.16.
+moved to 7.2.16. Bug 9 turned up when WAITAOF came in, and was replayed on all four (7.0.15
+through WAIT alone, as it has no WAITAOF).
 
 | bug | 7.0.15 | 7.2.16 | 8.10.2 | Valkey 9.1.2 |
 |---|---|---|---|---|
@@ -36,6 +37,7 @@ moved to 7.2.16.
 | 6. PFADD reads the byte after a sparse HyperLogLog's end | **bug** | **bug** | **bug** | **bug** |
 | 7. CLIENT UNBLOCK of a client CLIENT PAUSE holds crashes the server | **bug** | **bug** | answers 0 | answers 0 |
 | 8. CLIENT TRACKING answers an overlap of its prefixes twice | **bug** | **bug** | answers once | answers once |
+| 9. A client served by a blocking pop does not wait for the pop in WAIT or WAITAOF | **bug** | **bug** | **bug** | **bug** |
 
 ## 1. LSET takes its index modulo 2^32
 
@@ -334,3 +336,56 @@ prefixes (`PREFIX a PREFIX ab`), they answer the error alone.
 (`tests/tracking_test.py`).
 
 **To report to:** Redis, for its 7.2 branch.
+
+## 9. A client served by a blocking pop does not wait for the pop in WAIT or WAITAOF
+
+**What happens.** WAIT and WAITAOF wait for the client's last write: the replication offset
+right after its last command that propagated something (`c->woff`). A client that waits in
+BLPOP, BLMOVE, BZPOPMIN or another blocking pop, and is served by another client's write,
+pops what it waited for, and its pop is propagated, as LPOP, LMOVE or ZPOPMIN, to the
+append-only file and the replicas. Its offset stays where its writes before the BLPOP left
+it. So a WAIT or a WAITAOF it sends next does not wait for its pop: WAITAOF answers that
+the file has synced the pop when it has not, and WAIT counts replicas that never got it.
+
+**How to see it.** Against a server started with `--appendonly yes --appendfsync no`, which
+syncs nothing after its start:
+
+```
+python3 -c '
+import socket, time
+def req(*a):
+    return b"*%d\r\n" % len(a) + b"".join(b"$%d\r\n%s\r\n" % (len(x), x) for x in a)
+a = socket.create_connection(("127.0.0.1", 6379))
+b = socket.create_connection(("127.0.0.1", 6379))
+a.sendall(req(b"BLPOP", b"l", b"0")); time.sleep(0.2)
+b.sendall(req(b"RPUSH", b"l", b"x")); time.sleep(0.2)
+a.recv(4096), b.recv(4096)
+a.sendall(req(b"WAITAOF", b"1", b"0", b"100")); print(a.recv(4096))
+b.sendall(req(b"WAITAOF", b"1", b"0", b"100")); print(b.recv(4096))'
+```
+
+- **7.2.16, 8.10.2 and Valkey 9.1.2:** the BLPOP's client gets `*2 :1 :0` at once, though
+  nothing was synced; the RPUSH's client gets `*2 :0 :0` once its 100 ms are up.
+- **With a replica** (`--replicaof`) stopped by `kill -STOP` before the RPUSH, the BLPOP's
+  client's `WAIT 1 300` answers 1 at once, and the RPUSH's client's answers 0 after
+  300 ms, on all four servers, 7.0.15 among them.
+
+**Where.** `call()` sets `c->woff` when the offset moved during the command, and the served
+client's command does not move it there:
+- Redis 7.2.16: `call()` (`src/server.c`, line 3693) compares the offset with the one
+  before the command (line 3506). A served client's command runs again in
+  `unblockClientOnKey` (`src/blocked.c`, line 651), inside an execution unit it enters
+  before (line 677) and leaves after (line 692), so that the command and its unblock
+  handler run atomically. Inside the unit, `postExecutionUnitOperations` propagates
+  nothing (`src/server.c`, line 3400): the pop is propagated at `afterCommand`
+  (`src/blocked.c`, line 693), once `call()` has compared the offsets.
+- Valkey 9.1.2: the same, `call()` at `src/server.c`, line 4088, and the unit at
+  `src/blocked.c`, lines 757 to 773.
+- Redis 7.0.15 serves the client without a `call()` (`serveClientsBlockedOnListKey`,
+  `src/blocked.c`, line 285), and the pop is propagated with the command that served it
+  (line 682); `c->woff` is set only in `call()` (`src/server.c`, line 4021).
+
+**What BendKV does.** A client's woff counts its served pop, so that its WAIT or WAITAOF
+after it waits for the pop (`tests/admin_test.py`).
+
+**To report to:** Redis, for 7.2 and 8, and Valkey.

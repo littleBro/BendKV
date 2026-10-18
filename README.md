@@ -377,9 +377,10 @@ translation stays in the trusted base.
   in the order they came, after every command that may make one ready (one that may write
   a key a client waits on, or a command of the connection or of the server). A client that
   waits costs nothing to the commands on other keys (PERFORMANCE.md, section 61). XREAD
-  is not there, and WAIT's wait ends only by its time or CLIENT UNBLOCK (The server,
-  below); a timeout that the time now takes past 2^63 - 1 ms, one of more than 292
-  million years, waits, where Redis 7.2.16 refuses it as out of range. In a transaction
+  is not there, WAIT's wait ends only by its time or CLIENT UNBLOCK, and WAITAOF's by
+  those or the append-only file's sync (The server, below); a timeout that the time now
+  takes past 2^63 - 1 ms, one of more than 292 million years, waits, where Redis 7.2.16
+  refuses it as out of range (BendKV refuses WAITAOF's, as Redis does). In a transaction
   a blocking command does not wait, as in Redis (below).
 - **Transactions:** MULTI, EXEC, DISCARD, WATCH and UNWATCH, as Redis 7.2.16 runs them.
   After MULTI a command is queued (QUEUED), but for EXEC, DISCARD, MULTI (an error:
@@ -606,8 +607,18 @@ translation stays in the trusted base.
   the key (ZADD, ZINCRBY, HSET, HINCRBY, LPUSH, RPUSH, a served BLMPOP), and inside the
   reply of a served BZPOPMIN, BZPOPMAX or BZMPOP (FINDINGS.md, section 3zzzb).
 - **The server:** LASTSAVE (the last save that ended well, the start until one does), ROLE (a master
-  with no replica), WAIT (0, as no replica acknowledges: at once when it asks for none,
-  otherwise once its timeout ends, its client waiting as a blocking command's does),
+  with no replica, at the offset of INFO's `master_repl_offset`, counted as Redis 7.2.16
+  counts it with no replica: while the append-only file is on, one for each command the
+  file gets, a transaction's MULTI and EXEC among them and no SELECT, and one for each
+  turn of the loop in which a WAIT or a WAITAOF begins to wait, a turn's while a pause of
+  writes holds counted once the pause ends), WAIT (0, as no replica acknowledges: at once
+  when it asks for none, otherwise once its timeout ends, its client waiting as a
+  blocking command's does), WAITAOF (its first number 1 once the append-only file is
+  synced past the client's last write, which `appendfsync` syncs after each group with
+  `always`, about each second with `everysec`, and with `no` only as a rewrite begins;
+  its second 0, as no replica acknowledges; its errors in Redis's order; at once in
+  MULTI, and else at once when it has what it asks, its client waiting otherwise until
+  the sync, its timeout or CLIENT UNBLOCK),
   MEMORY STATS, DOCTOR, PURGE and MALLOC-STATS (Redis's fields and advice, from the
   numbers INFO's memory section shows), LOLWUT (Redis 7.2.16's line, and the drawings of
   VERSION 5 and 6, those that take no random number byte for byte as Redis draws them),
@@ -623,7 +634,15 @@ translation stays in the trusted base.
   each of its subcommands, HELP and MYSHARDID among them, once its number of arguments is
   Redis's. Where BendKV differs: MEMORY MALLOC-STATS has no allocator's statistics;
   LOLWUT's large drawings take up to a hundred times Redis's time (FINDINGS.md, sections
-  3zzl, 3zzzc and 3zzzf).
+  3zzl, 3zzzc and 3zzzf); the offset counts a group's commands once the group is written
+  to the file, so that an INFO or a ROLE in the group of writes before it (theirs in its
+  pipeline, or another client's in the same turn) gives the offset before them, where
+  Redis counts each command as it runs; a DEL of a key not there, which BendKV logs (as a
+  STORE of nothing logs one of its destination: Transactions, above), counts, and a
+  WAITAOF after it waits for its sync; a client served by a write while it waits in a
+  blocking pop waits for its pop in its next WAIT or WAITAOF, where Redis waits only for
+  its writes before the pop ([docs/UPSTREAM.md](docs/UPSTREAM.md), bug 9; FINDINGS.md,
+  section 3zzzzp).
 - **Configuration:** CONFIG GET (names, aliases and glob patterns), SET (several
   parameters at once, all or none), RESETSTAT, REWRITE, HELP, over every parameter of
   Redis 7.2.16 (counted in [In numbers](#in-numbers)), taken from Redis's own table by
@@ -824,9 +843,9 @@ translation stays in the trusted base.
   their own (a client in BCAST tracking mode gets the keys they change in an
   invalidation push after the one of the keys changed before SAVE, where Redis sends
   one; BGSAVE splits nothing), the file holds the databases as the group left them, and
-  SAVE's call time leaves the save out; after a start from the file, INFO's replication
-  section and ROLE give an offset of 0, where Redis counts into `master_repl_offset` a
-  DEL for each key whose time had passed, and keeps the file's `repl-id` and
+  SAVE's call time leaves the save out; after a start from the file, the offset of INFO's
+  replication section and ROLE counts from 0, where Redis counts into `master_repl_offset`
+  a DEL for each key whose time had passed, and keeps the file's `repl-id` and
   `repl-offset` as its `master_replid2` and offset, which its next save writes again
   (BendKV drops them); the log of a file that does not load gives the byte where the
   reading failed, where Redis gives what it had read at its last report of progress, and
@@ -1109,19 +1128,19 @@ away.
 | `src/float.bend` | 1,600 |  | no |
 | `src/geo.bend` | 870 |  | no |
 | `src/hll.bend` | 1,400 |  | no |
-| `src/info.bend` | 2,900 |  | no |
+| `src/info.bend` | 3,200 |  | no |
 | `src/lolwut.bend` | 470 |  | no |
 | `src/rdb.bend` | 3,100 |  | no |
 | `src/resp.bend` | 1,200 |  | no |
 | `src/script.bend` | 51 |  | no |
-| `src/server.bend` | 13,000 |  | no |
+| `src/server.bend` | 15,000 |  | no |
 | `src/sha.bend` | 120 |  | no |
 | `src/startup.bend` | 460 |  | no |
 | `src/stream.bend` | 1,100 |  | no |
 | `proof/LAWS.bend` | 920 | 20 |  |
 | `proof/SPEC.bend` | 370 |  |  |
 | `proof/PROOF.bend` | 18,000 | 2,800 |  |
-| `src/`, the 6 files the laws import | 28,000 | 7,400 |  |
+| `src/`, the 6 files the laws import | 31,000 | 8,200 |  |
 | `src/`, the 15 others | 32,000 | 2,800 |  |
 | `proof/` | 18,000 | 2,800 |  |
 <!-- END gen_counts: numbers -->
