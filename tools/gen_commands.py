@@ -457,7 +457,10 @@ def generate():
 SBEGIN, SEND = "# BEGIN gen_commands: stats\n", "# END gen_commands: stats\n"
 
 # the commands whose calls can fail as they run, on what the database
-# holds: INCR and its kin meet values that are not integers, and overflows;
+# holds: the commands of strings on a key of another kind (WRONGTYPE:
+# GET, SET with GET, GETSET, GETDEL, APPEND, STRLEN, GETRANGE, SUBSTR,
+# GETBIT, SETBIT, BITOP and BITFIELD_RO); INCR and its kin meet values
+# that are not integers, and overflows;
 # a time from now can overflow LLONG_MAX (EXPIRE, PEXPIRE, SETEX, PSETEX),
 # GETEX reads its time only once it finds its key, as BITCOUNT and BITPOS
 # read their ranges, SETRANGE can make a value past 512MB, OBJECT FREQ
@@ -488,10 +491,11 @@ SBEGIN, SEND = "# BEGIN gen_commands: stats\n", "# END gen_commands: stats\n"
 # not past the stream's last or on elements too large, XDEL on IDs read
 # once the key is found, and XSETID on a key not there or below the
 # stream's entries.
-# (SET's time
-# can overflow too, past 9 * 10^18 ms only: SET is left out, so that a
-# batch of SETs needs no look at its replies.)
-RISKY = {"incr", "decr", "incrby", "decrby", "expire", "pexpire", "setex", "psetex", "getex",
+# A batch of GETs or SETs looks at its replies too, as the code of a call
+# says which command it is, not whether a SET has GET.
+RISKY = {"get", "set", "getset", "getdel", "append", "strlen", "getrange", "substr", "getbit",
+         "setbit", "bitop", "bitfield_ro",
+         "incr", "decr", "incrby", "decrby", "expire", "pexpire", "setex", "psetex", "getex",
          "setrange", "bitcount", "bitpos", "object|freq", "object|idletime", "rename", "renamenx",
          "lcs", "bitfield", "hset", "hsetnx", "hget", "hmget", "hmset", "hdel", "hlen", "hstrlen",
          "hexists", "hkeys", "hvals", "hgetall", "hincrby", "hscan", "hrandfield", "memory|usage",

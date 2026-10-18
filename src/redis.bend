@@ -11747,6 +11747,12 @@ def stat.arity(+key: Nat) -> Nat:
 # whether a call of the command of a key can fail as it runs
 def stat.risky(+key: Nat) -> Bool:
   match key:
+    case 3n:
+      True{}
+    case 4n:
+      True{}
+    case 6n:
+      True{}
     case 10n:
       True{}
     case 11n:
@@ -11755,17 +11761,31 @@ def stat.risky(+key: Nat) -> Bool:
       True{}
     case 13n:
       True{}
+    case 14n:
+      True{}
+    case 15n:
+      True{}
     case 23n:
       True{}
     case 24n:
       True{}
     case 26n:
       True{}
+    case 27n:
+      True{}
     case 28n:
       True{}
     case 29n:
       True{}
+    case 37n:
+      True{}
+    case 38n:
+      True{}
     case 39n:
+      True{}
+    case 40n:
+      True{}
+    case 41n:
       True{}
     case 42n:
       True{}
@@ -11775,7 +11795,11 @@ def stat.risky(+key: Nat) -> Bool:
       True{}
     case 47n:
       True{}
+    case 48n:
+      True{}
     case 49n:
+      True{}
+    case 50n:
       True{}
     case 51n:
       True{}
@@ -15959,8 +15983,9 @@ def code.calls(+k: Nat, +n: Nat) -> Nat:
 
 # whether replies of calls of code k need a look for errors: calls
 # refused or failed by the parser, or calls that can fail as they run
-# (stat.risky: INCR, DECR, INCRBY and DECRBY meet values that are not
-# integers, and overflows)
+# (stat.risky: a command of a kind of value on a key of another,
+# WRONGTYPE, GET's too; INCR, DECR, INCRBY and DECRBY on values that are
+# not integers, and overflows)
 def code.risky(+k: Nat) -> Bool:
   Bool.or(Nat.is_lt(0n, code.class(k)), stat.risky(code.key(k)))
 
@@ -16072,11 +16097,19 @@ def err.put(+r: Reply, +k: Nat, acc: List<&2, Erred>) -> List<&2, Erred>:
     case _:
       acc
 
-# the error replies among the replies of a batch of calls of one code k
-def errs.one(+rs: List<&2, Reply>, +k: Nat, acc: List<&2, Erred>) -> List<&2, Erred>:
+# the error replies among the replies of a batch of calls of one run,
+# with the run's code (run.code), reckoned only for an error reply
+def err.put.run(+r: Reply, +run: Nat, acc: List<&2, Erred>) -> List<&2, Erred>:
+  match r:
+    case RError{+m}:
+      Erred{run.code(run), m} <> acc
+    case _:
+      acc
+
+def errs.one(+rs: List<&2, Reply>, +run: Nat, acc: List<&2, Erred>) -> List<&2, Erred>:
   match rs:
     case Con{+r, +rest}:
-      errs.one(rest, k, err.put(r, k, acc))
+      errs.one(rest, run, err.put.run(r, run, acc))
     case Nil{}:
       acc
 

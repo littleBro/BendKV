@@ -22,7 +22,11 @@ operation, BITFIELD's subcommands); errors with codes
 other than ERR (WRONGPASS, NOAUTH); calls while CLIENT REPLY holds
 replies back (counted all the same); commands after a QUIT (dropped); a
 protocol error (counted, then the connection closes); and random
-pipelines mixing all of these. And replies with lines that begin with
+pipelines mixing all of these. The commands of strings on a key of
+another kind (WRONGTYPE: GET, SET with GET, GETSET, GETDEL, APPEND,
+STRLEN, GETRANGE, SUBSTR, GETBIT, SETBIT, BITOP, BITFIELD_RO), one at a
+time, in pipelines of one command and of several, and in MULTI. And
+replies with lines that begin with
 '-' and are no errors (a bulk "-5", negative scores, members "-x"), alone
 and in pipelines of one command with an error among them. SCAN and
 RANDOMKEY answer keys of their own choice: their replies are compared by
@@ -237,6 +241,26 @@ def dash_payloads(c, port):
     return out
 
 
+def wrong_types(c, port):
+    # the commands of strings on a key that holds a list: each answers
+    # WRONGTYPE, which counts as an error of its call (#105)
+    wrong = [["GET", "l"], ["SET", "l", "x", "GET"], ["GETSET", "l", "x"], ["GETDEL", "l"],
+             ["APPEND", "l", "x"], ["STRLEN", "l"], ["GETRANGE", "l", "0", "1"], ["SUBSTR", "l", "0", "1"],
+             ["GETBIT", "l", "0"], ["SETBIT", "l", "0", "1"], ["BITOP", "AND", "d", "l"],
+             ["BITFIELD_RO", "l", "GET", "u8", "0"]]
+    out = [c.ask("RPUSH", "l", "a"), c.ask("SET", "s", "v")]
+    for args in wrong:
+        out.append(c.ask(*args))
+    for args in wrong:
+        out += c.pipe([args] * 4)
+    out += c.pipe(wrong)
+    out += c.pipe([["GET", "s"], ["GET", "l"], ["SET", "s", "w"], ["SET", "l", "y", "GET"], ["STRLEN", "s"],
+                   ["STRLEN", "l"], ["SET", "s", "z", "GET"]])
+    out += c.pipe([["MULTI"]] + wrong + [["EXEC"]])
+    out.append(c.ask("DEL", "l", "s", "d"))
+    return out
+
+
 def big_pipeline(c, port):
     # a batch of one command over 64 KB: tl does not count it all
     cmds = [["SET", "big%d" % i, "x" * 64] for i in range(1200)] + [["INCR", "big%d" % i] for i in range(3)]
@@ -333,6 +357,7 @@ def main():
     same("one command at a time", b, r, ports, one_at_a_time)
     same("errors one at a time", b, r, ports, errors_at_a_time)
     same("pipelines", b, r, ports, pipelines)
+    same("WRONGTYPE of the commands of strings", b, r, ports, wrong_types)
     same("replies with a '-' that are no errors", b, r, ports, dash_payloads)
     same("a pipeline over 64 KB", b, r, ports, big_pipeline)
     same("replies held back", b, r, ports, held_replies)

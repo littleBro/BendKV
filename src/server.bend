@@ -750,9 +750,14 @@ def errs.len(+xs: List<&2, R.Erred>, +acc: Nat) -> Nat:
       errs.len(rest, 1n+acc)
 
 # a batch of one code whose replies need no look, by its rule (1: its
-# calls less its errors, which the look for errors found anyway)
-def dirty.quick(+rule: Nat, +calls: Nat, +errs: Nat) -> Nat:
-  Bool.pick(Nat, Nat.is_eq(rule, 1n), Nat.sub(calls, errs), 0n)
+# calls less its errors xs, which the look for errors found anyway; the
+# errors counted for that rule alone)
+def dirty.quick(+rule: Nat, +calls: Nat, +xs: List<&2, R.Erred>) -> Nat:
+  match rule:
+    case 1n:
+      Nat.sub(calls, errs.len(xs, 0n))
+    case _:
+      0n
 
 # A batch's changes, once it has run: its calls' codes (its tally's runs),
 # replies and weights, zipped; a batch of one code by its rule alone
@@ -11486,13 +11491,13 @@ def run_put(walk: Bool, +rule: Nat, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ =>
       +outb = ans.len(a)
       Grp{(back, a) <> outs, es, S.srv.ran.d(srv, calls, run, runs, inb, outb, n), ds, WaitNone{}, up, TxNone{}, pb}
     case False{} R.Tally{+calls, True{}, +run, Nil{}} S.Fin{+rs, cn, srv, ds}:
-      +xs = R.errs.one(rs, R.run.code(run), Nil{})
-      +n = dirty.quick(rule, calls, errs.len(xs, 0n))
+      +xs = R.errs.one(rs, run, Nil{})
+      +n = dirty.quick(rule, calls, xs)
       +a = ans_of(rs, cn)
       +outb = ans.len(a)
       Grp{(back, a) <> outs, es, errs.put(xs, S.srv.ran.d(srv, calls, run, Nil{}, inb, outb, n)), ds, WaitNone{}, up, TxNone{}, pb}
     case True{} R.Tally{+calls, True{}, +run, Nil{}} S.Fin{+rs, cn, srv, ds}:
-      +xs = R.errs.one(rs, R.run.code(run), Nil{})
+      +xs = R.errs.one(rs, run, Nil{})
       +n = dirty.one.rule(rule, True{}, calls, errs.len(xs, 0n), rs, Nil{})
       +a = ans_of(rs, cn)
       +outb = ans.len(a)
@@ -11514,7 +11519,7 @@ def run_put.w(outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A
       +outb = ans.len(a)
       Grp{(back, a) <> outs, es, S.srv.ran.d(srv, calls, run, runs, inb, outb, n), ds, WaitNone{}, up, TxNone{}, pb}
     case R.Tally{+calls, True{}, +run, Nil{}} S.Fin{+rs, cn, srv, ds}:
-      +xs = R.errs.one(rs, R.run.code(run), Nil{})
+      +xs = R.errs.one(rs, run, Nil{})
       +n = dirty.batch(calls, run, Nil{}, True{}, errs.len(xs, 0n), rs, ws)
       +a = ans_of(rs, cn)
       +outb = ans.len(a)
@@ -11543,13 +11548,13 @@ def group_put(walk: Bool, +rule: Nat, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ 
       +outb = ans.len(a)
       Grp{(back, a) <> outs, A.ents.onto(e, es), S.srv.ran.d(srv, calls, run, runs, inb, outb, n), ds, WaitNone{}, up, TxNone{}, pb}
     case False{} R.Tally{+calls, True{}, +run, Nil{}} S.Logged{+rs, e, cn, srv, ds}:
-      +xs = R.errs.one(rs, R.run.code(run), Nil{})
-      +n = dirty.quick(rule, calls, errs.len(xs, 0n))
+      +xs = R.errs.one(rs, run, Nil{})
+      +n = dirty.quick(rule, calls, xs)
       +a = ans_of(rs, cn)
       +outb = ans.len(a)
       Grp{(back, a) <> outs, A.ents.onto(e, es), errs.put(xs, S.srv.ran.d(srv, calls, run, Nil{}, inb, outb, n)), ds, WaitNone{}, up, TxNone{}, pb}
     case True{} R.Tally{+calls, True{}, +run, Nil{}} S.Logged{+rs, e, cn, srv, ds}:
-      +xs = R.errs.one(rs, R.run.code(run), Nil{})
+      +xs = R.errs.one(rs, run, Nil{})
       +n = dirty.one.rule(rule, True{}, calls, errs.len(xs, 0n), rs, Nil{})
       +a = ans_of(rs, cn)
       +outb = ans.len(a)
@@ -11569,7 +11574,7 @@ def group_put.w(outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2,
       +outb = ans.len(a)
       Grp{(back, a) <> outs, A.ents.onto(e, es), S.srv.ran.d(srv, calls, run, runs, inb, outb, n), ds, WaitNone{}, up, TxNone{}, pb}
     case R.Tally{+calls, True{}, +run, Nil{}} S.Logged{+rs, e, cn, srv, ds}:
-      +xs = R.errs.one(rs, R.run.code(run), Nil{})
+      +xs = R.errs.one(rs, run, Nil{})
       +n = dirty.batch(calls, run, Nil{}, True{}, errs.len(xs, 0n), rs, ws)
       +a = ans_of(rs, cn)
       +outb = ans.len(a)

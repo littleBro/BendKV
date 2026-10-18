@@ -10518,6 +10518,30 @@ and INCR 4,608 instructions a request (3,506, 4,297 and 4,614 before).
 `auth_test`'s scenario 15 runs it against Redis: three clients, each connected just
 before another removes the password and sets it again, then a GET from each (NOAUTH).
 
+## 3zzzzq. The errors of the commands of strings, counted
+
+**What differed** (#105). The fast way looks at a batch's replies for errors only where a
+call may fail as it runs (`RISKY` in `tools/gen_commands.py`, `R.code.risky`), and the
+commands of strings were left out when values took kinds (section 3zf): GET, SET with
+GET, GETSET, GETDEL, APPEND, STRLEN, GETRANGE, SUBSTR, GETBIT, SETBIT, BITOP and
+BITFIELD_RO on a key of another kind answer WRONGTYPE as Redis does, and a batch of them
+counted none of those errors. INFO's errorstats had no WRONGTYPE for them, their
+commands' `failed_calls` stayed 0, and so did `total_error_replies`; in MULTI, and in a
+script, where each call is counted as it runs, they counted.
+
+**What changed** (`tools/gen_commands.py`, `src/redis.bend`, `src/server.bend`). The
+twelve are risky now, so a batch of them has its replies looked at, as a batch of INCRs
+or of a collection's commands has. The look (`R.errs.one`) takes the batch's run and
+reckons its code only for an error reply, and a batch of a command that changes nothing
+(GET) counts no errors for its changes (`dirty.quick`).
+
+**What it costs.** The look, about 20 instructions a request of a GET or a SET without a
+pipeline: perfcheck counts GET 3,526, SET 4,324 and INCR 4,613 (3,505, 4,295 and 4,608
+before). SET's walk for its changes (rule 3) is still a walk of its own, after the look.
+
+`tests/stats_test.py` runs the twelve on a key that holds a list against Redis 7.2.16:
+one at a time, in pipelines of one command and of several, and in MULTI.
+
 ## 4. Where a request's time goes, and hiding the memory waits
 
 With the eight patches, BendKV ran fewer instructions on GET and SET than Redis, missed
