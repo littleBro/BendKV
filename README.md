@@ -20,7 +20,7 @@ throughput of Redis 7.0.15 on the same machine, with half its memory for small v
 > append-only file and its rewrite, maxmemory and its eviction, Lua scripts and
 > functions, RESP3). The goal now is a drop-in replacement for a single Redis node,
 > measured by Redis's own test suite: of the 1,812 tests Redis 7.2.16 passes against a
-> server it did not start, BendKV passes 1,672, and 1,631 of the 1,688 in what it implements
+> server it did not start, BendKV passes 1,676, and 1,635 of the 1,688 in what it implements
 > ([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)). Do not use it for data you cannot
 > lose.
 
@@ -211,31 +211,37 @@ translation stays in the trusted base.
   held an entry (a STORE's destination, a key whose time had passed) is logged as the
   EVAL of the hash's script with the SADD, and SMOVE onto a key whose time had passed as
   one EVAL of a third fixed script that deletes the destination and runs the SMOVE.
-- **Sorted sets:** ZADD (NX, XX, GT, LT, CH, INCR), ZINCRBY, ZREM, ZCARD, ZSCORE, ZMSCORE,
-  ZRANK and ZREVRANK (WITHSCORE), ZCOUNT, ZLEXCOUNT, ZRANGE (BYSCORE, BYLEX, REV, LIMIT, WITHSCORES),
-  ZRANGEBYSCORE, ZREVRANGEBYSCORE, ZRANGEBYLEX, ZREVRANGEBYLEX, ZREVRANGE,
-  ZREMRANGEBYRANK, ZREMRANGEBYSCORE, ZREMRANGEBYLEX, ZPOPMIN and ZPOPMAX (with a count),
-  ZMPOP, ZRANDMEMBER (a count, repeating when negative, WITHSCORES; picked with the
-  server's random numbers), ZSCAN, ZUNION, ZINTER, ZDIFF, their STOREs, ZINTERCARD
-  (LIMIT) and ZRANGESTORE, their arguments and errors read where and as Redis reads them.
-  Scores are doubles, read, written, compared and added as C's are (`src/float.bend`),
-  with Redis's rules for infinities. A sorted set keeps its elements in Redis's order, by
-  score and then member: while it is small (at most 128 elements, members of at most 64
-  bytes, Redis's listpack defaults) in one string, each element its member and its
-  score's 8 bytes, as a listpack keeps them in one allocation (in a weight-balanced tree
-  once that string would pass one buffer of the runtime, 2,048 bytes), and past the
-  limits in the tree with a trie of its members, for good, as Redis turns a listpack
-  into a skiplist: a small one answers as Redis's listpack does
-  (no `-0` score, a range by member walked from its first element, ZSCAN whole with
+- **Sorted sets:** ZADD (NX, XX, GT, LT, CH, INCR), ZINCRBY, ZREM, ZCARD, ZSCORE,
+  ZMSCORE, ZRANK and ZREVRANK (WITHSCORE), ZCOUNT, ZLEXCOUNT, ZRANGE (BYSCORE, BYLEX,
+  REV, LIMIT, WITHSCORES), ZRANGEBYSCORE, ZREVRANGEBYSCORE, ZRANGEBYLEX, ZREVRANGEBYLEX,
+  ZREVRANGE, ZREMRANGEBYRANK, ZREMRANGEBYSCORE, ZREMRANGEBYLEX, ZPOPMIN and ZPOPMAX
+  (with a count), ZMPOP, ZRANDMEMBER (a count, repeating when negative, WITHSCORES;
+  picked with the server's random numbers), ZSCAN, ZUNION, ZINTER, ZDIFF, their STOREs,
+  ZINTERCARD (LIMIT) and ZRANGESTORE, their arguments and errors read where and as Redis
+  reads them. Scores are doubles, read, written, compared and added as C's are
+  (`src/float.bend`), with Redis's rules for infinities. A sorted set keeps its elements
+  in Redis's order, by score and then member: while it is small (at most 128 elements,
+  members of at most 64 bytes, Redis's listpack defaults) in one string, each element
+  its member and its score's 8 bytes, as a listpack keeps them in one allocation (in a
+  weight-balanced tree once that string would pass one buffer of the runtime, 2,048
+  bytes), and past the limits in the tree with a trie of its members, for good, as Redis
+  turns a listpack into a skiplist (and, as Redis 7.2.16 does, from a ZADD of more than
+  128 pairs, however many members they hold): a small one answers as Redis's listpack
+  does (no `-0` score, a range by member walked from its first element, ZSCAN whole with
   cursor 0, its integer scores as digits). OBJECT ENCODING answers `listpack` or
   `skiplist`, MEMORY USAGE estimates a sorted set's bytes, and a key never holds an
   empty one. A sorted-set write is logged as the command the client sent (ZINCRBY as
   ZADD INCR, ZADD's options in one order, ZMPOP as the ZPOPMIN or ZPOPMAX of the key it
   took from; the removal of the last elements as a DEL); a sorted set made where a key
   held an entry (a STORE's destination, a key whose time had passed) is logged as one
-  EVAL of a fourth fixed script that deletes the key and runs the ZADD of its elements. A
-  STORE of more than 128 elements loses the sign of a `-0` score where Redis keeps it.
-  The blocking BZPOPMIN, BZPOPMAX and BZMPOP are below (clients that wait).
+  EVAL of a fourth fixed script that deletes the key and runs the ZADD of its elements.
+  A STORE's destination is the sorted set Redis makes: ZUNIONSTORE's, ZINTERSTORE's and
+  ZDIFFSTORE's a skiplist, which keeps a `-0` score, turned a listpack when it holds at
+  most 128 elements and no member past 64 bytes, ZRANGESTORE's sized by a range of ranks
+  and grown from a listpack for a range of scores or members. Where BendKV differs: a
+  ZADD of more than 128 pairs that adds and changes nothing leaves a listpack as it was,
+  where Redis makes it a skiplist. The blocking BZPOPMIN, BZPOPMAX and BZMPOP are below
+  (clients that wait).
 - **Sorting:** SORT and SORT_RO (BY, LIMIT, GET, ASC, DESC, ALPHA and, for SORT, STORE),
   their options read in order and their errors given where and as Redis gives them, all
   before WRONGTYPE. A list, a set or a sorted set is sorted, a key not there as an empty
@@ -265,26 +271,28 @@ translation stays in the trusted base.
   listpack, where Redis makes it a skiplist for good.
 - **HyperLogLogs:** PFADD, PFCOUNT, PFMERGE, PFDEBUG (GETREG, DECODE, ENCODING, TODENSE)
   and PFSELFTEST, as Redis 7.2.16's `hyperloglog.c` runs them, on the bytes of a string:
-  Redis's header and registers, dense or sparse, and every value written byte for byte as
-  Redis writes it (the sparse opcodes split and merged as `hllSparseSet` does it, the turn
-  to dense past 3,000 bytes or for a register past 32, PFMERGE's sparse result, the count
-  kept in the header and made stale by a change). The count is Ertl's estimator as Redis
-  takes it, on doubles in software. A string that is not a HyperLogLog answers Redis's
-  WRONGTYPE, a corrupt sparse one INVALIDOBJ, as Redis 7.2.16 judges it, with the fix of
-  CVE-2025-32023, whose walks end at the first opcode past the last register, so that
-  one of any length is answered at once (FINDINGS.md, section 3zzzzk). PFADD, PFCOUNT of
-  one key and PFDEBUG are logged as the changes they make (a SET, a SET with KEEPTTL,
-  the SETRANGE of the count), PFMERGE as the SET of its destination; a file of Redis's,
-  which holds the PF commands, is read by running them. PFADD takes four to six times
-  Redis's instructions, a PFCOUNT that counts 13 to 18 times (2.6 times on two dense
-  HyperLogLogs), PFMERGE 1.2 to 2.4 times (section 59 of
-  [docs/PERFORMANCE.md](docs/PERFORMANCE.md)). Where BendKV differs:
-  `hll-sparse-max-bytes` is not read (3,000); PFSELFTEST checks fewer cases; the byte
-  past a sparse string's end, which an XZERO cut at its end reads, is 0 as each command
-  starts, where Redis keeps what a set wrote there (docs/UPSTREAM.md, bug 6); a PFADD
-  that a corrupt value stops keeps its change with an event and a log, where Redis keeps
-  it silently; and OBJECT ENCODING answers `embstr` for a HyperLogLog of up to 44 bytes,
-  where Redis's is `raw`.
+  Redis's header and registers, dense or sparse, and every value written byte for byte
+  as Redis writes it (the sparse opcodes split and merged as `hllSparseSet` does it, the
+  turn to dense past `hll-sparse-max-bytes`, 3,000 bytes by default, or for a register
+  past 32, PFMERGE's sparse result, the count kept in the header and made stale by a
+  change). The count is Ertl's estimator as Redis takes it, on doubles in software. A
+  string that is not a HyperLogLog answers Redis's WRONGTYPE, a corrupt sparse one
+  INVALIDOBJ, as Redis 7.2.16 judges it, with the fix of CVE-2025-32023, whose walks end
+  at the first opcode past the last register, so that one of any length is answered at
+  once (FINDINGS.md, section 3zzzzk). PFADD, PFCOUNT of one key and PFDEBUG are logged
+  as the changes they make (a SET, a SET with KEEPTTL, the SETRANGE of the count),
+  PFMERGE as the SET of its destination; a file of Redis's, which holds the PF commands,
+  is read by running them. PFADD takes four to six times Redis's instructions, a PFCOUNT
+  that counts 13 to 18 times (2.6 times on two dense HyperLogLogs), PFMERGE 1.2 to 2.4
+  times (section 59 of [docs/PERFORMANCE.md](docs/PERFORMANCE.md)). Where BendKV
+  differs: while `hll-sparse-max-bytes` is not 3,000, every command runs one at a time,
+  as while a client is in BCAST mode; a file of Redis's runs its PFADD and PFMERGE with
+  the parameter at 3,000, where Redis runs them with the parameter it starts with;
+  PFSELFTEST checks fewer cases; the byte past a sparse string's end, which an XZERO cut
+  at its end reads, is 0 as each command starts, where Redis keeps what a set wrote
+  there (docs/UPSTREAM.md, bug 6); a PFADD that a corrupt value stops keeps its change
+  with an event and a log, where Redis keeps it silently; and OBJECT ENCODING answers
+  `embstr` for a HyperLogLog of up to 44 bytes, where Redis's is `raw`.
 - **GEO:** GEOADD, GEOPOS, GEOHASH, GEODIST, GEORADIUS and GEORADIUSBYMEMBER with their
   `_RO` forms, GEOSEARCH and GEOSEARCHSTORE, as Redis 7.2.16's `geo.c` runs them: a
   position is a member of a sorted set whose score is its 52-bit geohash, GEOADD the ZADD
@@ -524,17 +532,16 @@ translation stays in the trusted base.
   whose transaction queued one) or of every command (ALL), for a timeout in ms; a second
   pause keeps the more restrictive kind and the later end. A command the pause holds
   back, once Redis's checks before it passed and before MULTI queues it, waits with the
-  rest of its client's batch (CLIENT LIST's flag b, INFO's blocked_clients) and runs when
-  the pause ends, at CLIENT UNPAUSE or at its time, in the order the clients came; a
-  monitor is never held back. While the pause holds, keys are not swept as they expire,
-  nor evicted, as Redis keeps the data set still. A script is held back by its flags, as
-  Redis reads them: one that may write (EVAL without a shebang, EVALSHA, a shebang without
-  no-writes), not one that declares no-writes, and an EXEC by the scripts it queued. Where
-  BendKV differs: CLIENT UNBLOCK of a client held back answers 0, as Redis 8.10.2 and
-  Valkey 9.1.2 do, where 7.0.15 and 7.2.16 crash on it (docs/UPSTREAM.md, bug 7); and
-  while a pause holds back writes, RANDOMKEY of a database whose keys all have a time to
-  live, all past it, answers nil, where Redis 7.2.16, which may not delete them then,
-  answers one of them.
+  rest of its client's batch (CLIENT LIST's flag b, INFO's blocked_clients) and runs
+  when the pause ends, at CLIENT UNPAUSE or at its time, in the order the clients came;
+  a monitor is never held back. While the pause holds, keys are not swept as they
+  expire, nor evicted, as Redis keeps the data set still, and RANDOMKEY of a database
+  whose keys all have a time to live, all past it, answers one of them, as Redis 7.2.16
+  does (`dbRandomKey`). A script is held back by its flags, as Redis reads them: one
+  that may write (EVAL without a shebang, EVALSHA, a shebang without no-writes), not one
+  that declares no-writes, and an EXEC by the scripts it queued. Where BendKV differs:
+  CLIENT UNBLOCK of a client held back answers 0, as Redis 8.10.2 and Valkey 9.1.2 do,
+  where 7.0.15 and 7.2.16 crash on it (docs/UPSTREAM.md, bug 7).
 - **MONITOR**, as Redis 7.2.16 runs it: each call that runs after it, of any client,
   sends every monitor a line, `+<s>.<us> [<db> <ip:port>]` and the call's arguments as
   the client sent them, quoted as Redis quotes them. As in Redis, a command refused
@@ -798,29 +805,29 @@ translation stays in the trusted base.
   what it holds at once is a window and the databases it builds (FINDINGS.md, section
   3zzzt). Where BendKV differs: the short form (`bendkv PORT`) has no save points;
   `rdb_changes_since_last_save` counts some writes otherwise (SET with GET by its reply,
-  ZADD and GEOADD each pair, BITFIELD each write that OVERFLOW FAIL let through, PFADD
-  one, PFCOUNT none; FLUSHDB and FLUSHALL a key whose time has passed until the sweep
-  deletes it, also after a read found it missing, which Redis's read deletes, and so
-  does `current_save_keys_total`; a pipeline's weights read as the batch found the
-  databases; an INFO after a FLUSHALL with save points in its pipeline as if that
-  FLUSHALL's save ended well; 0 after a start from the append-only file); no fork, so no
-  fork's fields or lines, and the progress of a save in INFO follows each slice written
-  (a rewrite's shows none); the line of a background save's start comes once its group
-  is answered; SAVE and the saves of SHUTDOWN and FLUSHALL ignore `rdb-key-save-delay`;
-  no LZF written; no IDLE or FREQ written, and those read set no word of use; SAVE's
-  client waits through the rest of its group, so that the others in it see it blocked,
-  the commands after SAVE in its pipeline run in a group of their own (a client in BCAST
-  tracking mode gets the keys they change in an invalidation push after the one of the
-  keys changed before SAVE, where Redis sends one; BGSAVE splits nothing), the file
-  holds the databases as the group left them, and SAVE's call time leaves the save out;
-  after a start from the file, INFO's replication section and ROLE give an offset of 0,
-  where Redis counts into `master_repl_offset` a DEL for each key whose time had passed,
-  and keeps the file's `repl-id` and `repl-offset` as its `master_replid2` and offset,
-  which its next save writes again (BendKV drops them); the log of a file that does not
-  load gives the byte where the reading failed, where Redis gives what it had read at
-  its last report of progress, and leaves out Redis's `function at rdb.c:N`; a
-  background save takes longer than Redis's, and so does the start from a large file
-  (PERFORMANCE.md, sections 72 and 78; FINDINGS.md, sections 3zzzk and 3zzzt).
+  ZADD and GEOADD each pair, PFADD one, PFCOUNT none; FLUSHDB and FLUSHALL a key whose
+  time has passed until the sweep deletes it, also after a read found it missing, which
+  Redis's read deletes, and so does `current_save_keys_total`; a pipeline's weights read
+  as the batch found the databases; an INFO after a FLUSHALL with save points in its
+  pipeline as if that FLUSHALL's save ended well; 0 after a start from the append-only
+  file); no fork, so no fork's fields or lines, and the progress of a save in INFO
+  follows each slice written (a rewrite's shows none); the line of a background save's
+  start comes once its group is answered; SAVE and the saves of SHUTDOWN and FLUSHALL
+  ignore `rdb-key-save-delay`; no LZF written; no IDLE or FREQ written, and those read
+  set no word of use; SAVE's client waits through the rest of its group, so that the
+  others in it see it blocked, the commands after SAVE in its pipeline run in a group of
+  their own (a client in BCAST tracking mode gets the keys they change in an
+  invalidation push after the one of the keys changed before SAVE, where Redis sends
+  one; BGSAVE splits nothing), the file holds the databases as the group left them, and
+  SAVE's call time leaves the save out; after a start from the file, INFO's replication
+  section and ROLE give an offset of 0, where Redis counts into `master_repl_offset` a
+  DEL for each key whose time had passed, and keeps the file's `repl-id` and
+  `repl-offset` as its `master_replid2` and offset, which its next save writes again
+  (BendKV drops them); the log of a file that does not load gives the byte where the
+  reading failed, where Redis gives what it had read at its last report of progress, and
+  leaves out Redis's `function at rdb.c:N`; a background save takes longer than Redis's,
+  and so does the start from a large file (PERFORMANCE.md, sections 72 and 78;
+  FINDINGS.md, sections 3zzzk and 3zzzt).
 
 Not yet: the commands of a stream's groups and XREAD's wait, CONFIG REWRITE (it answers as Redis does without a configuration file).
 Times in ms are limited to 14 digits.
@@ -1097,12 +1104,12 @@ away.
 | `src/float.bend` | 1,600 |  | no |
 | `src/geo.bend` | 870 |  | no |
 | `src/hll.bend` | 1,400 |  | no |
-| `src/info.bend` | 2,900 |  | no |
+| `src/info.bend` | 3,200 |  | no |
 | `src/lolwut.bend` | 470 |  | no |
 | `src/rdb.bend` | 3,100 |  | no |
 | `src/resp.bend` | 980 |  | no |
 | `src/script.bend` | 51 |  | no |
-| `src/server.bend` | 13,000 |  | no |
+| `src/server.bend` | 15,000 |  | no |
 | `src/sha.bend` | 120 |  | no |
 | `src/startup.bend` | 460 |  | no |
 | `src/stream.bend` | 1,100 |  | no |

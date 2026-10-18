@@ -291,11 +291,12 @@ def smove(db: KV.Trie<KV.Val>, +s: String, +d: String, +w: R.SMem, +now: Nat) ->
   smove.do(smv.find(x, s, d, w, now), s, d, w, x, now)
 
 # ZUNIONSTORE, ZINTERSTORE, ZDIFFSTORE: the elements the operation makes
-# of the sorted sets (and sets) at the keys there at now set at dst as
-# the update ZWNew sets them, or dst deleted as DEL deletes it when there
-# are none; the reply counts them. A key of another kind makes it
-# WRONGTYPE, options that do not read their error. ZRANGESTORE: the same,
-# of the range of the sorted set at src.
+# of the sorted sets (and sets) at the keys there at now (as
+# R.zop.stored orders them) set at dst as the update ZWNew sets them, or
+# dst deleted as DEL deletes it when there are none; the reply counts
+# them. A key of another kind makes it WRONGTYPE, options that do not
+# read their error. ZRANGESTORE: the same, of the range of the sorted set
+# at src, as R.zq.stored gives it.
 def zstore.put(+n: Nat, ps: List<&2, R.ZPair>, +d: String, db: KV.Trie<KV.Val>, +now: Nat) -> R.Reply & KV.Trie<KV.Val>:
   (R.r_int(n), db_of(upd.run(db, d, R.UZset{R.ZWNew{R.zopts.none(), ps}}, now)))
 
@@ -311,7 +312,7 @@ def zstore.ok(bad: Maybe<&2, R.Reply>, +op: R.ZSetK, ss: List<&2, R.ZSrc>, +d: S
     case Some{r}:
       (r, db)
     case None{}:
-      zstore.of(R.zop.els(op, ss), d, db, now)
+      zstore.of(R.zop.stored(op, ss), d, db, now)
 
 def zstore.do(g: R.ZGot, +op: R.ZSetK, +d: String, db: KV.Trie<KV.Val>, +now: Nat) -> R.Reply & KV.Trie<KV.Val>:
   match g:
@@ -329,7 +330,7 @@ def zrs.of(m: Maybe<&2, KV.Val>, q: R.ZQ, +d: String, db: KV.Trie<KV.Val>, +now:
     case None{}:
       zstore.of(Nil{}, d, db, now)
     case Some{KV.VColl{KV.CZset{+z}}}:
-      zstore.of(R.zq.run(q, z), d, db, now)
+      zstore.of(R.zq.stored(q, z), d, db, now)
     case Some{v}:
       (R.e_wrongtype(), db)
 

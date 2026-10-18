@@ -6,9 +6,12 @@ and when it is made again, the union of several, the errors and their
 order), values made by hand (registers past 32, every register at its
 most, opcodes that do not cover 16384 registers, end within an XZERO or
 pass the last register, 4 MB of them too, answered within 5 s),
-values corrupted at random bytes, then random sequences of the commands
-over a few keys. Every reply is compared, and after each write the
-value itself (GET), byte for byte.
+values corrupted at random bytes, hll-sparse-max-bytes from 0 to 20000
+bytes (PFADD and PFMERGE turn a value dense past it as it is set at the
+time: by CONFIG SET, in a pipeline before them, in MULTI, from a
+script), then random sequences of the commands over a few keys. Every
+reply is compared, and after each write the value itself (GET), byte for
+byte.
 
 But for a value whose opcodes end within an XZERO (docs/UPSTREAM.md, bug
 6): Redis reads the byte after the value's end as the XZERO's second, and
@@ -350,6 +353,80 @@ def script(b, r):
             same(b, r, [b"GET", b"e"])
 
 
+# the replies of commands sent at once, in a batch of their own
+def pipe(b, r, cmds):
+    global n
+    n += 1
+    for c in (b, r):
+        c.send(cmds)
+    x = [b.reply() for _ in cmds]
+    y = [r.reply() for _ in cmds]
+    if x != y:
+        fail(cmds[-1], x, y)
+
+
+def config_max(b, r, mx):
+    same(b, r, [b"CONFIG", b"SET", b"hll-sparse-max-bytes", mx])
+    same(b, r, [b"CONFIG", b"GET", b"hll-sparse-max-bytes"])
+
+
+# hll-sparse-max-bytes as Redis reads it in hllSparseSet: a PFADD or a
+# PFMERGE that would grow a sparse value past it turns the value dense,
+# with the parameter as it is when the command runs (unit/hyperloglog's
+# "Change hll-sparse-max-bytes" and "Hyperloglog promote to dense well in
+# different hll-sparse-max-bytes")
+def sparse_max(b, r):
+    k, k2, d = b"hsm", b"hsm2", b"hsmd"
+    rnd = random.Random(11)
+    for mx in (b"0", b"1", b"18", b"30", b"100", b"500", b"3000", b"3001", b"20000"):
+        config_max(b, r, mx)
+        both(b, r, [b"DEL", k])
+        write(b, r, [b"PFADD", k], [k])
+        for i in range(60):
+            els = [("%.17f" % rnd.random()).encode() for _ in range(rnd.choice([1, 3, 10, 40]))]
+            write(b, r, [b"PFADD", k] + els, [k])
+            same(b, r, [b"PFDEBUG", b"ENCODING", k])
+            if run(r, [b"PFDEBUG", b"ENCODING", k]) == (b"+", b"dense"):
+                break
+    # a value sparse under one, a PFADD past a lower one
+    config_max(b, r, b"3000")
+    both(b, r, [b"DEL", k])
+    write(b, r, [b"PFADD", k] + [x.encode() for x in "abcdedghijk"], [k])
+    config_max(b, r, b"30")
+    write(b, r, [b"PFADD", k, b"new_element"], [k])
+    same(b, r, [b"PFDEBUG", b"ENCODING", k])
+    # PFMERGE of sparse values into a new key and into a sparse one
+    config_max(b, r, b"3000")
+    both(b, r, [b"DEL", k, k2, d])
+    write(b, r, [b"PFADD", k] + [b"a%d" % i for i in range(60)], [k])
+    write(b, r, [b"PFADD", k2] + [b"b%d" % i for i in range(60)], [k2])
+    write(b, r, [b"PFADD", d, b"x", b"y"], [d])
+    for mx in (b"100", b"300", b"500"):
+        config_max(b, r, mx)
+        write(b, r, [b"PFMERGE", b"hsm3", k, k2], [b"hsm3"])
+        same(b, r, [b"PFDEBUG", b"ENCODING", b"hsm3"])
+        both(b, r, [b"DEL", b"hsm3"])
+    config_max(b, r, b"200")
+    write(b, r, [b"PFMERGE", d, k], [d])
+    same(b, r, [b"PFDEBUG", b"ENCODING", d])
+    # the parameter set in the batch of the PFADD, in MULTI, and a script's
+    config_max(b, r, b"3000")
+    both(b, r, [b"DEL", k, k2])
+    write(b, r, [b"PFADD", k] + [b"c%d" % i for i in range(20)], [k])
+    pipe(b, r, [[b"CONFIG", b"SET", b"hll-sparse-max-bytes", b"40"], [b"PFADD", k, b"p1", b"p2"], [b"GET", k],
+                [b"CONFIG", b"SET", b"hll-sparse-max-bytes", b"3000"], [b"PFADD", k2, b"q1", b"q2"], [b"GET", k2]])
+    both(b, r, [b"DEL", k, k2])
+    write(b, r, [b"PFADD", k] + [b"m%d" % i for i in range(20)], [k])
+    pipe(b, r, [[b"MULTI"], [b"CONFIG", b"SET", b"hll-sparse-max-bytes", b"40"], [b"PFADD", k, b"t1", b"t2"],
+                [b"PFADD", k2, b"t3"], [b"EXEC"], [b"GET", k], [b"GET", k2]])
+    both(b, r, [b"DEL", k])
+    write(b, r, [b"PFADD", k] + [b"s%d" % i for i in range(20)], [k])
+    write(b, r, [b"EVAL", b"return redis.call('PFADD', KEYS[1], ARGV[1], ARGV[2])", b"1", k, b"e1", b"e2"], [k])
+    same(b, r, [b"PFDEBUG", b"ENCODING", k])
+    config_max(b, r, b"3000")
+    both(b, r, [b"DEL", k, k2, d])
+
+
 def fuzz(b, r, rnd, rounds):
     k = b"hll"
     for j in range(rounds):
@@ -418,6 +495,7 @@ def main():
         b, r = Conn(a.bendkv, resp3), Conn(a.redis, resp3)
         both(b, r, [b"FLUSHALL"])
         script(b, r)
+        sparse_max(b, r)
         bug6(b)
         if not resp3:
             fuzz(b, r, rnd, a.rounds // 10)

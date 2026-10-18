@@ -193,12 +193,13 @@ type ZTree is Data:
   ZTip{}
   ZBin{n: Nat, m: String, d: F.F64, l: ZTree, r: ZTree}
 
-# A sorted set, as Redis 7.0 keeps one: a small one (at most 128
+# A sorted set, as Redis 7.2 keeps one: a small one (at most 128
 # elements, each member of at most 64 bytes) as a listpack, the string of
 # its n elements in order while that fits one buffer (2,048 bytes), else
-# its tree alone, which it stays (ZWide); any other as a skiplist with a
-# hashtable of its members, its tree and a trie of its members' scores,
-# which it stays (Sorted sets, below)
+# its tree alone, which it stays (ZWide); any other, or one a ZADD of more
+# than 128 pairs made, as a skiplist with a hashtable of its members, its
+# tree and a trie of its members' scores, which it stays (Sorted sets,
+# below)
 type Zset is Data:
   ZSmall{n: Nat, b: String}
   ZWide{tr: ZTree}
@@ -5722,10 +5723,12 @@ def deq.bytes(+d: Deq) -> Nat:
 # A sorted set's elements (Zset, above), each a member and its score (a
 # double, never a NaN), in order of score (-0 the same as +0), then of
 # member (bytes, as memcmp orders them, a prefix first: String.order).
-# Redis 7.0 keeps a sorted set as a listpack while it holds at most
+# Redis 7.2 keeps a sorted set as a listpack while it holds at most
 # zset-max-listpack-entries elements (128), each member of at most
 # zset-max-listpack-value bytes (64), and as a skiplist with a hashtable
-# of its members from the first write that passes either, for good.
+# of its members from the first write that passes either, or from a ZADD
+# of more than 128 pairs, however many members they hold (zset.large),
+# for good.
 # BendKV keeps a small one as the string of its elements in order, and a
 # large one as a tree with a trie of its members' scores, turning one
 # into the other at those defaults, whatever the parameters say, as it
@@ -6801,6 +6804,20 @@ def zset.add(z: Zset, +m: String, +d: F.F64) -> Zset:
       zset.add.wide(Bool.and(Nat.is_lt(zt.size(tr), 128n), Nat.is_le(String.length(m), 64n)), tr, m, d)
     case ZBig{tr, t}:
       ZBig{zt.add.own(tr, m, d), set(F.F64, t, m, d)}
+
+# z as a large sorted set of the same elements, as Redis 7.2's ZADD makes
+# a sorted set a skiplist before it adds more than 128 pairs (zsetConvert):
+# a small one's elements, with the scores it keeps (a -0 as 0), in a tree
+# with the trie of their scores; a large one as it is
+def zset.large(z: Zset) -> Zset:
+  match z:
+    case ZSmall{+n, +b}:
+      +tr = zt.build(n, zb.all(n, b))
+      ZBig{tr, zt.trie(tr, empty(F.F64))}
+    case ZWide{+tr}:
+      ZBig{tr, zt.trie(tr, empty(F.F64))}
+    case ZBig{tr, t}:
+      ZBig{tr, t}
 
 # z without m, which it holds with score d
 def zset.del(z: Zset, +m: String, +d: F.F64) -> Zset:

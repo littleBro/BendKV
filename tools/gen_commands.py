@@ -544,8 +544,9 @@ ENGINE = EVALS | {"script|load", "script|exists", "script|flush", "function|load
 # BITOP); 13 a positive integer, the weight for 0 (SORT's and GEO's
 # STORE); 14 the weight for an integer reply, or the integer when the
 # weight is 0, the weight for a score (ZADD and GEOADD; with INCR, and
-# ZINCRBY, the weight is whether the score changes); 15 the weight less
-# the nulls of an array (BITFIELD); 16 the weight, whatever the reply
+# ZINCRBY, the weight is whether the score changes); 15 the weight for
+# an array (BITFIELD, whose weight counts the writes that change its
+# value, R.bitfield.changes); 16 the weight, whatever the reply
 # (EVAL of BendKV's own scripts: the DEL they start with, then what the
 # command they run changes, which an error of that command does not undo)
 DIRTY_RULES = {"none": 0, "one": 1, "int": 2, "set": 3, "bulk": 4, "pop": 5, "mpop": 6, "zpop": 7,

@@ -456,12 +456,19 @@ type ExpIf is Data:
 # node of its own: a command travels in registers as wide as its widest
 # form, and an update's options are many.
 # A write of a HyperLogLog's key (HyperLogLog, below): PFADD of elements,
-# PFCOUNT of one key (it keeps the count it makes in the value), and
-# PFDEBUG's subcommand as it came (Redis reads it once the key is found)
+# with the bytes a sparse value may grow to (mx, hll-sparse-max-bytes:
+# the parser gives it the parameter's default, hll.max, and the server
+# the parameter as it is when the PFADD runs, server.bend), PFCOUNT of
+# one key (it keeps the count it makes in the value), and PFDEBUG's
+# subcommand as it came (Redis reads it once the key is found)
 type HllOp is Data:
-  HAdd{els: List<&2, String>}
+  HAdd{els: List<&2, String>, mx: Nat}
   HCount{}
   HDebug{sub: String}
+
+# hll-sparse-max-bytes's default
+def hll.max() -> Nat:
+  3000n
 
 type UpdOp is Data:
   USetNx{v: String}
@@ -618,8 +625,9 @@ type SortO is Data:
 # makes of them, an act of the session's database (ASort, below), so
 # that the laws of exec meet SORT as a read alone (Sort). PFCOUNT of
 # several keys reads them (SPfCount); PFMERGE reads its keys and writes
-# its destination with their union, an act of the session's database
-# (APfMerge, below); PFSELFTEST (SPfSelfTest) reads nothing. LASTSAVE,
+# its destination with their union, a sparse one within
+# hll-sparse-max-bytes, an act of the session's database (APfMerge,
+# below); PFSELFTEST (SPfSelfTest) reads that parameter alone. LASTSAVE,
 # MEMORY STATS, MEMORY DOCTOR, LOLWUT's drawings, SHUTDOWN and SAVE are
 # SAdmin, their kind and arguments (The administrative commands, below):
 # they read the server's state, the drawings its random numbers, SAVE
@@ -655,7 +663,11 @@ type SortO is Data:
 # clients (server.bend, ACL). AUTH (SAuth) and HELLO (SHello) keep their
 # arguments with each password put as its SHA-256 (auth.hashed,
 # hello.hashed), which is all the session reads of one. XREAD of several
-# keys, or with BLOCK (SXRead), reads them (Streams, below).
+# keys, or with BLOCK (SXRead), reads them (Streams, below). RANDOMKEY
+# (SRandomKey) carries whether a pause of writes holds, which the server
+# sets on the general way, where every batch runs while one holds
+# (server.bend, The pause): Redis 7.2 may answer a key whose time has
+# passed then (session.bend, randomkey.of).
 
 type SessOp is Data:
   SHello{args: List<&2, String>}
@@ -672,7 +684,7 @@ type SessOp is Data:
   SConfigResetStat{}
   SInfo{args: List<&2, String>}
   SCommand{args: List<&2, String>}
-  SRandomKey{}
+  SRandomKey{paused: Bool}
   SSwapDb{a: String, b: String}
   SMove{key: String, db: String}
   SFlushAll{}
@@ -9098,7 +9110,7 @@ def parse_id(id: Nat, name: String, args: List<&2, String>) -> Cmd:
     case 179n:  # PFADD
       match args:
         case Con{k, rest}:
-          Upd{k, UHll{HAdd{rest}}}
+          Upd{k, UHll{HAdd{rest, hll.max()}}}
         case Nil{}:
           e_arity("pfadd")
     case 180n:  # PFCOUNT
@@ -9423,7 +9435,7 @@ def parse_sess(id: Nat, name: String, args: List<&2, String>) -> SessOp:
     case 110n:  # RANDOMKEY
       match args:
         case Nil{}:
-          SRandomKey{}
+          SRandomKey{False{}}
         case _:
           s_arity("randomkey")
     case 111n:  # SWAPDB
@@ -17851,6 +17863,48 @@ def zq.scores(q: ZQ) -> Bool:
 def zq.reply(+q: ZQ, +z: KV.Zset) -> Reply:
   zels.reply(zq.run(q, z), zq.scores(q))
 
+# whether a read is of a range of ranks
+def zrng.ranks(r: ZRng) -> Bool:
+  match r:
+    case ZRankR{a, b}:
+      True{}
+    case ZScoreR{lo, hi}:
+      False{}
+    case ZLexR{lo, hi}:
+      False{}
+
+def zq.ranks(q: ZQ) -> Bool:
+  match q:
+    case ZQ{r, off, cnt, ws}:
+      zrng.ranks(r)
+    case ZQRev{q}:
+      zq.ranks(q)
+
+# The elements ZRANGESTORE sets at its destination, as Redis 7.2 adds them
+# to the sorted set it makes (t_zset.c's zrangeResultBeginStore): a range
+# of ranks sizes it by their count, as a ZADD's pairs size it
+# (zadd.sized), and a range of scores or members starts it as a listpack,
+# where its first elements, up to 128 and up to the first member past 64
+# bytes, keep a score of -0 as 0, before it turns a skiplist (zels.lp: on
+# while the listpack holds them, i of them before).
+def zels.lp(xs: List<&2, KV.ZEl>, +on: Bool, +i: Nat) -> List<&2, KV.ZEl>:
+  match xs:
+    case Nil{}:
+      Nil{}
+    case Con{KV.ZEl{+m, +d}, rest}:
+      +lp = Bool.and(on, Bool.and(Nat.is_lt(i, 128n), Nat.is_le(String.length(m), 64n)))
+      KV.ZEl{m, Bool.pick(F.F64, lp, KV.zset.norm(d), d)} <> zels.lp(rest, lp, 1n+i)
+
+def zq.lp(ranks: Bool, xs: List<&2, KV.ZEl>) -> List<&2, KV.ZEl>:
+  match ranks:
+    case True{}:
+      xs
+    case False{}:
+      zels.lp(xs, True{}, 0n)
+
+def zq.stored(+q: ZQ, +z: KV.Zset) -> List<&2, KV.ZEl>:
+  zq.lp(zq.ranks(q), zq.run(q, z))
+
 # ZCOUNT: the elements between the ranks of its bounds; ZLEXCOUNT: of a
 # small sorted set, those its range by member holds (as above), of a
 # large one, those between the ranks of its bounds
@@ -19091,10 +19145,13 @@ def bf.span(+w: String, +lo: Nat, +end: Nat) -> String:
   +s = String.take(String.drop(w, lo), Nat.sub(end, lo))
   s ++ zeros(Nat.sub(Nat.sub(end, lo), String.length(s)))
 
-# the span, whether a write changed the value (or it grows), and the
-# replies so far, reversed
+# the span, whether a write changed the value (or it grows), the replies
+# so far, reversed, whether the value grows (g), and the writes that count
+# as changes (n), as Redis 7.2.16's bitfieldGeneric counts them: each
+# that changed its field, or each when the value grows (a FAIL's
+# overflow, which writes nothing, none)
 type BfRun is Data:
-  BfRun{sp: String, ch: Bool, rs: List<&2, Reply>}
+  BfRun{sp: String, ch: Bool, rs: List<&2, Reply>, g: Bool, n: Nat}
 
 # an overflow (Redis's checkSignedBitfieldOverflow and
 # checkUnsignedBitfieldOverflow, whose sums wrap as here): 0 none, 1 past
@@ -19169,33 +19226,34 @@ def bf.wb(k: Nat, +w: String, +sp: String, +lo: Nat, +i: Nat, +q: Nat, +s: Nat, 
 # a write of a field's new value nv, its bits raw before; the reply is the
 # old value (SET) or the new one (INCRBY), or a null for a FAIL's
 # overflow, which writes nothing
-def bf.wr.do(fail: Bool, +set: Bool, +bits: Nat, +off: Nat, +w: String, +lo: Nat, +raw: W64, +old: W64, +nv: W64, +sp: String, +ch: Bool, rs: List<&2, Reply>) -> BfRun:
+def bf.wr.do(fail: Bool, +set: Bool, +bits: Nat, +off: Nat, +w: String, +lo: Nat, +raw: W64, +old: W64, +nv: W64, +sp: String, +ch: Bool, rs: List<&2, Reply>, +g: Bool, +n: Nat) -> BfRun:
   match fail:
     case True{}:
-      BfRun{sp, ch, RNull{} <> rs}
+      BfRun{sp, ch, RNull{} <> rs, g, n}
     case False{}:
       +nb = w64.and(nv, w64.low(bits))
       +s = Nat.mod(off, 8n)
       +e = Nat.add(s, bits)
       +i = Nat.div(off, 8n)
-      BfRun{range.put(sp, Nat.sub(i, lo), bf.wb(Nat.div(Nat.add(e, 7n), 8n), w, sp, lo, i, 0n, s, e, nb)), Bool.or(ch, Bool.not(w64.eq(nb, raw))), RIntS{w64.show(Bool.pick(W64, set, old, nv))} <> rs}
+      +d = Bool.not(w64.eq(nb, raw))
+      BfRun{range.put(sp, Nat.sub(i, lo), bf.wb(Nat.div(Nat.add(e, 7n), 8n), w, sp, lo, i, 0n, s, e, nb)), Bool.or(ch, d), RIntS{w64.show(Bool.pick(W64, set, old, nv))} <> rs, g, Bool.pick(Nat, Bool.or(g, d), 1n+n, n)}
 
 # a SET (set) of v, or an INCRBY by v, of a field of bits bits at bit
 # offset off, under the overflow ow (0 WRAP, 1 SAT, 2 FAIL)
 def bf.wr(+set: Bool, +sign: Bool, +bits: Nat, +off: Nat, +v: W64, +ow: Nat, +w: String, +lo: Nat, st: BfRun) -> BfRun:
   match st:
-    case BfRun{+sp, +ch, rs}:
+    case BfRun{+sp, +ch, rs, +g, +n}:
       +raw = bf.field(w, sp, lo, bits, off)
       +old = bf.val(sign, raw, bits)
       +value = Bool.pick(W64, set, v, old)
       +incr = Bool.pick(W64, set, w64.zero(), v)
       +o = bf.over.of(sign, value, incr, bits)
-      bf.wr.do(Bool.and(Nat.is_lt(0n, o), Nat.is_eq(ow, 2n)), set, bits, off, w, lo, raw, old, bf.nv(Nat.is_eq(o, 0n), o, sign, ow, w64.add(value, incr), bits), sp, ch, rs)
+      bf.wr.do(Bool.and(Nat.is_lt(0n, o), Nat.is_eq(ow, 2n)), set, bits, off, w, lo, raw, old, bf.nv(Nat.is_eq(o, 0n), o, sign, ow, w64.add(value, incr), bits), sp, ch, rs, g, n)
 
 def bf.get.at(+sign: Bool, +bits: Nat, +off: Nat, +w: String, +lo: Nat, st: BfRun) -> BfRun:
   match st:
-    case BfRun{+sp, ch, rs}:
-      BfRun{sp, ch, bf.rint(sign, bits, bf.field(w, sp, lo, bits, off)) <> rs}
+    case BfRun{+sp, ch, rs, g, n}:
+      BfRun{sp, ch, bf.rint(sign, bits, bf.field(w, sp, lo, bits, off)) <> rs, g, n}
 
 def bf.op(op: BfOp, +w: String, +lo: Nat, st: BfRun) -> BfRun:
   match op:
@@ -19219,7 +19277,8 @@ def bf.lo0(+ops: List<&2, BfOp>) -> Nat:
 def bf.run0(+ops: List<&2, BfOp>, +w: String) -> BfRun:
   +lo = bf.lo0(ops)
   +end = bf.end(ops, 0n)
-  bf.run(ops, w, lo, BfRun{bf.span(w, lo, end), Nat.is_lt(String.length(w), end), Nil{}})
+  +gr = Nat.is_lt(String.length(w), end)
+  bf.run(ops, w, lo, BfRun{bf.span(w, lo, end), gr, Nil{}, gr, 0n})
 
 def bf.put(ok: Bool, +r: Reply, +lo: Nat, +sp: String, m: Maybe<&2, KV.Item<String>>) -> Out:
   match ok:
@@ -19237,7 +19296,7 @@ def bf.res(ch: Bool, +r: Reply, +lo: Nat, +sp: String, m: Maybe<&2, KV.Item<Stri
 
 def bf.fin(st: BfRun, +lo: Nat, m: Maybe<&2, KV.Item<String>>) -> Out:
   match st:
-    case BfRun{+sp, ch, rs}:
+    case BfRun{+sp, ch, rs, g, n}:
       bf.res(ch, RArray{List.reverse(&2, Reply, rs)}, lo, sp, m)
 
 def bitfield.of(+ops: List<&2, BfOp>, m: Maybe<&2, KV.Item<String>>) -> Out:
@@ -19246,6 +19305,23 @@ def bitfield.of(+ops: List<&2, BfOp>, m: Maybe<&2, KV.Item<String>>) -> Out:
       bf.fin(bf.run0(ops, w), bf.lo0(ops), Some{KV.Item{w, e}})
     case None{}:
       bf.fin(bf.run0(ops, ""), bf.lo0(ops), None{})
+
+def bf.n(st: BfRun) -> Nat:
+  match st:
+    case BfRun{sp, ch, rs, g, +n}:
+      n
+
+# the changes BITFIELD's ops count on the entry m (INFO's
+# rdb_changes_since_last_save): of a string's value, or of none; a key of
+# another kind answers WRONGTYPE and counts none
+def bitfield.changes(+ops: List<&2, BfOp>, +m: Maybe<&2, KV.Item<KV.Val>>) -> Nat:
+  match m:
+    case Some{KV.Item{KV.VStr{+w}, +e}}:
+      bf.n(bf.run0(ops, w))
+    case Some{+it}:
+      0n
+    case None{}:
+      bf.n(bf.run0(ops, ""))
 
 # A hash's writes. A key not there is an empty hash: HSET, HSETNX and
 # HINCRBY make it, HDEL finds nothing; a key that holds a hash keeps its
@@ -20186,12 +20262,28 @@ def zadd.res(st: ZAdd, +fresh: Bool, +o: ZOpts, +ps: List<&2, ZPair>) -> Out:
     case ZAdd{z, +added, +upd, +done, +last}:
       Out{zadd.reply(o, added, upd, done, last), zadd.ch(Nat.is_eq(Nat.add(added, upd), 0n), fresh, o, ps, z)}
 
+# Redis 7.2's ZADD sizes its sorted set by its pairs before it adds them
+# (t_zset.c's zsetTypeCreate for a key not there, zsetTypeMaybeConvert for
+# a listpack): more than 128, duplicates counted, make it a skiplist
+# (KV.zset.large), however many members they hold, and a skiplist keeps a
+# score of -0. The sorted set of a ZADD that adds and changes nothing is
+# left as it was, where Redis's turns a skiplist all the same.
+def zadd.sized.of(big: Bool, z: KV.Zset) -> KV.Zset:
+  match big:
+    case True{}:
+      KV.zset.large(z)
+    case False{}:
+      z
+
+def zadd.sized(+n: Nat, z: KV.Zset) -> KV.Zset:
+  zadd.sized.of(Nat.is_lt(128n, n), z)
+
 def zadd.fin(err: Maybe<&2, Reply>, +fresh: Bool, +o: ZOpts, +ps: List<&2, ZPair>, z: KV.Zset) -> Out:
   match err:
     case Some{r}:
       Out{r, CKeep{}}
     case None{}:
-      zadd.res(zadd.go(ps, o, ZAdd{z, 0n, 0n, 0n, F.F64{0n, 0n}}), fresh, o, ps)
+      zadd.res(zadd.go(ps, o, ZAdd{zadd.sized(List.length(&2, ZPair, ps), z), 0n, 0n, 0n, F.F64{0n, 0n}}), fresh, o, ps)
 
 def zadd.out(+fresh: Bool, +o: ZOpts, +ps: List<&2, ZPair>, z: KV.Zset) -> Out:
   zadd.fin(zadd.check(o, ps), fresh, o, ps, z)
@@ -20809,22 +20901,19 @@ def xwrite.coll(op: XWrite, +now: Nat, +cl: KV.Coll) -> Out:
 
 # HyperLogLog
 # -----------
-# PFADD, PFCOUNT, PFMERGE, PFDEBUG and PFSELFTEST as Redis 7.0.15 runs
+# PFADD, PFCOUNT, PFMERGE, PFDEBUG and PFSELFTEST as Redis 7.2.16 runs
 # them (hyperloglog.c) on a string that holds a HyperLogLog (hll.bend).
 # A string that is none (H.valid) answers the WRONGTYPE error of its
 # own, a key of another kind the usual one; a sparse HyperLogLog whose
 # opcodes Redis finds invalid answers INVALIDOBJ. A sparse one turns
-# dense past 3000 bytes, hll-sparse-max-bytes's default: BendKV does not
-# read the parameter, as a write of one key runs on its database alone.
+# dense once a PFADD or a PFMERGE would grow it past the bytes they carry
+# (mx: hll-sparse-max-bytes, as Redis's hllSparseSet reads it).
 
 def e_hll_type() -> Reply:
   RError{"WRONGTYPE Key is not a valid HyperLogLog string value."}
 
 def e_hll_bad() -> Reply:
   RError{"INVALIDOBJ Corrupted HLL object detected"}
-
-def hll.max() -> Nat:
-  3000n
 
 # a cardinality as addReplyLongLong sends a uint64_t: as a long long
 def hll.reply(c: H.W) -> Reply:
@@ -20856,19 +20945,19 @@ def pfadd.out(o: H.AddOut, made: Bool) -> Out:
         case False{} False{}:
           Out{e_hll_bad(), CKeep{}}
 
-def pfadd.some(ok: Bool, +w: String, els: List<&2, String>) -> Out:
+def pfadd.some(ok: Bool, +w: String, els: List<&2, String>, +mx: Nat) -> Out:
   match ok:
     case True{}:
-      pfadd.out(H.add(False{}, w, hll.max(), els), False{})
+      pfadd.out(H.add(False{}, w, mx, els), False{})
     case False{}:
       Out{e_hll_type(), CKeep{}}
 
-def pfadd.of(els: List<&2, String>, m: Maybe<&2, KV.Item<String>>) -> Out:
+def pfadd.of(els: List<&2, String>, +mx: Nat, m: Maybe<&2, KV.Item<String>>) -> Out:
   match m:
     case Some{KV.Item{+w, e}}:
-      pfadd.some(H.valid(w), w, els)
+      pfadd.some(H.valid(w), w, els, mx)
     case None{}:
-      pfadd.out(H.add(True{}, H.fresh(), hll.max(), els), True{})
+      pfadd.out(H.add(True{}, H.fresh(), mx, els), True{})
 
 # PFCOUNT of one key: 0 for a key not there; the count kept in the value,
 # when it is valid; else the count made, which the value keeps (the
@@ -20962,8 +21051,8 @@ def pfdebug.of(+sub: String, m: Maybe<&2, KV.Item<String>>) -> Out:
 # a write of a HyperLogLog's key, from the string it holds there at now
 def hll.upd(op: HllOp, m: Maybe<&2, KV.Item<String>>) -> Out:
   match op:
-    case HAdd{els}:
-      pfadd.of(els, m)
+    case HAdd{els, +mx}:
+      pfadd.of(els, mx, m)
     case HCount{}:
       pfcount.of(m)
     case HDebug{+sub}:
@@ -21043,27 +21132,28 @@ def pf.merge.put(m: Maybe<&2, String>, +dst: String) -> Cmd:
     case None{}:
       Bad{e_hll_bad()}
 
-def pf.merge.at(v: Maybe<&2, KV.Val>, +dst: String, a: H.Acc) -> Cmd:
+def pf.merge.at(v: Maybe<&2, KV.Val>, +dst: String, a: H.Acc, +mx: Nat) -> Cmd:
   match v:
     case Some{KV.VStr{+w}}:
-      pf.merge.put(H.merge(w, a, hll.max()), dst)
+      pf.merge.put(H.merge(w, a, mx), dst)
     case _:
-      pf.merge.put(H.merge(H.fresh(), a, hll.max()), dst)
+      pf.merge.put(H.merge(H.fresh(), a, mx), dst)
 
-def pf.merge.of(r: PfRead, +dst: String, +t: KV.Trie<KV.Val>, +now: Nat) -> Cmd:
+def pf.merge.of(r: PfRead, +dst: String, +t: KV.Trie<KV.Val>, +now: Nat, +mx: Nat) -> Cmd:
   match r:
     case PfOk{a}:
-      pf.merge.at(KV.read(KV.Val, t, dst, now), dst, a)
+      pf.merge.at(KV.read(KV.Val, t, dst, now), dst, a, mx)
     case PfErr{e}:
       Bad{e}
 
 # PFMERGE's write of its destination (APfMerge): the union of the
 # HyperLogLogs of its keys (the destination's among them), which the
-# destination keeps with its time, or holds as a new key; the SET of the
-# value that makes, with KEEPTTL, which answers OK as PFMERGE does; or
-# the error of a key, which writes nothing
-def pf.merge.cmd(+t: KV.Trie<KV.Val>, +now: Nat, +dst: String, srcs: List<&2, String>) -> Cmd:
-  pf.merge.of(pf.read(dst <> srcs, PfOk{H.acc.new()}, t, now), dst, t, now)
+# destination keeps with its time, or holds as a new key, a sparse one
+# within mx bytes (hll-sparse-max-bytes); the SET of the value that
+# makes, with KEEPTTL, which answers OK as PFMERGE does; or the error of
+# a key, which writes nothing
+def pf.merge.cmd(+t: KV.Trie<KV.Val>, +now: Nat, +dst: String, srcs: List<&2, String>, +mx: Nat) -> Cmd:
+  pf.merge.of(pf.read(dst <> srcs, PfOk{H.acc.new()}, t, now), dst, t, now, mx)
 
 def pf.selftest.of(m: Maybe<&2, String>) -> Reply:
   match m:
@@ -21073,8 +21163,8 @@ def pf.selftest.of(m: Maybe<&2, String>) -> Reply:
       RError{"ERR " ++ e}
 
 # PFSELFTEST's reply (H.selftest)
-def pf.selftest() -> Reply:
-  pf.selftest.of(H.selftest())
+def pf.selftest(+hm: Nat) -> Reply:
+  pf.selftest.of(H.selftest(hm))
 
 # RESTORE's update, from whether its key is there at now (live)
 def restore.gone(live: Bool) -> Out:
@@ -22559,6 +22649,50 @@ def zop.reply(+op: ZSetK, g: ZGot) -> Reply:
     case ZGotWrong{}:
       e_wrongtype()
 
+# The elements ZUNIONSTORE, ZINTERSTORE and ZDIFFSTORE set at their
+# destination, as Redis makes it (zunionInterDiffGenericCommand): a
+# skiplist of them, which keeps a score of -0, turned a listpack when it
+# holds at most 128 elements and none of a member past 64 bytes
+# (zsetConvertToListpackIfNeeded). The ZADD of ZWNew sizes its sorted set
+# by its pairs (zadd.sized) and makes it a skiplist at its first member
+# past 64 bytes, so the first such element comes first (zels.long), and
+# its sorted set is a skiplist from its first pair.
+def zels.first.long(xs: List<&2, KV.ZEl>) -> Maybe<&2, KV.ZEl>:
+  match xs:
+    case Nil{}:
+      None{}
+    case Con{KV.ZEl{+m, +d}, rest}:
+      Bool.pick(Maybe<&2, KV.ZEl>, Nat.is_lt(64n, String.length(m)), Some{KV.ZEl{m, d}}, zels.first.long(rest))
+
+def zels.cons.if(keep: Bool, x: KV.ZEl, xs: List<&2, KV.ZEl>) -> List<&2, KV.ZEl>:
+  match keep:
+    case True{}:
+      x <> xs
+    case False{}:
+      xs
+
+# xs without its first element of a member past 64 bytes (seen: taken)
+def zels.but.long(xs: List<&2, KV.ZEl>, +seen: Bool) -> List<&2, KV.ZEl>:
+  match xs:
+    case Nil{}:
+      Nil{}
+    case Con{KV.ZEl{+m, +d}, rest}:
+      +take = Bool.and(Bool.not(seen), Nat.is_lt(64n, String.length(m)))
+      zels.cons.if(Bool.not(take), KV.ZEl{m, d}, zels.but.long(rest, Bool.or(seen, take)))
+
+def zels.long.of(f: Maybe<&2, KV.ZEl>, xs: List<&2, KV.ZEl>) -> List<&2, KV.ZEl>:
+  match f:
+    case None{}:
+      xs
+    case Some{e}:
+      e <> zels.but.long(xs, False{})
+
+def zels.long(+xs: List<&2, KV.ZEl>) -> List<&2, KV.ZEl>:
+  zels.long.of(zels.first.long(xs), xs)
+
+def zop.stored(+op: ZSetK, ss: List<&2, ZSrc>) -> List<&2, KV.ZEl>:
+  zels.long(zop.els(op, ss))
+
 # the pairs of a STORE's ZADD: each score as Redis writes a double, and
 # its member
 def zstore.pairs(xs: List<&2, KV.ZEl>) -> List<&2, ZPair>:
@@ -22583,7 +22717,7 @@ def zstore.ok(bad: Maybe<&2, Reply>, +op: ZSetK, ss: List<&2, ZSrc>, +d: String,
     case Some{r}:
       (r, db)
     case None{}:
-      zstore.of(zop.els(op, ss), d, db)
+      zstore.of(zop.stored(op, ss), d, db)
 
 def zstore.do(g: ZGot, +op: ZSetK, +d: String, db: Db) -> Reply & Db:
   match g:
@@ -22604,7 +22738,7 @@ def zrs.of(m: Maybe<&2, KV.Val>, q: ZQ, +d: String, db: Db) -> Reply & Db:
     case None{}:
       zstore.of(Nil{}, d, db)
     case Some{KV.VColl{KV.CZset{+z}}}:
-      zstore.of(zq.run(q, z), d, db)
+      zstore.of(zq.stored(q, z), d, db)
     case Some{v}:
       (e_wrongtype(), db)
 
@@ -23614,7 +23748,8 @@ def ds.copy(+src: String, +dst: String, +j: Nat, rep: Bool, ds: Ds) -> Bool & Ds
 # (a COPY without DB in a file Redis wrote); every database emptied
 # (FLUSHALL); SORT with STORE, which writes what it makes of the keys of
 # the focus to its destination there (sort.write); PFMERGE, which writes
-# the union of its keys to its destination (pf.merge.cmd); a GEO search
+# the union of its keys to its destination, a sparse one within mx bytes
+# (pf.merge.cmd); a GEO search
 # that stores, which writes what it finds to its destination (geo.write)
 type Act is Data:
   ARun{c: Cmd}
@@ -23626,7 +23761,7 @@ type Act is Data:
   ACopyHere{src: String, dst: String, rep: Bool}
   AWipe{}
   ASort{key: String, o: SortO}
-  APfMerge{dst: String, srcs: List<&2, String>}
+  APfMerge{dst: String, srcs: List<&2, String>, mx: Nat}
   AGeo{kind: Nat, args: List<&2, String>}
 
 def act.run(r: Reply & Db, pre: List<&2, Db>, post: List<&2, Db>) -> Reply & Ds:
@@ -23654,9 +23789,9 @@ def sort.write.ds(+ds: Ds, +k: String, o: SortO) -> Cmd:
   sort.write(db.trie(d), db.now(d), k, o)
 
 # PFMERGE's command (pf.merge.cmd) on the focus
-def pf.merge.ds(+ds: Ds, +dst: String, srcs: List<&2, String>) -> Cmd:
+def pf.merge.ds(+ds: Ds, +dst: String, srcs: List<&2, String>, +mx: Nat) -> Cmd:
   +d = ds.focused(ds)
-  pf.merge.cmd(db.trie(d), db.now(d), dst, srcs)
+  pf.merge.cmd(db.trie(d), db.now(d), dst, srcs, mx)
 
 # a GEO store's source: GEOSEARCHSTORE's second key, the others' first
 def geo.src(+kind: Nat, args: List<&2, String>) -> String:
@@ -23717,9 +23852,9 @@ def act(a: Act, ds: Ds) -> Reply & Ds:
     case ASort{+k, o} x:
       +y = x
       act.cmd(sort.write.ds(y, k, o), y)
-    case APfMerge{+d, srcs} x:
+    case APfMerge{+d, srcs, +mx} x:
       +y = x
-      act.cmd(pf.merge.ds(y, d, srcs), y)
+      act.cmd(pf.merge.ds(y, d, srcs, mx), y)
     case AGeo{+k, args} x:
       +y = x
       act.cmd(geo.store.ds(y, k, args), y)

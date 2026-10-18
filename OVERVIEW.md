@@ -262,8 +262,8 @@ STORE's destination, an expired key), as an EVAL entry of the same script as for
 with SADD, and an SMOVE onto an expired key as one EVAL entry of a third constant script
 that deletes the destination and runs SMOVE.
 Sorted sets: ZADD (NX, XX, GT, LT, CH, INCR), ZINCRBY, ZREM, ZCARD, ZSCORE, ZMSCORE,
-ZRANK and ZREVRANK (WITHSCORE), ZCOUNT, ZLEXCOUNT, ZRANGE (BYSCORE, BYLEX, REV, LIMIT, WITHSCORES),
-ZRANGEBYSCORE, ZREVRANGEBYSCORE, ZRANGEBYLEX, ZREVRANGEBYLEX, ZREVRANGE,
+ZRANK and ZREVRANK (WITHSCORE), ZCOUNT, ZLEXCOUNT, ZRANGE (BYSCORE, BYLEX, REV, LIMIT,
+WITHSCORES), ZRANGEBYSCORE, ZREVRANGEBYSCORE, ZRANGEBYLEX, ZREVRANGEBYLEX, ZREVRANGE,
 ZREMRANGEBYRANK, ZREMRANGEBYSCORE, ZREMRANGEBYLEX, ZPOPMIN and ZPOPMAX (with a count),
 ZMPOP, ZRANDMEMBER (with a count, with repeats when it is negative, WITHSCORES; chosen
 by the server's random numbers), ZSCAN, ZUNION, ZINTER, ZDIFF and their STORE forms,
@@ -274,17 +274,21 @@ by member): while it is small (at most 128 elements, members up to 64 bytes: Red
 default listpack limits) in one string, each element its member and its score's 8 bytes,
 or in a weight-balanced tree once that string would pass one buffer of the runtime
 (2,048 bytes), and past the limits in the tree with a trie of its members beside it, for
-good, as Redis converts a listpack to a skiplist: a small one answers as a listpack does
-in Redis (it never holds a score of `-0`, a range by member is walked from the first
-element, ZSCAN returns it whole with cursor 0, integer scores as digits). OBJECT
-ENCODING answers `listpack` or `skiplist`, MEMORY USAGE estimates the size, and a key
-holds no empty sorted set. A write is logged as the command the client sent (ZINCRBY as
-ZADD INCR, ZADD's options in one order, ZMPOP as a ZPOPMIN or ZPOPMAX of the key it
+good, as Redis converts a listpack to a skiplist (and from a ZADD of more than 128
+pairs, however many members they hold, as Redis 7.2.16 does): a small one answers as a
+listpack does in Redis (it never holds a score of `-0`, a range by member is walked from
+the first element, ZSCAN returns it whole with cursor 0, integer scores as digits).
+OBJECT ENCODING answers `listpack` or `skiplist`, MEMORY USAGE estimates the size, and a
+key holds no empty sorted set. A write is logged as the command the client sent (ZINCRBY
+as ZADD INCR, ZADD's options in one order, ZMPOP as a ZPOPMIN or ZPOPMAX of the key it
 popped from; popping the last elements as a DEL); a sorted set made where the key had an
 entry (a STORE's destination, an expired key), as one EVAL entry of a fourth constant
-script that deletes the key and runs a ZADD of its elements. A STORE of more than 128
-elements loses the sign of a `-0` score where Redis keeps it. The blocking BZPOPMIN,
-BZPOPMAX and BZMPOP are below.
+script that deletes the key and runs a ZADD of its elements. A STORE's destination is
+the sorted set Redis makes (ZUNIONSTORE's, ZINTERSTORE's and ZDIFFSTORE's a skiplist
+turned a listpack when it fits, ZRANGESTORE's sized by a range of ranks, grown from a
+listpack for one of scores or members), and keeps a `-0` score where Redis does. A ZADD
+of more than 128 pairs that adds and changes nothing leaves a listpack as it was, where
+Redis makes it a skiplist. The blocking BZPOPMIN, BZPOPMAX and BZMPOP are below.
 Sorting: SORT and SORT_RO (BY, LIMIT, GET, ASC, DESC, ALPHA and, in SORT, STORE), the
 options read in order and the errors where and as in Redis, all before WRONGTYPE. The
 elements of a list, a set or a sorted set are sorted as doubles read as Redis reads them
@@ -299,14 +303,16 @@ BendKV's order, elements whose weights tie under a LIMIT with BY in a stable sor
 errno from an earlier SORT, and a small sorted set stays a listpack after a SORT.
 HyperLogLogs: PFADD, PFCOUNT, PFMERGE, PFDEBUG and PFSELFTEST, on a string's bytes as
 Redis 7.2.16 keeps them: Redis's header and registers, dense or sparse, every value
-written byte for byte as Redis writes it, and the count as Ertl's estimator in Redis makes
-it, on doubles in software. A corrupt sparse value is judged as Redis 7.2.16 judges it, with
-the fix of CVE-2025-32023. PFADD, PFCOUNT of one key and PFDEBUG are logged as the
-changes they make, PFMERGE as the SET of its destination. Where it differs from Redis:
-`hll-sparse-max-bytes` is not read (3,000), PFSELFTEST checks fewer cases, the byte past a
-sparse string's end is 0 as each command starts (Redis keeps what a set wrote there), a
-PFADD that a corrupt value stops keeps its change with an event and a log, and a
-HyperLogLog of up to 44 bytes is `embstr` to OBJECT ENCODING.
+written byte for byte as Redis writes it, and the count as Ertl's estimator in Redis
+makes it, on doubles in software. A corrupt sparse value is judged as Redis 7.2.16
+judges it, with the fix of CVE-2025-32023. PFADD, PFCOUNT of one key and PFDEBUG are
+logged as the changes they make, PFMERGE as the SET of its destination. Where it differs
+from Redis: while `hll-sparse-max-bytes` is not 3,000 every command runs one at a time,
+a file of Redis's runs its PFADD and PFMERGE with the parameter at 3,000, PFSELFTEST
+checks fewer cases, the byte past a sparse string's end is 0 as each command starts
+(Redis keeps what a set wrote there), a PFADD that a corrupt value stops keeps its
+change with an event and a log, and a HyperLogLog of up to 44 bytes is `embstr` to
+OBJECT ENCODING.
 GEO: GEOADD, GEOPOS, GEOHASH, GEODIST, GEORADIUS and GEORADIUSBYMEMBER with their `_RO`
 forms, GEOSEARCH and GEOSEARCHSTORE, as Redis 7.2.16's `geo.c` runs them: a position is
 a member of a sorted set whose score is its 52-bit geohash, GEOADD is the ZADD of its
@@ -944,19 +950,18 @@ The translation the kernel reads can be dumped with
   skipped. The reference is the same run on redis-server 7.2.16 with default settings,
   each unit on a freshly started server instance: in this mode 1,905 tests run, and
   Redis passes 1,812 (almost all the others need DEBUG, off by default in 7). BendKV
-  passes 1,672 of them (92.3%), and in the units of what it has (the protocol, the
+  passes 1,676 of them (92.5%), and in the units of what it has (the protocol, the
   connection and clients and their pause, the keyspace and databases, strings with
   ranges, bits and fields, counters, hashes, lists, sets, sorted sets, SORT, HyperLogLogs,
   GEO, DUMP and RESTORE, times to live, lazy freeing, transactions, Pub/Sub and keyspace
   notifications, introspection, the slow log and the latency monitor, client-side
-  caching, ACL users, Lua scripts and functions), 1,631 of 1,688 (96.6%); streams' values,
+  caching, ACL users, Lua scripts and functions), 1,635 of 1,688 (96.9%); streams' values,
   reads and writes pass 41 of the 122 tests of `unit/type/stream` and
   `unit/type/stream-cgroups` that Redis passes. The others stop on commands that do not
   exist (74 tests: XGROUP, SYNC…), do not run because the unit stopped earlier (24), or
   fail on XREAD's wait and streams' groups, on clients left in MULTI or subscribed by
-  tests that failed on a command that does not exist, on `hll-sparse-max-bytes`, which
-  BendKV does not read, on RANDOMKEY during a pause, and on what the list in
-  docs/COMPATIBILITY.md gives (42). Against Redis 7.0.15, whose suite runs 1,757 tests
+  tests that failed on a command that does not exist, and on what the list in
+  docs/COMPATIBILITY.md gives (38). Against Redis 7.0.15, whose suite runs 1,757 tests
   in this mode, BendKV passed 1,556 of the 1,677 that Redis passed (92.8%), and 1,516
   of 1,565 in the units of what it has. Times to live and
   the sweep of expired keys added 78 passed tests: before them there were 135, and 30
@@ -1605,8 +1610,8 @@ make clients BEND="$B" # redis-py's and go-redis's test suites on Redis and on B
    FLUSHDB, FLUSHALL, keyspace lines per database — with laws and recovery of all the
    databases from the append-only file), the ranges and bits of strings (GETRANGE,
    SETRANGE, GETBIT, SETBIT, BITCOUNT, BITPOS — with a law of SETRANGE and recovery from
-   the append-only file). Redis's suite in external mode: BendKV passes 1,672 of the
-   1,812 tests Redis 7.2.16 itself passes, and 1,631 of 1,688 in the units of what it has
+   the append-only file). Redis's suite in external mode: BendKV passes 1,676 of the
+   1,812 tests Redis 7.2.16 itself passes, and 1,635 of 1,688 in the units of what it has
    ([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)). Start-up as for redis-server (the
    command line and the configuration file). The database as a record with a count of
    keys (DBSIZE in O(1)).

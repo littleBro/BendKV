@@ -10199,8 +10199,8 @@ them whole only alone in its group:
 `tools/redis_suite.py` runs Redis 7.2.16's `tests/unit` in its external mode, against
 redis-server 7.2.16 and against BendKV, as it ran 7.0.15's (docs/COMPATIBILITY.md).
 7.2.16's suite runs 1,905 tests in this mode, where 7.0.15's ran 1,757, and Redis passes
-1,812 of them (1,677). BendKV passed 1,657 at first (91.4%), and passes 1,672 (92.3%)
-since the three changes below.
+1,812 of them (1,677). BendKV passed 1,657 at first (91.4%), and passes 1,676 (92.5%)
+since the six changes below.
 
 **A HyperLogLog's walks read to its end.** unit/hyperloglog has a test of the fix of
 CVE-2025-32023: a sparse HyperLogLog of 32 MB of ZERO opcodes, 64 registers each, and a
@@ -10215,7 +10215,7 @@ opcodes that hold 16,384 there are 16,384 at most, and the 16,385th, if any, pas
 last register, where Redis's walks end: a walk now reads `sp.most(v)` opcodes, the
 length plus one or 16,385, whichever is less (src/hll.bend). Its answer is the same, as
 the registers only add up. PFCOUNT of the 32 MB takes 8 ms, and the unit passes 25 of
-its 27 (the other two set `hll-sparse-max-bytes`, which BendKV does not read).
+its 27 (the other two set `hll-sparse-max-bytes`, below).
 `hll_test` sets four values whose opcodes pass the last register, one of them 4 MB of
 ZEROs, compares six commands on each with Redis, and fails one not answered within 5 s.
 PFDEBUG DECODE still walks every opcode, as Redis's does.
@@ -10239,13 +10239,57 @@ runs at once: one for BLPOP, BRPOP, BLMOVE, BRPOPLPUSH, BZPOPMIN and BZPOPMAX, t
 elements for BLMPOP and BZMPOP. `blocking_test` serves each of the six against Redis
 and compares `rdb_changes_since_last_save` after it.
 
-**What it did not change.** Of the 140 tests Redis passes and BendKV does not, the new
+**The changes BITFIELD counts.** Redis 7.2.16 counts a write of BITFIELD (a SET or an
+INCRBY that no FAIL stops) as a change when it changes its field's bits, or whatever it
+writes when the value grows (`bitfieldGeneric`), where 7.0.15 counted each; SETBIT
+counted so already in 7.0.15, and BendKV with it. unit/bitops's "SETBIT/BITFIELD only
+increase dirty when the value changed" expects no change for a BITFIELD SET of the
+value already there. The run of BITFIELD's operations counts them now as it makes the
+value (`BfRun`'s `n`, src/redis.bend), and the weight of a call (`R.bitfield.changes`)
+is that count, its rule the weight of a call that answered (src/server.bend).
+`bitfield_test` compares the changes each of its commands counts with Redis, a SETBIT
+among them now and then.
+
+**hll-sparse-max-bytes.** Redis turns a sparse HyperLogLog dense once a PFADD or a
+PFMERGE would grow it past `hll-sparse-max-bytes` (`hllSparseSet`), as the parameter is
+when the command runs, and PFSELFTEST requires its sparse value sparse below half of it;
+BendKV turned it dense past 3,000 bytes, the default, whatever the parameter said, and
+unit/hyperloglog's "Change hll-sparse-max-bytes" and "Hyperloglog promote to dense well
+in different hll-sparse-max-bytes" failed. The bytes now come with the command: PFADD's
+`HAdd` and PFMERGE's act `APfMerge` carry them (src/redis.bend), the parser gives PFADD
+the default, the session gives PFMERGE's act and PFSELFTEST the parameter as it is (the
+server's `Mm` keeps it as a number, read at the start and by each CONFIG SET), and the
+actor gives it to a PFADD that runs the general way (`bg.cmd.run`, in EXEC and a
+script's calls too). While the parameter is not 3,000, Ps's bit 15 keeps every batch on
+the general way, as the fast way runs a PFADD as the parser made it: the fast way pays
+nothing for the parameter, and a server whose parameter is not the default runs every
+command one at a time. The laws see a command that carries its bytes, so none changes. A
+PFADD or a PFMERGE of an append-only file that Redis wrote loads with the default: a law
+reads a file's acts from its commands alone, and BendKV's own file logs both as the SETs
+they make. `hll_test` sets the parameter from 0 to 20,000 bytes and adds to a value
+until it turns dense, lowers it under a sparse value, merges sparse values under three,
+and sets it in the batch of a PFADD, in MULTI and before a script's PFADD, each against
+Redis.
+
+**RANDOMKEY during a pause.** While a pause holds back writes, Redis 7.2.16 deletes no
+key whose time has passed (`expireIfNeeded` answers it expired and leaves it), and
+`dbRandomKey`, which tries a key at random until one is there, answers the key it tries
+a hundredth time when every key of the database has a time to live: so a database whose
+keys have all passed their times answers one of them, where BendKV answered nil, and
+unit/pause's "Test the randomkey command will not cause the server to get into an
+infinite loop during the client pause write" failed. RANDOMKEY (`SRandomKey`) now
+carries whether a pause holds, which the server sets on the general way, where every
+batch runs while one holds (`bg.cmd.run`), and the session answers a key there at now,
+or, while a pause holds and none is, one of every key the database holds, read at time
+0, where every key is there (`randomkey.of`). The laws see a command that carries its
+flag, so none changes. A database where some keys are there and others have passed their
+times answers one that is there, where Redis's hundred tries may land on those that
+passed. `pause_test` runs the suite's test against Redis: a SET with PX 3 and a pause of
+writes in one transaction, RANDOMKEY once the time has passed, then again once the pause
+ends.
+
+**What it did not change.** Of the 136 tests Redis passes and BendKV does not, the new
 ones of 7.2.16:
-- unit/hyperloglog's two that set `hll-sparse-max-bytes` and expect a HyperLogLog to turn
-  dense past it.
-- unit/pause's RANDOMKEY while a pause holds back writes: when every key of a database
-  has a time to live and has passed it, Redis 7.2.16, which may not delete them then,
-  answers one of them after 100 tries (`dbRandomKey`); BendKV answers nil.
 - unit/pubsub's three tests of a client that publishes to itself, in a transaction and
   in a script: the test of streams' events before them stops at XGROUP before it closes
   its client, subscribed to every channel, so that each PUBLISH counts one receiver more,
@@ -10338,6 +10382,48 @@ which it read through on each call before. A list takes 96 bytes more, its node;
 a set or a sorted set 32 bytes less a key, as a collection's value is no longer as wide
 as a list's deque. GET, SET and INCR run as before: 3,504, 4,298 and 4,611 instructions a
 request merged with 5a2ff7c, which counts 3,501, 4,301 and 4,609.
+
+## 3zzzzm. Sorted sets sized by ZADD's pairs, as Redis 7.2.16 sizes them
+
+**What differed.** A differential run against Redis 7.2.16 (`diff_test`, seed 1)
+answered ZSCAN of a sorted set with scores of 0 where Redis's were -0. A ZADD of 130
+pairs, of 94 members, had made the key. Redis 7.2 sizes a sorted set by a ZADD's pairs
+before it adds them, duplicates counted (`t_zset.c`'s `zsetTypeCreate` for a key not
+there, `zsetTypeMaybeConvert` for a listpack): more than 128 make a skiplist however
+many members they hold. Redis 7.0 grew a listpack an element at a time, as BendKV did,
+and turned it a skiplist at its 129th member. A listpack keeps an integral score as an
+integer and a skiplist keeps the double, so a skiplist answers -0 where a listpack
+answers 0, and OBJECT ENCODING tells them apart.
+
+**What changed** (`src/map.bend`, `src/redis.bend`, `src/aof.bend`, `proof/SPEC.bend`,
+`proof/PROOF.bend`).
+- `KV.zset.large` makes a small sorted set large with the same elements, and
+  `zadd.sized` makes ZADD's sorted set large before its pairs when they are more than
+  128. GEOADD's points are ZADD's pairs, as in Redis.
+- A STORE writes its destination as the ZADD of its elements on a key not there
+  (`ZWNew`), which now sizes it, so each STORE gives that ZADD its elements as Redis
+  would leave them. ZRANGESTORE sizes its destination by a range of ranks, and starts a
+  range of scores or members as a listpack (`zrangeResultBeginStore`), whose first
+  elements, up to the 128th and up to the first member past 64 bytes, keep a -0 as 0
+  (`zq.stored`). ZUNIONSTORE, ZINTERSTORE and ZDIFFSTORE make a skiplist, turned a
+  listpack only when it holds at most 128 elements and no member past 64 bytes
+  (`zsetConvertToListpackIfNeeded`): their first element of such a member comes first in
+  the ZADD (`zop.stored`), so that a destination with one is a skiplist from its first
+  pair. Before this change a STORE of more than 128 elements lost the sign of a -0
+  score, and one with a long member lost it in the elements before that member.
+- The spec's STOREs read their elements as `R.zop.stored` and `R.zq.stored` give them,
+  and no law changes. The proofs of ZADD's change start from the sized sorted set: the
+  sizing leaves a large one as it is (`big_sized_of`), and under XX a ZADD adds nothing
+  to the sized empty one (`zadd_xx_sized`).
+- Left as it was: a ZADD of more than 128 pairs that adds and changes nothing leaves a
+  listpack as it was, where Redis's turns a skiplist all the same, as BendKV leaves
+  untouched the key of a write that changes nothing.
+
+`zset_test` adds ZADDs of 128, 129 and 130 pairs (of 94 members) on a key not there and
+on a listpack, GEOADDs of 128 and 130 points, and ZRANGESTORE by rank, by score with and
+without LIMIT, and by member in reverse, from a skiplist of 200 elements and from one
+with a member of 70 bytes, then ZUNIONSTORE, ZINTERSTORE and ZDIFFSTORE, each read by
+its encoding and its scores of -0, against Redis.
 
 ## 4. Where a request's time goes, and hiding the memory waits
 
