@@ -1,6 +1,6 @@
-get 3452
-set 4214
-incr 4552
+get 3538
+set 4333
+incr 4636
 get.misses 2.81
 set.misses 3.12
 incr.misses 3.29
