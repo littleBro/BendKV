@@ -65,9 +65,11 @@ import ./hll.bend as H
 # transaction, watched keys, subscriptions and line are forgotten
 # (Transactions, Pub/Sub, Clients), and the channel the Bye it waits for
 # before it closes its socket goes back on; or a connection opened, with
-# its client's id, channel, socket's fd and addresses (Clients). A batch
-# from a client with a subscription is a SubReq, which runs a command at
-# a time.
+# its client's id, channel, socket's fd and addresses (Clients); or the
+# question whether a client in the state cn must authenticate first,
+# whose answer goes back on back (Clients that must authenticate). A
+# batch from a client with a subscription is a SubReq, which runs a
+# command at a time.
 type Req is Data:
   Req{cn: S.Conn, job: B.Job, back: Chan(Ans), tl: U32, inb: Nat, raw: String}
   SubReq{cn: S.Conn, job: B.Job, back: Chan(Ans), tl: U32, inb: Nat, raw: String}
@@ -78,18 +80,21 @@ type Req is Data:
   Gone{id: Nat, back: Chan(Ans)}
   Left{id: Nat, back: Chan(Ans)}
   Join{id: Nat, back: Chan(Ans), fd: U32, addr: String, laddr: String}
+  Must{cn: S.Conn, back: Chan(Ans)}
 
 # a batch's answer: its replies, encoded (none when CLIENT REPLY held
 # them all back), and the connection's state after it (AnsSub: its
-# client has a subscription after it, Pub/Sub, or monitors, MONITOR); or
-# the replies of the
-# batch so far, its client waiting (Hold), more to come. On the same
-# channel, a watch of the socket says that bytes came (Ready), the actor
-# that it holds nothing more for a client gone (Bye), and a message
-# published to a subscribed client, or a line to a monitor, comes (Push).
+# client has a subscription after it, Pub/Sub, or monitors, MONITOR;
+# AnsAuth: it has not authenticated, and must says whether it must:
+# Clients that must authenticate); or the replies of the batch so far,
+# its client waiting (Hold), more to come. On the same channel, a watch
+# of the socket says that bytes came (Ready), the actor that it holds
+# nothing more for a client gone (Bye), and a message published to a
+# subscribed client, or a line to a monitor, comes (Push).
 type Ans is Data:
   Ans{out: Maybe<&2, String>, cn: S.Conn}
   AnsSub{out: Maybe<&2, String>, cn: S.Conn}
+  AnsAuth{out: Maybe<&2, String>, cn: S.Conn, must: Bool}
   Hold{out: Maybe<&2, String>}
   Ready{}
   Bye{}
@@ -129,6 +134,8 @@ def ans.len(+a: Ans) -> Nat:
     case Ans{Some{+out}, cn}:
       String.length(out)
     case AnsSub{Some{+out}, cn}:
+      String.length(out)
+    case AnsAuth{Some{+out}, cn, m}:
       String.length(out)
     case Hold{Some{+out}}:
       String.length(out)
@@ -4096,6 +4103,17 @@ def ans.sub(on: Bool, a: Ans) -> Ans:
   match on a:
     case True{} Ans{out, cn}:
       AnsSub{out, cn}
+    case _ a0:
+      a0
+
+# an answer to a client that has not authenticated after it (auth), and
+# whether it must authenticate first (its server asks for a password),
+# whose connection reads its next requests so (Clients that must
+# authenticate)
+def ans.auth(auth: Bool, must: Bool, a: Ans) -> Ans:
+  match auth a:
+    case False{} Ans{out, cn}:
+      AnsAuth{out, cn, must}
     case _ a0:
       a0
 
@@ -10556,9 +10574,9 @@ def ps.quit(quit: Bool, +id: Nat, pb: Ps) -> Ps:
 
 def bg.put(+back: Chan(Ans), +inb: Nat, g: LRun, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>) -> Grp:
   match g:
-    case LRun{rs, es, +conn, srv, ds, ws, up, tx, pb}:
+    case LRun{rs, es, +conn, +srv, ds, ws, up, tx, pb}:
       +p = ps.quit(S.conn.quit(conn), S.conn.id(conn), ps.mon.end(conn, pb))
-      +a = ans.sub(Bool.or(Bool.or(ps.has(S.conn.id(conn), p), ps.mon.is(S.conn.id(conn), p)), ps.trk.waits(S.conn.id(conn), p)), ans_of.gen(List.reverse(&2, R.Reply, rs), conn))
+      +a = ans.auth(S.conn.auth(conn), Bool.not(S.authed(conn, srv)), ans.sub(Bool.or(Bool.or(ps.has(S.conn.id(conn), p), ps.mon.is(S.conn.id(conn), p)), ps.trk.waits(S.conn.id(conn), p)), ans_of.gen(List.reverse(&2, R.Reply, rs), conn)))
       +outb = ans.len(a)
       bg.out(back, a, ps.flush(p, outs), es, S.srv.ran(srv, 0n, 0n, Nil{}, inb, outb), ds, ws, up, tx)
     case LHeld{LRun{rs, es, +conn, srv, ds, ws, up, tx, pb}}:
@@ -11968,10 +11986,13 @@ def group_req(+log: Bool, q: Req, g: Grp) -> Grp:
     case Left{+id, back} Grp{outs, es, srv, ds, ws, up, tx, pb}:
       +sv = S.srv.left(srv, id)
       Grp{(back, Bye{}) <> outs, es, sv, ds, ws, up, tx.drop(id, tx), ps.acl.at(ps.left(id, ps.drop(id, pb)), acl.on(sv))}
+    case Must{+cn, back} Grp{outs, es, +srv, ds, ws, up, tx, pb}:
+      Grp{(back, ans.auth(S.conn.auth(cn), Bool.not(S.authed(cn, srv)), Ans{None{}, cn})) <> outs, es, srv, ds, ws, up, tx, pb}
     case Join{+id, +back, fd, addr, laddr} Grp{outs, es, +srv, +ds, ws, up, tx, pb}:
       +now = R.ds.now(ds)
       +sv = S.srv.acl.client(srv, id, "default")
-      Grp{(back, Ans{None{}, S.conn_join(id, srv)}) <> outs, es, sv, ds, ws, up, tx, ps.acl.at(ps.join(id, Cl{id, Chan.mark(Ans, back, 0, now), fd, cl.at(srv, addr), cl.at(srv, laddr), now, "", 0n, clf.new(), False{}, TkOff{}, "default"}, pb), acl.on(sv))}
+      +cj = S.conn_join(id, srv)
+      Grp{(back, ans.auth(S.conn.auth(cj), Bool.not(S.authed(cj, srv)), Ans{None{}, cj})) <> outs, es, sv, ds, ws, up, tx, ps.acl.at(ps.join(id, Cl{id, Chan.mark(Ans, back, 0, now), fd, cl.at(srv, addr), cl.at(srv, laddr), now, "", 0n, clf.new(), False{}, TkOff{}, "default"}, pb), acl.on(sv))}
 
 # the clock (IO.clock: s and us since 1970) in ms
 def clock.ms(t: U32 & U32) -> Nat:
@@ -12758,11 +12779,15 @@ def got.bytes(+xs: List<&2, String>, +acc: Nat) -> Nat:
 # (resp.bend reads longer ones in windows), and the tail of the last
 # read with what came since is several; the batch holds the bytes they
 # were read from, whole (the parser takes them and gives them back, so
-# that nothing shares them), which go to the actor with the batch
+# that nothing shares them), which go to the actor with the batch; a
+# client that has not authenticated has them walked first (Clients that
+# must authenticate)
 def parse_in(rest: P.Tail, got: List<&2, String>) -> P.Batch:
   match rest got:
     case P.TailNone{} Con{x, Nil{}}:
       P.parse_read(x)
+    case P.TailAuth{t} g:
+      P.parse_auth(t, glue(g, SNil{}))
     case r g:
       P.parse_tail(r, glue(g, SNil{}))
 
@@ -12824,7 +12849,7 @@ def conn_batch(s: Socket, batch: P.Batch, +inb: Nat, +ln: Link, cn: S.Conn) -> I
 def conn_send(s: Socket, +ln: Link, cn: S.Conn, reqs: List<&2, B.Req>, tl: U32, err: Maybe<&2, String>, rest: P.Tail, need: Nat, +inb: Nat, raw: String) -> IO(Unit):
   match reqs:
     case Nil{}:
-      conn_err(s, ln, cn, err, rest, need)
+      conn_none(s, ln, cn, err, rest, need)
     case Con{r, rs}:
       conn_ask(s, ln, cn, r <> rs, tl, err, rest, need, inb, raw)
 
@@ -12890,6 +12915,8 @@ def conn_ans(s: Socket, +ln: Link, got: Maybe<&1, Ans>, err: Maybe<&2, String>, 
       conn_quit(s, ln, cn, err, rest, need)
     case Some{Ans{Some{out}, cn}}:
       conn_put(s, ln, link.post(ln), out, cn, err, rest, need)
+    case Some{AnsAuth{out, cn, must}}:
+      conn_ans(s, ln, Some{Ans{out, cn}}, err, P.tail.auth(must, rest), need)
     case Some{AnsSub{out, cn}}:
       conn_sub.put(s, ln, link.post(ln), out, cn, err, rest, need)
     case Some{Push{out}}:
@@ -13004,13 +13031,86 @@ def conn_oops(on: Bool, s: Socket, +ln: Link, msg: String) -> IO(Unit):
         sent : Bool <- Chan.send(Req, db, Oops{})
         conn_drop(s, ln)
 
+# Clients that must authenticate
+# ------------------------------
+# While a client must authenticate first, its requests are read with
+# Redis's limits (resp.bend, Clients that must authenticate). The actor's
+# answer to a client that has not authenticated (S.conn.auth: it came
+# while a password was set, or a RESET came since) is AnsAuth, with
+# whether it must authenticate now, and its connection keeps its tail as
+# such a client's (P.TailAuth): its next parse holds the bytes from the
+# first request past a limit (P.TailHeld) while the requests before it
+# run. The answer to them (or to Must, when there are none) says whether
+# the client may send them after all: an AUTH among them, or a server
+# that asks for no password now, lets it in. A client that must is
+# answered the protocol error and its connection ends; one let in has the
+# bytes parsed at once, its tail kept as such a client's (an answer drops
+# it once the client has authenticated). A tail left by a parse before
+# the client had to authenticate (a RESET in its batch) is looked at with
+# that answer (P.tail.auth). A client with a subscription is read without
+# the limits: it has authenticated, or its server asked for no password
+# when it subscribed. Every other answer (Ans) leaves the tail as it is:
+# a client that has not authenticated gets one only while its server asks
+# for no password (the fast way: S.ready). conn_batch and conn_put keep
+# one caller each, which a def called from two places loses (entered
+# through the work loop: FINDINGS.md, section 8), so bytes let in go
+# through conn_more, and an AnsAuth through conn_ans as an Ans.
+
+# the tail of a client that has not authenticated, after an answer: as
+# any client's once it has, else the bytes it holds, which it may not
+# send (P.tail.auth), or the next read
+@unsafe
+def conn_auth.next(auth: Bool, t: P.Tail, s: Socket, +ln: Link, cn: S.Conn, need: Nat) -> IO(Unit):
+  match auth t:
+    case True{} u:
+      conn_loop(s, u, Nil{}, 0n, need, ln, cn)
+    case False{} P.TailHeld{u, msg}:
+      conn_oops(mute.on(S.conn.mode(cn)), s, ln, msg)
+    case False{} u:
+      conn_loop(s, P.TailAuth{u}, Nil{}, 0n, need, ln, cn)
+
+# after a batch's answer, with no protocol error: the bytes the tail held,
+# which an answer as any client's lets in (its client has authenticated,
+# or need not), the tail of a client that has not authenticated, or the
+# next read
+@unsafe
+def conn_next(s: Socket, +ln: Link, +cn: S.Conn, rest: P.Tail, need: Nat) -> IO(Unit):
+  match rest:
+    case P.TailHeld{t, msg}:
+      conn_more(s, P.TailAuth{P.TailHeld{t, msg}}, Nil{}, 0n, need, ln, cn, False{})
+    case P.TailAuth{t}:
+      conn_auth.next(S.conn.auth(cn), t, s, ln, cn, need)
+    case r:
+      conn_loop(s, r, Nil{}, 0n, need, ln, cn)
+
 @unsafe
 def conn_err(s: Socket, +ln: Link, cn: S.Conn, err: Maybe<&2, String>, rest: P.Tail, need: Nat) -> IO(Unit):
   match err:
     case None{}:
-      conn_loop(s, rest, Nil{}, 0n, need, ln, cn)
+      conn_next(s, ln, cn, rest, need)
     case Some{msg}:
       conn_oops(mute.on(S.conn.mode(cn)), s, ln, msg)
+
+# whether a client whose bytes are held from its first request must
+# authenticate still: the actor answers (Must), as after a batch
+@unsafe
+def conn_must(s: Socket, +ln: Link, cn: S.Conn, err: Maybe<&2, String>, rest: P.Tail, need: Nat) -> IO(Unit):
+  match ln:
+    case Link{+db, +back, post, tl, id}:
+      do IO<Unit>:
+        sent : Bool <- Chan.send(Req, db, Must{cn, back})
+        got : Maybe<&1, Ans> <- Chan.recv(Ans, back)
+        conn_ans(s, ln, got, err, rest, need)
+
+# a parse with no requests: the next read, or, for bytes held from the
+# first request, the actor's answer first
+@unsafe
+def conn_none(s: Socket, +ln: Link, cn: S.Conn, err: Maybe<&2, String>, rest: P.Tail, need: Nat) -> IO(Unit):
+  match err rest:
+    case None{} P.TailHeld{t, msg}:
+      conn_must(s, ln, cn, None{}, P.TailHeld{t, msg}, need)
+    case e r:
+      conn_err(s, ln, cn, e, r, need)
 
 # A client that waits
 # -------------------
@@ -13139,6 +13239,10 @@ def conn_woke(s: Socket, +ln: Link, m: Maybe<&1, Ans>, got: List<&2, String>, ha
       do IO<Unit>:
         p : Socket & Bool <- TCP.unwatch(s)
         conn_unwatched(p, ln, out, cn, got, have, need, err, rest)
+    case Some{AnsAuth{out, cn, must}}:
+      do IO<Unit>:
+        p : Socket & Bool <- TCP.unwatch(s)
+        conn_unwatched(p, ln, out, cn, got, have, need, err, P.tail.auth(must, rest))
     case Some{AnsSub{out, cn}}:
       do IO<Unit>:
         p : Socket & Bool <- TCP.unwatch(s)
@@ -13208,6 +13312,31 @@ def conn_resent(m: Socket & Result<&1, &1, U32 & String, Unit>, +ln: Link, cn: S
     case Done{u}:
       conn_after(s, ln, cn, got, have, need, err, rest)
 
+# the tail of a client that has not authenticated, with what came while
+# it waited: as any client's once it has, else the bytes it holds, which
+# it may not send (P.tail.auth), or what came read on
+@unsafe
+def conn_after.auth(auth: Bool, t: P.Tail, s: Socket, +ln: Link, cn: S.Conn, got: List<&2, String>, +have: Nat, +need: Nat) -> IO(Unit):
+  match auth t:
+    case True{} u:
+      conn_more(s, u, got, have, need, ln, cn, Nat.is_lt(have, need))
+    case False{} P.TailHeld{u, msg}:
+      conn_oops(mute.on(S.conn.mode(cn)), s, ln, msg)
+    case False{} u:
+      conn_more(s, P.TailAuth{u}, got, have, need, ln, cn, Nat.is_lt(have, need))
+
+# what came while the client waited, read on, as after any batch (what
+# its tail held first: Clients that must authenticate)
+@unsafe
+def conn_after.next(s: Socket, +ln: Link, +cn: S.Conn, +got: List<&2, String>, +have: Nat, +need: Nat, rest: P.Tail) -> IO(Unit):
+  match rest:
+    case P.TailHeld{t, msg}:
+      conn_more(s, P.TailAuth{P.TailHeld{t, msg}}, got, have, need, ln, cn, False{})
+    case P.TailAuth{t}:
+      conn_after.auth(S.conn.auth(cn), t, s, ln, cn, got, have, need)
+    case r:
+      conn_more(s, r, got, have, need, ln, cn, Nat.is_lt(have, need))
+
 @unsafe
 def conn_after.q(quit: Bool, s: Socket, +ln: Link, +cn: S.Conn, +got: List<&2, String>, +have: Nat, +need: Nat, err: Maybe<&2, String>, rest: P.Tail) -> IO(Unit):
   match quit err:
@@ -13216,7 +13345,7 @@ def conn_after.q(quit: Bool, s: Socket, +ln: Link, +cn: S.Conn, +got: List<&2, S
     case False{} Some{msg}:
       conn_oops(mute.on(S.conn.mode(cn)), s, ln, msg)
     case False{} None{}:
-      conn_more(s, rest, got, have, need, ln, cn, Nat.is_lt(have, need))
+      conn_after.next(s, ln, cn, got, have, need, rest)
 
 @unsafe
 def conn_after(s: Socket, +ln: Link, +cn: S.Conn, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: P.Tail) -> IO(Unit):
@@ -13310,13 +13439,26 @@ def conn_sub.ans(s: Socket, +ln: Link, got: Maybe<&1, Ans>, err: Maybe<&2, Strin
     case other:
       conn_ans(s, ln, other, err, rest, need)
 
+# a subscribed client's tail, read without the limits of a client that
+# must authenticate (Clients that must authenticate): bytes held before
+# it subscribed, parsed at once, or the tail as any client's
+@unsafe
+def conn_sub.next(s: Socket, +ln: Link, cn: S.Conn, rest: P.Tail, need: Nat) -> IO(Unit):
+  match rest:
+    case P.TailHeld{t, msg}:
+      conn_sub.more(s, P.TailHeld{t, msg}, Nil{}, 0n, need, ln, cn, False{})
+    case P.TailAuth{t}:
+      conn_sub(s, t, Nil{}, 0n, need, ln, cn)
+    case r:
+      conn_sub(s, r, Nil{}, 0n, need, ln, cn)
+
 # the answer's replies written, then the connection's end (QUIT), its
 # protocol error, or its wait as a subscribed client
 @unsafe
 def conn_sub.err(s: Socket, +ln: Link, cn: S.Conn, err: Maybe<&2, String>, rest: P.Tail, need: Nat) -> IO(Unit):
   match err:
     case None{}:
-      conn_sub(s, rest, Nil{}, 0n, need, ln, cn)
+      conn_sub.next(s, ln, cn, rest, need)
     case Some{msg}:
       conn_oops(mute.on(S.conn.mode(cn)), s, ln, msg)
 
@@ -13554,6 +13696,8 @@ def conn_start.of(m: Maybe<&1, Ans>, s: Socket, +ln: Link, +id: Nat) -> IO(Unit)
   match m:
     case Some{Ans{o, cn}}:
       conn_loop(s, P.TailNone{}, Nil{}, 0n, 1n, ln, cn)
+    case Some{AnsAuth{o, cn, must}}:
+      conn_loop(s, P.TailAuth{P.TailNone{}}, Nil{}, 0n, 1n, ln, cn)
     case _:
       conn_loop(s, P.TailNone{}, Nil{}, 0n, 1n, ln, S.conn_new(id))
 

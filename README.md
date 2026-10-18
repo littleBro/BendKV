@@ -437,18 +437,23 @@ translation stays in the trusted base.
   (the key with its time), SWAPDB, FLUSHDB and FLUSHALL (with ASYNC/SYNC, which empty at
   once), with Redis's errors for a bad number; INFO's keyspace has a line for each
   database that holds keys, and the sweep of expired keys goes over every database.
-- **Connection:** PING, ECHO, TIME (the time the batch runs at, to the ms), HELLO (2 or 3,
-  with AUTH and SETNAME), AUTH (a password, or a user and its password), SELECT, QUIT,
-  RESET (which selects database 0 again, RESP2 and the default user),
-  CLIENT (ID, GETNAME, SETNAME, SETINFO, REPLY ON/OFF/SKIP, NO-EVICT, NO-TOUCH, TRACKING,
-  CACHING, GETREDIR, TRACKINGINFO, UNBLOCK (TIMEOUT or ERROR), LIST, INFO, KILL, PAUSE,
-  UNPAUSE, HELP). With NO-TOUCH on, a client's commands leave the keys' access times and
-  counters as they were, but TOUCH's, and its scripts' calls, TOUCH's too. A
-  client must authenticate where Redis asks it to: once a command's name and number of arguments
-  are checked, before it runs (a syntax error is NOAUTH for a client that has not
+- **Connection:** PING, ECHO, TIME (the time the batch runs at, to the ms), HELLO (2 or
+  3, with AUTH and SETNAME), AUTH (a password, or a user and its password), SELECT,
+  QUIT, RESET (which selects database 0 again, RESP2 and the default user), CLIENT (ID,
+  GETNAME, SETNAME, SETINFO, REPLY ON/OFF/SKIP, NO-EVICT, NO-TOUCH, TRACKING, CACHING,
+  GETREDIR, TRACKINGINFO, UNBLOCK (TIMEOUT or ERROR), LIST, INFO, KILL, PAUSE, UNPAUSE,
+  HELP). With NO-TOUCH on, a client's commands leave the keys' access times and counters
+  as they were, but TOUCH's, and its scripts' calls, TOUCH's too. A client must
+  authenticate where Redis asks it to: once a command's name and number of arguments are
+  checked, before it runs (a syntax error is NOAUTH for a client that has not
   authenticated); a client is authenticated as it connects, and at RESET, when the
   default user is on and takes no password then, and by AUTH and HELLO's AUTH, and
-  nothing else changes it.
+  nothing else changes it. While it must authenticate, its requests are read with
+  Redis's limits: a count past 10 arguments, or a bulk's length past 16384 bytes, is a
+  protocol error as soon as its line has come, and the connection closes (an inline
+  request has none). Where BendKV differs: a RESET followed in the same read by a whole
+  request past a limit has that request answered NOAUTH, where Redis refuses it with the
+  protocol error (docs/FINDINGS.md, section 3zzzzn).
 - **Clients:** CLIENT LIST (all, of a TYPE, of IDs), CLIENT INFO and CLIENT KILL (the old
   form of an address, and the filters ID, TYPE, ADDR, LADDR, USER and SKIPME), as Redis
   7.2.16 runs them, with its errors. A client's line has Redis's fields in Redis's order:
@@ -1107,7 +1112,7 @@ away.
 | `src/info.bend` | 2,900 |  | no |
 | `src/lolwut.bend` | 470 |  | no |
 | `src/rdb.bend` | 3,100 |  | no |
-| `src/resp.bend` | 980 |  | no |
+| `src/resp.bend` | 1,200 |  | no |
 | `src/script.bend` | 51 |  | no |
 | `src/server.bend` | 13,000 |  | no |
 | `src/sha.bend` | 120 |  | no |
