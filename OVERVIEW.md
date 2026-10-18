@@ -1050,13 +1050,15 @@ The translation the kernel reads can be dumped with
   served at once, 100 timeouts at once, clients that leave while they wait, and 50
   consumers moving 1,000 elements while some of them leave (section 41 of
   docs/PERFORMANCE.md).
-- **Transactions** (`tests/multi_test.py`, in each server mode): 12 scenarios of MULTI,
+- **Transactions** (`tests/multi_test.py`, in each server mode): 13 scenarios of MULTI,
   EXEC, DISCARD, WATCH and UNWATCH on BendKV and on Redis, their transcripts compared
   line by line (replies of all kinds and SELECT inside, DISCARD, a nested MULTI, WATCH
   inside MULTI, refused commands and EXECABORT, errors while running, QUIT and RESET
   inside a transaction, changes of watched keys by another client and non-changes,
   FLUSHALL, FLUSHDB, SWAPDB, MOVE, COPY, RENAME, EXPIRE, expiring keys, a blocking
-  command inside EXEC, CLIENT REPLY OFF and SKIP, INFO's statistics); then under load:
+  command inside EXEC, CLIENT REPLY OFF and SKIP around a transaction and inside one,
+  INFO's statistics, and the bytes of EXEC's array when a command inside turns the
+  replies off, subscribes to two channels or closes its own client); then under load:
   20 clients raise a counter to 1,000 through WATCH (each lost race is retried), a
   reader never sees half a transaction, 100 clients leave in the middle of MULTI or with
   watched keys (section 42 of docs/PERFORMANCE.md). The differential test sends random

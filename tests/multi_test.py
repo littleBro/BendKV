@@ -27,7 +27,11 @@ DISCARD forgetting a touch, EXEC unwatching; a blocking command inside
 EXEC (it does not wait), clients that wait served after EXEC (not
 between its commands), CLIENT REPLY OFF and SKIP around a transaction,
 and the statistics of INFO (commandstats, errorstats) as info.tcl checks
-them.
+them; CLIENT REPLY OFF and SKIP inside a transaction, a SUBSCRIBE of
+two channels inside one, and a client that closes itself inside one
+(CLIENT KILL of its own id, ACL DELUSER of its own user), the bytes
+EXEC answers compared: its array's count of commands, as Redis writes it
+before they run, then the replies its client was sent.
 
 The checks under load: 20 clients adding 1000 to a counter with WATCH,
 GET, MULTI, SET and EXEC (each lost race retried), the counter ending at
@@ -39,6 +43,7 @@ after which a write and a transaction run as before.
     python3 tests/multi_test.py --bendkv 6380 --redis 6390
 """
 import argparse
+import socket
 import sys
 import threading
 import time
@@ -50,6 +55,33 @@ def pipe(c, cmds):
     """Commands sent at once, as one batch; their replies."""
     c.raw(b"".join(enc(x) for x in cmds))
     return [c.read() for _ in cmds]
+
+
+def raw(port, cmds, setup=()):
+    """The bytes a new client gets for cmds sent at once (after the
+    commands of setup, each answered first), read until none come for a
+    while; and whether the server closed the connection."""
+    s = socket.create_connection(("127.0.0.1", port))
+    s.settimeout(0.5)
+    for x in setup:
+        s.sendall(enc(x))
+        time.sleep(0.05)
+        s.recv(1 << 16)
+    s.sendall(b"".join(enc(x) for x in cmds))
+    out, closed = b"", False
+    try:
+        while True:
+            d = s.recv(1 << 16)
+            if not d:
+                closed = True
+                break
+            out += d
+    except socket.timeout:
+        pass
+    except ConnectionResetError:
+        closed = True
+    s.close()
+    return out, closed
 
 
 def stats(r, *names):
@@ -220,6 +252,44 @@ def scenarios(port, log):
         stats(r, "cmdstat_watch", "cmdstat_unwatch", "cmdstat_multi", "cmdstat_discard", "cmdstat_exec",
               "errorstat_ERR", "errorstat_EXECABORT"))
     r.cmd("CONFIG", "RESETSTAT")
+    # 13. EXEC's array: its count of commands first, then the replies its
+    # client was sent as they ran
+    log("13 reply off", raw(port, [["MULTI"], ["SET", "a13", "1"], ["CLIENT", "REPLY", "OFF"], ["SET", "b13", "2"],
+                                   ["EXEC"], ["CLIENT", "REPLY", "ON"], ["GET", "b13"]], [["SELECT", "9"]]))
+    log("13 reply skip", raw(port, [["MULTI"], ["SET", "a13", "1"], ["CLIENT", "REPLY", "SKIP"], ["SET", "b13", "3"],
+                                    ["GET", "a13"], ["EXEC"], ["PING", "skipped"], ["ECHO", "after"]], [["SELECT", "9"]]))
+    log("13 skip then on", raw(port, [["MULTI"], ["CLIENT", "REPLY", "SKIP"], ["CLIENT", "REPLY", "ON"], ["GET", "a13"],
+                                      ["EXEC"], ["PING", "skipped"], ["ECHO", "after"]], [["SELECT", "9"]]))
+    log("13 off then on", raw(port, [["MULTI"], ["CLIENT", "REPLY", "OFF"], ["GET", "a13"], ["CLIENT", "REPLY", "ON"],
+                                     ["GET", "b13"], ["EXEC"], ["ECHO", "after"]], [["SELECT", "9"]]))
+    # (UNSUBSCRIBE of all would answer in the order of Redis's table of
+    # channels, which a random seed sets)
+    log("13 subscribe", raw(port, [["MULTI"], ["SUBSCRIBE", "c13", "d13"], ["PING"], ["EXEC"],
+                                   ["UNSUBSCRIBE", "c13", "d13"]], [["SELECT", "9"]]))
+    c13 = socket.create_connection(("127.0.0.1", port))
+    c13.settimeout(0.5)
+    c13.sendall(enc(["CLIENT", "ID"]))
+    time.sleep(0.05)
+    cid = c13.recv(1 << 16)[1:-2].decode()
+    c13.sendall(b"".join(enc(x) for x in [["SELECT", "9"], ["MULTI"], ["SET", "k13", "1"],
+                                          ["CLIENT", "KILL", "ID", cid, "SKIPME", "no"], ["SET", "k13b", "2"],
+                                          ["INCR", "k13"], ["EXEC"], ["SET", "k13c", "3"]]))
+    got, closed = b"", False
+    try:
+        while True:
+            d = c13.recv(1 << 16)
+            if not d:
+                closed = True
+                break
+            got += d
+    except socket.timeout:
+        pass
+    c13.close()
+    log("13 killed itself", got, closed, r.cmd("MGET", "k13", "k13b", "k13c"))
+    log("13 deluser", r.cmd("ACL", "SETUSER", "u13", "on", ">pw", "~*", "+@all"),
+        raw(port, [["MULTI"], ["ACL", "DELUSER", "u13"], ["SET", "after13", "1"], ["EXEC"], ["PING"]],
+            [["AUTH", "u13", "pw"], ["SELECT", "9"]]),
+        r.cmd("GET", "after13"), r.cmd("ACL", "USERS"))
     for c in (a, b, r):
         c.close()
 

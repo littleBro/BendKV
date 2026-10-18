@@ -389,20 +389,27 @@ translation stays in the trusted base.
   NOAUTH) makes EXEC answer EXECABORT, and an EXEC refused itself aborts the transaction,
   with its reason. EXEC runs the queued commands as one: their replies are its array (an
   error as a command runs is in it), no client that waits is served between them, and a
-  blocking command among them answers at once. A watched key that any command changes,
-  or that is there with its time passed when EXEC comes, makes EXEC answer a null array.
-  A change is what Redis counts as one: a write that changes the key, a DEL of a key that
-  is there, FLUSHDB, FLUSHALL and SWAPDB of a database that holds it, MOVE, COPY, RENAME,
-  the sweep of expired keys; a key watched after its time passed changes only when it is
-  set again (its deletion is no change). EXEC, DISCARD, UNWATCH, RESET and a closed
-  connection unwatch. A watched key costs nothing to the commands on other keys
-  (PERFORMANCE.md, section 61). The calls are counted as Redis counts them (a queued
-  command when EXEC runs it, EXEC once). The append-only file has a transaction's
-  effects between a MULTI and an EXEC when they are two or more, as Redis writes them.
-  Where BendKV differs: an LTRIM that removes nothing changes no watched key (Redis
-  signals the key anyway), and a DEL of a key not there is logged (BendKV logs every
-  DEL), so a transaction with one may be wrapped in MULTI and EXEC where Redis writes its
-  one other effect alone.
+  blocking command among them answers at once. EXEC's array counts its commands, as Redis
+  writes it before they run, and their replies follow as their client takes them: none
+  after a CLIENT REPLY OFF among them, and none after a command that closes its client
+  (ACL DELUSER of its user, after which the client is the default user's, or CLIENT KILL
+  of itself): the commands after it still run, and the client closes once EXEC's reply is
+  out. A CLIENT REPLY SKIP among them skips the reply of the command after EXEC. A watched
+  key that any command changes, or that is there with its time passed when EXEC comes,
+  makes EXEC answer a null array. A change is what Redis counts as one: a write that
+  changes the key, a DEL of a key that is there, FLUSHDB, FLUSHALL and SWAPDB of a
+  database that holds it, MOVE, COPY, RENAME, the sweep of expired keys; a key watched
+  after its time passed changes only when it is set again (its deletion is no change).
+  EXEC, DISCARD, UNWATCH, RESET and a closed connection unwatch. A watched key costs
+  nothing to the commands on other keys (PERFORMANCE.md, section 61). The calls are
+  counted as Redis counts them (a queued command when EXEC runs it, EXEC once). The
+  append-only file has a transaction's effects between a MULTI and an EXEC when they are
+  two or more, as Redis writes them. Where BendKV differs: an LTRIM that removes nothing
+  changes no watched key (Redis signals the key anyway), and a DEL of a key not there is
+  logged (BendKV logs every DEL), so a transaction with one may be wrapped in MULTI and
+  EXEC where Redis writes its one other effect alone; and a client whose replies are off
+  as its EXEC comes gets none of the transaction's, where Redis sends those after a CLIENT
+  REPLY ON in it, without the array's count.
 - **Pub/Sub:** SUBSCRIBE, UNSUBSCRIBE, PSUBSCRIBE, PUNSUBSCRIBE, SSUBSCRIBE, SUNSUBSCRIBE,
   PUBLISH, SPUBLISH and PUBSUB (CHANNELS, NUMSUB, NUMPAT, SHARDCHANNELS, SHARDNUMSUB,
   HELP), as Redis 7.2.16 runs them. Each name is answered with the client's count of
@@ -980,7 +987,7 @@ served (`tests/writer_test.py`), clients that wait (`tests/blocking_test.py`: 18
 of the blocking commands on BendKV and on Redis, their transcripts compared line by line,
 then 300 clients served at once, 100 timeouts at once, clients that leave while they wait,
 and 50 consumers moving 1,000 items while some leave), transactions (`tests/multi_test.py`:
-12 scenarios of MULTI, EXEC, DISCARD, WATCH and UNWATCH on BendKV and on Redis, their
+13 scenarios of MULTI, EXEC, DISCARD, WATCH and UNWATCH on BendKV and on Redis, their
 transcripts compared line by line, then a counter raised by 20 clients with WATCH, each
 lost race retried, a reader that never sees half of a transaction, and 100 clients that
 leave in MULTI or with keys watched; random transactions in the differential test too),

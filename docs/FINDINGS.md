@@ -10631,6 +10631,47 @@ before). SET's walk for its changes (rule 3) is still a walk of its own, after t
 `tests/stats_test.py` runs the twelve on a key that holds a list against Redis 7.2.16:
 one at a time, in pipelines of one command and of several, and in MULTI.
 
+## 3zzzzr. EXEC's array, as Redis writes it
+
+**What differed** (#101). Redis's execCommand writes EXEC's array's count first, the
+number of commands queued, then runs them all; each reply goes out as its client's flags
+let it at that moment. BendKV gathered the replies and counted those it had:
+- a command that closes its own client (ACL DELUSER of its user, CLIENT KILL of itself
+  with SKIPME no) made EXEC answer nothing, and the commands after it did not run.
+  Redis answers the count and the replies up to that command's, runs the rest with their
+  replies dropped (CLIENT_CLOSE_AFTER_REPLY), and closes the client once EXEC's reply is
+  out; after ACL DELUSER the client is the default user's (ACLFreeUserAndKillClients), so
+  the commands after it run as that user;
+- a CLIENT REPLY OFF among the commands dropped EXEC's whole array, where Redis sends the
+  count and the replies before it;
+- a CLIENT REPLY SKIP among them skipped the next command's reply in EXEC, where Redis
+  skips the reply of the command after EXEC (CLIENT_REPLY_SKIP_NEXT becomes a skip only
+  once EXEC ends);
+- a SUBSCRIBE of several channels among them answers each channel: Redis's count stays
+  the number of commands, and BendKV counted the replies.
+
+**What changed** (`src/server.bend`, `src/redis.bend`, `src/resp.bend`). EXEC's array is
+`R.RArrayN`, whose header is a count of its own, the number of commands queued. The run
+of EXEC's commands keeps what they did to their client (`Xc`): after a command that
+closed it, its quit is undone and its replies are off, so the commands after it run and
+their replies are dropped, and the client closes after EXEC's reply; a skip of the next
+reply is kept for the command after EXEC. EXEC's reply goes out as the client's mode was
+before EXEC. ACL DELUSER of the client's own user makes the client the default user's
+(`bg.gone.self`).
+
+**What it costs.** Nothing on a request's path: perfcheck counts GET 3,519, SET 4,316 and
+INCR 4,610 instructions a request (3,527, 4,320 and 4,613 before).
+
+**Where BendKV differs.** A client whose replies are off as its EXEC comes (a CLIENT
+REPLY OFF before its MULTI), and whose transaction turns them on again, gets from Redis
+the replies from that CLIENT REPLY ON on, with no array's count before them; BendKV
+sends none of them, as EXEC's reply goes out whole or not at all.
+
+`tests/multi_test.py`'s scenario 13 runs these against Redis 7.2.16, EXEC's bytes
+compared. The three cases of #101, and those of #77 (pushes in a transaction, which the
+pushes after the reply of section 3zzzzg had already put after EXEC's array), answer as
+Redis does.
+
 ## 4. Where a request's time goes, and hiding the memory waits
 
 With the eight patches, BendKV ran fewer instructions on GET and SET than Redis, missed

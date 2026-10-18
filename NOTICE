@@ -241,6 +241,20 @@ parts of it are written from 7.2.16's sources:
   synced to the disk (aof.c's flushAppendOnlyFile and
   rewriteAppendOnlyFileBackground, bio.c's fsync jobs), in
   src/redis.bend, src/session.bend, src/info.bend and src/server.bend.
+- The errors of the commands of strings on a key of another kind
+  (WRONGTYPE), counted in errorstats, failed_calls and
+  total_error_replies as any command's are, however the commands come
+  (object.c's checkType, networking.c's afterErrorReply and server.c's
+  call()), in src/redis.bend, src/server.bend and tools/gen_commands.py.
+- EXEC's array: its count, the commands queued, written before they
+  run, whatever replies follow (a SUBSCRIBE's, or none for a CLIENT
+  REPLY OFF or SKIP among them), and a client one of them closes, by
+  CLIENT KILL or by ACL DELUSER of its own user, answered whole before
+  it is closed, as the default user once its own is gone (multi.c's
+  execCommand, networking.c's clientCommand, resetClient and
+  prepareClientToWrite, acl.c's ACLFreeUserAndKillClients and
+  server.c's call()), in src/server.bend, src/redis.bend, src/resp.bend
+  and src/session.bend.
 
 Bend (bend-patches/): patches to the Bend compiler and its runtime
 (github.com/bendlang/bend at 1cce499, Bend 2.0.35), Copyright 2026

@@ -70,7 +70,11 @@ type By is Data:
 # it walks an array's items.) RRaw is a reply in bytes already, in the
 # protocol of the connection it goes to, written as it is: a script's
 # result, which the engine writes as Redis writes it (server.bend,
-# Scripts).
+# Scripts). RArrayN is an array whose header counts n, whatever the
+# replies after it: EXEC's, whose count of commands Redis writes before
+# they run, so that a command that turns its client's replies off, or
+# closes it, leaves fewer after it, and a SUBSCRIBE of several channels
+# more (server.bend, bg.exec.done).
 type Reply is Data:
   RStatus{s: String}
   RError{s: String}
@@ -91,6 +95,7 @@ type Reply is Data:
   RKMap{xs: List<&2, Reply>}
   RKPair{xs: List<&2, Reply>}
   RRaw{s: String}
+  RArrayN{n: Nat, xs: List<&2, Reply>}
 
 # a key and a value, for MSET
 type KVPair is Data:

@@ -1828,6 +1828,8 @@ def blk.shape(+form: Nat, r: R.Reply) -> R.Reply:
       R.RKPair{xs}
     case R.RRaw{x}:
       R.RRaw{x}
+    case R.RArrayN{n, xs}:
+      R.RArrayN{n, xs}
 
 # WAITAOF's numlocal (k's bit 0) and whether its numreplicas is above 0
 # (bit 1)
