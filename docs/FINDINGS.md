@@ -10199,8 +10199,8 @@ them whole only alone in its group:
 `tools/redis_suite.py` runs Redis 7.2.16's `tests/unit` in its external mode, against
 redis-server 7.2.16 and against BendKV, as it ran 7.0.15's (docs/COMPATIBILITY.md).
 7.2.16's suite runs 1,905 tests in this mode, where 7.0.15's ran 1,757, and Redis passes
-1,812 of them (1,677). BendKV passed 1,657 at first (91.4%), and passes 1,673 (92.3%)
-since the four changes below.
+1,812 of them (1,677). BendKV passed 1,657 at first (91.4%), and passes 1,675 (92.4%)
+since the five changes below.
 
 **A HyperLogLog's walks read to its end.** unit/hyperloglog has a test of the fix of
 CVE-2025-32023: a sparse HyperLogLog of 32 MB of ZERO opcodes, 64 registers each, and a
@@ -10215,7 +10215,7 @@ opcodes that hold 16,384 there are 16,384 at most, and the 16,385th, if any, pas
 last register, where Redis's walks end: a walk now reads `sp.most(v)` opcodes, the
 length plus one or 16,385, whichever is less (src/hll.bend). Its answer is the same, as
 the registers only add up. PFCOUNT of the 32 MB takes 8 ms, and the unit passes 25 of
-its 27 (the other two set `hll-sparse-max-bytes`, which BendKV does not read).
+its 27 (the other two set `hll-sparse-max-bytes`, below).
 `hll_test` sets four values whose opcodes pass the last register, one of them 4 MB of
 ZEROs, compares six commands on each with Redis, and fails one not answered within 5 s.
 PFDEBUG DECODE still walks every opcode, as Redis's does.
@@ -10250,10 +10250,29 @@ is that count, its rule the weight of a call that answered (src/server.bend).
 `bitfield_test` compares the changes each of its commands counts with Redis, a SETBIT
 among them now and then.
 
-**What it did not change.** Of the 139 tests Redis passes and BendKV does not, the new
+**hll-sparse-max-bytes.** Redis turns a sparse HyperLogLog dense once a PFADD or a
+PFMERGE would grow it past `hll-sparse-max-bytes` (`hllSparseSet`), as the parameter is
+when the command runs, and PFSELFTEST requires its sparse value sparse below half of it;
+BendKV turned it dense past 3,000 bytes, the default, whatever the parameter said, and
+unit/hyperloglog's "Change hll-sparse-max-bytes" and "Hyperloglog promote to dense well
+in different hll-sparse-max-bytes" failed. The bytes now come with the command: PFADD's
+`HAdd` and PFMERGE's act `APfMerge` carry them (src/redis.bend), the parser gives PFADD
+the default, the session gives PFMERGE's act and PFSELFTEST the parameter as it is (the
+server's `Mm` keeps it as a number, read at the start and by each CONFIG SET), and the
+actor gives it to a PFADD that runs the general way (`bg.cmd.run`, in EXEC and a
+script's calls too). While the parameter is not 3,000, Ps's bit 15 keeps every batch on
+the general way, as the fast way runs a PFADD as the parser made it: the fast way pays
+nothing for the parameter, and a server whose parameter is not the default runs every
+command one at a time. The laws see a command that carries its bytes, so none changes. A
+PFADD or a PFMERGE of an append-only file that Redis wrote loads with the default: a law
+reads a file's acts from its commands alone, and BendKV's own file logs both as the SETs
+they make. `hll_test` sets the parameter from 0 to 20,000 bytes and adds to a value
+until it turns dense, lowers it under a sparse value, merges sparse values under three,
+and sets it in the batch of a PFADD, in MULTI and before a script's PFADD, each against
+Redis.
+
+**What it did not change.** Of the 137 tests Redis passes and BendKV does not, the new
 ones of 7.2.16:
-- unit/hyperloglog's two that set `hll-sparse-max-bytes` and expect a HyperLogLog to turn
-  dense past it.
 - unit/pause's RANDOMKEY while a pause holds back writes: when every key of a database
   has a time to live and has passed it, Redis 7.2.16, which may not delete them then,
   answers one of them after 100 tries (`dbRandomKey`); BendKV answers nil.

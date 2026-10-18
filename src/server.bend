@@ -2807,6 +2807,21 @@ def ps.calm(+pb: Ps) -> Bool:
 # it: a look in the registry for a client that would let its batches run
 # so cost every GET 39 instructions (1.1%).
 
+# HyperLogLogs' parameter
+# -----------------------
+# A PFADD or a PFMERGE turns a sparse HyperLogLog dense once it would
+# grow it past hll-sparse-max-bytes, as Redis's hllSparseSet reads the
+# parameter when the command runs (R.HAdd's and R.APfMerge's mx). The
+# parser gives PFADD the parameter's default (R.hll.max), the session
+# gives PFMERGE's act the parameter as it is (S.own_acts), and a PFADD
+# that runs the general way gets it as it is (bg.cmd.run), in EXEC and a
+# script's calls too, after a CONFIG SET before it in its batch. While
+# the parameter is not at its default (Ps's bit 15, from S.srv.tune),
+# every batch runs the general way (ps.gate), as the fast way runs a
+# PFADD as the parser made it; the fast way pays nothing for it. A PFADD
+# or a PFMERGE of an append-only file that Redis wrote loads with the
+# default (aof.bend: file.act).
+
 # whether the client of id has NO-TOUCH on
 def ps.nt(+id: Nat, +pb: Ps) -> Bool:
   match pb:
@@ -2822,7 +2837,8 @@ def ps.nt(+id: Nat, +pb: Ps) -> Bool:
 # tracking table are heeded keys, Tracking); 3 as 0 and 4 as 1, but only
 # for a client that is not restricted, while some client is (bit 20:
 # ACL; bit 22 adds 1, bit 20 adds 3); 2 the general way, and while some
-# client has NO-TOUCH on (bit 18: NO-TOUCH)
+# client has NO-TOUCH on (bit 18: NO-TOUCH) or hll-sparse-max-bytes is
+# not at its default (bit 15: HyperLogLogs' parameter)
 def ps.gate(+pb: Ps) -> Nat:
   match pb:
     case Ps{reg, +ev, px, cs, own}:
@@ -3902,15 +3918,17 @@ def ev.of(+srv: S.Srv) -> U32:
 # maxmemory) and a pause (25, The pause), each keeping the fast way off
 # but 28, 27 and 26; 29 to 26 follow the server and the actor. With them,
 # restricted clients (20, ACL: the gate's classes 3 and 4, ps.gate),
-# writes refused (19, MISCONF: misconf.bit) and a client with NO-TOUCH on
-# (18, which the actor keeps: NO-TOUCH). t is what the server says of
+# writes refused (19, MISCONF: misconf.bit), a client with NO-TOUCH on
+# (18, which the actor keeps: NO-TOUCH) and hll-sparse-max-bytes not at
+# its default (15, HyperLogLogs' parameter). t is what the server says of
 # them (S.srv.tune: 1 maxmemory set, 2 an LFU policy, 4 kick, 8
-# restricted clients, 16 MISCONF), its bit b as ev's bit to
+# restricted clients, 16 MISCONF, 32 the HyperLogLogs' parameter), its
+# bit b as ev's bit to
 def tune.bit(+t: U32, +b: U32, +to: U32) -> U32:
   Bool.pick(U32, U32.is_ne(U32.and(t, b), 0), to, 0)
 
 def mem.bits(+t: U32, +ev: U32) -> U32:
-  U32.or(U32.or(U32.and(ev, 604241920), U32.or(tune.bit(t, 1, 268435456), tune.bit(t, 2, 134217728))), U32.or(U32.or(tune.bit(t, 4, 67108864), tune.bit(t, 8, 1048576)), tune.bit(t, 16, 524288)))
+  U32.or(U32.or(U32.and(ev, 604241920), U32.or(tune.bit(t, 1, 268435456), tune.bit(t, 2, 134217728))), U32.or(U32.or(tune.bit(t, 4, 67108864), tune.bit(t, 8, 1048576)), U32.or(tune.bit(t, 16, 524288), tune.bit(t, 32, 32768))))
 
 # whether the writes are refused (MISCONF: Background saves): a
 # background save failed (rdb_last_bgsave_status err) while save points
@@ -5570,7 +5588,7 @@ def ek.upd(+j: Nat, +k: String, op: R.UpdOp) -> List<&2, Ek>:
       [EkW{j, k, "incrbyfloat", ev.str()}]
     case R.UZset{z}:
       [EkW{j, k, ek.zset(z), ev.z()}]
-    case R.UHll{R.HAdd{es}}:
+    case R.UHll{R.HAdd{es, mx}}:
       [EkW{j, k, "pfadd", ev.str()}]
     case R.UHll{h}:
       Nil{}
@@ -6142,9 +6160,12 @@ def bg.restored(+key: String, +ac: Nat, es: List<&2, A.Ent>, g: LRun) -> LRun:
       LHeld{h}
 
 # a command run the general way, in EXEC too; INFO with the tracking's
-# counts (trk.info) set before it runs
+# counts (trk.info) set before it runs, PFADD with hll-sparse-max-bytes
+# as it is now (HyperLogLogs' parameter)
 def bg.cmd.run(held: Bool, +ok: Bool, +k: S.Role, +c: R.Cmd, +code: Nat, rs: List<&2, R.Reply>, es: List<&2, A.Ent>, +conn: S.Conn, +srv: S.Srv, ds: R.Ds, ws: Waits, up: List<&2, Up>, tx: Tx, pb: Ps) -> LRun:
   match c:
+    case R.Upd{+key, R.UHll{R.HAdd{+els, mx}}}:
+      bg.run(held, ok, k, R.Upd{key, R.UHll{R.HAdd{els, S.srv.hll(srv)}}}, code, rs, es, conn, srv, ds, ws, up, tx, pb)
     case R.Own{R.SRestore{+key, R.URestore{p, t, rep, +ac}}}:
       bg.restored(key, ac, es, bg.run(held, ok, k, c, code, rs, Nil{}, conn, srv, ds, ws, up, tx, pb))
     case R.Own{R.SInfo{a}}:

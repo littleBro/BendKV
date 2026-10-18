@@ -456,12 +456,19 @@ type ExpIf is Data:
 # node of its own: a command travels in registers as wide as its widest
 # form, and an update's options are many.
 # A write of a HyperLogLog's key (HyperLogLog, below): PFADD of elements,
-# PFCOUNT of one key (it keeps the count it makes in the value), and
-# PFDEBUG's subcommand as it came (Redis reads it once the key is found)
+# with the bytes a sparse value may grow to (mx, hll-sparse-max-bytes:
+# the parser gives it the parameter's default, hll.max, and the server
+# the parameter as it is when the PFADD runs, server.bend), PFCOUNT of
+# one key (it keeps the count it makes in the value), and PFDEBUG's
+# subcommand as it came (Redis reads it once the key is found)
 type HllOp is Data:
-  HAdd{els: List<&2, String>}
+  HAdd{els: List<&2, String>, mx: Nat}
   HCount{}
   HDebug{sub: String}
+
+# hll-sparse-max-bytes's default
+def hll.max() -> Nat:
+  3000n
 
 type UpdOp is Data:
   USetNx{v: String}
@@ -618,8 +625,9 @@ type SortO is Data:
 # makes of them, an act of the session's database (ASort, below), so
 # that the laws of exec meet SORT as a read alone (Sort). PFCOUNT of
 # several keys reads them (SPfCount); PFMERGE reads its keys and writes
-# its destination with their union, an act of the session's database
-# (APfMerge, below); PFSELFTEST (SPfSelfTest) reads nothing. LASTSAVE,
+# its destination with their union, a sparse one within
+# hll-sparse-max-bytes, an act of the session's database (APfMerge,
+# below); PFSELFTEST (SPfSelfTest) reads that parameter alone. LASTSAVE,
 # MEMORY STATS, MEMORY DOCTOR, LOLWUT's drawings, SHUTDOWN and SAVE are
 # SAdmin, their kind and arguments (The administrative commands, below):
 # they read the server's state, the drawings its random numbers, SAVE
@@ -9061,7 +9069,7 @@ def parse_id(id: Nat, name: String, args: List<&2, String>) -> Cmd:
     case 179n:  # PFADD
       match args:
         case Con{k, rest}:
-          Upd{k, UHll{HAdd{rest}}}
+          Upd{k, UHll{HAdd{rest, hll.max()}}}
         case Nil{}:
           e_arity("pfadd")
     case 180n:  # PFCOUNT
@@ -20780,22 +20788,19 @@ def xwrite.coll(op: XWrite, +now: Nat, +cl: KV.Coll) -> Out:
 
 # HyperLogLog
 # -----------
-# PFADD, PFCOUNT, PFMERGE, PFDEBUG and PFSELFTEST as Redis 7.0.15 runs
+# PFADD, PFCOUNT, PFMERGE, PFDEBUG and PFSELFTEST as Redis 7.2.16 runs
 # them (hyperloglog.c) on a string that holds a HyperLogLog (hll.bend).
 # A string that is none (H.valid) answers the WRONGTYPE error of its
 # own, a key of another kind the usual one; a sparse HyperLogLog whose
 # opcodes Redis finds invalid answers INVALIDOBJ. A sparse one turns
-# dense past 3000 bytes, hll-sparse-max-bytes's default: BendKV does not
-# read the parameter, as a write of one key runs on its database alone.
+# dense once a PFADD or a PFMERGE would grow it past the bytes they carry
+# (mx: hll-sparse-max-bytes, as Redis's hllSparseSet reads it).
 
 def e_hll_type() -> Reply:
   RError{"WRONGTYPE Key is not a valid HyperLogLog string value."}
 
 def e_hll_bad() -> Reply:
   RError{"INVALIDOBJ Corrupted HLL object detected"}
-
-def hll.max() -> Nat:
-  3000n
 
 # a cardinality as addReplyLongLong sends a uint64_t: as a long long
 def hll.reply(c: H.W) -> Reply:
@@ -20827,19 +20832,19 @@ def pfadd.out(o: H.AddOut, made: Bool) -> Out:
         case False{} False{}:
           Out{e_hll_bad(), CKeep{}}
 
-def pfadd.some(ok: Bool, +w: String, els: List<&2, String>) -> Out:
+def pfadd.some(ok: Bool, +w: String, els: List<&2, String>, +mx: Nat) -> Out:
   match ok:
     case True{}:
-      pfadd.out(H.add(False{}, w, hll.max(), els), False{})
+      pfadd.out(H.add(False{}, w, mx, els), False{})
     case False{}:
       Out{e_hll_type(), CKeep{}}
 
-def pfadd.of(els: List<&2, String>, m: Maybe<&2, KV.Item<String>>) -> Out:
+def pfadd.of(els: List<&2, String>, +mx: Nat, m: Maybe<&2, KV.Item<String>>) -> Out:
   match m:
     case Some{KV.Item{+w, e}}:
-      pfadd.some(H.valid(w), w, els)
+      pfadd.some(H.valid(w), w, els, mx)
     case None{}:
-      pfadd.out(H.add(True{}, H.fresh(), hll.max(), els), True{})
+      pfadd.out(H.add(True{}, H.fresh(), mx, els), True{})
 
 # PFCOUNT of one key: 0 for a key not there; the count kept in the value,
 # when it is valid; else the count made, which the value keeps (the
@@ -20933,8 +20938,8 @@ def pfdebug.of(+sub: String, m: Maybe<&2, KV.Item<String>>) -> Out:
 # a write of a HyperLogLog's key, from the string it holds there at now
 def hll.upd(op: HllOp, m: Maybe<&2, KV.Item<String>>) -> Out:
   match op:
-    case HAdd{els}:
-      pfadd.of(els, m)
+    case HAdd{els, +mx}:
+      pfadd.of(els, mx, m)
     case HCount{}:
       pfcount.of(m)
     case HDebug{+sub}:
@@ -21014,27 +21019,28 @@ def pf.merge.put(m: Maybe<&2, String>, +dst: String) -> Cmd:
     case None{}:
       Bad{e_hll_bad()}
 
-def pf.merge.at(v: Maybe<&2, KV.Val>, +dst: String, a: H.Acc) -> Cmd:
+def pf.merge.at(v: Maybe<&2, KV.Val>, +dst: String, a: H.Acc, +mx: Nat) -> Cmd:
   match v:
     case Some{KV.VStr{+w}}:
-      pf.merge.put(H.merge(w, a, hll.max()), dst)
+      pf.merge.put(H.merge(w, a, mx), dst)
     case _:
-      pf.merge.put(H.merge(H.fresh(), a, hll.max()), dst)
+      pf.merge.put(H.merge(H.fresh(), a, mx), dst)
 
-def pf.merge.of(r: PfRead, +dst: String, +t: KV.Trie<KV.Val>, +now: Nat) -> Cmd:
+def pf.merge.of(r: PfRead, +dst: String, +t: KV.Trie<KV.Val>, +now: Nat, +mx: Nat) -> Cmd:
   match r:
     case PfOk{a}:
-      pf.merge.at(KV.read(KV.Val, t, dst, now), dst, a)
+      pf.merge.at(KV.read(KV.Val, t, dst, now), dst, a, mx)
     case PfErr{e}:
       Bad{e}
 
 # PFMERGE's write of its destination (APfMerge): the union of the
 # HyperLogLogs of its keys (the destination's among them), which the
-# destination keeps with its time, or holds as a new key; the SET of the
-# value that makes, with KEEPTTL, which answers OK as PFMERGE does; or
-# the error of a key, which writes nothing
-def pf.merge.cmd(+t: KV.Trie<KV.Val>, +now: Nat, +dst: String, srcs: List<&2, String>) -> Cmd:
-  pf.merge.of(pf.read(dst <> srcs, PfOk{H.acc.new()}, t, now), dst, t, now)
+# destination keeps with its time, or holds as a new key, a sparse one
+# within mx bytes (hll-sparse-max-bytes); the SET of the value that
+# makes, with KEEPTTL, which answers OK as PFMERGE does; or the error of
+# a key, which writes nothing
+def pf.merge.cmd(+t: KV.Trie<KV.Val>, +now: Nat, +dst: String, srcs: List<&2, String>, +mx: Nat) -> Cmd:
+  pf.merge.of(pf.read(dst <> srcs, PfOk{H.acc.new()}, t, now), dst, t, now, mx)
 
 def pf.selftest.of(m: Maybe<&2, String>) -> Reply:
   match m:
@@ -21044,8 +21050,8 @@ def pf.selftest.of(m: Maybe<&2, String>) -> Reply:
       RError{"ERR " ++ e}
 
 # PFSELFTEST's reply (H.selftest)
-def pf.selftest() -> Reply:
-  pf.selftest.of(H.selftest())
+def pf.selftest(+hm: Nat) -> Reply:
+  pf.selftest.of(H.selftest(hm))
 
 # RESTORE's update, from whether its key is there at now (live)
 def restore.gone(live: Bool) -> Out:
@@ -23585,7 +23591,8 @@ def ds.copy(+src: String, +dst: String, +j: Nat, rep: Bool, ds: Ds) -> Bool & Ds
 # (a COPY without DB in a file Redis wrote); every database emptied
 # (FLUSHALL); SORT with STORE, which writes what it makes of the keys of
 # the focus to its destination there (sort.write); PFMERGE, which writes
-# the union of its keys to its destination (pf.merge.cmd); a GEO search
+# the union of its keys to its destination, a sparse one within mx bytes
+# (pf.merge.cmd); a GEO search
 # that stores, which writes what it finds to its destination (geo.write)
 type Act is Data:
   ARun{c: Cmd}
@@ -23597,7 +23604,7 @@ type Act is Data:
   ACopyHere{src: String, dst: String, rep: Bool}
   AWipe{}
   ASort{key: String, o: SortO}
-  APfMerge{dst: String, srcs: List<&2, String>}
+  APfMerge{dst: String, srcs: List<&2, String>, mx: Nat}
   AGeo{kind: Nat, args: List<&2, String>}
 
 def act.run(r: Reply & Db, pre: List<&2, Db>, post: List<&2, Db>) -> Reply & Ds:
@@ -23625,9 +23632,9 @@ def sort.write.ds(+ds: Ds, +k: String, o: SortO) -> Cmd:
   sort.write(db.trie(d), db.now(d), k, o)
 
 # PFMERGE's command (pf.merge.cmd) on the focus
-def pf.merge.ds(+ds: Ds, +dst: String, srcs: List<&2, String>) -> Cmd:
+def pf.merge.ds(+ds: Ds, +dst: String, srcs: List<&2, String>, +mx: Nat) -> Cmd:
   +d = ds.focused(ds)
-  pf.merge.cmd(db.trie(d), db.now(d), dst, srcs)
+  pf.merge.cmd(db.trie(d), db.now(d), dst, srcs, mx)
 
 # a GEO store's source: GEOSEARCHSTORE's second key, the others' first
 def geo.src(+kind: Nat, args: List<&2, String>) -> String:
@@ -23688,9 +23695,9 @@ def act(a: Act, ds: Ds) -> Reply & Ds:
     case ASort{+k, o} x:
       +y = x
       act.cmd(sort.write.ds(y, k, o), y)
-    case APfMerge{+d, srcs} x:
+    case APfMerge{+d, srcs, +mx} x:
       +y = x
-      act.cmd(pf.merge.ds(y, d, srcs), y)
+      act.cmd(pf.merge.ds(y, d, srcs, mx), y)
     case AGeo{+k, args} x:
       +y = x
       act.cmd(geo.store.ds(y, k, args), y)

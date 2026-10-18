@@ -1839,7 +1839,8 @@ def merge(+v: String, a: Acc, +mx: Nat) -> Maybe<&2, String>:
 # and 10,000 elements added to a dense HyperLogLog and to a sparse one
 # (Redis: ten million), whose counts at 1, 10, 100, 1000 and 10,000 must
 # agree, stay within 6 standard errors of the truth (1 at 10), and the
-# sparse one sparse below 1500 elements (hll-sparse-max-bytes / 2).
+# sparse one sparse below hm / 2 elements, hm the bytes it may grow to
+# (hll-sparse-max-bytes, as Redis's sparse one grows to it).
 # Random numbers come from xorshift with a fixed seed: Redis's rand()
 # gives other ones, which the checks pass all the same.
 
@@ -1898,8 +1899,8 @@ def st.v(o: AddOut) -> String:
     case AddErr{ch, v}:
       v
 
-def st.add1(+v: String, +e: String) -> String:
-  st.v(add(False{}, v, 3000n, [e]))
+def st.add1(+v: String, +e: String, +hm: Nat) -> String:
+  st.v(add(False{}, v, hm, [e]))
 
 def count.w(c: Count) -> W:
   match c:
@@ -1922,20 +1923,20 @@ def st.cnt(+v: String) -> Nat:
 def st.diff(+a: Nat, +b: Nat) -> Nat:
   Bool.pick(Nat, Nat.is_lt(a, b), Nat.sub(b, a), Nat.sub(a, b))
 
-# the checks at checkpoint j: the sparse one sparse below 1500, the
+# the checks at checkpoint j: the sparse one sparse below hm / 2, the
 # counts agreeing, the dense one's within ceil(1.04 / 128 * 6 * j) of j
 # (1 at 10)
-def st.check(+j: Nat, +d: String, +sv: String) -> Maybe<&2, String>:
+def st.check(+j: Nat, +d: String, +sv: String, +hm: Nat) -> Maybe<&2, String>:
   +cd = st.cnt(d)
   +err = st.diff(j, cd)
   +mx = Bool.pick(Nat, Nat.is_eq(j, 10n), 1n, Nat.div(Nat.add(Nat.mul(624n, j), 12799n), 12800n))
-  Bool.pick(Maybe<&2, String>, Bool.and(Nat.is_lt(j, 1500n), Bool.not(is_sparse(sv))), Some{"TESTFAILED sparse encoding not used"},
+  Bool.pick(Maybe<&2, String>, Bool.and(Nat.is_lt(j, Nat.div(hm, 2n)), Bool.not(is_sparse(sv))), Some{"TESTFAILED sparse encoding not used"},
   Bool.pick(Maybe<&2, String>, Nat.is_ne(cd, st.cnt(sv)), Some{"TESTFAILED dense/sparse disagree"},
   Bool.pick(Maybe<&2, String>, Nat.is_lt(mx, err), Some{"TESTFAILED Too big error. card:" ++ Nat.show(j) ++ " abserr:" ++ Nat.show(err)}, None{})))
 
 # elements j on, k of them, added to the dense d and the sparse sv: err,
 # what the last checkpoint found; chk, whether j is the next one (cp)
-def st.add(k: Nat, err: Maybe<&2, String>, chk: Bool, +j: Nat, +d: String, +sv: String, +cp: Nat) -> Maybe<&2, String>:
+def st.add(k: Nat, err: Maybe<&2, String>, chk: Bool, +j: Nat, +d: String, +sv: String, +cp: Nat, +hm: Nat) -> Maybe<&2, String>:
   match k:
     case 0n:
       err
@@ -1947,14 +1948,15 @@ def st.add(k: Nat, err: Maybe<&2, String>, chk: Bool, +j: Nat, +d: String, +sv: 
           match chk:
             case False{}:
               +e = st.ele(j)
-              st.add(q, None{}, Nat.is_eq(Nat.add(j, 1n), cp), Nat.add(j, 1n), st.add1(d, e), st.add1(sv, e), cp)
+              st.add(q, None{}, Nat.is_eq(Nat.add(j, 1n), cp), Nat.add(j, 1n), st.add1(d, e, hm), st.add1(sv, e, hm), cp, hm)
             case True{}:
               +e = st.ele(j)
-              +d2 = st.add1(d, e)
-              +s2 = st.add1(sv, e)
+              +d2 = st.add1(d, e, hm)
+              +s2 = st.add1(sv, e, hm)
               +cp2 = Nat.mul(cp, 10n)
-              st.add(q, st.check(j, d2, s2), Nat.is_eq(Nat.add(j, 1n), cp2), Nat.add(j, 1n), d2, s2, cp2)
+              st.add(q, st.check(j, d2, s2, hm), Nat.is_eq(Nat.add(j, 1n), cp2), Nat.add(j, 1n), d2, s2, cp2, hm)
 
-# PFSELFTEST: none when every check passes, else what failed
-def selftest() -> Maybe<&2, String>:
-  st.or(st.or(st.cycle(2463534242), st.cycle(88675123)), st.add(10000n, None{}, True{}, 1n, st.dense0() ++ zeros(12288n), fresh(), 1n))
+# PFSELFTEST with hll-sparse-max-bytes at hm: none when every check
+# passes, else what failed
+def selftest(+hm: Nat) -> Maybe<&2, String>:
+  st.or(st.or(st.cycle(2463534242), st.cycle(88675123)), st.add(10000n, None{}, True{}, 1n, st.dense0() ++ zeros(12288n), fresh(), 1n, hm))

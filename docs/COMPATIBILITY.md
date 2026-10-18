@@ -39,20 +39,20 @@ make suite REDIS_SRC=../redis      # both runs and the table, in build/suite/
 ## The result
 
 Redis 7.2.16, October 2026. Of the 1,812 tests Redis passes in this mode, BendKV passes
-**1,673 (92.3%)**; of the 1,688 in the units of what BendKV has, 1,632 (96.7%), and 41
+**1,675 (92.4%)**; of the 1,688 in the units of what BendKV has, 1,634 (96.8%), and 41
 of the 122 of streams'.
 
 7.2.16's suite runs 148 tests more in this mode than 7.0.15's, and Redis passes 135 more;
-BendKV passes 117 more, 1,673 where it passed 1,556 of the 1,677 that 7.0.15 passed
-(92.8%). The suite found four things to fix (section 3zzzzk of
+BendKV passes 119 more, 1,675 where it passed 1,556 of the 1,677 that 7.0.15 passed
+(92.8%). The suite found five things to fix (section 3zzzzk of
 [FINDINGS.md](FINDINGS.md)), and BendKV passed 1,657 before them:
 - unit/hyperloglog, 27 tests where 7.0.15's had 20, sets a sparse HyperLogLog of 32 MB of
   opcodes whose runs pass the last register, the test of the fix of CVE-2025-32023.
   BendKV answered INVALIDOBJ as Redis does, but its walks of the opcodes read on to the
   end, in a time that grew with the square of the length, and the unit stopped at the
   suite's limit of 60 s, 13 tests passed. They now end at the first opcode past the last
-  register, as Redis's do, and BendKV passes 25: the other two set `hll-sparse-max-bytes`,
-  which BendKV does not read (README, HyperLogLogs).
+  register, as Redis's do. Its other two new tests set `hll-sparse-max-bytes`, which
+  BendKV did not read; it does now, and passes the 27.
 - unit/type/list's tests of a timeout whose ms pass LLONG_MAX, which 7.2.16 finds out of
   range where 7.0.15 found it negative, and of the changes a served BLPOP or BLMOVE
   counts, which 7.2.16 counts as their calls, as it runs the command again for the client
@@ -310,7 +310,7 @@ source): 9 of the 17. The other 7 need MULTI and WATCH, Lua or lists (then).
 
 | area | units | Redis passes | BendKV passes |
 |---|---|---:|---:|
-| what BendKV has: the protocol, connections and clients and their pause, the keyspace and its databases, strings and their ranges, bits and fields, counters and floats, hashes, lists, sets, sorted sets and the commands that wait on them, SORT, HyperLogLogs, GEO, DUMP and RESTORE, times to live, lazy freeing, transactions, pub/sub and keyspace notifications, introspection, the slow log and the latency monitor, client-side caching, ACL users, Lua scripts and functions | protocol, quit, keyspace, type/string, type/incr, type/hash, type/list, list-2, list-3, type/set, type/zset, sort, hyperloglog, geo, dump, scan, bitops, bitfield, expire, lazyfree, violations, multi, pubsub, pause, introspection, introspection-2, other, info-command, latency-monitor, slowlog, tracking, scripting, functions | 1688 | **1632** |
+| what BendKV has: the protocol, connections and clients and their pause, the keyspace and its databases, strings and their ranges, bits and fields, counters and floats, hashes, lists, sets, sorted sets and the commands that wait on them, SORT, HyperLogLogs, GEO, DUMP and RESTORE, times to live, lazy freeing, transactions, pub/sub and keyspace notifications, introspection, the slow log and the latency monitor, client-side caching, ACL users, Lua scripts and functions | protocol, quit, keyspace, type/string, type/incr, type/hash, type/list, list-2, list-3, type/set, type/zset, sort, hyperloglog, geo, dump, scan, bitops, bitfield, expire, lazyfree, violations, multi, pubsub, pause, introspection, introspection-2, other, info-command, latency-monitor, slowlog, tracking, scripting, functions | 1688 | **1634** |
 | streams: their values, reads and writes; their groups and XREAD's wait not yet | type/stream, type/stream-cgroups | 122 | **41** |
 | the query buffer, not yet | querybuf | 2 | 0 |
 
@@ -332,7 +332,7 @@ wait):
 | unit/expire | 66 | 59 | 57 |
 | unit/functions | 96 | 92 | 92 |
 | unit/geo | 64 | 64 | 64 |
-| unit/hyperloglog | 27 | 27 | 25 |
+| unit/hyperloglog | 27 | 27 | 27 |
 | unit/info-command | 3 | 3 | 3 |
 | unit/introspection | 34 | 34 | 33 |
 | unit/introspection-2 | 47 | 46 | 44 |
@@ -363,9 +363,9 @@ wait):
 | unit/type/string | 82 | 82 | 79 |
 | unit/type/zset | 303 | 300 | 298 |
 | unit/violations | 1 | 1 | 1 |
-| **all** | **1905** | **1812** | **1673 (92.3%)** |
+| **all** | **1905** | **1812** | **1675 (92.4%)** |
 
-## Why the other 139 fail
+## Why the other 137 fail
 
 Against Redis 7.2.16:
 
@@ -379,7 +379,7 @@ Against Redis 7.2.16:
   - 23 are type/stream's and type/stream-cgroups', on a command outside any test:
     `CONFIG SET appendonly yes`. BendKV turns its append-only file on only at its start.
   - One test runs only on a server that names jemalloc as its allocator.
-- **41 fail with another error.**
+- **39 fail with another error.**
   - 20 are streams': XREAD with BLOCK, which BendKV answers with an error (10), XACK and
     XPENDING on a group XGROUP did not make (8), and the two tests that set
     `stream-node-max-entries`.
@@ -389,7 +389,6 @@ Against Redis 7.2.16:
   - The others fail for what BendKV does not have yet, or has otherwise:
     - COMMAND's entries of commands it does not have: GETKEYS of XGROUP, and MIGRATE
       marked movablekeys;
-    - `hll-sparse-max-bytes`, which BendKV does not read (2);
     - RANDOMKEY while a pause holds back writes (above);
     - the order of a hash Redis keeps in a listpack past the parameters' defaults
       (2, above);

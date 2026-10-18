@@ -596,9 +596,9 @@ def act(a: R.Act, ds: R.Ds) -> R.Reply & (List<&2, Eff> & R.Ds):
     case R.ASort{+k, o} x:
       +y = x
       act.cmd(R.sort.write.ds(y, k, o), y)
-    case R.APfMerge{+d, srcs} x:
+    case R.APfMerge{+d, srcs, +mx} x:
       +y = x
-      act.cmd(R.pf.merge.ds(y, d, srcs), y)
+      act.cmd(R.pf.merge.ds(y, d, srcs, mx), y)
     case R.AGeo{+k, args} x:
       +y = x
       act.cmd(R.geo.store.ds(y, k, args), y)
@@ -1304,14 +1304,14 @@ def file.copy(args: List<&2, String>, c: R.Cmd) -> R.Act:
       file.copy.any(c)
 
 # a command of a file as an act: SELECT moves the focus, SWAPDB, MOVE,
-# COPY and FLUSHALL act on the databases, SORT with STORE, PFMERGE and a
-# GEO search that stores (as Redis writes them, the command that ran)
-# write their destination, RESTORE with IDLETIME or FREQ (as Redis
-# writes it, the command that ran) restores its key, and
-# any other command runs on the focus (a SELECT, SWAPDB, MOVE or COPY
-# whose numbers or options do not read too: exec answers it with an
-# error and changes nothing, as Redis's load ignores a command that
-# fails)
+# COPY and FLUSHALL act on the databases, SORT with STORE, PFMERGE (a
+# sparse value within hll-sparse-max-bytes's default, R.hll.max, as a
+# PFADD of a file parses) and a GEO search that stores (as Redis writes
+# them, the command that ran) write their destination, RESTORE with
+# IDLETIME or FREQ (as Redis writes it, the command that ran) restores its
+# key, and any other command runs on the focus (a SELECT, SWAPDB, MOVE or
+# COPY whose numbers or options do not read too: exec answers it with an
+# error and changes nothing, as Redis's load ignores a command that fails)
 def file.act(+c: R.Cmd) -> R.Act:
   match c:
     case R.Own{R.SSelect{+s}}:
@@ -1327,7 +1327,7 @@ def file.act(+c: R.Cmd) -> R.Act:
     case R.Own{R.SSortStore{k, o}}:
       R.ASort{k, o}
     case R.Own{R.SPfMerge{d, srcs}}:
-      R.APfMerge{d, srcs}
+      R.APfMerge{d, srcs, R.hll.max()}
     case R.Own{R.SGeoStore{k, args}}:
       R.AGeo{k, args}
     case R.Own{R.SRestore{k, op}}:

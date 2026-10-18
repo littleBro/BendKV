@@ -20,7 +20,7 @@ throughput of Redis 7.0.15 on the same machine, with half its memory for small v
 > append-only file and its rewrite, maxmemory and its eviction, Lua scripts and
 > functions, RESP3). The goal now is a drop-in replacement for a single Redis node,
 > measured by Redis's own test suite: of the 1,812 tests Redis 7.2.16 passes against a
-> server it did not start, BendKV passes 1,673, and 1,632 of the 1,688 in what it implements
+> server it did not start, BendKV passes 1,675, and 1,634 of the 1,688 in what it implements
 > ([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)). Do not use it for data you cannot
 > lose.
 
@@ -265,26 +265,28 @@ translation stays in the trusted base.
   listpack, where Redis makes it a skiplist for good.
 - **HyperLogLogs:** PFADD, PFCOUNT, PFMERGE, PFDEBUG (GETREG, DECODE, ENCODING, TODENSE)
   and PFSELFTEST, as Redis 7.2.16's `hyperloglog.c` runs them, on the bytes of a string:
-  Redis's header and registers, dense or sparse, and every value written byte for byte as
-  Redis writes it (the sparse opcodes split and merged as `hllSparseSet` does it, the turn
-  to dense past 3,000 bytes or for a register past 32, PFMERGE's sparse result, the count
-  kept in the header and made stale by a change). The count is Ertl's estimator as Redis
-  takes it, on doubles in software. A string that is not a HyperLogLog answers Redis's
-  WRONGTYPE, a corrupt sparse one INVALIDOBJ, as Redis 7.2.16 judges it, with the fix of
-  CVE-2025-32023, whose walks end at the first opcode past the last register, so that
-  one of any length is answered at once (FINDINGS.md, section 3zzzzk). PFADD, PFCOUNT of
-  one key and PFDEBUG are logged as the changes they make (a SET, a SET with KEEPTTL,
-  the SETRANGE of the count), PFMERGE as the SET of its destination; a file of Redis's,
-  which holds the PF commands, is read by running them. PFADD takes four to six times
-  Redis's instructions, a PFCOUNT that counts 13 to 18 times (2.6 times on two dense
-  HyperLogLogs), PFMERGE 1.2 to 2.4 times (section 59 of
-  [docs/PERFORMANCE.md](docs/PERFORMANCE.md)). Where BendKV differs:
-  `hll-sparse-max-bytes` is not read (3,000); PFSELFTEST checks fewer cases; the byte
-  past a sparse string's end, which an XZERO cut at its end reads, is 0 as each command
-  starts, where Redis keeps what a set wrote there (docs/UPSTREAM.md, bug 6); a PFADD
-  that a corrupt value stops keeps its change with an event and a log, where Redis keeps
-  it silently; and OBJECT ENCODING answers `embstr` for a HyperLogLog of up to 44 bytes,
-  where Redis's is `raw`.
+  Redis's header and registers, dense or sparse, and every value written byte for byte
+  as Redis writes it (the sparse opcodes split and merged as `hllSparseSet` does it, the
+  turn to dense past `hll-sparse-max-bytes`, 3,000 bytes by default, or for a register
+  past 32, PFMERGE's sparse result, the count kept in the header and made stale by a
+  change). The count is Ertl's estimator as Redis takes it, on doubles in software. A
+  string that is not a HyperLogLog answers Redis's WRONGTYPE, a corrupt sparse one
+  INVALIDOBJ, as Redis 7.2.16 judges it, with the fix of CVE-2025-32023, whose walks end
+  at the first opcode past the last register, so that one of any length is answered at
+  once (FINDINGS.md, section 3zzzzk). PFADD, PFCOUNT of one key and PFDEBUG are logged
+  as the changes they make (a SET, a SET with KEEPTTL, the SETRANGE of the count),
+  PFMERGE as the SET of its destination; a file of Redis's, which holds the PF commands,
+  is read by running them. PFADD takes four to six times Redis's instructions, a PFCOUNT
+  that counts 13 to 18 times (2.6 times on two dense HyperLogLogs), PFMERGE 1.2 to 2.4
+  times (section 59 of [docs/PERFORMANCE.md](docs/PERFORMANCE.md)). Where BendKV
+  differs: while `hll-sparse-max-bytes` is not 3,000, every command runs one at a time,
+  as while a client is in BCAST mode; a file of Redis's runs its PFADD and PFMERGE with
+  the parameter at 3,000, where Redis runs them with the parameter it starts with;
+  PFSELFTEST checks fewer cases; the byte past a sparse string's end, which an XZERO cut
+  at its end reads, is 0 as each command starts, where Redis keeps what a set wrote
+  there (docs/UPSTREAM.md, bug 6); a PFADD that a corrupt value stops keeps its change
+  with an event and a log, where Redis keeps it silently; and OBJECT ENCODING answers
+  `embstr` for a HyperLogLog of up to 44 bytes, where Redis's is `raw`.
 - **GEO:** GEOADD, GEOPOS, GEOHASH, GEODIST, GEORADIUS and GEORADIUSBYMEMBER with their
   `_RO` forms, GEOSEARCH and GEOSEARCHSTORE, as Redis 7.2.16's `geo.c` runs them: a
   position is a member of a sorted set whose score is its 52-bit geohash, GEOADD the ZADD

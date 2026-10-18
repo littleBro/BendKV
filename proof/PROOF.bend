@@ -10916,8 +10916,8 @@ def pfadd_none(o: H.AddOut, -m: Maybe<&2, KV.Item<KV.Val>>) -> Good(m, ch_of(R.p
 
 def hll_none(op: R.HllOp, -m: Maybe<&2, KV.Item<KV.Val>>) -> Good(m, ch_of(R.hll.upd(op, None{}))):
   match op:
-    case R.HAdd{+els}:
-      pfadd_none(H.add(True{}, H.fresh(), R.hll.max(), els), m)
+    case R.HAdd{+els, +mx}:
+      pfadd_none(H.add(True{}, H.fresh(), mx, els), m)
     case R.HCount{}:
       {==}
     case R.HDebug{sub}:
@@ -11172,10 +11172,10 @@ def pfadd_some_out(o: H.AddOut, -w: String, -e: Nat) -> Good(Some{KV.Item{KV.VSt
         case False{}:
           {==}
 
-def pfadd_some(ok: Bool, +w: String, els: List<&2, String>, -e: Nat) -> Good(Some{KV.Item{KV.VStr{w}, e}}, ch_of(R.pfadd.some(ok, w, els))):
+def pfadd_some(ok: Bool, +w: String, els: List<&2, String>, +mx: Nat, -e: Nat) -> Good(Some{KV.Item{KV.VStr{w}, e}}, ch_of(R.pfadd.some(ok, w, els, mx))):
   match ok:
     case True{}:
-      pfadd_some_out(H.add(False{}, w, R.hll.max(), els), w, e)
+      pfadd_some_out(H.add(False{}, w, mx, els), w, e)
     case False{}:
       {==}
 
@@ -11242,8 +11242,8 @@ def pfdebug_some(ok: Bool, +sub: String, +w: String, -e: Nat) -> Good(Some{KV.It
 
 def hll_some(op: R.HllOp, +w: String, -e: Nat) -> Good(Some{KV.Item{KV.VStr{w}, e}}, ch_of(R.hll.upd(op, Some{KV.Item{w, e}}))):
   match op:
-    case R.HAdd{+els}:
-      pfadd_some(H.valid(w), w, els, e)
+    case R.HAdd{+els, +mx}:
+      pfadd_some(H.valid(w), w, els, mx, e)
     case R.HCount{}:
       pfcount_some(H.valid(w), w, e)
     case R.HDebug{+sub}:
@@ -13560,8 +13560,8 @@ def act_split(+a: R.Act, +ds: R.Ds) -> {(R.reply_ds(R.act(a, ds)), (aeff(a, ds),
       {==}
     case R.ASort{+k, +ob} x:
       act_split_cmd(R.sort.write.ds(x, k, ob), x)
-    case R.APfMerge{+d, +srcs} x:
-      act_split_cmd(R.pf.merge.ds(x, d, srcs), x)
+    case R.APfMerge{+d, +srcs, +mx} x:
+      act_split_cmd(R.pf.merge.ds(x, d, srcs, mx), x)
     case R.AGeo{+k, +args} x:
       act_split_cmd(R.geo.store.ds(x, k, args), x)
 
@@ -15182,11 +15182,11 @@ def act_inv(t: R.Act, +o: R.Ds, +r: R.Ds, +sel: Nat, +n: Nat, +sm: {KV.small(n) 
       (ez, q) = inv
       (ei, en) = q
       post_run(R.sort.write.ds(o, k, ob), o, r, sel, n)(ln)(sm)(ez)(ei)(en)
-    case R.APfMerge{+d, +srcs}:
+    case R.APfMerge{+d, +srcs, +mx}:
       (inv, ln) = st
       (ez, q) = inv
       (ei, en) = q
-      post_run(R.pf.merge.ds(o, d, srcs), o, r, sel, n)(ln)(sm)(ez)(ei)(en)
+      post_run(R.pf.merge.ds(o, d, srcs, mx), o, r, sel, n)(ln)(sm)(ez)(ei)(en)
     case R.AGeo{+k, +args}:
       (inv, ln) = st
       (ez, q) = inv
@@ -17420,8 +17420,8 @@ def act_now(t: R.Act, +o: R.Ds) -> {R.ds.now(R.ds_of(R.act(t, o))) == R.ds.now(o
       now_wipe(o)
     case R.ASort{+k, +ob}:
       now_run(R.sort.write.ds(o, k, ob), o)
-    case R.APfMerge{+d, +srcs}:
-      now_run(R.pf.merge.ds(o, d, srcs), o)
+    case R.APfMerge{+d, +srcs, +mx}:
+      now_run(R.pf.merge.ds(o, d, srcs, mx), o)
     case R.AGeo{+k, +args}:
       now_run(R.geo.store.ds(o, k, args), o)
 
@@ -17793,8 +17793,8 @@ def one_eff(t: R.Act, +o: R.Ds) -> OneE(aeff(t, o)):
       Inr{(A.EWipe{}, {==})}
     case R.ASort{+k, +ob}:
       one_run(R.sort.write.ds(o, k, ob), o)
-    case R.APfMerge{+d, +srcs}:
-      one_run(R.pf.merge.ds(o, d, srcs), o)
+    case R.APfMerge{+d, +srcs, +mx}:
+      one_run(R.pf.merge.ds(o, d, srcs, mx), o)
     case R.AGeo{+k, +args}:
       one_run(R.geo.store.ds(o, k, args), o)
 
@@ -21498,8 +21498,8 @@ def counted_act(a: R.Act, +ds: R.Ds) -> {Laws.counted_ds(ds) == True{} : Bool} -
       e => counted_wipe(x)
     case R.ASort{+k, +ob} x:
       counted_cmd(R.sort.write.ds(x, k, ob), x)
-    case R.APfMerge{+d, +srcs} x:
-      counted_cmd(R.pf.merge.ds(x, d, srcs), x)
+    case R.APfMerge{+d, +srcs, +mx} x:
+      counted_cmd(R.pf.merge.ds(x, d, srcs, mx), x)
     case R.AGeo{+k, +args} x:
       counted_cmd(R.geo.store.ds(x, k, args), x)
 
