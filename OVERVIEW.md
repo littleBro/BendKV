@@ -488,7 +488,9 @@ KILL, HELP. A client must be authenticated where Redis requires it:
 after the check of the command's name and number of arguments and before it runs (a
 syntax error for an unauthenticated client is NOAUTH); a client is authenticated on
 connecting and on RESET if the default user is on and takes no password then, and after
-AUTH or AUTH in HELLO, and nothing else changes that.
+AUTH or AUTH in HELLO, and nothing else changes that. While it must authenticate, its
+requests are read with Redis's limits: 10 arguments, and bulks of 16384 bytes (section
+3zzzzn of FINDINGS.md).
 ACL: users as Redis 7.2.16 keeps them, set by ACL SETUSER (selectors, key patterns with
 what each may do, channels, passwords kept as SHA-256, Redis's errors) and read by
 GETUSER, LIST, USERS, WHOAMI, CAT, DRYRUN, GENPASS, LOG and HELP. A call of a client whose

@@ -225,6 +225,10 @@ parts of it are written from 7.2.16's sources:
   has passed when every key of the database has one and none is there
   (db.c's dbRandomKey and expireIfNeeded), in src/redis.bend,
   src/session.bend and src/server.bend.
+- The limits of a client that must authenticate: a request of more than
+  10 arguments, or with a bulk of more than 16384 bytes, refused once its
+  line has come (networking.c's processMultibulkBuffer and
+  authRequired), in src/resp.bend and src/server.bend.
 - WAITAOF and the replication's offset: WAITAOF's checks, its answers
   and its waits (replication.c's waitaofCommand and
   processClientsWaitingReplicas, blocked.c's blockForAofFsync and

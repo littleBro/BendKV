@@ -7320,7 +7320,8 @@ logged in as a user that may run nothing.
 arguments, or with a bulk of more than 16 KB, from a client that must authenticate
 (networking.c, `unauthenticated multibulk length` and `unauthenticated bulk length`), and
 closes it. BendKV has never had these limits: unit/auth's test of them, which runs once
-its `external:skip` tag is taken off, waits for the error until its timeout.
+its `external:skip` tag is taken off, waits for the error until its timeout (section
+3zzzzn brings them, as Redis 7.2.16 reads them).
 
 A command inside EXEC that closes its own client (CLIENT KILL of its own id, and now ACL
 DELUSER of its own user) loses EXEC's whole reply, and the commands after it do not run.
@@ -10424,6 +10425,71 @@ on a listpack, GEOADDs of 128 and 130 points, and ZRANGESTORE by rank, by score 
 without LIMIT, and by member in reverse, from a skiplist of 200 elements and from one
 with a member of 70 bytes, then ZUNIONSTORE, ZINTERSTORE and ZDIFFSTORE, each read by
 its encoding and its scores of -0, against Redis.
+
+## 3zzzzn. The limits of a client that must authenticate
+
+**What differed.** While a client must authenticate (`authRequired`: its server's
+default user takes a password, or is off, and the client has not authenticated), Redis
+7.2.16 reads its requests with two limits more (`networking.c`,
+`processMultibulkBuffer`). A count past 10 arguments is refused with "Protocol error:
+unauthenticated multibulk length", and a bulk's length past 16384 bytes with "Protocol
+error: unauthenticated bulk length", as soon as their lines have come, before the bytes
+they announce; the connection closes after the error. Redis looks at each line once, as
+it comes, after the requests before it have run: an AUTH earlier in the same write lets
+a long request in, a RESET makes the limits apply to the next one, and a count taken
+while the server asked for no password stays taken once it asks for one. Inline
+requests have none. BendKV read such requests whole and answered them NOAUTH, and a
+count's line alone, or a long bulk's, left its connection waiting for bytes it would
+only refuse.
+
+**What changed** (`src/resp.bend`, `src/server.bend`).
+- The actor's answer to a client that has not authenticated (it came while a password
+  was set, or a RESET came since) is `AnsAuth`, with whether it must authenticate now,
+  and its connection keeps its tail as such a client's (`P.TailAuth`).
+- Such a tail's next parse first walks what came for the first request past a limit
+  (`P.lim.of`), through the lines that have come, read as the parser reads them
+  (`line_at`, `len.read`); a line not whole, or not right, ends the walk, as the parser
+  waits for it or refuses it itself. The walk passes over the lines the tail held
+  whole, looked at (or let in) when they came.
+- The requests before that one are parsed and run as any client's, and the bytes from
+  it are held (`P.TailHeld`). The answer to them says whether the client may send them
+  after all, and so does the actor's answer to `Must` when there is no request before
+  them: an AUTH among them, or a server that asks for no password now, lets them in. A
+  client that must authenticate is answered the error, and its connection ends as at
+  any protocol error; one let in has the held bytes parsed at once, its tail kept as
+  such a client's.
+- After a batch whose RESET made its client need a password, the request its tail holds
+  is looked at too, and a long request read in part is walked from its bulk not whole
+  yet, with its count and the arguments it has.
+
+**What it costs.** Every other client's answer is `Ans`, which leaves the tail as it is:
+its connection matches the tail once more after each answer, and the parse matches it
+once more, about 2 instructions a request under callgrind, and perfcheck counts what
+the build before counts (GET 3,499, SET 4,297 and INCR 4,613 instructions a request).
+The new paths reach `conn_batch` and `conn_put` through the defs that called them
+already (`conn_more`, and `conn_ans` again for an `AnsAuth`): a def called from a second
+place is entered through the work loop (section 8), and a first build that called the
+two from new places paid about 4 instructions a request for each.
+
+**Where BendKV differs.** A RESET followed, in the same read, by a whole request past a
+limit: BendKV parsed that request before the RESET ran, and answers it NOAUTH, where
+Redis refuses it with the protocol error. A client with a subscription is read without
+the limits; it can have one without authenticating only while its server asks for no
+password, and Redis limits it again once its server asks for one. And Redis also cuts
+off such a client once its replies not yet written pass 1024 bytes (unit/auth's test of
+an output buffer limited), which needs the accounting of output buffers BendKV does not
+have yet.
+
+`auth_test`'s scenario 13 runs against Redis: a count's line alone and a request of 11
+arguments, one of 10, a bulk's line past 16384 bytes before the bytes and with them, a
+bulk of 16384 bytes, an inline request of 13 words, requests before one past a limit, an
+AUTH, a failed AUTH and HELLO's AUTH before one in the same write, a RESET before a
+count's line and before a long request read in part, and a client that came while a
+password was set: once the password is removed, a request past a limit and the count's
+line of another, and once it is set again, the rest of that request (NOAUTH) and a
+count's line (refused). Redis's unit/auth, run with its `external:skip` tag taken off as
+section 3zzzh ran unit/acl, passes its test of these limits: 6 of the 7 tests Redis
+passes there.
 
 ## 3zzzzo. WAITAOF and the replication's offset, as Redis 7.2.16 counts them
 
