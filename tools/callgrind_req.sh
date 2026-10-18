@@ -10,8 +10,8 @@
 # pipeline depth 16 (PIPE), with values of DATA bytes (3, redis-benchmark's
 # default), and the flags of RB_FLAGS (-3: each client in RESP3); CG_FLAGS
 # adds flags to callgrind's (tools/perf_guard.sh: counts per instruction,
-# and L1 caches of a fixed size). IDLE ("blpop 100", "watch 1", "track 1",
-# "bcast 1", "events 1"): idle clients, held by tools/idle_clients.py from
+# and L1 caches of a fixed size). IDLE ("blpop 100", "xread 100", "watch 1",
+# "track 1", "bcast 1", "events 1"): idle clients, held by tools/idle_clients.py from
 # before the keys are set to the end. Prints, per request: instructions,
 # last-level data read misses, mispredicted indirect and conditional
 # branches. valgrind 3.22 cannot decode some code built with -march (a

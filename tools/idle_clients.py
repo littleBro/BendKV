@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """Holds N idle connections to a server until killed, for
 tools/waiters_bench.sh: in mode blpop each waits in BLPOP on a key of its
-own (a worker of a job queue), in mode watch each has sent WATCH on a key
+own (a worker of a job queue), in mode xread in XREAD BLOCK 0 on a stream
+of its own that is not there, in mode xreadgroup in XREADGROUP BLOCK 0 on
+a stream of its own and its group (made first, with MKSTREAM: such a
+client's key is never readied but by a write of it, as Redis counts it
+in total_blocking_keys_on_nokey), in mode watch each has sent WATCH on a key
 of its own and nothing since; in mode track each tracks keys (CLIENT
 TRACKING, in RESP3) and has read a key of its own, in mode bcast each
 tracks in BCAST mode a prefix of its own, which no other key has, in mode
@@ -16,7 +20,7 @@ bench (password pw), restricted as it may not run DEBUG, which the first
 makes, for redis-benchmark --user bench -a pw. Prints READY once all are
 in place.
 
-    python3 tools/idle_clients.py PORT blpop|watch|track|bcast|bcastkeys|events|acl|acluser N
+    python3 tools/idle_clients.py PORT blpop|xread|xreadgroup|watch|track|bcast|bcastkeys|events|acl|acluser N
 """
 import select
 import socket
@@ -39,6 +43,13 @@ def main():
         s = socket.create_connection(("127.0.0.1", port))
         if mode == "blpop":
             s.sendall(resp("BLPOP", "idle:q:%d" % i, "0"))
+        elif mode == "xread":
+            s.sendall(resp("XREAD", "BLOCK", "0", "STREAMS", "idle:x:%d" % i, "$"))
+        elif mode == "xreadgroup":
+            s.settimeout(5)
+            s.sendall(resp("XGROUP", "CREATE", "idle:g:%d" % i, "g", "$", "MKSTREAM"))
+            s.recv(64)
+            s.sendall(resp("XREADGROUP", "GROUP", "g", "c", "BLOCK", "0", "STREAMS", "idle:g:%d" % i, ">"))
         elif mode == "watch":
             s.sendall(resp("WATCH", "idle:w:%d" % i))
             s.settimeout(5)

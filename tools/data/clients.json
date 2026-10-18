@@ -1,7 +1,5 @@
 {
- "go-redis-resp3": {
-  "go-redis::[It] Commands streams should XRead": "ERR BendKV does not block on streams yet"
- },
+ "go-redis-resp3": {},
  "redis-py-resp2": {
   "tests.test_asyncio.test_commands.TestRedisCommands::test_module_list[pool]": "unknown command 'MODULE'",
   "tests.test_asyncio.test_commands.TestRedisCommands::test_module_list[single]": "unknown command 'MODULE'",

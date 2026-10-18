@@ -10,7 +10,8 @@ in stream_group_test.py); then
   they came, and the writes that read the clock resolved, as BendKV's
   scripts: XWSet's (a group's last ID and entries read, a consumer's
   seen and active times, the pending entries it got or lost, at their
-  times and with their counts) and XWDelCon's (a consumer deleted);
+  times and with their counts; an XREADGROUP that waited, its consumer
+  made as it began to wait) and XWDelCon's (a consumer deleted);
 - Redis started from BendKV's file holds the same streams, but for the
   consumers' seen and active times, which its XGROUP CREATECONSUMER and
   XCLAIM set to its own now;
@@ -49,6 +50,10 @@ def cmds():
             cmd("XGROUP", "CREATE", "s1", "g2", "$", "ENTRIESREAD", "6"),
             cmd("XGROUP", "CREATE", "s1", "g3", i(2)),
             cmd("XGROUP", "CREATE", "s1", "g4", "0", "ENTRIESREAD", "-1"),
+            # XREADGROUP that waits until its time is up: its consumer made
+            # as it began to wait (with NOACK, Redis logs its creation)
+            cmd("XREADGROUP", "GROUP", "g2", "cw", "BLOCK", "10", "STREAMS", "s1", ">"),
+            cmd("XREADGROUP", "GROUP", "g2", "cn", "BLOCK", "10", "NOACK", "STREAMS", "s1", ">"),
             cmd("XREADGROUP", "GROUP", "g1", "c1", "COUNT", "2", "STREAMS", "s1", ">"),
             cmd("XREADGROUP", "GROUP", "g1", "c2", "COUNT", "2", "STREAMS", "s1", ">"),
             cmd("XREADGROUP", "GROUP", "g1", "c1", "STREAMS", "s1", "0"),

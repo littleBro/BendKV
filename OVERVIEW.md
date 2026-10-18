@@ -335,8 +335,9 @@ REPLACE and ABSTTL (section 3zzu of docs/FINDINGS.md). A stream is a value BendK
 from RESTORE and the RDB file, its nodes Redis's listpacks byte for byte, with its groups
 (section 3zzzu of docs/FINDINGS.md); XLEN, XRANGE, XREVRANGE, XREAD, XINFO and XPENDING
 read it, XADD, XTRIM, XDEL and XSETID write it, and XGROUP, XREADGROUP, XACK, XCLAIM and
-XAUTOCLAIM write its groups, as Redis does (sections 3zzzy, 3zzzza and 3zzzzt); XREAD's
-and XREADGROUP's wait are not there yet.
+XAUTOCLAIM write its groups, as Redis does (sections 3zzzy, 3zzzza and 3zzzzt), and
+XREAD and XREADGROUP with BLOCK wait as Redis's do (section 3zzzzu, and clients that
+wait, below).
 The RDB file, as Redis 7.2.16 writes and reads it: SAVE writes it (`temp-<pid>.rdb`,
 synced, renamed onto `dbfilename`, the directory synced), SHUTDOWN saves it with SAVE or
 with save points, FLUSHALL with save points saves the emptied databases, and the start
@@ -361,14 +362,23 @@ cron (that is Redis's precision too); CLIENT UNBLOCK ends a wait with an empty a
 (TIMEOUT) or with the UNBLOCKED error (ERROR); a client that closed its connection while
 waiting is forgotten. `blocked_clients` and `clients_in_timeout_table` in INFO count
 them, and failed calls and errors are counted as Redis counts them. A command with
-replies turned off (CLIENT REPLY OFF or SKIP) pops as it does with them on. Where BendKV
-differs: Redis serves the clients of the keys a command added (`signalKeyAsReady` from
-`dbAdd`), key by key in order of readiness, while BendKV looks at all waiting clients,
-in order of their arrival, after each command that may make one ready (one that may
-write a key a client waits on, or a command of the connection or of the server); there
-is no XREAD, WAIT's wait ends only by its time or CLIENT UNBLOCK, and WAITAOF's by
-those or the append-only file's sync (below). In a
-transaction a blocking command does not wait, as in Redis (below).
+replies turned off (CLIENT REPLY OFF or SKIP) pops as it does with them on. XREAD and
+XREADGROUP with BLOCK (milliseconds; 0 means wait forever) wait as Redis 7.2.16 has them
+wait: XREAD's `$` is read as its key's last ID when its client begins to wait, and
+XREADGROUP's consumers are made then; the client runs its command again, as it came,
+once a command (or EXEC, or a script) is done that added to a key it waits on, made or
+deleted the key, changed its kind, replaced it, or destroyed one of its groups: XREAD's
+when the key is a stream then, XREADGROUP's whatever the key holds (it then answers
+NOGROUP or WRONGTYPE); one whose read would wait again goes on waiting, at the end of
+the line, until its time as it was. Where BendKV differs: Redis serves the clients of
+the keys a command added (`signalKeyAsReady` from `dbAdd`), key by key in order of
+readiness, while BendKV looks at all waiting clients, in order of their arrival, after
+each command that may make one ready (one that may write a key a client waits on, or a
+command of the connection or of the server); a stream whose time has passed readies its
+clients when the sweep of expired keys deletes it, not when a command finds it expired;
+WAIT's wait ends only by its time or CLIENT UNBLOCK, and WAITAOF's by those or the
+append-only file's sync (below). In a transaction a blocking command does not wait, as
+in Redis (below).
 Transactions: MULTI, EXEC, DISCARD, WATCH and UNWATCH, as Redis 7.2.16 runs them. After
 MULTI a command is queued (QUEUED), except EXEC, DISCARD, MULTI (an error: transactions
 do not nest), WATCH (an error inside MULTI), QUIT and RESET, which run; a command refused
@@ -958,20 +968,19 @@ The translation the kernel reads can be dumped with
   skipped. The reference is the same run on redis-server 7.2.16 with default settings,
   each unit on a freshly started server instance: in this mode 1,905 tests run, and
   Redis passes 1,812 (almost all the others need DEBUG, off by default in 7). BendKV
-  passes 1,719 of them (94.9%), and in the units of what it has (the protocol, the
+  passes 1,741 of them (96.1%), and in the units of what it has (the protocol, the
   connection and clients and their pause, the keyspace and databases, strings with
   ranges, bits and fields, counters, hashes, lists, sets, sorted sets, SORT, HyperLogLogs,
   GEO, DUMP and RESTORE, times to live, lazy freeing, transactions, Pub/Sub and keyspace
   notifications, introspection, the slow log and the latency monitor, client-side
   caching, ACL users, Lua scripts and functions), 1,644 of 1,688 (97.4%); streams' values,
-  reads, writes and groups pass 75 of the 122 tests of `unit/type/stream` and
+  reads, writes, groups and waits pass 97 of the 122 tests of `unit/type/stream` and
   `unit/type/stream-cgroups` that Redis passes. The others stop on commands that do not
   exist (30 tests: SYNC, MIGRATE…), do not run because the unit stopped earlier (24), or
-  fail on XREAD's and XREADGROUP's wait, on clients left in MULTI by a test that failed on
-  a command that does not exist, and on what the list in docs/COMPATIBILITY.md gives
-  (39). Against Redis 7.0.15, whose suite runs 1,757 tests
-  in this mode, BendKV passed 1,556 of the 1,677 that Redis passed (92.8%), and 1,516
-  of 1,565 in the units of what it has. Times to live and
+  fail on clients left in MULTI by a test that failed on a command that does not exist,
+  and on what the list in docs/COMPATIBILITY.md gives (17). Against Redis 7.0.15, whose
+  suite runs 1,757 tests in this mode, BendKV passed 1,556 of the 1,677 that Redis passed
+  (92.8%), and 1,516 of 1,565 in the units of what it has. Times to live and
   the sweep of expired keys added 78 passed tests: before them there were 135, and 30
   tests failed on SET's options; ranges and bits added 49 more, TOUCH, TIME and OBJECT
   4, MSETNX, RENAME and RENAMENX 13, COPY 7, BITOP and LCS 19, BITFIELD 16, hashes 64,
@@ -1007,9 +1016,9 @@ The translation the kernel reads can be dumped with
   RESP2 and in RESP3, and go-redis v9.23.0's specs, in RESP3, each against Redis 7.2.16
   and against BendKV, each on a server started for it, without their tests of modules,
   clusters, sentinels and TLS. Of the tests Redis passes, BendKV passes 2,768 of 2,772 in
-  redis-py, the same tests in RESP2 and in RESP3, and 462 of 463 in go-redis; every other
-  one fails on what BendKV does not have (XREAD's wait, MODULE, REPLICAOF, and COMMAND's
-  entry of MIGRATE), none on a command BendKV has
+  redis-py, the same tests in RESP2 and in RESP3, and all 463 in go-redis; every other
+  one fails on what BendKV does not have (MODULE, REPLICAOF, and COMMAND's entry of
+  MIGRATE), none on a command BendKV has
   otherwise. A test Redis passes that BendKV fails, and that is not among the
   known failures of `tools/data/clients.json`, fails CI.
 - **Differential testing against Redis 7.2.16** (`tests/diff_test.py`). Random streams
@@ -1050,7 +1059,11 @@ The translation the kernel reads can be dumped with
   RENAME, MOVE and SWAPDB, CLIENT REPLY OFF, INFO's statistics); then 300 clients
   served at once, 100 timeouts at once, clients that leave while they wait, and 50
   consumers moving 1,000 elements while some of them leave (section 41 of
-  docs/PERFORMANCE.md).
+  docs/PERFORMANCE.md). `tests/stream_block_test.py`, in each server mode too: 41
+  scenarios of XREAD and XREADGROUP with BLOCK on BendKV and on Redis, their transcripts
+  compared line by line (the writes that serve a client and those that do not, `$`,
+  timeouts, CLIENT UNBLOCK and KILL, a stream that expires, XREADGROUP's consumers,
+  INFO's counts, the keyspace events, RESP3; section 3zzzzu of docs/FINDINGS.md).
 - **Transactions** (`tests/multi_test.py`, in each server mode): 13 scenarios of MULTI,
   EXEC, DISCARD, WATCH and UNWATCH on BendKV and on Redis, their transcripts compared
   line by line (replies of all kinds and SELECT inside, DISCARD, a nested MULTI, WATCH
@@ -1620,7 +1633,7 @@ make clients BEND="$B" # redis-py's and go-redis's test suites on Redis and on B
    FLUSHDB, FLUSHALL, keyspace lines per database — with laws and recovery of all the
    databases from the append-only file), the ranges and bits of strings (GETRANGE,
    SETRANGE, GETBIT, SETBIT, BITCOUNT, BITPOS — with a law of SETRANGE and recovery from
-   the append-only file). Redis's suite in external mode: BendKV passes 1,719 of the
+   the append-only file). Redis's suite in external mode: BendKV passes 1,741 of the
    1,812 tests Redis 7.2.16 itself passes, and 1,644 of 1,688 in the units of what it has
    ([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)). Start-up as for redis-server (the
    command line and the configuration file). The database as a record with a count of

@@ -26,10 +26,9 @@ inactive; XPENDING) is now less a time, read by each server at its own
 now: two that differ by less than 2 s count as the same (an inactive of
 -1, a consumer that has read nothing, only as -1).
 
-XREAD with BLOCK is served when an entry is there; BendKV blocks on no
-stream yet, so where Redis would wait it answers an error, which the
-test checks on BendKV alone. In MULTI, where Redis does not wait, both
-answer a null array.
+XREAD with BLOCK is served when an entry is there; where it would wait,
+tests/stream_block_test.py has its clients wait. In MULTI, where Redis
+does not wait, both answer a null array.
 
     python3 tests/stream_read_test.py --bendkv 6380 --redis 6390 [--seed 1]
 """
@@ -312,16 +311,6 @@ def shape_reads(b, r, shape, rnd, conns):
         batch(bc, rc, pendings(gs, r, bs, rnd), loose=True, xpend=True)
 
 
-def block_alone(b):
-    global n
-    for c, want in ((cmd("XREAD", "BLOCK", 0, "STREAMS", "s", "$"), b"ERR BendKV does not block on streams yet"),
-                    (cmd("XREAD", "BLOCK", 100, "STREAMS", "nokey", "s", "$", "$"), b"ERR BendKV does not block on streams yet")):
-        n += 1
-        x = run(b, c)
-        if x != (b"-", want):
-            fail(b" ".join(c), x, "(BendKV alone) -" + want.decode())
-
-
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--bendkv", type=int, default=6380)
@@ -349,7 +338,6 @@ def main():
             shape_reads(b, r, shape, rnd, conns)
             for (bc, rc) in conns:
                 batch(bc, rc, errors(), loose=True, xpend=True)
-        block_alone(b)
         t = time.time()
         big = big_shape()
         p = make(r, big)
