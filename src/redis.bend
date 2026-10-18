@@ -21569,13 +21569,16 @@ def xadd.res.chk(gt: Bool, big: Bool, +nid: KV.XId, tr: XTo, +id: XAId, +w: Stri
     case True{} False{}:
       XRsOk{xadd.trw(tr, x, nid, fv, nf, tot, Bool.pick(String, xaid.at(id), w, X.xid.show(nid)) <> fv)}
 
+# no ID to add: <ms>-* past the last sequence of ms, which Redis's
+# streamAppendItem refuses as an ID not past the last (EDOM); * always
+# has one, the stream not exhausted (checked before)
 def xadd.res.at(m: Maybe<&2, KV.XId>, a: XA, +x: KV.XStream) -> XRs:
   match m a:
     case Some{+nid} XA{nomk, tr, +id, +w, +fv, +nf}:
       +tot = X.xe.tot(fv, 0n)
       xadd.res.chk(Cmp.is_gt(KV.xid.cmp(nid, X.xstream.last(x))), Nat.is_lt(1073741824n, tot), nid, tr, id, w, fv, nf, tot, x)
     case None{} XA{nomk, tr, id, w, fv, nf}:
-      XRsBad{e_xlarge()}
+      XRsBad{e_xsmall()}
     case _ XABad{r}:
       XRsBad{r}
 
