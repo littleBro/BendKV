@@ -17808,6 +17808,48 @@ def zq.scores(q: ZQ) -> Bool:
 def zq.reply(+q: ZQ, +z: KV.Zset) -> Reply:
   zels.reply(zq.run(q, z), zq.scores(q))
 
+# whether a read is of a range of ranks
+def zrng.ranks(r: ZRng) -> Bool:
+  match r:
+    case ZRankR{a, b}:
+      True{}
+    case ZScoreR{lo, hi}:
+      False{}
+    case ZLexR{lo, hi}:
+      False{}
+
+def zq.ranks(q: ZQ) -> Bool:
+  match q:
+    case ZQ{r, off, cnt, ws}:
+      zrng.ranks(r)
+    case ZQRev{q}:
+      zq.ranks(q)
+
+# The elements ZRANGESTORE sets at its destination, as Redis 7.2 adds them
+# to the sorted set it makes (t_zset.c's zrangeResultBeginStore): a range
+# of ranks sizes it by their count, as a ZADD's pairs size it
+# (zadd.sized), and a range of scores or members starts it as a listpack,
+# where its first elements, up to 128 and up to the first member past 64
+# bytes, keep a score of -0 as 0, before it turns a skiplist (zels.lp: on
+# while the listpack holds them, i of them before).
+def zels.lp(xs: List<&2, KV.ZEl>, +on: Bool, +i: Nat) -> List<&2, KV.ZEl>:
+  match xs:
+    case Nil{}:
+      Nil{}
+    case Con{KV.ZEl{+m, +d}, rest}:
+      +lp = Bool.and(on, Bool.and(Nat.is_lt(i, 128n), Nat.is_le(String.length(m), 64n)))
+      KV.ZEl{m, Bool.pick(F.F64, lp, KV.zset.norm(d), d)} <> zels.lp(rest, lp, 1n+i)
+
+def zq.lp(ranks: Bool, xs: List<&2, KV.ZEl>) -> List<&2, KV.ZEl>:
+  match ranks:
+    case True{}:
+      xs
+    case False{}:
+      zels.lp(xs, True{}, 0n)
+
+def zq.stored(+q: ZQ, +z: KV.Zset) -> List<&2, KV.ZEl>:
+  zq.lp(zq.ranks(q), zq.run(q, z))
+
 # ZCOUNT: the elements between the ranks of its bounds; ZLEXCOUNT: of a
 # small sorted set, those its range by member holds (as above), of a
 # large one, those between the ranks of its bounds
@@ -20165,12 +20207,28 @@ def zadd.res(st: ZAdd, +fresh: Bool, +o: ZOpts, +ps: List<&2, ZPair>) -> Out:
     case ZAdd{z, +added, +upd, +done, +last}:
       Out{zadd.reply(o, added, upd, done, last), zadd.ch(Nat.is_eq(Nat.add(added, upd), 0n), fresh, o, ps, z)}
 
+# Redis 7.2's ZADD sizes its sorted set by its pairs before it adds them
+# (t_zset.c's zsetTypeCreate for a key not there, zsetTypeMaybeConvert for
+# a listpack): more than 128, duplicates counted, make it a skiplist
+# (KV.zset.large), however many members they hold, and a skiplist keeps a
+# score of -0. The sorted set of a ZADD that adds and changes nothing is
+# left as it was, where Redis's turns a skiplist all the same.
+def zadd.sized.of(big: Bool, z: KV.Zset) -> KV.Zset:
+  match big:
+    case True{}:
+      KV.zset.large(z)
+    case False{}:
+      z
+
+def zadd.sized(+n: Nat, z: KV.Zset) -> KV.Zset:
+  zadd.sized.of(Nat.is_lt(128n, n), z)
+
 def zadd.fin(err: Maybe<&2, Reply>, +fresh: Bool, +o: ZOpts, +ps: List<&2, ZPair>, z: KV.Zset) -> Out:
   match err:
     case Some{r}:
       Out{r, CKeep{}}
     case None{}:
-      zadd.res(zadd.go(ps, o, ZAdd{z, 0n, 0n, 0n, F.F64{0n, 0n}}), fresh, o, ps)
+      zadd.res(zadd.go(ps, o, ZAdd{zadd.sized(List.length(&2, ZPair, ps), z), 0n, 0n, 0n, F.F64{0n, 0n}}), fresh, o, ps)
 
 def zadd.out(+fresh: Bool, +o: ZOpts, +ps: List<&2, ZPair>, z: KV.Zset) -> Out:
   zadd.fin(zadd.check(o, ps), fresh, o, ps, z)
@@ -22536,6 +22594,50 @@ def zop.reply(+op: ZSetK, g: ZGot) -> Reply:
     case ZGotWrong{}:
       e_wrongtype()
 
+# The elements ZUNIONSTORE, ZINTERSTORE and ZDIFFSTORE set at their
+# destination, as Redis makes it (zunionInterDiffGenericCommand): a
+# skiplist of them, which keeps a score of -0, turned a listpack when it
+# holds at most 128 elements and none of a member past 64 bytes
+# (zsetConvertToListpackIfNeeded). The ZADD of ZWNew sizes its sorted set
+# by its pairs (zadd.sized) and makes it a skiplist at its first member
+# past 64 bytes, so the first such element comes first (zels.long), and
+# its sorted set is a skiplist from its first pair.
+def zels.first.long(xs: List<&2, KV.ZEl>) -> Maybe<&2, KV.ZEl>:
+  match xs:
+    case Nil{}:
+      None{}
+    case Con{KV.ZEl{+m, +d}, rest}:
+      Bool.pick(Maybe<&2, KV.ZEl>, Nat.is_lt(64n, String.length(m)), Some{KV.ZEl{m, d}}, zels.first.long(rest))
+
+def zels.cons.if(keep: Bool, x: KV.ZEl, xs: List<&2, KV.ZEl>) -> List<&2, KV.ZEl>:
+  match keep:
+    case True{}:
+      x <> xs
+    case False{}:
+      xs
+
+# xs without its first element of a member past 64 bytes (seen: taken)
+def zels.but.long(xs: List<&2, KV.ZEl>, +seen: Bool) -> List<&2, KV.ZEl>:
+  match xs:
+    case Nil{}:
+      Nil{}
+    case Con{KV.ZEl{+m, +d}, rest}:
+      +take = Bool.and(Bool.not(seen), Nat.is_lt(64n, String.length(m)))
+      zels.cons.if(Bool.not(take), KV.ZEl{m, d}, zels.but.long(rest, Bool.or(seen, take)))
+
+def zels.long.of(f: Maybe<&2, KV.ZEl>, xs: List<&2, KV.ZEl>) -> List<&2, KV.ZEl>:
+  match f:
+    case None{}:
+      xs
+    case Some{e}:
+      e <> zels.but.long(xs, False{})
+
+def zels.long(+xs: List<&2, KV.ZEl>) -> List<&2, KV.ZEl>:
+  zels.long.of(zels.first.long(xs), xs)
+
+def zop.stored(+op: ZSetK, ss: List<&2, ZSrc>) -> List<&2, KV.ZEl>:
+  zels.long(zop.els(op, ss))
+
 # the pairs of a STORE's ZADD: each score as Redis writes a double, and
 # its member
 def zstore.pairs(xs: List<&2, KV.ZEl>) -> List<&2, ZPair>:
@@ -22560,7 +22662,7 @@ def zstore.ok(bad: Maybe<&2, Reply>, +op: ZSetK, ss: List<&2, ZSrc>, +d: String,
     case Some{r}:
       (r, db)
     case None{}:
-      zstore.of(zop.els(op, ss), d, db)
+      zstore.of(zop.stored(op, ss), d, db)
 
 def zstore.do(g: ZGot, +op: ZSetK, +d: String, db: Db) -> Reply & Db:
   match g:
@@ -22581,7 +22683,7 @@ def zrs.of(m: Maybe<&2, KV.Val>, q: ZQ, +d: String, db: Db) -> Reply & Db:
     case None{}:
       zstore.of(Nil{}, d, db)
     case Some{KV.VColl{KV.CZset{+z}}}:
-      zstore.of(zq.run(q, z), d, db)
+      zstore.of(zq.stored(q, z), d, db)
     case Some{v}:
       (e_wrongtype(), db)
 

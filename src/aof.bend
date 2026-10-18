@@ -363,7 +363,7 @@ def zstore.ok(bad: Maybe<&2, R.Reply>, +op: R.ZSetK, ss: List<&2, R.ZSrc>, +d: S
     case Some{r}:
       (r, (Nil{}, db))
     case None{}:
-      zstore.eff(R.zop.els(op, ss), d, db)
+      zstore.eff(R.zop.stored(op, ss), d, db)
 
 def zstore.run(g: R.ZGot, +op: R.ZSetK, +d: String, db: R.Db) -> R.Reply & (List<&2, R.Cmd> & R.Db):
   match g:
@@ -381,7 +381,7 @@ def zrs.run(m: Maybe<&2, KV.Val>, q: R.ZQ, +d: String, db: R.Db) -> R.Reply & (L
     case None{}:
       zstore.eff(Nil{}, d, db)
     case Some{KV.VColl{KV.CZset{+z}}}:
-      zstore.eff(R.zq.run(q, z), d, db)
+      zstore.eff(R.zq.stored(q, z), d, db)
     case Some{v}:
       (R.e_wrongtype(), (Nil{}, db))
 

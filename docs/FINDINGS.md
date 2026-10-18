@@ -10369,6 +10369,48 @@ a set or a sorted set 32 bytes less a key, as a collection's value is no longer 
 as a list's deque. GET, SET and INCR run as before: 3,504, 4,298 and 4,611 instructions a
 request merged with 5a2ff7c, which counts 3,501, 4,301 and 4,609.
 
+## 3zzzzm. Sorted sets sized by ZADD's pairs, as Redis 7.2.16 sizes them
+
+**What differed.** A differential run against Redis 7.2.16 (`diff_test`, seed 1)
+answered ZSCAN of a sorted set with scores of 0 where Redis's were -0. A ZADD of 130
+pairs, of 94 members, had made the key. Redis 7.2 sizes a sorted set by a ZADD's pairs
+before it adds them, duplicates counted (`t_zset.c`'s `zsetTypeCreate` for a key not
+there, `zsetTypeMaybeConvert` for a listpack): more than 128 make a skiplist however
+many members they hold. Redis 7.0 grew a listpack an element at a time, as BendKV did,
+and turned it a skiplist at its 129th member. A listpack keeps an integral score as an
+integer and a skiplist keeps the double, so a skiplist answers -0 where a listpack
+answers 0, and OBJECT ENCODING tells them apart.
+
+**What changed** (`src/map.bend`, `src/redis.bend`, `src/aof.bend`, `proof/SPEC.bend`,
+`proof/PROOF.bend`).
+- `KV.zset.large` makes a small sorted set large with the same elements, and
+  `zadd.sized` makes ZADD's sorted set large before its pairs when they are more than
+  128. GEOADD's points are ZADD's pairs, as in Redis.
+- A STORE writes its destination as the ZADD of its elements on a key not there
+  (`ZWNew`), which now sizes it, so each STORE gives that ZADD its elements as Redis
+  would leave them. ZRANGESTORE sizes its destination by a range of ranks, and starts a
+  range of scores or members as a listpack (`zrangeResultBeginStore`), whose first
+  elements, up to the 128th and up to the first member past 64 bytes, keep a -0 as 0
+  (`zq.stored`). ZUNIONSTORE, ZINTERSTORE and ZDIFFSTORE make a skiplist, turned a
+  listpack only when it holds at most 128 elements and no member past 64 bytes
+  (`zsetConvertToListpackIfNeeded`): their first element of such a member comes first in
+  the ZADD (`zop.stored`), so that a destination with one is a skiplist from its first
+  pair. Before this change a STORE of more than 128 elements lost the sign of a -0
+  score, and one with a long member lost it in the elements before that member.
+- The spec's STOREs read their elements as `R.zop.stored` and `R.zq.stored` give them,
+  and no law changes. The proofs of ZADD's change start from the sized sorted set: the
+  sizing leaves a large one as it is (`big_sized_of`), and under XX a ZADD adds nothing
+  to the sized empty one (`zadd_xx_sized`).
+- Left as it was: a ZADD of more than 128 pairs that adds and changes nothing leaves a
+  listpack as it was, where Redis's turns a skiplist all the same, as BendKV leaves
+  untouched the key of a write that changes nothing.
+
+`zset_test` adds ZADDs of 128, 129 and 130 pairs (of 94 members) on a key not there and
+on a listpack, GEOADDs of 128 and 130 points, and ZRANGESTORE by rank, by score with and
+without LIMIT, and by member in reverse, from a skiplist of 200 elements and from one
+with a member of 70 bytes, then ZUNIONSTORE, ZINTERSTORE and ZDIFFSTORE, each read by
+its encoding and its scores of -0, against Redis.
+
 ## 4. Where a request's time goes, and hiding the memory waits
 
 With the eight patches, BendKV ran fewer instructions on GET and SET than Redis, missed
