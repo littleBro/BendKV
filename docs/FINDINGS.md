@@ -10200,8 +10200,8 @@ them whole only alone in its group:
 `tools/redis_suite.py` runs Redis 7.2.16's `tests/unit` in its external mode, against
 redis-server 7.2.16 and against BendKV, as it ran 7.0.15's (docs/COMPATIBILITY.md).
 7.2.16's suite runs 1,905 tests in this mode, where 7.0.15's ran 1,757, and Redis passes
-1,812 of them (1,677). BendKV passed 1,657 at first (91.4%), and passes 1,672 (92.3%)
-since the three changes below.
+1,812 of them (1,677). BendKV passed 1,657 at first (91.4%), and passes 1,673 (92.3%)
+since the four changes below.
 
 **A HyperLogLog's walks read to its end.** unit/hyperloglog has a test of the fix of
 CVE-2025-32023: a sparse HyperLogLog of 32 MB of ZERO opcodes, 64 registers each, and a
@@ -10240,7 +10240,18 @@ runs at once: one for BLPOP, BRPOP, BLMOVE, BRPOPLPUSH, BZPOPMIN and BZPOPMAX, t
 elements for BLMPOP and BZMPOP. `blocking_test` serves each of the six against Redis
 and compares `rdb_changes_since_last_save` after it.
 
-**What it did not change.** Of the 140 tests Redis passes and BendKV does not, the new
+**The changes BITFIELD counts.** Redis 7.2.16 counts a write of BITFIELD (a SET or an
+INCRBY that no FAIL stops) as a change when it changes its field's bits, or whatever it
+writes when the value grows (`bitfieldGeneric`), where 7.0.15 counted each; SETBIT
+counted so already in 7.0.15, and BendKV with it. unit/bitops's "SETBIT/BITFIELD only
+increase dirty when the value changed" expects no change for a BITFIELD SET of the
+value already there. The run of BITFIELD's operations counts them now as it makes the
+value (`BfRun`'s `n`, src/redis.bend), and the weight of a call (`R.bitfield.changes`)
+is that count, its rule the weight of a call that answered (src/server.bend).
+`bitfield_test` compares the changes each of its commands counts with Redis, a SETBIT
+among them now and then.
+
+**What it did not change.** Of the 139 tests Redis passes and BendKV does not, the new
 ones of 7.2.16:
 - unit/hyperloglog's two that set `hll-sparse-max-bytes` and expect a HyperLogLog to turn
   dense past it.

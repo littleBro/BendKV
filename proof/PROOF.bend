@@ -9569,7 +9569,7 @@ def bf_res_none(ch: Bool, +r: R.Reply, +lo: Nat, +sp: String, -m: Maybe<&2, KV.I
 
 def bf_none(st: R.BfRun, +lo: Nat, -m: Maybe<&2, KV.Item<KV.Val>>) -> Good(m, ch_of(R.bf.fin(st, lo, None{}))):
   match st:
-    case R.BfRun{+sp, ch, rs}:
+    case R.BfRun{+sp, ch, rs, g, n}:
       bf_res_none(ch, R.RArray{List.reverse(&2, R.Reply, rs)}, lo, sp, m)
 
 def bf_put_some(ok: Bool, +r: R.Reply, +lo: Nat, +sp: String, +w: String, +e: Nat) -> Good(Some{KV.Item{KV.VStr{w}, e}}, ch_of(R.bf.put(ok, r, lo, sp, Some{KV.Item{w, e}}))):
@@ -9589,7 +9589,7 @@ def bf_res_some(ch: Bool, +r: R.Reply, +lo: Nat, +sp: String, +w: String, +e: Na
 
 def bf_some(st: R.BfRun, +lo: Nat, +w: String, +e: Nat) -> Good(Some{KV.Item{KV.VStr{w}, e}}, ch_of(R.bf.fin(st, lo, Some{KV.Item{w, e}}))):
   match st:
-    case R.BfRun{+sp, ch, rs}:
+    case R.BfRun{+sp, ch, rs, g, n}:
       bf_res_some(ch, R.RArray{List.reverse(&2, R.Reply, rs)}, lo, sp, w, e)
 
 # A write of a hash: a new one's change is good whatever the key's entry

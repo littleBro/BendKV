@@ -198,6 +198,9 @@ parts of it are written from 7.2.16's sources:
   HyperLogLog's opcodes, which end at the first past the last register
   (hyperloglog.c's hllSparseRegHisto, hllMerge and hllSparseToDense), in
   src/hll.bend.
+- The changes BITFIELD counts: each write that changed its field, or
+  each when the value grows (bitops.c's bitfieldGeneric), in
+  src/redis.bend and src/server.bend.
 
 Bend (bend-patches/): patches to the Bend compiler and its runtime
 (github.com/bendlang/bend at 1cce499, Bend 2.0.35), Copyright 2026

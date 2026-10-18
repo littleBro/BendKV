@@ -291,20 +291,13 @@ def d.zadd(+r: R.Reply, +w: Nat) -> Nat:
     case _:
       0n
 
-# (a loop, as d.len)
-def d.nulls(+xs: List<&2, R.Reply>, +acc: Nat) -> Nat:
-  match xs:
-    case Nil{}:
-      acc
-    case Con{R.RNull{}, +rest}:
-      d.nulls(rest, 1n+acc)
-    case Con{+x, +rest}:
-      d.nulls(rest, acc)
-
+# BITFIELD: its writes that count as changes (R.bitfield.changes, as
+# Redis 7.2.16 counts them: each that changed its field, or each when the
+# value grows), when it ran
 def d.bitfield(+r: R.Reply, +w: Nat) -> Nat:
   match r:
     case R.RArray{+xs}:
-      Nat.sub(w, d.nulls(xs, 0n))
+      w
     case _:
       0n
 
@@ -410,16 +403,6 @@ def dw.bit(+off: Nat, +on: Bool, +m: Maybe<&2, KV.Item<KV.Val>>) -> Nat:
       0n
     case None{}:
       1n
-
-# BITFIELD: its SETs and INCRBYs
-def dw.bf(+ops: List<&2, R.BfOp>) -> Nat:
-  match ops:
-    case Nil{}:
-      0n
-    case Con{R.BfGet{+s, +b, +o}, +rest}:
-      dw.bf(rest)
-    case Con{+x, +rest}:
-      1n+dw.bf(rest)
 
 # LTRIM: the elements out of its range, of the list there
 def dw.kept(+sp: R.LSpan, +n: Nat) -> Nat:
@@ -613,7 +596,7 @@ def dw.upd(+op: R.UpdOp, +k: String, +ds: R.Ds) -> Nat:
     case R.USetBit{+off, +on}:
       dw.bit(off, on, R.ds.ent(ds, k))
     case R.UBitfield{+ops}:
-      dw.bf(ops)
+      R.bitfield.changes(ops, R.ds.ent(ds, k))
     case R.UHash{R.HWSet{+ps, +mset}}:
       List.length(&2, KV.HPair, ps)
     case R.UHash{R.HWNew{+ps}}:

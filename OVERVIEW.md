@@ -940,19 +940,19 @@ The translation the kernel reads can be dumped with
   skipped. The reference is the same run on redis-server 7.2.16 with default settings,
   each unit on a freshly started server instance: in this mode 1,905 tests run, and
   Redis passes 1,812 (almost all the others need DEBUG, off by default in 7). BendKV
-  passes 1,672 of them (92.3%), and in the units of what it has (the protocol, the
+  passes 1,673 of them (92.3%), and in the units of what it has (the protocol, the
   connection and clients and their pause, the keyspace and databases, strings with
   ranges, bits and fields, counters, hashes, lists, sets, sorted sets, SORT, HyperLogLogs,
   GEO, DUMP and RESTORE, times to live, lazy freeing, transactions, Pub/Sub and keyspace
   notifications, introspection, the slow log and the latency monitor, client-side
-  caching, ACL users, Lua scripts and functions), 1,631 of 1,688 (96.6%); streams' values,
+  caching, ACL users, Lua scripts and functions), 1,632 of 1,688 (96.7%); streams' values,
   reads and writes pass 41 of the 122 tests of `unit/type/stream` and
   `unit/type/stream-cgroups` that Redis passes. The others stop on commands that do not
   exist (74 tests: XGROUP, SYNC…), do not run because the unit stopped earlier (24), or
   fail on XREAD's wait and streams' groups, on clients left in MULTI or subscribed by
   tests that failed on a command that does not exist, on `hll-sparse-max-bytes`, which
   BendKV does not read, on RANDOMKEY during a pause, and on what the list in
-  docs/COMPATIBILITY.md gives (42). Against Redis 7.0.15, whose suite runs 1,757 tests
+  docs/COMPATIBILITY.md gives (41). Against Redis 7.0.15, whose suite runs 1,757 tests
   in this mode, BendKV passed 1,556 of the 1,677 that Redis passed (92.8%), and 1,516
   of 1,565 in the units of what it has. Times to live and
   the sweep of expired keys added 78 passed tests: before them there were 135, and 30
@@ -1603,8 +1603,8 @@ make clients BEND="$B" # redis-py's and go-redis's test suites on Redis and on B
    FLUSHDB, FLUSHALL, keyspace lines per database — with laws and recovery of all the
    databases from the append-only file), the ranges and bits of strings (GETRANGE,
    SETRANGE, GETBIT, SETBIT, BITCOUNT, BITPOS — with a law of SETRANGE and recovery from
-   the append-only file). Redis's suite in external mode: BendKV passes 1,672 of the
-   1,812 tests Redis 7.2.16 itself passes, and 1,631 of 1,688 in the units of what it has
+   the append-only file). Redis's suite in external mode: BendKV passes 1,673 of the
+   1,812 tests Redis 7.2.16 itself passes, and 1,632 of 1,688 in the units of what it has
    ([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)). Start-up as for redis-server (the
    command line and the configuration file). The database as a record with a count of
    keys (DBSIZE in O(1)).

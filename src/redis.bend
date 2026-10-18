@@ -19049,10 +19049,13 @@ def bf.span(+w: String, +lo: Nat, +end: Nat) -> String:
   +s = String.take(String.drop(w, lo), Nat.sub(end, lo))
   s ++ zeros(Nat.sub(Nat.sub(end, lo), String.length(s)))
 
-# the span, whether a write changed the value (or it grows), and the
-# replies so far, reversed
+# the span, whether a write changed the value (or it grows), the replies
+# so far, reversed, whether the value grows (g), and the writes that count
+# as changes (n), as Redis 7.2.16's bitfieldGeneric counts them: each
+# that changed its field, or each when the value grows (a FAIL's
+# overflow, which writes nothing, none)
 type BfRun is Data:
-  BfRun{sp: String, ch: Bool, rs: List<&2, Reply>}
+  BfRun{sp: String, ch: Bool, rs: List<&2, Reply>, g: Bool, n: Nat}
 
 # an overflow (Redis's checkSignedBitfieldOverflow and
 # checkUnsignedBitfieldOverflow, whose sums wrap as here): 0 none, 1 past
@@ -19127,33 +19130,34 @@ def bf.wb(k: Nat, +w: String, +sp: String, +lo: Nat, +i: Nat, +q: Nat, +s: Nat, 
 # a write of a field's new value nv, its bits raw before; the reply is the
 # old value (SET) or the new one (INCRBY), or a null for a FAIL's
 # overflow, which writes nothing
-def bf.wr.do(fail: Bool, +set: Bool, +bits: Nat, +off: Nat, +w: String, +lo: Nat, +raw: W64, +old: W64, +nv: W64, +sp: String, +ch: Bool, rs: List<&2, Reply>) -> BfRun:
+def bf.wr.do(fail: Bool, +set: Bool, +bits: Nat, +off: Nat, +w: String, +lo: Nat, +raw: W64, +old: W64, +nv: W64, +sp: String, +ch: Bool, rs: List<&2, Reply>, +g: Bool, +n: Nat) -> BfRun:
   match fail:
     case True{}:
-      BfRun{sp, ch, RNull{} <> rs}
+      BfRun{sp, ch, RNull{} <> rs, g, n}
     case False{}:
       +nb = w64.and(nv, w64.low(bits))
       +s = Nat.mod(off, 8n)
       +e = Nat.add(s, bits)
       +i = Nat.div(off, 8n)
-      BfRun{range.put(sp, Nat.sub(i, lo), bf.wb(Nat.div(Nat.add(e, 7n), 8n), w, sp, lo, i, 0n, s, e, nb)), Bool.or(ch, Bool.not(w64.eq(nb, raw))), RIntS{w64.show(Bool.pick(W64, set, old, nv))} <> rs}
+      +d = Bool.not(w64.eq(nb, raw))
+      BfRun{range.put(sp, Nat.sub(i, lo), bf.wb(Nat.div(Nat.add(e, 7n), 8n), w, sp, lo, i, 0n, s, e, nb)), Bool.or(ch, d), RIntS{w64.show(Bool.pick(W64, set, old, nv))} <> rs, g, Bool.pick(Nat, Bool.or(g, d), 1n+n, n)}
 
 # a SET (set) of v, or an INCRBY by v, of a field of bits bits at bit
 # offset off, under the overflow ow (0 WRAP, 1 SAT, 2 FAIL)
 def bf.wr(+set: Bool, +sign: Bool, +bits: Nat, +off: Nat, +v: W64, +ow: Nat, +w: String, +lo: Nat, st: BfRun) -> BfRun:
   match st:
-    case BfRun{+sp, +ch, rs}:
+    case BfRun{+sp, +ch, rs, +g, +n}:
       +raw = bf.field(w, sp, lo, bits, off)
       +old = bf.val(sign, raw, bits)
       +value = Bool.pick(W64, set, v, old)
       +incr = Bool.pick(W64, set, w64.zero(), v)
       +o = bf.over.of(sign, value, incr, bits)
-      bf.wr.do(Bool.and(Nat.is_lt(0n, o), Nat.is_eq(ow, 2n)), set, bits, off, w, lo, raw, old, bf.nv(Nat.is_eq(o, 0n), o, sign, ow, w64.add(value, incr), bits), sp, ch, rs)
+      bf.wr.do(Bool.and(Nat.is_lt(0n, o), Nat.is_eq(ow, 2n)), set, bits, off, w, lo, raw, old, bf.nv(Nat.is_eq(o, 0n), o, sign, ow, w64.add(value, incr), bits), sp, ch, rs, g, n)
 
 def bf.get.at(+sign: Bool, +bits: Nat, +off: Nat, +w: String, +lo: Nat, st: BfRun) -> BfRun:
   match st:
-    case BfRun{+sp, ch, rs}:
-      BfRun{sp, ch, bf.rint(sign, bits, bf.field(w, sp, lo, bits, off)) <> rs}
+    case BfRun{+sp, ch, rs, g, n}:
+      BfRun{sp, ch, bf.rint(sign, bits, bf.field(w, sp, lo, bits, off)) <> rs, g, n}
 
 def bf.op(op: BfOp, +w: String, +lo: Nat, st: BfRun) -> BfRun:
   match op:
@@ -19177,7 +19181,8 @@ def bf.lo0(+ops: List<&2, BfOp>) -> Nat:
 def bf.run0(+ops: List<&2, BfOp>, +w: String) -> BfRun:
   +lo = bf.lo0(ops)
   +end = bf.end(ops, 0n)
-  bf.run(ops, w, lo, BfRun{bf.span(w, lo, end), Nat.is_lt(String.length(w), end), Nil{}})
+  +gr = Nat.is_lt(String.length(w), end)
+  bf.run(ops, w, lo, BfRun{bf.span(w, lo, end), gr, Nil{}, gr, 0n})
 
 def bf.put(ok: Bool, +r: Reply, +lo: Nat, +sp: String, m: Maybe<&2, KV.Item<String>>) -> Out:
   match ok:
@@ -19195,7 +19200,7 @@ def bf.res(ch: Bool, +r: Reply, +lo: Nat, +sp: String, m: Maybe<&2, KV.Item<Stri
 
 def bf.fin(st: BfRun, +lo: Nat, m: Maybe<&2, KV.Item<String>>) -> Out:
   match st:
-    case BfRun{+sp, ch, rs}:
+    case BfRun{+sp, ch, rs, g, n}:
       bf.res(ch, RArray{List.reverse(&2, Reply, rs)}, lo, sp, m)
 
 def bitfield.of(+ops: List<&2, BfOp>, m: Maybe<&2, KV.Item<String>>) -> Out:
@@ -19204,6 +19209,23 @@ def bitfield.of(+ops: List<&2, BfOp>, m: Maybe<&2, KV.Item<String>>) -> Out:
       bf.fin(bf.run0(ops, w), bf.lo0(ops), Some{KV.Item{w, e}})
     case None{}:
       bf.fin(bf.run0(ops, ""), bf.lo0(ops), None{})
+
+def bf.n(st: BfRun) -> Nat:
+  match st:
+    case BfRun{sp, ch, rs, g, +n}:
+      n
+
+# the changes BITFIELD's ops count on the entry m (INFO's
+# rdb_changes_since_last_save): of a string's value, or of none; a key of
+# another kind answers WRONGTYPE and counts none
+def bitfield.changes(+ops: List<&2, BfOp>, +m: Maybe<&2, KV.Item<KV.Val>>) -> Nat:
+  match m:
+    case Some{KV.Item{KV.VStr{+w}, +e}}:
+      bf.n(bf.run0(ops, w))
+    case Some{+it}:
+      0n
+    case None{}:
+      bf.n(bf.run0(ops, ""))
 
 # A hash's writes. A key not there is an empty hash: HSET, HSETNX and
 # HINCRBY make it, HDEL finds nothing; a key that holds a hash keeps its
