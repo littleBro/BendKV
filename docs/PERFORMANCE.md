@@ -9131,3 +9131,74 @@ The next steps: a group's write on a stream taken out of the keyspace, as HSET's
 made of words alone, with no group built; and the walks of XREADGROUP's reply and act
 made one, which needs its act to be made from its reply's walk (section 87's write
 planned once).
+
+## 90. Streams' heads, compared in place
+
+FINDINGS 3zzzzw. "Before" is the build of 36c2441 (section 89's "now"), and "now" this
+change on it, counted as section 89 counted them: callgrind, 400 requests counted after
+200, from 20 clients at a pipeline depth of 16, on a stream of 2,000 entries `1-1` to
+`1-2000`, 100 a node, and its group `g` at 0; the history, the claims and XACK after
+`c1` read the first 1,000, `<id>` one of `1-0` to `1-999`. The writes run on the same
+stream, and `s2` is a stream the first XADD makes. Redis 7.2.16 under callgrind alike.
+
+**Instructions a request:**
+
+| command | before | now | | Redis 7.2.16 | now / Redis |
+|---|---:|---:|---:|---:|---:|
+| XREADGROUP GROUP g c1 COUNT 1 STREAMS s > | 251,158 | 239,826 | −4.5% | 56,332 | 4.3 |
+| XREADGROUP GROUP g c1 COUNT 10 STREAMS s 0 | 766,202 | 759,096 | −0.9% | 89,224 | 8.5 |
+| XCLAIM s g c2 0 `<id>` | 255,759 | 239,224 | −6.5% | 75,415 | 3.2 |
+| XCLAIM s g c2 0 `<id>` JUSTID | 242,007 | 225,455 | −6.8% | 47,116 | 4.8 |
+| XAUTOCLAIM s g c3 0 0 COUNT 10 | 1,017,334 | 1,007,066 | −1.0% | 157,321 | 6.4 |
+| XACK s g `<id>` | 39,168 | 37,694 | −3.8% | 10,091 | 3.7 |
+| XRANGE s 1-1050 + COUNT 10 | 138,710 | 132,758 | −4.3% | 70,958 | 1.9 |
+| XRANGE s - + COUNT 10 | 109,049 | 109,119 | +0.1% | 43,653 | 2.5 |
+| XREVRANGE s + - COUNT 10 | 105,729 | 105,843 | +0.1% | 51,046 | 2.1 |
+| XRANGE s 1-1001 1-1001 (a node's first entry) | 38,488 | 38,757 | +0.7% | 13,204 | 2.9 |
+| XRANGE s 1-1050 1-1050 (its 50th) | 62,823 | 56,616 | −9.9% | 39,965 | 1.4 |
+| XRANGE s 1-1100 1-1100 (its last) | 40,354 | 40,510 | +0.4% | 67,570 | 0.6 |
+| XREAD COUNT 1 STREAMS s 1-1999 (the stream's last entry) | 43,600 | 44,197 | +1.4% | 71,805 | 0.6 |
+| XLEN s (for scale) | 8,230 | 8,243 | +0.2% | 4,389 | 1.9 |
+| XADD s * f v | 64,426 | 54,324 | −15.7% | 10,947 | 5.0 |
+| XADD s2 * f v | 61,632 | 52,418 | −15.0% | 10,849 | 4.8 |
+| XADD s MAXLEN ~ 1000 * f v | 125,794 | 112,702 | −10.4% | 13,782 | 8.2 |
+| XTRIM s MAXLEN ~ 1000 | 58,679 | 55,359 | −5.7% | 6,735 | 8.2 |
+
+**What each part took.**
+- **A head compared by its differences.** A walk passed an entry by making its ID, the
+  node's master ID plus the head's two differences, and comparing that ID with the
+  walk's bounds. As it comes into a node, the walk now reads its bounds from the node's
+  master ID: below or above every entry whose head reads small (section 89's three
+  integers of 7 bits), or at a time and a sequence within 128 of the master's. A small
+  head then compares with a bound by its two differences, and an ID is made for an entry
+  the walk takes alone. An entry passed on the way to a range's start takes 365
+  instructions where it took 500 (XRANGE of a node's 50th entry, less XRANGE of its
+  first, over 49 entries); Redis's iterator takes 550. The bounds cost about 100 to 600
+  instructions a node, which the reads of a node's first or last entry pay for few heads
+  (+0.4 to +1.4%).
+- **XADD's options looked for by their first letter.** XADD's and XTRIM's loop of
+  options asked of each word whether it was MAXLEN, MINID, LIMIT or NOMKSTREAM, before it
+  asked whether it was XADD's `*`. A word whose first byte is none of L, M and N, in
+  either case, is none of the four, and is no longer compared with them: 12 of the 14
+  compares of words a request of XADD made were its `*` against the four names, three
+  times: a request reads its words for its error when it is parsed (`xadd.err`), for its
+  run (`xwrite`), and again once its ID is resolved (`xadd.go`). Each compare took about
+  850 instructions.
+- **A word's compare, its first byte first.** `is_word` made a copy of its word up to its
+  first NUL, upper-cased it and compared it with the name it was asked of (a NUL search
+  of 180 instructions, a compare of 270, the copy and its drop). It now compares their
+  first bytes first and answers a word that differs there in about 100 instructions, the
+  copy not made: XTRIM's 12 compares make 6 copies where they made 12, and XCLAIM with
+  JUSTID, whose options are compared so too, takes 1.8% fewer. A first version compared
+  the bytes one by one after the lengths, and took 29% more on XTRIM:
+  a word given to a function as a literal is a chain of cells, one a byte, and each
+  byte's read from it, or its length, walks it (FINDINGS 3zzzzw).
+
+**`make perfcheck`**: GET, SET and INCR unchanged: 3,527, 4,318 and 4,610 instructions
+per request (before, on the same machine in the same hour, 3,537, 4,320 and 4,607);
+last-level misses 2.84, 3.15 and 3.31; with 100 clients in BLPOP, GET 3,639 and SET 4,481
+(before, 3,640 and 4,480).
+
+The next steps are section 89's: a group's write on a stream taken out of the keyspace,
+XCLAIM's plan made of words alone, and the walks of XREADGROUP's reply and act made one.
+XADD's words read once a request, where they are read three times, is a fourth.

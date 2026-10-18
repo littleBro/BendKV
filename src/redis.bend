@@ -1276,10 +1276,23 @@ def function_help() -> List<&2, String>:
 def sess_reply(r: Reply) -> SessOp:
   SReply{r}
 
-# whether s is the word w (in upper case) in any case, as strcasecmp
-# finds it: up to s's first NUL
-def is_word(+s: String, w: String) -> Bool:
-  String.eq(String.to_upper(cstr(s)), w)
+def is_word.of(+s: String, w: String, first: Bool) -> Bool:
+  match first:
+    case False{}:
+      False{}
+    case True{}:
+      String.eq(String.to_upper(cstr(s)), w)
+
+# whether s is the word w (in upper case, not empty) in any case, as
+# strcasecmp finds it: up to s's first NUL. The first bytes are compared
+# first, s's upper-cased as String.to_upper does it (a to z): most words
+# differ there, and are answered without the copy of s that the whole
+# compare makes. (A word passed here is a chain of cells, so its length is
+# not read: that would walk it.)
+def is_word(+s: String, +w: String) -> Bool:
+  +c = String.code_at(s, 0n)
+  +u = U32.sub(c, U32.mul(Bool.to_u32(Bool.and(U32.is_ge(c, 97), U32.is_le(c, 122))), 32))
+  is_word.of(s, w, U32.is_eq(u, String.code_at(w, 0n)))
 
 # BITOP op dst src...: the operation named in any case, as strcasecmp
 # reads it; NOT takes exactly one source
@@ -8443,10 +8456,20 @@ type XOs is Data:
 
 # what the word w is to the loop (more: a word follows it): 0 XADD's
 # "*", 1 MAXLEN, 2 MINID, 3 LIMIT, 4 NOMKSTREAM, 5 XADD's ID, 6 XTRIM's
-# syntax error
+# syntax error. A word whose first character is no L, M or N (in either
+# case), as "*" and an ID, is none of the options' names, and is not
+# compared with them (named: it may be one)
+def xo.kind.of(named: Bool, +xadd: Bool, +w: String, +more: Bool) -> Nat:
+  match named:
+    case True{}:
+      Bool.pick(Nat, Bool.and(more, is_word(w, "MAXLEN")), 1n, Bool.pick(Nat, Bool.and(more, is_word(w, "MINID")), 2n, Bool.pick(Nat, Bool.and(more, is_word(w, "LIMIT")), 3n, Bool.pick(Nat, Bool.and(xadd, is_word(w, "NOMKSTREAM")), 4n, Bool.pick(Nat, xadd, 5n, 6n)))))
+    case False{}:
+      +star = Bool.and(xadd, Bool.and(U32.is_eq(String.code_at(w, 0n), 42), X.su.cend(w, 1n)))
+      Bool.pick(Nat, star, 0n, Bool.pick(Nat, xadd, 5n, 6n))
+
 def xo.kind(+xadd: Bool, +w: String, +more: Bool) -> Nat:
-  +star = Bool.and(xadd, Bool.and(U32.is_eq(String.code_at(w, 0n), 42), X.su.cend(w, 1n)))
-  Bool.pick(Nat, star, 0n, Bool.pick(Nat, Bool.and(more, is_word(w, "MAXLEN")), 1n, Bool.pick(Nat, Bool.and(more, is_word(w, "MINID")), 2n, Bool.pick(Nat, Bool.and(more, is_word(w, "LIMIT")), 3n, Bool.pick(Nat, Bool.and(xadd, is_word(w, "NOMKSTREAM")), 4n, Bool.pick(Nat, xadd, 5n, 6n))))))
+  +c = U32.to_nat(String.code_at(w, 0n))
+  xo.kind.of(Bool.or(Bool.and(Nat.is_le(76n, c), Nat.is_le(c, 78n)), Bool.and(Nat.is_le(108n, c), Nat.is_le(c, 110n))), xadd, w, more)
 
 # a trim's operator: ~ (1), = (2), or none (0), each a C string of it
 def xo.opw(+w: String) -> Nat:

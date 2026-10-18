@@ -374,7 +374,7 @@ translation stays in the trusted base.
   Redis keeps the count, the ranges take about twice Redis's time (a read of a stream's
   last entry less than Redis's), the writes 3 to 12 times, and the groups' reads and
   claims 5 to 9 times, as a group's write walks its stream again and copies its group
-  (sections 82, 84, 87 and 89 of [docs/PERFORMANCE.md](docs/PERFORMANCE.md)).
+  (sections 82, 84, 87, 89 and 90 of [docs/PERFORMANCE.md](docs/PERFORMANCE.md)).
 - **Clients that wait:** BLPOP, BRPOP, BLMOVE, BRPOPLPUSH, BLMPOP, BZPOPMIN, BZPOPMAX
   and BZMPOP, their timeouts (seconds, a double; 0 waits for ever) read as Redis reads
   them, with its errors. A command that finds nothing to pop makes its client wait, and

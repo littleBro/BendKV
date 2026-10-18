@@ -11032,6 +11032,82 @@ checks), `tests/stream_group_test.py` (32,233), `tests/stream_write_test.py` (32
 `tests/stream_aof_test.py` and `tests/stream_group_aof_test.py` pass, and
 `tests/stream_check.bend` reads 3,856 heads alike both ways, 3,424 of them the fast way.
 
+## 3zzzzw. Streams' heads, compared in place
+
+**What there is.** A walk of a stream's node passed each entry before its start, or past
+its end, by its ID, which it made for the entry: the node's master ID plus the two
+differences of the entry's head. It now compares most heads with its bounds by their
+differences alone. XADD and XTRIM no longer compare a word that cannot be one of their
+options with the options' names, and `is_word`, which every command that reads an option
+asks, answers a word whose first byte is not the name's without copying it. Nothing that
+the commands answer, change, log or count changed.
+
+**How it is built** (`src/stream.bend` and `src/redis.bend`).
+- **A walk's bounds seen from a node's master ID** (`XWr`, `xwq.at`). As the walk comes
+  into a node, it reads each of its two bounds from the node's master ID (v, w): below
+  every entry whose head reads small (section 3zzzzv's three integers of 7 bits: such an
+  entry's ID is v plus its time's difference and w plus its sequence's, each below 128),
+  above every one, or at the time v plus a difference ms below 128, its sequence below,
+  above or at w plus a difference below 128 (`XRb`, `XRs`). A small head then compares
+  with a bound by its two differences (`xrb.cmp`), and the walk makes the entry's ID only
+  when it takes the entry (`xw.do.s`). A node whose master ID passes 10^14 - 128 in
+  either part, where a difference added could leave the IDs' small numbers, has no such
+  bounds (`XWrNo`), and its heads are read as IDs, as are the heads that do not read
+  small.
+- **The walk cut at its start** (section 3zzzzv) asks of the entry it is at whether it is
+  live and before the walk's start. In a walk forwards that is an entry the walk passes
+  (what it does with it is 0, as for a deleted one) that is not deleted (`xw.before`), so
+  that the question needs no ID either.
+- **XADD's and XTRIM's options by their first letter** (`xo.kind`). The loop of their
+  options asks of each word what it is. A word whose first byte is none of L, M and N, in
+  either case, as XADD's `*` and an ID, is none of MAXLEN, MINID, LIMIT and NOMKSTREAM,
+  and is no longer compared with them.
+- **A word's compare, its first byte first** (`is_word`). The first byte of the word,
+  upper-cased as `String.to_upper` does it (a to z), is compared with the name's first;
+  the word is copied up to its first NUL, upper-cased and compared whole only when they
+  are the same. A name is upper case and not empty, as every caller's is.
+
+`tests/stream_check.bend` checks the walks' decisions. In nodes of six master IDs (two
+small ones, 10^14 - 128 in both parts, one past it in either part, and one whose time
+passes 10^14), it makes the entries of every pair of differences of 0, 1, 127 and 128
+from the master ID, live and deleted (a difference of 128 does not read small). It then
+asks what a walk forwards and a walk backwards between each pair of 22 bounds (the
+master ID plus each pair of differences, IDs just below it, 0-0 and the greatest ID)
+does with each entry, decided by the heads' differences and decided by their IDs:
+185,856 decisions, all alike. With `BENDKV_CHECK_BREAK=walk` it makes each decision by
+the differences wrong on purpose and fails, as `tests/smoke_check.sh` checks.
+
+**A string literal passed to a function is a chain of cells.** A first version of
+`is_word` compared the word's length with the name's, then their bytes one by one,
+`String.code_at` of each. It took 29% more instructions on XTRIM than the version it
+replaced. The compiler gives a literal that a call passes as an argument as a chain of
+cells kept with the program, a cell a byte (`term_ctr(CID_SCON, ...)` in the C), where a
+request's words are a run of bytes. The runtime's string functions read a run at once
+but a chain a cell at a time: `String.length` of a name of ten bytes took 425
+instructions, and each `String.code_at` of it 220, the chain walked from its first cell.
+`String.eq` of a literal written at its call reads the literal's bytes as one run
+(`str_eq_lit`), but one passed through a parameter is a chain again. So the version kept
+reads the name's first byte alone.
+
+The proofs are as before. No law changed.
+
+**What it costs** (PERFORMANCE.md, section 90). Nothing on the fast way. Instructions a
+request on a stream of 2,000 entries, before and now (Redis 7.2.16): XREADGROUP of a new
+entry 251,000 and 240,000 (56,000), XCLAIM of one entry 256,000 and 239,000 (75,000),
+XRANGE of ten from a node's middle 139,000 and 133,000 (71,000), XRANGE of a node's 50th
+entry 62,800 and 56,600 (40,000). An entry passed on the way to a range's start takes
+365 instructions where it took 500; Redis's iterator takes 550. XADD takes 54,300 where it
+took 64,400 (Redis 10,900), and XTRIM by `~` 55,400 where it took 58,700 (6,700). The
+bounds read at each node cost 100 to 600 instructions, which the reads that pass few
+heads pay: XREAD of a stream's last entry takes 44,200 where it took 43,600.
+
+**Tests.** Against Redis 7.2.16, nothing differs: `tests/stream_read_test.py` (28,880
+checks), `tests/stream_group_test.py` (32,233), `tests/stream_write_test.py` (32,582),
+`tests/stream_dump_test.py` (3,036) and `tests/stream_block_test.py` (91 lines);
+`tests/stream_aof_test.py` and `tests/stream_group_aof_test.py` pass; and
+`tests/stream_check.bend` reads 3,856 heads alike both ways and makes its 185,856
+decisions alike.
+
 ## 4. Where a request's time goes, and hiding the memory waits
 
 With the eight patches, BendKV ran fewer instructions on GET and SET than Redis, missed

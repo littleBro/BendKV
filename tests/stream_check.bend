@@ -9,10 +9,16 @@
 # deleted or not. It checks too that the fast way read most of them
 # itself. With BENDKV_CHECK_BREAK=head the fast way's reads are each
 # given one byte more than they take, to show that a difference fails
-# the run (tests/smoke_check.sh).
+# the run (tests/smoke_check.sh). Then it checks what a walk does with an
+# entry (pass, end or take) when its head reads small: decided by the
+# head's differences from its node's master ID and the walk's bounds seen
+# from it (xw.k), as decided by the head's ID (xw.k.h of xh.read), of
+# master IDs whose bounds are seen so and of master IDs past them
+# (BENDKV_CHECK_BREAK=walk: each decision by the differences one more).
 # Run: bend tests/stream_check.bend
 import Base
 import ../src/map.bend as KV
+import ../src/rdb.bend as D
 import ../src/stream.bend as X
 
 def env.or(r: Result<&1, &1, U32 & String, String>) -> String:
@@ -1076,8 +1082,150 @@ def verdict(r: Count & Nat) -> IO(Unit):
   (c, k) = r
   verdict.at(c, k)
 
+# The walks' decisions
+# ---------------------
+
+# a head as the check compares it: what the walk does (k, plus brk), its
+# flags, its ID and where its body starts; or a head that does not read
+type Wh is Data:
+  Wh{k: Nat, fl: Nat, id: KV.XId, off: Nat}
+  WhNo{}
+
+def wh.of(h: X.XWh, +mid: KV.XId, +brk: Nat) -> Wh:
+  match h:
+    case X.XWh{+k, +f, +i, +o}:
+      Wh{Nat.add(k, brk), f, i, o}
+    case X.XWhS{+k, +f, +ms, +sq}:
+      Wh{Nat.add(k, brk), f, D.xid.plus(mid, KV.XS{ms}, KV.XS{sq}), 6n}
+    case X.XWhBad{}:
+      WhNo{}
+
+def wh.same(a: Wh, b: Wh) -> Bool:
+  match a b:
+    case Wh{+k, +f, +i, +o} Wh{+g, +h, +j, +p}:
+      Bool.and(Bool.and(Nat.is_eq(k, g), Nat.is_eq(f, h)), Bool.and(Cmp.is_eq(KV.xid.cmp(i, j)), Nat.is_eq(o, p)))
+    case WhNo{} WhNo{}:
+      True{}
+    case _ _:
+      False{}
+
+# decisions made, and those made otherwise
+type Tally is Data:
+  Tally{bad: Nat, n: Nat}
+
+def tally(t: Tally, +b: Nat) -> Tally:
+  match t:
+    case Tally{+bad, +n}:
+      Tally{Nat.add(bad, b), Nat.add(n, 1n)}
+
+# one decision of the entry e of the node x (master ID mid) by a walk from
+# lo to hi: 0 when both ways decide alike
+def wk.one(+e: String, +x: KV.XNode, +mid: KV.XId, +lo: KV.XId, +hi: KV.XId, +rev: Bool, +brk: Nat) -> Nat:
+  +q = X.xwq.at(X.XWq{lo, hi, rev, False{}, X.XWrNo{}}, mid)
+  Bool.pick(Nat, wh.same(wh.of(X.xw.k(e, x, q), mid, brk), wh.of(X.xw.k.h(X.xh.read(e, mid), q), mid, 0n)), 0n, 1n)
+
+# each bound hi of hs after lo, forwards and backwards
+def wk.his(hs: List<&2, KV.XId>, +e: String, +x: KV.XNode, +mid: KV.XId, +lo: KV.XId, +brk: Nat, t: Tally) -> Tally:
+  match hs:
+    case Con{+hi, rest}:
+      wk.his(rest, e, x, mid, lo, brk, tally(tally(t, wk.one(e, x, mid, lo, hi, False{}, brk)), wk.one(e, x, mid, lo, hi, True{}, brk)))
+    case Nil{}:
+      t
+
+# each pair of the bounds bs (ls: the starts left)
+def wk.los(ls: List<&2, KV.XId>, +bs: List<&2, KV.XId>, +e: String, +x: KV.XNode, +mid: KV.XId, +brk: Nat, t: Tally) -> Tally:
+  match ls:
+    case Con{+lo, rest}:
+      wk.los(rest, bs, e, x, mid, brk, wk.his(bs, e, x, mid, lo, brk, t))
+    case Nil{}:
+      t
+
+# each entry of es
+def wk.ents(es: List<&2, String>, +bs: List<&2, KV.XId>, +x: KV.XNode, +mid: KV.XId, +brk: Nat, t: Tally) -> Tally:
+  match es:
+    case Con{+e, rest}:
+      wk.ents(rest, bs, x, mid, brk, wk.los(bs, bs, e, x, mid, brk, t))
+    case Nil{}:
+      t
+
+# the differences of the entries and of the bounds: every edge of a small
+# head's integers, and the first past them
+def wk.offs() -> List<&2, Nat>:
+  [0n, 1n, 127n, 128n]
+
+# the entries of IDs mid plus each pair of differences, live and deleted
+def wk.ents.s(ss: List<&2, Nat>, +mid: KV.XId, +dm: Nat, acc: List<&2, String>) -> List<&2, String>:
+  match ss:
+    case Con{+ds, rest}:
+      +id = D.xid.plus(mid, KV.XS{dm}, KV.XS{ds})
+      wk.ents.s(rest, mid, dm, ent(True{}, False{}, id, mid) <> (ent(True{}, True{}, id, mid) <> acc))
+    case Nil{}:
+      acc
+
+def wk.ents.m(ms: List<&2, Nat>, +mid: KV.XId, acc: List<&2, String>) -> List<&2, String>:
+  match ms:
+    case Con{+dm, rest}:
+      wk.ents.m(rest, mid, wk.ents.s(wk.offs(), mid, dm, acc))
+    case Nil{}:
+      acc
+
+# the bounds: mid plus each pair of differences, IDs below it in either
+# part (mod 2^64), 0-0 and the greatest ID
+def wk.bs.s(ss: List<&2, Nat>, +mid: KV.XId, +dm: Nat, acc: List<&2, KV.XId>) -> List<&2, KV.XId>:
+  match ss:
+    case Con{+ds, rest}:
+      wk.bs.s(rest, mid, dm, D.xid.plus(mid, KV.XS{dm}, KV.XS{ds}) <> acc)
+    case Nil{}:
+      acc
+
+def wk.bs.m(ms: List<&2, Nat>, +mid: KV.XId, acc: List<&2, KV.XId>) -> List<&2, KV.XId>:
+  match ms:
+    case Con{+dm, rest}:
+      wk.bs.m(rest, mid, wk.bs.s(wk.offs(), mid, dm, acc))
+    case Nil{}:
+      acc
+
+def wk.bounds(+mid: KV.XId) -> List<&2, KV.XId>:
+  match mid:
+    case KV.XId{+m, +s}:
+      +one = X.xn.one()
+      wk.bs.m(wk.offs(), KV.XId{m, s}, KV.XId{m, X.xn.sub(s, one)} <> (KV.XId{KV.xn.add(m, one), X.xn.sub(s, one)} <> (KV.XId{X.xn.sub(m, one), KV.xn.add(s, KV.XS{5n})} <> (KV.XId{KV.xn.add(m, one), X.xn.zero()} <> (X.xid.zero() <> (X.xid.max() <> Nil{}))))))
+
+# the master IDs: small ones, the greatest whose bounds are seen from it,
+# and ones past it in either part, or of an XL time
+def wk.mids() -> List<&2, KV.XId>:
+  +e = Nat.sub(KV.xn.e14(), 128n)
+  KV.XId{KV.XS{5n}, KV.XS{7n}} <> (KV.XId{KV.XS{0n}, KV.XS{0n}} <> (KV.XId{KV.XS{e}, KV.XS{e}} <> (KV.XId{KV.XS{Nat.add(e, 1n)}, KV.XS{5n}} <> (KV.XId{KV.XS{5n}, KV.XS{Nat.add(e, 1n)}} <> (KV.XId{KV.XL{10n, 5n}, KV.XS{7n}} <> Nil{})))))
+
+def wk.mid(+mid: KV.XId, +brk: Nat, t: Tally) -> Tally:
+  wk.ents(wk.ents.m(wk.offs(), mid, Nil{}), wk.bounds(mid), KV.XNd{mid, Nil{}, 1n, 0n, 0n, 0n, Nil{}}, mid, brk, t)
+
+def wk.all(ms: List<&2, KV.XId>, +brk: Nat, t: Tally) -> Tally:
+  match ms:
+    case Con{+mid, rest}:
+      wk.all(rest, brk, wk.mid(mid, brk, t))
+    case Nil{}:
+      t
+
+def wk.verdict.of(ok: Bool, +bad: Nat, +n: Nat) -> IO(Unit):
+  match ok:
+    case True{}:
+      IO.print("ALL STREAM WALK DECISIONS ALIKE: " ++ Nat.show(n) ++ " decisions of entries, by their heads' differences and by their IDs")
+    case False{}:
+      IO.die(Unit, 1, "FAIL stream walks: " ++ Nat.show(bad) ++ " of " ++ Nat.show(n) ++ " decisions made otherwise by the heads' differences")
+
+def wk.verdict(t: Tally) -> IO(Unit):
+  match t:
+    case Tally{+bad, +n}:
+      wk.verdict.of(Nat.is_eq(bad, 0n), bad, n)
+
+def run(+b: String) -> IO(Unit):
+  do IO<Unit>:
+    Unit <- verdict(walk(cases(), String.eq(b, "head"), Count{0n, 0n}, 0n))
+    wk.verdict(wk.all(wk.mids(), Bool.pick(Nat, String.eq(b, "walk"), 1n, 0n), Tally{0n, 0n}))
+
 def main() -> IO(Unit):
   do IO<Unit>:
     r : Result<&1, &1, U32 & String, String> <- IO.get_env("BENDKV_CHECK_BREAK")
-    verdict(walk(cases(), String.eq(env.or(r), "head"), Count{0n, 0n}, 0n))
+    run(env.or(r))
 
