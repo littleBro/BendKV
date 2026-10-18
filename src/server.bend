@@ -604,7 +604,7 @@ def dw.lmove(+ds: R.Ds, +s: String, +d: String) -> Nat:
 def dw.stream.of(+w: Nat, +x: KV.XStream, +c: Nat, +k: String, +ws: List<&2, String>, +now: Nat) -> Nat:
   match w:
     case 0n:
-      R.xplan.n(R.xkeyed.plan(c, k, ws, x, now))
+      R.xplan.n(R.xkeyed.plan(c, k, ws, True{}, x, now))
     case 1n:
       R.xset.dirty(ws, x)
     case _:

@@ -9027,3 +9027,107 @@ The next steps: the `/proc` numbers read only for the sections that show them; a
 that serves a waiting client on the fast way when the client is ready by the write's
 kind alone (XADD to a stream a client in XREAD waits on); and XREADGROUP's acts at the
 wait's start made without a group's walks.
+
+## 89. Streams' walks, read in place
+
+FINDINGS 3zzzzv. "Before" is the build of 9024d86 (streams' waits), on which this change
+is made, "now" this change, and Redis 7.2.16 ran beside them, the three one after the
+other on the same machine (four cores, shared with other work).
+
+**Instructions a request** (callgrind, 400 requests counted after 200, from 20 clients
+at a pipeline depth of 16, on a stream of 2,000 entries `1-1` to `1-2000`, 100 a node,
+and its group `g` at 0; the history, the claims and XACK after `c1` read the first
+1,000, `<id>` one of `1-0` to `1-999`; Redis under callgrind alike):
+
+| command | before | now | Redis 7.2.16 | now / Redis |
+|---|---:|---:|---:|---:|
+| XREADGROUP GROUP g c1 COUNT 1 STREAMS s > | 593,169 | 251,158 | 56,332 | 4.5 |
+| XREADGROUP GROUP g c1 COUNT 10 STREAMS s 0 | 1,858,076 | 766,202 | 89,224 | 8.6 |
+| XCLAIM s g c2 0 `<id>` | 798,037 | 255,759 | 75,415 | 3.4 |
+| XCLAIM s g c2 0 `<id>` JUSTID | 572,458 | 242,007 | 47,116 | 5.1 |
+| XAUTOCLAIM s g c3 0 0 COUNT 10 | 2,991,153 | 1,017,334 | 157,321 | 6.5 |
+| XACK s g `<id>` | 61,724 | 39,168 | 10,091 | 3.9 |
+| XRANGE s 1-1050 + COUNT 10 | 225,645 | 138,710 | 70,958 | 2.0 |
+| XRANGE s - + COUNT 10 | 148,561 | 109,049 | 43,653 | 2.5 |
+| XREVRANGE s + - COUNT 10 | 126,793 | 105,729 | 51,046 | 2.1 |
+| XRANGE s 1-1001 1-1001 (a node's first entry) | 71,233 | 38,488 | 13,204 | 2.9 |
+| XRANGE s 1-1050 1-1050 (its 50th) | 141,311 | 62,823 | 39,965 | 1.6 |
+| XRANGE s 1-1100 1-1100 (its last) | 246,204 | 40,354 | 67,570 | 0.6 |
+| XREAD COUNT 1 STREAMS s 1-1999 (the stream's last entry) | 230,091 | 43,600 | 71,805 | 0.6 |
+| XLEN s (for scale) | 8,244 | 8,230 | 4,389 | 1.9 |
+
+**Throughput** (redis-benchmark, as section 87 ran it: a stream of 100,000 entries `1-1`
+to `1-100000`, a field and a value each, 100 a node, and its group `g` at 0; `<mid>` is
+`1-50050`, the middle of a node; 20 clients at a pipeline depth of 16; the rows in their
+order, so that XREADGROUP's first row gives `c1` 50,000 entries, which the rows after it
+read again, claim and acknowledge, `<id>` one of `1-0` to `1-49999` at random; the
+median of three runs of each). Requests a second:
+
+| command | before | now | Redis 7.2.16 | Redis's / now |
+|---|---:|---:|---:|---:|
+| XRANGE s - + COUNT 10 | 57,700 | 97,100 | 196,000 | 2.0 |
+| XRANGE s `<mid>` + COUNT 10 | 37,600 | 74,400 | 158,000 | 2.1 |
+| XREVRANGE s + - COUNT 10 | 67,500 | 91,000 | 164,000 | 1.8 |
+| XREAD COUNT 10 STREAMS s `<mid>` | 32,000 | 63,400 | 122,000 | 1.9 |
+| XREADGROUP GROUP g c1 COUNT 1 STREAMS s > | 10,800 | 28,600 | 163,000 | 5.7 |
+| XREADGROUP GROUP g c1 COUNT 10 STREAMS s 0 | 3,640 | 10,700 | 99,600 | 9.3 |
+| XCLAIM s g c2 0 `<id>` | 7,410 | 21,900 | 110,000 | 5.0 |
+| XCLAIM s g c1 0 `<id>` JUSTID | 9,980 | 25,000 | 198,000 | 7.9 |
+| XAUTOCLAIM s g c3 0 0 COUNT 10 | 2,130 | 7,820 | 71,200 | 9.1 |
+| XPENDING s g | 321,000 | 306,000 | 546,000 | 1.8 |
+| XACK s g `<id>` | 104,000 | 157,000 | 680,000 | 4.3 |
+| XGROUP CREATECONSUMER s g `<one of 100>` | 508,000 | 450,000 | 935,000 | 2.1 |
+| XREAD COUNT 1 STREAMS s 1-99999 | 33,200 | 196,000 | 149,000 | 0.8 |
+| XLEN s (for scale) | 1,460,000 | 1,460,000 | 971,000 | 0.7 |
+
+XPENDING, XGROUP CREATECONSUMER and XLEN run the same code in both builds: their
+differences are the machine's (their runs differ by up to a third from one to the next).
+
+**What each part took.**
+- **A walk in place.** A walk forwards turned its first node's list of entries around
+  and took each entry it read; it now reads them where they lie, the node lent. An entry
+  passed on the way to a range's start took about 1,430 instructions (XRANGE of a node's
+  50th entry, less XRANGE of its first, over 49 entries) and takes 500 now, where Redis's
+  iterator takes 550.
+- **A walk cut at its start.** XRANGE of a node's last entry reads the node's newest
+  entry, takes it and ends: 40,000 instructions, where the walk from the oldest read all
+  100 heads (246,000) and Redis's iterator reads them too (68,000). A read of a stream's
+  last entry, as a consumer that keeps up with its producer reads, runs 196,000 times a
+  second, faster than Redis's 149,000. A walk whose start is nearer its node's master ID
+  goes from the oldest as before, its newest head read first (XRANGE of a node's 50th
+  entry reads its 49 older heads).
+- **A tree's size read in place** made the most of the rest: every walk read the sizes
+  of the stream's tree of nodes on its way down, and each size took the node it was
+  given, copying a node the keyspace holds (`ctr_own_slow`) and dropping the copy. The
+  pending entries' and consumers' trees paid it at each level of a change. XACK, which
+  walks nothing, takes 39,200 instructions where it took 61,700, its group's trees
+  changed with their sizes read in place, and the group with them (FINDINGS 3zzzzv).
+- **A group's write that runs its reads once.** XREADGROUP's act serves its key for its
+  change's words alone, by walks that read IDs alone, and XCLAIM's and XAUTOCLAIM's
+  counts of changes build no reply: XREADGROUP of a new entry reads its entry's fields
+  once where it read them twice, and XCLAIM of one entry walks four times where it
+  walked five, one of the walks reading the entry's fields where two did.
+- **A head in six bytes.** On the streams above, every head is three integers of 7 bits,
+  read in six bytes.
+
+**Where the time goes now** (XREADGROUP of a new entry, 251,000 instructions):
+- **The walks.** It walks its key six times: the stream's last live entry for its reply,
+  its act and its count of changes, the range for its reply and its act, and XWSet's
+  question whether the stream holds the entry it delivers. A walk from the middle of a
+  node reads about 25 heads, at about 500 instructions each.
+- **The stream written back.** A group's write on a stream the keyspace holds copies the
+  group at its first change and puts the new stream in the keyspace, where dropping the
+  old one frees the old group's paths (`bkeep.go`, 11,000 instructions a request).
+- **XCLAIM's plan** builds the group its claims make, its pending entries and consumers
+  changed, to write the words of its change, and drops it: the drop alone takes 18,500 of
+  its 256,000 instructions.
+
+**`make perfcheck`**: GET, SET and INCR unchanged: 3,528, 4,324 and 4,614 instructions
+per request (before, 3,530, 4,317 and 4,612); last-level misses 2.84, 3.15 and 3.35; with
+100 clients in BLPOP, GET 3,641 and SET 4,477 (before, 3,640 and 4,486).
+
+The next steps: a group's write on a stream taken out of the keyspace, as HSET's hash is
+(section 54), so that it changes the stream in place and drops no old one; XCLAIM's plan
+made of words alone, with no group built; and the walks of XREADGROUP's reply and act
+made one, which needs its act to be made from its reply's walk (section 87's write
+planned once).

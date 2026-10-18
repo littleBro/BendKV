@@ -279,8 +279,9 @@ type XEh is Data:
   XEh{fl: Nat, id: KV.XId, off: Nat}
   XEhBad{}
 
-# The slow way: each element read as its text (D.lp.next), and the bytes
-# after it taken (n: the entry's length)
+# The slow way: each element of a copy of the entry (a walk lends the
+# entry) read as its text (D.lp.next), and the bytes after it taken (n:
+# the entry's length)
 def xh.seq(+fl: Nat, +ms: KV.XN, r: D.LpR, +n: Nat, +mid: KV.XId) -> XEh:
   match r:
     case D.LpOk{+v, +t}:
@@ -303,7 +304,7 @@ def xh.flags(r: D.LpR, +n: Nat, +mid: KV.XId) -> XEh:
       XEhBad{}
 
 def xh.slow(+e: String, +n: Nat, +mid: KV.XId) -> XEh:
-  xh.flags(D.lp.next(e), n, mid)
+  xh.flags(D.lp.next(String.slice(e, 0n, n)), n, mid)
 
 # The fast way: the three integers read where they lie, as lpGetInteger
 # reads them, with no text made and no bytes taken. An element that is
@@ -417,15 +418,42 @@ def xh.fast(h: XHi, +e: String, +n: Nat, +mid: KV.XId) -> XEh:
     case _:
       xh.slow(e, n, mid)
 
+# The fastest way, most entries' heads: each integer of 7 bits, in one
+# byte below 128 with its backlen (1) after it, the three in the entry's
+# first six bytes (b0, b2 and b4 the integers; past the entry's end a
+# byte reads as 2^32 - 1, which is no such integer)
+def xh.small(ok: Bool, +b0: Nat, +b2: Nat, +b4: Nat, +e: String, +n: Nat, +mid: KV.XId) -> XEh:
+  match ok:
+    case True{}:
+      XEh{b0, D.xid.plus(mid, KV.XS{b2}, KV.XS{b4}), 6n}
+    case False{}:
+      xh.fast(xh.int(e, 0n, n), e, n, mid)
+
+# whether b is an integer of 7 bits and c its backlen
+def xh.small.at(+b: Nat, +c: Nat) -> Bool:
+  Bool.and(Nat.is_lt(b, 128n), Nat.is_eq(c, 1n))
+
 def xh.read(+e: String, +mid: KV.XId) -> XEh:
   +n = String.length(e)
-  xh.fast(xh.int(e, 0n, n), e, n, mid)
+  +b0 = xh.at(e, 0n)
+  +b2 = xh.at(e, 2n)
+  +b4 = xh.at(e, 4n)
+  +ok = Bool.and(Bool.and(Nat.is_lt(6n, n), xh.small.at(b0, xh.at(e, 1n))), Bool.and(xh.small.at(b2, xh.at(e, 3n)), xh.small.at(b4, xh.at(e, 5n))))
+  xh.small(ok, b0, b2, b4, e, n, mid)
 
 def xh.deleted(+fl: Nat) -> Bool:
   Nat.is_eq(Nat.mod(fl, 2n), 1n)
 
 def xh.same(+fl: Nat) -> Bool:
   Nat.is_eq(Nat.mod(Nat.div(fl, 2n), 2n), 1n)
+
+# how many fields fs holds, the list lent
+def xe.nfs(+fs: List<&2, String>, +n: Nat) -> Nat:
+  match fs:
+    case Con{f, +rest}:
+      xe.nfs(rest, Nat.add(n, 1n))
+    case Nil{}:
+      n
 
 # k more elements from r on, after acc (the last first)
 def xe.els(k: Nat, r: D.LpR, acc: List<&2, String>) -> List<&2, String>:
@@ -435,10 +463,11 @@ def xe.els(k: Nat, r: D.LpR, acc: List<&2, String>) -> List<&2, String>:
     case _ _:
       acc
 
-# the master's fields fs and the values vs (the last first) in turn
-def xe.zip(fs: List<&2, String>, vs: List<&2, String>, acc: List<&2, String>) -> List<&2, String>:
+# the master's fields fs (lent) and the values vs (the last first) in
+# turn
+def xe.zip(+fs: List<&2, String>, vs: List<&2, String>, acc: List<&2, String>) -> List<&2, String>:
   match fs vs:
-    case Con{f, fr} Con{v, vr}:
+    case Con{+f, +fr} Con{v, vr}:
       xe.zip(fr, vr, v <> (f <> acc))
     case _ _:
       List.reverse(&2, String, acc)
@@ -450,11 +479,12 @@ def xe.own(r: D.LpR) -> List<&2, String>:
     case _:
       Nil{}
 
-# an entry's fields and values, from the bytes t after its head
-def xe.body(same: Bool, t: String, +mfs: List<&2, String>, +nmf: Nat) -> List<&2, String>:
+# an entry's fields and values, from the bytes t after its head (mfs:
+# its node's master fields, lent)
+def xe.body(same: Bool, t: String, +mfs: List<&2, String>) -> List<&2, String>:
   match same:
     case True{}:
-      xe.zip(mfs, List.reverse(&2, String, xe.els(nmf, D.lp.next(t), Nil{})), Nil{})
+      xe.zip(mfs, List.reverse(&2, String, xe.els(xe.nfs(mfs, 0n), D.lp.next(t), Nil{})), Nil{})
     case False{}:
       xe.own(D.lp.next(t))
 
@@ -515,29 +545,29 @@ def xns.floor(+t: KV.XNodes, +k: KV.XId) -> Maybe<&2, Nat>:
 # it. A node may hold an entry before its master ID (XSETID below a
 # deleted top, then XADD), which a walk finds where raxSeek puts it.
 
+# A walk's bounds: from lo to hi, backwards (rev), and whether it wants
+# IDs alone (ids). XWqOf is never built: it makes XWq a node of its own,
+# one word.
+type XWq is Data:
+  XWq{lo: KV.XId, hi: KV.XId, rev: Bool, ids: Bool}
+  XWqOf{q: XWq}
+
 # A walk: the entries taken (the newest first), how many more it may
-# take, and whether it is over
+# take, whether it is over, its bounds and the node it is in. A node's
+# entries are kept the newest first, and a walk reads them where they
+# lie, the node lent to it: backwards from the first on, forwards by a
+# recursion down the list that visits each entry once the older ones are
+# visited. The bounds and the node travel with the walk, which the
+# recursion passes down and back up, so that it holds nothing but the
+# entry it is at, and no entry is turned around, copied or dropped.
 type XWk is Data:
-  XWk{acc: List<&2, XE>, c: Nat, end: Bool}
+  XWk{acc: List<&2, XE>, c: Nat, end: Bool, q: XWq, x: KV.XNode}
 
-# an entry's body, read from its bytes past its head (off on), or none
-# for a walk that wants IDs alone (ids)
-def xw.body(ids: Bool, +fl: Nat, +e: String, +off: Nat, +mfs: List<&2, String>, +nmf: Nat) -> List<&2, String>:
-  match ids:
-    case True{}:
-      Nil{}
-    case False{}:
-      xe.body(xh.same(fl), String.drop(e, off), mfs, nmf)
-
-# take (2), pass (0), or end (1)
-def xw.do(k: Nat, +fl: Nat, +id: KV.XId, +e: String, +off: Nat, acc: List<&2, XE>, +c: Nat, +mfs: List<&2, String>, +nmf: Nat, +ids: Bool) -> XWk:
-  match k:
-    case 0n:
-      XWk{acc, c, False{}}
-    case 1n:
-      XWk{acc, c, True{}}
-    case _:
-      XWk{XE{id, xw.body(ids, fl, e, off, mfs, nmf)} <> acc, Nat.sub(c, 1n), Nat.is_eq(c, 1n)}
+# what a walk does with an entry (pass 0, end 1, take 2) and the entry's
+# head, or a head that does not read
+type XWh is Data:
+  XWh{k: Nat, fl: Nat, id: KV.XId, off: Nat}
+  XWhBad{}
 
 # what a forward walk does with an entry: pass one deleted or before lo,
 # end at one past hi, take the others; backwards, pass one deleted or
@@ -549,43 +579,262 @@ def xw.what(rev: Bool, +fl: Nat, +id: KV.XId, +lo: KV.XId, +hi: KV.XId) -> Nat:
     case True{}:
       Bool.pick(Nat, Bool.or(xh.deleted(fl), Cmp.is_gt(KV.xid.cmp(id, hi))), 0n, Bool.pick(Nat, Cmp.is_lt(KV.xid.cmp(id, lo)), 1n, 2n))
 
-def xw.one(h: XEh, +e: String, +rev: Bool, acc: List<&2, XE>, +c: Nat, +mfs: List<&2, String>, +nmf: Nat, +lo: KV.XId, +hi: KV.XId, +ids: Bool) -> XWk:
+def xw.k.of(h: XEh, +rev: Bool, +lo: KV.XId, +hi: KV.XId) -> XWh:
   match h:
     case XEh{+fl, +id, +off}:
-      xw.do(xw.what(rev, fl, id, lo, hi), fl, id, e, off, acc, c, mfs, nmf, ids)
+      XWh{xw.what(rev, fl, id, lo, hi), fl, id, off}
     case XEhBad{}:
-      XWk{acc, c, True{}}
+      XWhBad{}
 
-# a walk through a node's entries es, in the walk's order
-def xw.ents(es: List<&2, String>, w: XWk, +rev: Bool, +mid: KV.XId, +mfs: List<&2, String>, +nmf: Nat, +lo: KV.XId, +hi: KV.XId, +ids: Bool) -> XWk:
+def xw.k.h(h: XEh, +q: XWq) -> XWh:
+  match q:
+    case XWq{+lo, +hi, +rev, ids}:
+      xw.k.of(h, rev, lo, hi)
+    case XWqOf{+y}:
+      xw.k.h(h, y)
+
+# the entry e of the node x read, and what the walk does with it
+def xw.k(+e: String, +x: KV.XNode, +q: XWq) -> XWh:
+  match x:
+    case KV.XNd{+mid, mfs, live, dead, bytes, nel, es}:
+      xw.k.h(xh.read(e, mid), q)
+    case KV.XNdOf{+y}:
+      xw.k(e, y, q)
+
+# an entry's body, read from a copy of its bytes past its head (off on),
+# its node x's master fields lent
+def xw.body.of(+fl: Nat, +e: String, +off: Nat, +x: KV.XNode) -> List<&2, String>:
+  match x:
+    case KV.XNd{mid, +mfs, live, dead, bytes, nel, es}:
+      xe.body(xh.same(fl), String.slice(e, off, Nat.sub(String.length(e), off)), mfs)
+    case KV.XNdOf{+y}:
+      xw.body.of(fl, e, off, y)
+
+def xw.body.ids(ids: Bool, +fl: Nat, +e: String, +off: Nat, +x: KV.XNode) -> List<&2, String>:
+  match ids:
+    case True{}:
+      Nil{}
+    case False{}:
+      xw.body.of(fl, e, off, x)
+
+# an entry's body, or none for a walk that wants IDs alone
+def xw.body(+fl: Nat, +e: String, +off: Nat, +q: XWq, +x: KV.XNode) -> List<&2, String>:
+  match q:
+    case XWq{lo, hi, rev, +ids}:
+      xw.body.ids(ids, fl, e, off, x)
+    case XWqOf{+y}:
+      xw.body(fl, e, off, y, x)
+
+# pass (0), end (1), or take (2)
+def xw.do(k: Nat, +fl: Nat, +id: KV.XId, +e: String, +off: Nat, acc: List<&2, XE>, +c: Nat, +q: XWq, +x: KV.XNode) -> XWk:
+  match k:
+    case 0n:
+      XWk{acc, c, False{}, q, x}
+    case 1n:
+      XWk{acc, c, True{}, q, x}
+    case _:
+      XWk{XE{id, xw.body(fl, e, off, q, x)} <> acc, Nat.sub(c, 1n), Nat.is_eq(c, 1n), q, x}
+
+def xw.step(h: XWh, +e: String, acc: List<&2, XE>, +c: Nat, q: XWq, x: KV.XNode) -> XWk:
+  match h:
+    case XWh{+k, +fl, +id, +off}:
+      xw.do(k, fl, id, e, off, acc, c, q, x)
+    case XWhBad{}:
+      XWk{acc, c, True{}, q, x}
+
+# the walk at the entry e of its node, unless it is over
+def xw.ent(+e: String, w: XWk) -> XWk:
+  match w:
+    case XWk{acc, +c, False{}, +q, +x}:
+      xw.step(xw.k(e, x, q), e, acc, c, q, x)
+    case other:
+      other
+
+# a walk backwards through a node's entries es
+def xw.back(+es: List<&2, String>, w: XWk) -> XWk:
   match es w:
-    case Con{+e, rest} XWk{acc, +c, False{}}:
-      xw.ents(rest, xw.one(xh.read(e, mid), e, rev, acc, c, mfs, nmf, lo, hi, ids), rev, mid, mfs, nmf, lo, hi, ids)
+    case Con{+e, +rest} XWk{acc, +c, False{}, +q, +x}:
+      xw.back(rest, xw.step(xw.k(e, x, q), e, acc, c, q, x))
     case _ other:
       other
 
-# a node's entries es (kept the newest first) in a walk's order: a match,
-# so that a walk backwards reverses none
-def xw.order(rev: Bool, +es: List<&2, String>) -> List<&2, String>:
+# a walk forwards through a node's entries es: the older ones, then e
+def xw.fwd(+es: List<&2, String>, w: XWk) -> XWk:
+  match es:
+    case Con{+e, +rest}:
+      xw.ent(e, xw.fwd(rest, w))
+    case Nil{}:
+      w
+
+# A walk forwards from lo past a node's master ID mid. A node's live
+# entries' IDs grow, the oldest first (XADD and XSETID keep them so, and
+# rdb.bend checks a node it reads), so that every live entry older than
+# one before lo is before lo too. The walk reads the node's newest entry
+# first: when it is live and before lo, the node holds nothing the walk
+# takes, and the walk passes it whole; when lo seems nearer the newest
+# entry than mid, the walk goes down from the newest, reading each
+# entry's head, to the first live one before lo, which it passes with the
+# older ones, and takes or passes the entries above it, the oldest first;
+# else it goes from the oldest, as from a start at mid. The walk takes the
+# same entries in each way; the guess decides how many heads it reads.
+
+# whether b is nearer c than a, for a <= b <= c: by their times when a's
+# and c's differ, else by their sequences
+def xw.nearer.of(same: Bool, +ma: KV.XN, +sa: KV.XN, +mb: KV.XN, +sb: KV.XN, +mc: KV.XN, +sc: KV.XN) -> Bool:
+  match same:
+    case True{}:
+      Cmp.is_lt(KV.xn.cmp(xn.sub(sc, sb), xn.sub(sb, sa)))
+    case False{}:
+      Cmp.is_lt(KV.xn.cmp(xn.sub(mc, mb), xn.sub(mb, ma)))
+
+def xw.nearer(+a: KV.XId, +b: KV.XId, +c: KV.XId) -> Bool:
+  match a b c:
+    case KV.XId{+ma, +sa} KV.XId{+mb, +sb} KV.XId{+mc, +sc}:
+      xw.nearer.of(KV.xn.is_eq(ma, mc), ma, sa, mb, sb, mc, sc)
+
+# What a walk down a node does at an entry, its head h read: it stops,
+# passing the entry and the older ones (XCStop); it takes or passes the
+# entry once the older ones are walked down (XCGo); it walks the older
+# ones from the oldest, then the entry (XCAll); or, the head not read, it
+# walks the older ones from the oldest and ends at the entry, as a walk
+# from the oldest ends at it (XCBad)
+type XCut is Data:
+  XCStop{}
+  XCGo{h: XWh}
+  XCAll{h: XWh}
+  XCBad{}
+
+def xw.cut.pick(m: Nat, h: XWh) -> XCut:
+  match m:
+    case 0n:
+      XCStop{}
+    case 1n:
+      XCGo{h}
+    case _:
+      XCAll{h}
+
+# at the newest entry: the node passed whole when the entry is live and
+# before lo (0), down from it when lo seems nearer it than mid (1), else
+# from the oldest (2)
+def xw.cut.top(h: XWh, +lo: KV.XId, +mid: KV.XId) -> XCut:
+  match h:
+    case XWh{+k, +fl, +id, +off}:
+      xw.cut.pick(Bool.pick(Nat, Bool.and(Bool.not(xh.deleted(fl)), Cmp.is_lt(KV.xid.cmp(id, lo))), 0n, Bool.pick(Nat, xw.nearer(mid, lo, id), 1n, 2n)), XWh{k, fl, id, off})
+    case XWhBad{}:
+      XCBad{}
+
+# at an older one on the way down: stop at a live one before lo
+def xw.cut.at(h: XWh, +lo: KV.XId) -> XCut:
+  match h:
+    case XWh{+k, +fl, +id, +off}:
+      xw.cut.pick(Bool.pick(Nat, Bool.and(Bool.not(xh.deleted(fl)), Cmp.is_lt(KV.xid.cmp(id, lo))), 0n, 1n), XWh{k, fl, id, off})
+    case XWhBad{}:
+      XCBad{}
+
+# the walk at the entry e of its node, its head h read, unless it is over
+def xw.ent.h(h: XWh, +e: String, w: XWk) -> XWk:
+  match w:
+    case XWk{acc, +c, False{}, +q, +x}:
+      xw.step(h, e, acc, c, q, x)
+    case other:
+      other
+
+# what the walk down does at the head of es, the newest of them (at its
+# end, nothing more: it stops)
+def xw.cut.next(+es: List<&2, String>, +lo: KV.XId, +x: KV.XNode, +q: XWq) -> XCut:
+  match es:
+    case Con{+e, +rest}:
+      xw.cut.at(xw.k(e, x, q), lo)
+    case Nil{}:
+      XCStop{}
+
+# the walk down a node's entries es from their head (d: what it does
+# there). The entry at the head is a field of es, which the node lends, so
+# that keeping it for the way back up takes nothing (a parameter kept
+# across the call down would be taken, and every walk's entries with it)
+def xw.cut(+es: List<&2, String>, d: XCut, +lo: KV.XId, w: XWk) -> XWk:
+  match es d w:
+    case Con{+e, +t} XCGo{+h} XWk{acc, +c, False{}, +q, +x}:
+      xw.ent.h(h, e, xw.cut(t, xw.cut.next(t, lo, x, q), lo, XWk{acc, c, False{}, q, x}))
+    case Con{+e, +t} XCAll{+h} w0:
+      xw.ent.h(h, e, xw.fwd(t, w0))
+    case Con{+e, +t} XCBad{} w0:
+      xw.ent(e, xw.fwd(t, w0))
+    case _ _ w0:
+      w0
+
+def xwq.lo(+q: XWq) -> KV.XId:
+  match q:
+    case XWq{+lo, hi, rev, ids}:
+      lo
+    case XWqOf{+y}:
+      xwq.lo(y)
+
+# what the walk down does at the newest entry, the head of es
+def xw.cut.first(+es: List<&2, String>, +lo: KV.XId, +mid: KV.XId, +x: KV.XNode, +q: XWq) -> XCut:
+  match es:
+    case Con{+e, +rest}:
+      xw.cut.top(xw.k(e, x, q), lo, mid)
+    case Nil{}:
+      XCStop{}
+
+# a walk forwards through a node's entries es: from the oldest when lo is
+# at most mid, else from the newest entry's head (xw.cut.top)
+def xw.fwd.of(past: Bool, +es: List<&2, String>, +mid: KV.XId, w: XWk) -> XWk:
+  match past w:
+    case True{} XWk{acc, +c, False{}, +q, +x}:
+      +lo = xwq.lo(q)
+      xw.cut(es, xw.cut.first(es, lo, mid, x, q), lo, XWk{acc, c, False{}, q, x})
+    case False{} w0:
+      xw.fwd(es, w0)
+    case _ w0:
+      w0
+
+def xw.fwd.top(+es: List<&2, String>, +mid: KV.XId, w: XWk) -> XWk:
+  match w:
+    case XWk{acc, +c, end, +q, +x}:
+      xw.fwd.of(Cmp.is_gt(KV.xid.cmp(xwq.lo(q), mid)), es, mid, XWk{acc, c, end, q, x})
+
+def xw.node.go(rev: Bool, +mid: KV.XId, +es: List<&2, String>, w: XWk) -> XWk:
   match rev:
     case True{}:
-      es
+      xw.back(es, w)
     case False{}:
-      List.reverse(&2, String, es)
+      xw.fwd.top(es, mid, w)
 
-# a walk through a node
-def xw.node(+x: KV.XNode, w: XWk, +rev: Bool, +lo: KV.XId, +hi: KV.XId, +ids: Bool) -> XWk:
+# a walk through the node x, the walk's node
+def xw.node(+x: KV.XNode, +rev: Bool, w: XWk) -> XWk:
   match x:
-    case KV.XNd{+mid, +mfs, live, dead, bytes, nel, +es}:
-      xw.ents(xw.order(rev, es), w, rev, mid, mfs, List.length(&2, String, mfs), lo, hi, ids)
+    case KV.XNd{+mid, mfs, live, dead, bytes, nel, +es}:
+      xw.node.go(rev, mid, es, w)
     case KV.XNdOf{+y}:
-      xw.node(y, w, rev, lo, hi, ids)
+      xw.node(y, rev, w)
+
+# the walk with y as its node
+def xw.in(+y: KV.XNode, w: XWk) -> XWk:
+  match w:
+    case XWk{acc, c, end, q, x}:
+      XWk{acc, c, end, q, y}
+
+# the walk through the node at place i of t (c: how i compares with the
+# size of t's left side), found in place and lent to the walk
+def xw.nth(+t: KV.XNodes, c: Cmp, +i: Nat, +rev: Bool, w: XWk) -> XWk:
+  match t c:
+    case KV.XNTip{} _:
+      w
+    case KV.XNBin{n, y, +l, r} LT{}:
+      xw.nth(l, Nat.cmp(i, xns.lsize(l)), i, rev, w)
+    case KV.XNBin{n, +y, l, r} EQ{}:
+      xw.node(y, rev, xw.in(y, w))
+    case KV.XNBin{n, y, +l, +r} GT{}:
+      +j = Nat.sub(i, Nat.add(KV.xns.size(l), 1n))
+      xw.nth(r, Nat.cmp(j, xns.lsize(r)), j, rev, w)
 
 # a walk through k nodes of t from place i on, forwards or backwards
-def xw.nodes(k: Nat, w: XWk, +t: KV.XNodes, +i: Nat, +rev: Bool, +lo: KV.XId, +hi: KV.XId, +ids: Bool) -> XWk:
+def xw.nodes(k: Nat, w: XWk, +t: KV.XNodes, +i: Nat, +rev: Bool) -> XWk:
   match k w:
-    case 1n+j XWk{acc, +c, False{}}:
-      xw.nodes(j, xw.node(xns.nth(t, i), XWk{acc, c, False{}}, rev, lo, hi, ids), t, Bool.pick(Nat, rev, Nat.sub(i, 1n), Nat.add(i, 1n)), rev, lo, hi, ids)
+    case 1n+j XWk{acc, +c, False{}, q, x}:
+      xw.nodes(j, xw.nth(t, Nat.cmp(i, xns.lsize(t)), i, rev, XWk{acc, c, False{}, q, x}), t, Bool.pick(Nat, rev, Nat.sub(i, 1n), Nat.add(i, 1n)), rev)
     case _ other:
       other
 
@@ -599,9 +848,18 @@ def xw.start(m: Maybe<&2, Nat>, +dflt: Nat) -> Nat:
     case None{}:
       dflt
 
+# the bound a walk starts from: hi backwards, else lo (a match, as an ID
+# picked by Bool.pick is made a node of its own)
+def xw.key(rev: Bool, +lo: KV.XId, +hi: KV.XId) -> KV.XId:
+  match rev:
+    case True{}:
+      hi
+    case False{}:
+      lo
+
 def xw.at(+t: KV.XNodes, +rev: Bool, +lo: KV.XId, +hi: KV.XId) -> Nat:
   +n = KV.xns.size(t)
-  +k = Bool.pick(KV.XId, rev, hi, lo)
+  +k = xw.key(rev, lo, hi)
   +dflt = Bool.pick(Nat, rev, Nat.sub(n, 1n), 0n)
   Bool.pick(Nat, xid.is_zero(k), dflt, xw.start(xns.floor(t, k), dflt))
 
@@ -612,10 +870,31 @@ def xstream.nodes(+x: KV.XStream) -> KV.XNodes:
     case KV.XStrOf{+y}:
       xstream.nodes(y)
 
+# The sizes of a stream's trees, read in place. A size passed a tree that
+# a call made (xstream.nodes's) would take the tree it is passed, and so
+# take every tree it is given: a tree kept in the keyspace would then be
+# copied, each time its size is read, and its copy dropped.
+
+# how many nodes x holds
+def xs.nnodes(+x: KV.XStream) -> Nat:
+  match x:
+    case KV.XStr{n, last, first, maxdel, added, nodes, groups}:
+      KV.xns.size(nodes)
+    case KV.XStrOf{+y}:
+      xs.nnodes(y)
+
+# how many groups x has
+def xs.ngroups(+x: KV.XStream) -> Nat:
+  match x:
+    case KV.XStr{n, last, first, maxdel, added, nodes, groups}:
+      KV.xgs.size(groups)
+    case KV.XStrOf{+y}:
+      xs.ngroups(y)
+
 # a walk's entries in the order it took them
 def xw.taken(w: XWk) -> List<&2, XE>:
   match w:
-    case XWk{acc, c, e}:
+    case XWk{acc, c, e, q, x}:
       List.reverse(&2, XE, acc)
 
 # the entries of x from lo to hi, at most c of them (c at least 1), in
@@ -626,7 +905,7 @@ def xs.walk(+x: KV.XStream, +lo: KV.XId, +hi: KV.XId, +c: Nat, +rev: Bool, +ids:
   +i = xw.at(t, rev, lo, hi)
   +n = KV.xns.size(t)
   +k = Bool.pick(Nat, rev, Nat.add(i, 1n), Nat.sub(n, i))
-  xw.taken(xw.nodes(Bool.pick(Nat, Nat.is_eq(n, 0n), 0n, k), XWk{Nil{}, c, False{}}, t, i, rev, lo, hi, ids))
+  xw.taken(xw.nodes(Bool.pick(Nat, Nat.is_eq(n, 0n), 0n, k), XWk{Nil{}, c, False{}, XWq{lo, hi, rev, ids}, xnode.none()}, t, i, rev))
 
 def xs.range(+x: KV.XStream, +lo: KV.XId, +hi: KV.XId, +c: Nat, +rev: Bool) -> List<&2, XE>:
   xs.walk(x, lo, hi, c, rev, False{})
@@ -821,6 +1100,22 @@ def xgroup.cons(+g: KV.XGroup) -> KV.XCons:
     case KV.XGrpOf{+y}:
       xgroup.cons(y)
 
+# how many entries are pending in g, and how many consumers it has, read
+# in place (xs.nnodes)
+def xgroup.npel(+g: KV.XGroup) -> Nat:
+  match g:
+    case KV.XGrp{name, last, rd, pel, cons}:
+      KV.xpl.size(pel)
+    case KV.XGrpOf{+y}:
+      xgroup.npel(y)
+
+def xgroup.ncons(+g: KV.XGroup) -> Nat:
+  match g:
+    case KV.XGrp{name, last, rd, pel, cons}:
+      KV.xcs.size(cons)
+    case KV.XGrpOf{+y}:
+      xgroup.ncons(y)
+
 def xs.group(+x: KV.XStream, +name: String) -> Maybe<&2, KV.XGroup>:
   +t = xstream.groups(x)
   KV.xgs.find(t, KV.xgs.at(t, name), name)
@@ -838,6 +1133,12 @@ def xcon.ids(+c: KV.XCon) -> KV.XIds:
   match c:
     case KV.XCon{name, seen, active, +ids}:
       ids
+
+# how many entries are pending for c, read in place (xs.nnodes)
+def xcon.nids(+c: KV.XCon) -> Nat:
+  match c:
+    case KV.XCon{name, seen, active, ids}:
+      KV.xis.size(ids)
 
 def xcon.active(+c: KV.XCon) -> KV.XAct:
   match c:
@@ -1059,7 +1360,7 @@ def xcs.keep(none: Bool, +x: KV.XCon, acc: List<&2, KV.XCon>) -> List<&2, KV.XCo
 def xcs.pending(cs: List<&2, KV.XCon>, acc: List<&2, KV.XCon>) -> List<&2, KV.XCon>:
   match cs:
     case Con{+x, rest}:
-      xcs.pending(rest, xcs.keep(Nat.is_eq(KV.xis.size(xcon.ids(x)), 0n), x, acc))
+      xcs.pending(rest, xcs.keep(Nat.is_eq(xcon.nids(x), 0n), x, acc))
     case Nil{}:
       List.reverse(&2, KV.XCon, acc)
 
@@ -1821,12 +2122,28 @@ def xpl.of(+g: KV.XGroup, +id: KV.XId) -> Maybe<&2, KV.XNack>:
   +pel = xgroup.pel(g)
   KV.xpl.find(pel, KV.xpl.at(pel, id), id)
 
+# A group's writes below match the group's node once, its fields moved
+# into the group they make: a group that a write made (the steps of
+# XWSet's words, of XCLAIM's and of XAUTOCLAIM's) changes in place, its
+# trees with it, where reading each field apart (xgroup.pel) would keep
+# the trees shared with the group it read them from, and so copy each
+# path a change takes, and drop the old one with the group. A group the
+# stream holds is copied at its first change.
+
+# the group without the pending entry of id, which o owns
+def xg.unack.at(+g: KV.XGroup, +o: String, +id: KV.XId) -> KV.XGroup:
+  match g:
+    case KV.XGrp{+name, +last, rd, +pel, +cons}:
+      KV.XGrp{name, last, rd, KV.xpl.del(id, pel), xcs.unown(cons, o, id)}
+    case KV.XGrpOf{+y}:
+      xg.unack.at(y, o, id)
+
 # the group without the pending entry of id (an XACK, or an entry gone
 # from the stream), as it was when it has none
 def xg.unack.of(m: Maybe<&2, KV.XNack>, +g: KV.XGroup, +id: KV.XId) -> KV.XGroup:
   match m:
     case Some{+nk}:
-      xgroup.mk(g, xgroup.last(g), xgroup.read(g), KV.xpl.del(id, xgroup.pel(g)), xcs.unown(xgroup.cons(g), xnack.owner(nk), id))
+      xg.unack.at(g, xnack.owner(nk), id)
     case None{}:
       g
 
@@ -1843,14 +2160,22 @@ def xcs.move(same: Bool, +cs: KV.XCons, +o: String, +c: String, +id: KV.XId) -> 
       xcs.own(xcs.unown(cs, o, id), c, id)
 
 # the group with the entry of id pending for consumer c (who is there),
-# delivered at t, n times: made, or moved from its owner
+# delivered at t, n times: moved from its owner (m: some), or made
+def xg.give.at(+g: KV.XGroup, m: Maybe<&2, String>, +c: String, +id: KV.XId, +t: Nat, +n: KV.XN) -> KV.XGroup:
+  match g m:
+    case KV.XGrp{+name, +last, rd, +pel, +cons} Some{+o}:
+      KV.XGrp{name, last, rd, KV.xpl.set(KV.XNk{id, c, t, n}, pel), xcs.move(String.eq(o, c), cons, o, c, id)}
+    case KV.XGrp{+name, +last, rd, +pel, +cons} None{}:
+      KV.XGrp{name, last, rd, KV.xpl.put(KV.XNk{id, c, t, n}, pel), xcs.own(cons, c, id)}
+    case KV.XGrpOf{+y} m0:
+      xg.give.at(y, m0, c, id, t, n)
+
 def xg.give.of(m: Maybe<&2, KV.XNack>, +g: KV.XGroup, +c: String, +id: KV.XId, +t: Nat, +n: KV.XN) -> KV.XGroup:
   match m:
     case Some{+nk}:
-      +o = xnack.owner(nk)
-      xgroup.mk(g, xgroup.last(g), xgroup.read(g), KV.xpl.set(KV.XNk{id, c, t, n}, xgroup.pel(g)), xcs.move(String.eq(o, c), xgroup.cons(g), o, c, id))
+      xg.give.at(g, Some{xnack.owner(nk)}, c, id, t, n)
     case None{}:
-      xgroup.mk(g, xgroup.last(g), xgroup.read(g), KV.xpl.put(KV.XNk{id, c, t, n}, xgroup.pel(g)), xcs.own(xgroup.cons(g), c, id))
+      xg.give.at(g, None{}, c, id, t, n)
 
 def xg.give(+g: KV.XGroup, +c: String, +id: KV.XId, +t: Nat, +n: KV.XN) -> KV.XGroup:
   xg.give.of(xpl.of(g, id), g, c, id, t, n)
@@ -1877,20 +2202,37 @@ def xg.sets(ns: List<&2, XSn>, +g: KV.XGroup, +c: String, +x: KV.XStream) -> KV.
     case Nil{}:
       g
 
+# the group with the consumer k set (there) or put (not there)
+def xg.cons.at(+g: KV.XGroup, there: Bool, +k: KV.XCon) -> KV.XGroup:
+  match g there:
+    case KV.XGrp{+name, +last, rd, +pel, +cons} True{}:
+      KV.XGrp{name, last, rd, pel, KV.xcs.set(k, cons)}
+    case KV.XGrp{+name, +last, rd, +pel, +cons} False{}:
+      KV.XGrp{name, last, rd, pel, KV.xcs.put(k, cons)}
+    case KV.XGrpOf{+y} t:
+      xg.cons.at(y, t, k)
+
 def xg.con.of(m: Maybe<&2, KV.XCon>, +g: KV.XGroup, +c: String, +seen: Nat, act: KV.XAct) -> KV.XGroup:
   match m:
     case Some{+k}:
-      xgroup.mk(g, xgroup.last(g), xgroup.read(g), xgroup.pel(g), KV.xcs.set(xcon.times(k, seen, act), xgroup.cons(g)))
+      xg.cons.at(g, True{}, xcon.times(k, seen, act))
     case None{}:
-      xgroup.mk(g, xgroup.last(g), xgroup.read(g), xgroup.pel(g), KV.xcs.put(KV.XCon{c, seen, act, KV.XITip{}}, xgroup.cons(g)))
+      xg.cons.at(g, False{}, KV.XCon{c, seen, act, KV.XITip{}})
 
 # the group with consumer c's times (c made when it is not there)
 def xg.con(+g: KV.XGroup, +c: String, +seen: Nat, act: KV.XAct) -> KV.XGroup:
   xg.con.of(xgroup.con(g, c), g, c, seen, act)
 
+# the group with its last ID and count of entries read
+def xg.last.at(+g: KV.XGroup, +last: KV.XId, rd: KV.XRd) -> KV.XGroup:
+  match g:
+    case KV.XGrp{+name, l, r, +pel, +cons}:
+      KV.XGrp{name, last, rd, pel, cons}
+    case KV.XGrpOf{+y}:
+      xg.last.at(y, last, rd)
+
 def xg.set(+g: KV.XGroup, +c: String, +seen: Nat, act: KV.XAct, ns: List<&2, XSn>, +x: KV.XStream, +last: KV.XId, rd: KV.XRd) -> KV.XGroup:
-  +g2 = xg.sets(ns, xg.con(g, c, seen, act), c, x)
-  xgroup.mk(g2, last, rd, xgroup.pel(g2), xgroup.cons(g2))
+  xg.last.at(xg.sets(ns, xg.con(g, c, seen, act), c, x), last, rd)
 
 def xs.gset.of(m: Maybe<&2, KV.XGroup>, +x: KV.XStream, +c: String, +seen: Nat, act: KV.XAct, ns: List<&2, XSn>, +last: KV.XId, rd: KV.XRd) -> Maybe<&2, KV.XStream>:
   match m:
@@ -2005,6 +2347,10 @@ def xs.entry.of(es: List<&2, XE>) -> Maybe<&2, XE>:
 def xs.entry(+x: KV.XStream, +id: KV.XId) -> Maybe<&2, XE>:
   xs.entry.of(xs.range(x, id, id, 1n, False{}))
 
+# the entry of id, its ID alone with bare (its fields and values none)
+def xs.entry.w(+x: KV.XStream, +id: KV.XId, +bare: Bool) -> Maybe<&2, XE>:
+  xs.entry.of(xs.walk(x, id, id, 1n, False{}, bare))
+
 def xhe.sn(m: Maybe<&2, XE>, +nk: KV.XNack, +now: Nat, ns: List<&2, XSn>) -> List<&2, XSn>:
   match m:
     case Some{e}:
@@ -2015,11 +2361,12 @@ def xhe.sn(m: Maybe<&2, XE>, +nk: KV.XNack, +now: Nat, ns: List<&2, XSn>) -> Lis
 type XHs is Data:
   XHs{hs: List<&2, XHe>, ns: List<&2, XSn>}
 
-def xg.history(nks: List<&2, KV.XNack>, +x: KV.XStream, +now: Nat, h: XHs) -> XHs:
+# (bare: the entries' IDs alone, for the words of the write alone)
+def xg.history(nks: List<&2, KV.XNack>, +x: KV.XStream, +now: Nat, +bare: Bool, h: XHs) -> XHs:
   match nks h:
     case Con{+nk, rest} XHs{hs, ns}:
-      +m = xs.entry(x, KV.xnack.id(nk))
-      xg.history(rest, x, now, XHs{XHe{KV.xnack.id(nk), m} <> hs, xhe.sn(m, nk, now, ns)})
+      +m = xs.entry.w(x, KV.xnack.id(nk), bare)
+      xg.history(rest, x, now, bare, XHs{XHe{KV.xnack.id(nk), m} <> hs, xhe.sn(m, nk, now, ns)})
     case Nil{} h0:
       h0
 
