@@ -896,7 +896,7 @@ translation stays in the trusted base.
   and so does the start from a large file (PERFORMANCE.md, sections 72 and 78;
   FINDINGS.md, sections 3zzzk and 3zzzt).
 
-Not yet: XREAD's and XREADGROUP's wait, CONFIG REWRITE (it answers as Redis does without a configuration file).
+Not yet: CONFIG REWRITE (it answers as Redis does without a configuration file).
 Times in ms are limited to 14 digits.
 
 ## Performance

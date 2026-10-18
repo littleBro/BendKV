@@ -437,10 +437,9 @@ INFO's statistics per command, which `info-command` looked for, made 3 more test
 SCAN and RANDOMKEY pass all their tests on keys: SCAN's basic iteration, COUNT, MATCH,
 TYPE, and its guarantee under a load of writes, and RANDOMKEY's three.
 
-So what the suite counts next is XREAD's and XREADGROUP's wait (22 tests of the streams'
-units) and `CONFIG SET appendonly yes`, which 23 tests after it wait for, then
-replication, whose SYNC stops 26 tests, then the query buffer of the third row (2
-tests).
+So what the suite counts next is `CONFIG SET appendonly yes`, which 23 tests after it
+wait for, then replication, whose SYNC stops 26 tests, then the query buffer of the
+third row (2 tests).
 
 ## What it found
 
