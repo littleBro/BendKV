@@ -390,13 +390,14 @@ Where performance and proof meet: **batched execution under proved laws.**
    batches run the general way, each call checked against its user's selectors, and the
    client of each other batch is looked up by its id in a trie of the restricted
    (PERFORMANCE.md, section 70). A stream's groups take 5 to 9 times Redis's time to
-   read and claim (sections 3zzzzt and 3zzzzv): the walks read a node's entries in
-   place, about 500 instructions an entry they pass where Redis takes 550, and go down
-   from a node's newest entry when their start is nearer it, but a group's write still
-   walks its stream about twice as often as Redis's, and on a stream the keyspace holds
-   it copies the group and drops the old stream; a stream taken out of the keyspace for
-   its groups' writes, as HSET's hash is, is next (PERFORMANCE.md, section 89). Next
-   within the scope: the query buffer's limits.
+   read and claim (sections 3zzzzt, 3zzzzv and 3zzzzw): the walks read a node's entries
+   in place, about 365 instructions an entry they pass, its head compared with their
+   bounds by its differences from its node's master ID, where Redis takes 550, and go
+   down from a node's newest entry when their start is nearer it, but a group's write
+   still walks its stream about twice as often as Redis's, and on a stream the keyspace
+   holds it copies the group and drops the old stream; a stream taken out of the
+   keyspace for its groups' writes, as HSET's hash is, is next (PERFORMANCE.md, sections
+   89 and 90). Next within the scope: the query buffer's limits.
 
 After that comes proving the native strings (section 5, step 1): a small piece of
 work that makes the word "verified" much stronger.
