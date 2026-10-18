@@ -10464,8 +10464,9 @@ only refuse.
 
 **What it costs.** Every other client's answer is `Ans`, which leaves the tail as it is:
 its connection matches the tail once more after each answer, and the parse matches it
-once more, about 2 instructions a request under callgrind, and perfcheck counts what
-the build before counts (GET 3,499, SET 4,297 and INCR 4,613 instructions a request).
+once more, about 2 instructions a request under callgrind. perfcheck counts GET 3,506,
+SET 4,297 and INCR 4,614 instructions a request, against 3,499, 4,297 and 4,613 for the
+build before.
 The new paths reach `conn_batch` and `conn_put` through the defs that called them
 already (`conn_more`, and `conn_ans` again for an `AnsAuth`): a def called from a second
 place is entered through the work loop (section 8), and a first build that called the
