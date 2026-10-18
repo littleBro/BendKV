@@ -365,7 +365,8 @@ differs: Redis serves the clients of the keys a command added (`signalKeyAsReady
 `dbAdd`), key by key in order of readiness, while BendKV looks at all waiting clients,
 in order of their arrival, after each command that may make one ready (one that may
 write a key a client waits on, or a command of the connection or of the server); there
-is no XREAD, and WAIT's wait ends only by its time or CLIENT UNBLOCK (below). In a
+is no XREAD, WAIT's wait ends only by its time or CLIENT UNBLOCK, and WAITAOF's by
+those or the append-only file's sync (below). In a
 transaction a blocking command does not wait, as in Redis (below).
 Transactions: MULTI, EXEC, DISCARD, WATCH and UNWATCH, as Redis 7.2.16 runs them. After
 MULTI a command is queued (QUEUED), except EXEC, DISCARD, MULTI (an error: transactions
@@ -446,10 +447,14 @@ time of the actor's group, in ms (the microseconds end in 000), and a monitor ge
 lines of the calls EXEC runs after EXEC's array, whereas Redis writes them between its
 replies.
 The server's administrative commands, as Redis 7.2.16 answers them on a master with no
-replica: LASTSAVE (the last save that ended well, the start until one does), ROLE, WAIT (0: at once
-when it asks for no replica, otherwise when its timeout ends, its client waiting as a
-blocking command's does), MEMORY STATS, DOCTOR, PURGE and MALLOC-STATS (Redis's fields
-and advice from the numbers of INFO's memory section; no allocator's statistics), LOLWUT
+replica: LASTSAVE (the last save that ended well, the start until one does), ROLE (with
+the replication's offset, INFO's `master_repl_offset`, which counts what the append-only
+file gets as Redis 7.2.16 counts it with no replica), WAIT (0: at once when it asks for
+no replica, otherwise when its timeout ends, its client waiting as a blocking command's
+does), WAITAOF (once the append-only file is synced past the client's last write, as
+`appendfsync` syncs it; section 3zzzzo of docs/FINDINGS.md), MEMORY STATS, DOCTOR, PURGE
+and MALLOC-STATS (Redis's fields and advice from the numbers of INFO's memory section; no
+allocator's statistics), LOLWUT
 (Redis 7.2.16's line, and VERSION 5's and 6's drawings, byte for byte those that take
 no random number), and SHUTDOWN with its flags: the append-only file written and synced,
 a rewrite or a background save that runs stopped, the RDB file saved with SAVE or with
@@ -999,9 +1004,9 @@ The translation the kernel reads can be dumped with
   RESP2 and in RESP3, and go-redis v9.23.0's specs, in RESP3, each against Redis 7.2.16
   and against BendKV, each on a server started for it, without their tests of modules,
   clusters, sentinels and TLS. Of the tests Redis passes, BendKV passes 2,723 of 2,772 in
-  redis-py, the same tests in RESP2 and in RESP3, and 449 of 463 in go-redis; every other
+  redis-py, the same tests in RESP2 and in RESP3, and 450 of 463 in go-redis; every other
   one fails on what BendKV does not have (streams' groups and XREAD's wait, MODULE,
-  REPLICAOF, WAITAOF, and COMMAND's entries of those), none on a command BendKV has
+  REPLICAOF, and COMMAND's entries of those), none on a command BendKV has
   otherwise. A test Redis passes that BendKV fails, and that is not among the
   known failures of `tools/data/clients.json`, fails CI.
 - **Differential testing against Redis 7.2.16** (`tests/diff_test.py`). Random streams

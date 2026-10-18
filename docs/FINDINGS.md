@@ -10425,6 +10425,95 @@ without LIMIT, and by member in reverse, from a skiplist of 200 elements and fro
 with a member of 70 bytes, then ZUNIONSTORE, ZINTERSTORE and ZDIFFSTORE, each read by
 its encoding and its scores of -0, against Redis.
 
+## 3zzzzo. WAITAOF and the replication's offset, as Redis 7.2.16 counts them
+
+**What was missing.** WAITAOF, new in Redis 7.2, was an unknown command (go-redis's test
+of it failed so), and INFO's `master_repl_offset` and ROLE's offset were 0 where Redis
+7.2 counts them with no replica (`info_test` parted from Redis once a WAIT had waited:
+section 3zzzzl). Redis 7.2 counts into the offset each command it propagates while the
+append-only file is on: `replicationFeedSlaves`, with no replica and no backlog to feed,
+adds one, so that WAITAOF can tell what the file has synced. A transaction's MULTI and
+EXEC count; a SELECT does not, as the function counts before it would select a database.
+It counts one more at the end of each cycle of the event loop in which a client began to
+wait in WAIT or WAITAOF, for the GETACK it sends its replicas then
+(`sendGetackToReplicas`; while a pause of writes holds, at the pause's end).
+`fsynced_reploff` is the offset known to be on the disk: 0 at the start with the file
+on, -1 without; with `appendfsync always` the offset after each cycle's fsync, with
+`everysec` the one the background fsync was asked at, and with `no` the one the old
+incremental file is synced at as a rewrite begins. Each client keeps the offset after
+its last command that propagated something (`c->woff`), and `WAITAOF numlocal
+numreplicas timeout` waits until `fsynced_reploff` passes it and as many replicas have
+acknowledged it, or until its time is up, then answers both counts.
+
+**What changed** (`src/info.bend`, `src/session.bend`, `src/redis.bend`,
+`src/server.bend`, `tools/gen_commands.py`, `tests/admin_test.py`).
+- `Rof` (info.bend) holds the file's bytes, which `IInfo` held before, the offset (a
+  `Big`: a long long's count may pass 2^48), the offset synced, each client's offset by
+  its id, the cycle of the last GETACK, and one a pause holds.
+- The file's writer counts a group's commands as it writes them (`ents.out`): one for an
+  entry of one effect, a transaction's effects and its MULTI and EXEC, one for each
+  FUNCTION command's entry, none for a SELECT. A client that wrote in the group gets one
+  past the offset before the group's entries as its own: the file is synced only between
+  groups, so that a sync covers that offset when it covers the client's last entry, and
+  no count is added to a write as it runs. A script's writes count for its caller (the
+  script's client is 0), and a served pop for its client (below).
+- WAITAOF is parsed as Redis parses it, its errors in Redis's order (numlocal,
+  numreplicas, the timeout, then a numlocal with no file). In MULTI, or when it asks for
+  nothing it lacks, the session answers it at once, in MULTI with the offset its client
+  had when EXEC began (Redis sets `c->woff` after EXEC's call). Otherwise its client
+  waits, as a WAIT's does (`BlkAof`, parser code 221); the clients that wait for a sync
+  are looked at at a tick and once the syncer has synced, while one may be served so,
+  and their time up and CLIENT UNBLOCK answer them with what they have.
+- A client that begins to wait in WAIT or WAITAOF counts a GETACK, once a cycle (El's
+  count of cycles), kept while a pause of writes holds and counted when it ends, by its
+  time or CLIENT UNPAUSE.
+- The syncs: with `always`, after each group's write; with `everysec`, the syncer asks
+  the actor for the offset before it syncs (`SyncAsk`, answered once the group the ask
+  came in is written) and tells it once it has (`Synced`), so that the clients that wait
+  are served then, not at the next tick; with `no`, as a rewrite takes a new incremental
+  file, and, in the single file BendKV runs without a directory, as the rewritten file,
+  synced, replaces it.
+- ROLE gives the offset.
+
+**Where BendKV differs** (README.md, The server).
+- The offset counts a group's commands once the group is written, so that an INFO or a
+  ROLE in the group of writes before it gives the offset before them, where Redis counts
+  each command as it runs. No test of Redis's reads it so, and an exact offset there
+  would have the session count each command's entries as it runs it.
+- A DEL of a key not there is logged (Transactions; BITOP and SORT's STORE of nothing
+  log one of their destination), so it counts, and a WAITAOF after it waits for its
+  sync, where Redis's answers at once.
+- A client served by a write while it waits in a blocking pop waits for its pop in its
+  next WAIT or WAITAOF. Redis leaves that client's offset at its writes before the pop,
+  so that its WAITAOF answers 1 before the pop is synced and its WAIT counts replicas
+  that never got the pop, in 7.0.15, 7.2.16, 8.10.2 and Valkey 9.1.2 alike
+  (docs/UPSTREAM.md, bug 9): `admin_test`'s WAITAOF after a served BLPOP found it.
+- CLIENT UNBLOCK with ERROR counts a WAITAOF once, as it counts a WAIT (bug 4).
+
+**Tests.** `admin_test` compares with Redis ROLE's offset and INFO's, the offset's steps
+for a WAIT and a WAITAOF that wait and for those answered at once, WAITAOF's errors (22
+cases), its answers without the file, in MULTI and when its time is up, its client in
+CLIENT LIST, CLIENT UNBLOCK both ways, a pipeline of them, and, on servers of their own
+with the file on, for each `appendfsync`: the offset after each of 16 groups of commands
+(writes, transactions, scripts, SELECT, PUBLISH, FLUSHALL, and WAIT and WAITAOF
+themselves), WAITAOF's answers after them, and, with `no`, its answers to a client of
+each way a write reaches the file (a script, a transaction, FUNCTION LOAD, a plain
+write) and around a rewrite. The waits it checks on BendKV alone (bug 4) it
+runs on Redis too, unchecked, so that `info_test` finds the two offsets equal.
+go-redis's test of WAITAOF passes, and is off the known failures (COMPATIBILITY.md:
+450 of 463).
+
+**What it costs** (PERFORMANCE.md, section 86). The fast way runs as it did: GET, SET and
+INCR within an instruction of their counts before, and within 5 with 100 clients in
+BLPOP. With the file on, a SET runs 4.1%
+fewer instructions than before and an INCR 3.3% fewer: the writer walks a group's entries
+once, encoding each as it takes it apart, where it walked them for their arguments, then
+again for their database. A first version cost a SET 13.6% more instead: its count read
+the FUNCTION entries' list after encoding it, so Bend made the encoder borrow its list
+in every caller, and each caller freed the list in a walk of its own (section 7's trap;
+the encoder's generated C takes its list with `ctr_take` before and peeks into it with
+`term_peek` in that version).
+
 ## 4. Where a request's time goes, and hiding the memory waits
 
 With the eight patches, BendKV ran fewer instructions on GET and SET than Redis, missed

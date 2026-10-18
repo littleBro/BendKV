@@ -8843,3 +8843,32 @@ every hash, set and sorted set takes 32 bytes less.
 **`make perfcheck`** (merged with 5a2ff7c): GET, SET and INCR 3,504, 4,298 and 4,611
 instructions per request, as the integration branch counts them (3,501, 4,301 and 4,609);
 with 100 clients in BLPOP, +3.1% and +3.4%.
+
+## 86. WAITAOF and the replication's offset
+
+FINDINGS 3zzzzo. "Before" is the build of 93e2462, the integration branch this change was
+made on, and "now" this change on it, under callgrind (`tools/callgrind_req.sh`, 20
+clients at a depth of 16, as `make perfcheck` counts), the save points off.
+
+| test | before | now | |
+|---|---:|---:|---:|
+| GET | 3,505 | 3,504 | −0.0% |
+| SET | 4,296 | 4,297 | +0.0% |
+| INCR | 4,611 | 4,611 | 0.0% |
+| GET, 100 clients in BLPOP | 3,617 | 3,612 | −0.1% |
+| SET, 100 clients in BLPOP | 4,451 | 4,453 | +0.0% |
+| SET, the append-only file on | 8,989 | 8,621 | −4.1% |
+| INCR, the append-only file on | 12,545 | 12,130 | −3.3% |
+
+With the file on (`--appendonly yes`, `appendfsync everysec`), the writer now walks a
+group's entries once, each encoded as it is taken apart (`ents.out`), where it walked
+them for their arguments (`A.ents.args`) and again for their database (`A.ents.sel`):
+of SET's 368 fewer instructions, 248 are the second walk's loops, 102 `slot_keep` and
+67 `List.append`. The counts of "now" hold the offset's count and each writing client's
+offset, set by its id in a trie (`ents.mine` and `rof.mine`, about 20 instructions a
+write besides the trie's own).
+
+A first version ran SET with the file on at 10,214 instructions (+13.6%) and INCR at
+13,668 (+9.0%): it read the FUNCTION entries' list after encoding it, so Bend made
+`A.encode.onto` borrow its list in every caller, and each caller freed the list in a
+walk of its own, 766 instructions a SET in `term_drop` (FINDINGS 7).

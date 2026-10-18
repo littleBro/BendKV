@@ -225,6 +225,15 @@ parts of it are written from 7.2.16's sources:
   has passed when every key of the database has one and none is there
   (db.c's dbRandomKey and expireIfNeeded), in src/redis.bend,
   src/session.bend and src/server.bend.
+- WAITAOF and the replication's offset: WAITAOF's checks, its answers
+  and its waits (replication.c's waitaofCommand and
+  processClientsWaitingReplicas, blocked.c's blockForAofFsync and
+  replyToBlockedClientTimedOut), master_repl_offset counted with no
+  replica (replication.c's replicationFeedSlaves, server.c's
+  sendGetackToReplicas, call() and beforeSleep), and the offset known
+  synced to the disk (aof.c's flushAppendOnlyFile and
+  rewriteAppendOnlyFileBackground, bio.c's fsync jobs), in
+  src/redis.bend, src/session.bend, src/info.bend and src/server.bend.
 
 Bend (bend-patches/): patches to the Bend compiler and its runtime
 (github.com/bendlang/bend at 1cce499, Bend 2.0.35), Copyright 2026

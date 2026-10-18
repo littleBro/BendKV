@@ -439,14 +439,15 @@ its parse takes time in proportion to its length: the GEOADD takes 194 ms, the E
 29 ms (section 3zzn of [FINDINGS.md](FINDINGS.md)).
 
 Bugs in Redis and Valkey. Comparing BendKV with Redis 7.2.16, 8.10.2 and Valkey 9.1.2
-found eight bugs in them: LSET takes its index modulo 2^32, a failed AUTH in a pipeline
+found nine bugs in them: LSET takes its index modulo 2^32, a failed AUTH in a pipeline
 gets no reply, CONFIG SET tls-port crashes a server built without TLS, CLIENT UNBLOCK with
 ERROR counts a WAIT twice, RESTORE with a time to live near 2^63 ms makes a key that
 7.0.15 does not, PFADD reads the byte after a sparse HyperLogLog's end (every version),
-CLIENT UNBLOCK of a client CLIENT PAUSE holds crashes the server, and CLIENT TRACKING
-answers an overlap of its prefixes twice. BendKV does not copy them, but for the sixth,
-where it reads that byte as 0. [UPSTREAM.md](UPSTREAM.md) has how to see each, where it
-is in the code, and where it is to be reported.
+CLIENT UNBLOCK of a client CLIENT PAUSE holds crashes the server, CLIENT TRACKING
+answers an overlap of its prefixes twice, and a client served by a blocking pop does not
+wait for its pop in WAIT or WAITAOF (every version). BendKV does not copy them, but for
+the sixth, where it reads that byte as 0. [UPSTREAM.md](UPSTREAM.md) has how to see each,
+where it is in the code, and where it is to be reported.
 
 A difference kept on purpose. `locale-collate`, new in 7.2, names the locale in which SORT's
 ALPHA compares; BendKV compares bytes, as the C locales do, and takes those alone: CONFIG
@@ -535,15 +536,15 @@ make clients                       # the three suites, against Redis and build/b
 |---|---:|---:|
 | redis-py 8.1.0, RESP2 | 2,772 | **2,723 (98.2%)** |
 | redis-py 8.1.0, RESP3 | 2,772 | **2,723 (98.2%)** |
-| go-redis v9.23.0, RESP3 | 463 | **449 (97.0%)** |
+| go-redis v9.23.0, RESP3 | 463 | **450 (97.2%)** |
 
 Against Redis 7.0.15 BendKV passed 2,708 of the 2,753 tests it passes in redis-py, and
 447 of 460 in go-redis. 7.2.16 passes each of those, and 19 more in redis-py and 3 in
 go-redis. BendKV passes 15 of redis-py's 19 (ACL GETUSER, SETUSER and LOG with 7.2's
-fields, CLIENT NO-TOUCH, ZRANK and ZREVRANK with WITHSCORE) and 2 of go-redis's 3
-(WITHSCORE's). It fails four of redis-py's, which create a stream's group
-(`test_xinfo_consumers`, of 7.2, in the sync and asyncio clients, and
-`test_xgroup_create_entriesread`), and go-redis's test of WAITAOF, a command of 7.2.
+fields, CLIENT NO-TOUCH, ZRANK and ZREVRANK with WITHSCORE) and all 3 of go-redis's
+(WITHSCORE's, and WAITAOF's since WAITAOF: section 3zzzzo of [FINDINGS.md](FINDINGS.md)).
+It fails four of redis-py's, which create a stream's group (`test_xinfo_consumers`, of
+7.2, in the sync and asyncio clients, and `test_xgroup_create_entriesread`).
 
 redis-py's tests give in RESP3 what they give in RESP2, test by test, against Redis and
 against BendKV: the same tests pass, and the same fail. (Its three tests of subscribing
@@ -554,7 +555,7 @@ Every test BendKV fails of those Redis passes fails on what BendKV does not have
 
 - **A command it does not have:** in redis-py, streams' groups (XGROUP 40, XACK 3,
   XREADGROUP 2), MODULE 2 and REPLICAOF 1 (48 tests in each protocol); in go-redis,
-  streams' groups (XGROUP, 12 tests) and WAITAOF (1).
+  streams' groups (XGROUP, 12 tests).
   Functions (section 3zzzp of [FINDINGS.md](FINDINGS.md)) brought redis-py's 7 tests of
   FUNCTION and FCALL in each protocol (LOAD, LIST, DELETE, FLUSH, DUMP and RESTORE, FCALL
   and FCALL_RO) and its test of COMMAND LIST, which wants more than 300 commands, and
