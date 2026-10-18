@@ -1362,9 +1362,7 @@ The translation the kernel reads can be dumped with
   start refuses give a refusal with the entry's number and its byte, the file untouched.
   `redis-check-aof` from Redis 7 accepts BendKV's files as valid (with SELECT, SWAPDB,
   MOVE, COPY and FLUSHALL), Redis 7.0.15 and 7.2.16 load BendKV's append-only file and
-  get the same data in the same databases (7.2.16 keeps a small set in a listpack, which
-  BendKV's OBJECT ENCODING calls a hashtable until its encodings come, so that
-  `tests/aof_redis_test.py` fails there against 7.2.16), and BendKV loads an append-only
+  get the same data in the same databases, encodings too, and BendKV loads an append-only
   file written by Redis (with `SELECT`, command names in lower case, GETSET already
   rewritten as SET, and COPY as the client sent it). `tests/aof_redis_test.py` (in
   `make test`) checks this both ways: the same commands go to BendKV and to
