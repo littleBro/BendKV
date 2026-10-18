@@ -1,6 +1,5 @@
 {
  "go-redis-resp3": {
-  "go-redis::[It] Commands server should WaitAOF": "unknown command 'waitAOF'",
   "go-redis::[It] Commands streams group should XAck": "unknown command 'xgroup'",
   "go-redis::[It] Commands streams group should XAutoClaim": "unknown command 'xgroup'",
   "go-redis::[It] Commands streams group should XAutoClaim return deletedIDs": "unknown command 'xgroup'",

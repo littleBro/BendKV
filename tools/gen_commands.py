@@ -91,7 +91,7 @@ COMMANDS = {
     "publish": [], "spublish": [], "pubsub": ["channels", "help", "numpat", "numsub",
     "shardchannels", "shardnumsub"], "monitor": [], "bgrewriteaof": [], "sort": [],
     "sort_ro": [], "pfadd": [], "pfcount": [], "pfmerge": [], "pfdebug": [], "pfselftest": [],
-    "lastsave": [], "role": [], "wait": [], "shutdown": [], "lolwut": [], "geoadd": [],
+    "lastsave": [], "role": [], "wait": [], "waitaof": [], "shutdown": [], "lolwut": [], "geoadd": [],
     "geodist": [], "geohash": [], "geopos": [], "georadius": [], "georadius_ro": [],
     "georadiusbymember": [], "georadiusbymember_ro": [], "geosearch": [], "geosearchstore": [],
     "dump": [], "restore": [], "slowlog": ["get", "help", "len", "reset"],

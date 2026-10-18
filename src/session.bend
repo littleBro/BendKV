@@ -643,6 +643,97 @@ def srv.aof(s: Srv, +n: Nat) -> Srv:
     case Srv{pass, cfg, info, mm}:
       Srv{pass, cfg, I.info.aof(info, n), mm}
 
+# a group's entries appended to the append-only file: n bytes, k commands
+def srv.aof.put(s: Srv, +n: Nat, +k: Nat) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.aof.put(info, n, k), mm}
+
+# the replication's offset and the file's sync (info.bend: Rof): the
+# offset, the offset synced, whether the file is on, a client's offset
+# after its last write, the EXEC's client's before it, whether the
+# clients that wait are to be looked at for WAITAOF
+def srv.off(+s: Srv) -> I.Big:
+  match s:
+    case Srv{pass, cfg, +info, mm}:
+      I.info.off(info)
+
+def srv.synced(+s: Srv) -> I.Big:
+  match s:
+    case Srv{pass, cfg, +info, mm}:
+      I.info.synced(info)
+
+def srv.aof.on(+s: Srv) -> Bool:
+  match s:
+    case Srv{pass, cfg, +info, mm}:
+      I.info.aof.on(info)
+
+def srv.woff(+s: Srv, +id: Nat) -> I.Big:
+  match s:
+    case Srv{pass, cfg, +info, mm}:
+      I.info.woff(info, id)
+
+def srv.xw(+s: Srv) -> I.Big:
+  match s:
+    case Srv{pass, cfg, +info, mm}:
+      I.info.xw(info)
+
+def srv.aof.due(+s: Srv) -> Bool:
+  match s:
+    case Srv{pass, cfg, +info, mm}:
+      I.info.aof.due(info)
+
+# a client began to wait in WAIT or WAITAOF: Redis's GETACK, counted
+# once a cycle of the event loop, or kept for the end of the pause that
+# holds (held); the pause's end; the syncer's ask of the offset and its
+# sync of it (everysec), or the file synced to all it was written; a
+# client's write; the EXEC's client's offset kept; a client waits in
+# WAITAOF for a sync; the clients that wait looked at
+def srv.getack(s: Srv, +held: Bool) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, +mm}:
+      Srv{pass, cfg, I.info.getack(info, held, I.el.cyc(mm.el(mm))), mm}
+
+def srv.unpaused(s: Srv) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, +mm}:
+      Srv{pass, cfg, I.info.unpaused(info, I.el.cyc(mm.el(mm))), mm}
+
+def srv.sync.ask(s: Srv) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.sync.ask(info), mm}
+
+def srv.sync.done(s: Srv) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.sync.done(info), mm}
+
+def srv.sync.all(s: Srv) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.sync.all(info), mm}
+
+def srv.mine(s: Srv, +id: Nat) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.mine(info, id), mm}
+
+def srv.xw.set(s: Srv, +id: Nat) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.xw.set(info, id), mm}
+
+def srv.aw(s: Srv) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.aw(info), mm}
+
+def srv.walked(s: Srv, +left: Bool) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.walked(info, left), mm}
+
 # the rewrite of the append-only file (info.bend: Rws): whether one runs,
 # whether one is scheduled, how many failed in a row; one started at ms;
 # one scheduled (BGREWRITEAOF in EXEC); the one that ran ended well at
@@ -1457,13 +1548,19 @@ def auth.login(+args: List<&2, String>, +s: Srv) -> Login:
 # Scripts), which no key serves and no time ends either: the server
 # answers it when the engine is done, its replies before the command held
 # until then (rs, newest first), as Redis writes a script's caller's
-# replies once the script ends.
+# replies once the script ends. WAITAOF waits as BlkAof, with its timeout,
+# whether its numlocal is 1 and its numreplicas above 0 (k's bits 0 and
+# 1), and its client's offset after its last write once it waits (w):
+# the server answers it once the append-only file is synced to w
+# (server.bend, WAITAOF), or when its time is up, from its offsets
+# (blk.aof.reply); in MULTI it answers at once from them.
 type Blk is Data:
   BlkPop{c: R.Cmd, form: Nat, ms: List<&2, Nat>}
   BlkBad{r: R.Reply}
   BlkPause{}
   BlkWait{ms: List<&2, Nat>}
   BlkScript{rs: List<&2, R.Reply>}
+  BlkAof{ms: List<&2, Nat>, k: Nat, w: I.Big}
 
 # The timeout, as getTimeoutFromObjectOrReply reads one in seconds: a
 # long double as string2ld reads it, times 1000 (rounded as x87 rounds);
@@ -1594,12 +1691,25 @@ def blk.wait(l: R.LL) -> Blk:
     case R.LLBad{}:
       BlkBad{R.RError{"ERR timeout is not an integer or out of range"}}
 
+# WAITAOF's: numlocal 1 or not (k's bit 0), numreplicas above 0 or not
+# (bit 1), and its timeout as WAIT's (the parser read them, numlocal 0 or
+# 1 and numreplicas not negative, each in the one form string2ll takes:
+# R.waitaof.of)
+def blk.aof(+l: String, +n: String, t: R.LL) -> Blk:
+  match t:
+    case R.LL{neg, +hi, +lo}:
+      BlkAof{F.big.add(F.big.mul_small(F.big.mul_small(F.big.of(hi), 1000n, 0n), 1000000n, 0n), F.big.of(lo)), Nat.add(Bool.pick(Nat, String.eq(l, "1"), 1n, 0n), Bool.pick(Nat, String.eq(n, "0"), 0n, 2n)), I.big.zero()}
+    case R.LLBad{}:
+      BlkBad{R.RError{"ERR timeout is not an integer or out of range"}}
+
 # a blocking command's pop, its arguments read as Redis reads them (their
 # number checked by the parser)
 def blk.parse(+id: Nat, args: List<&2, String>) -> Blk:
   match id args:
     case 186n Con{n, Con{+t, rest}}:
       blk.wait(R.ll.read(t))
+    case 221n Con{+l, Con{+n, Con{+t, rest}}}:
+      blk.aof(l, n, R.ll.read(t))
     case 155n Con{s, Con{d, Con{+t, rest}}}:
       blk.with(blk.tmo(t), R.LMove{s, d, R.RtoL{}}, 0n)
     case 156n Con{s, Con{d, Con{+a, Con{+b, Con{+t, rest}}}}}:
@@ -1702,6 +1812,50 @@ def blk.shape(+form: Nat, r: R.Reply) -> R.Reply:
     case R.RRaw{x}:
       R.RRaw{x}
 
+# WAITAOF's numlocal (k's bit 0) and whether its numreplicas is above 0
+# (bit 1)
+def blk.aof.local(+k: Nat) -> Bool:
+  Nat.is_eq(Nat.mod(k, 2n), 1n)
+
+def blk.aof.reps(+k: Nat) -> Bool:
+  Nat.is_le(2n, k)
+
+# whether a timeout of ms (a big integer) is past what the time now (in
+# ms) leaves of a long long, LLONG_MAX - now: getTimeoutFromObjectOrReply's
+# "timeout is out of range" (0 is no time); LLONG_MAX, 2^63 - 1, in F's
+# limbs of 24 bits, the lowest first
+def blk.llmax() -> List<&2, Nat>:
+  [16777215n, 16777215n, 32767n]
+
+def blk.far(ms: List<&2, Nat>, +now: Nat) -> Bool:
+  Cmp.is_gt(F.big.cmp(ms, F.big.sub(blk.llmax(), F.big.of(now))))
+
+# WAITAOF's reply from the server's offsets (info.bend: Rof): whether the
+# append-only file is synced to w, the offset after its client's last
+# write (fsynced_reploff >= c->woff, where fsynced_reploff is -1 without
+# the file), and that no replica acknowledged; answered at once (in
+# MULTI, or once the server finds it need not wait), the timeout out of
+# range or numlocal set without the file is Redis's error first
+def blk.aof.ack(+s: Srv, +w: I.Big) -> Bool:
+  Bool.and(srv.aof.on(s), I.big.le(w, srv.synced(s)))
+
+def blk.aof.acks(+local: Bool) -> R.Reply:
+  R.RArray{[R.RInt{R.IPos{Bool.pick(Nat, local, 1n, 0n)}}, R.RInt{R.IPos{0n}}]}
+
+def blk.aof.err(+ms: List<&2, Nat>, +k: Nat, +s: Srv, +now: Nat) -> Maybe<&2, R.Reply>:
+  Bool.pick(Maybe<&2, R.Reply>, blk.far(ms, now), Some{R.RError{"ERR timeout is out of range"}},
+    Bool.pick(Maybe<&2, R.Reply>, Bool.and(blk.aof.local(k), Bool.not(srv.aof.on(s))), Some{R.RError{"ERR WAITAOF cannot be used when numlocal is set but appendonly is disabled."}}, None{}))
+
+def blk.aof.now(m: Maybe<&2, R.Reply>, +w: I.Big, +s: Srv) -> R.Reply:
+  match m:
+    case Some{r}:
+      r
+    case None{}:
+      blk.aof.acks(blk.aof.ack(s, w))
+
+def blk.aof.reply(+ms: List<&2, Nat>, +k: Nat, +w: I.Big, +s: Srv, +now: Nat) -> R.Reply:
+  blk.aof.now(blk.aof.err(ms, k, s, now), w, s)
+
 # the pop run once on db: its reply as the blocking command's
 def blk.reply(b: Blk, db: R.Db) -> R.Reply:
   match b:
@@ -1715,6 +1869,8 @@ def blk.reply(b: Blk, db: R.Db) -> R.Reply:
       R.RInt{R.IPos{0n}}
     case BlkScript{rs}:
       R.RNullA{}
+    case BlkAof{ms, k, w}:
+      blk.aof.acks(False{})
 
 # the reply of a client whose time is up, or that CLIENT UNBLOCK unblocks
 # without an error, as Redis's replyToBlockedClientTimedOut: a null array
@@ -1725,6 +1881,27 @@ def blk.late(+b: Blk) -> R.Reply:
       R.RInt{R.IPos{0n}}
     case _:
       R.RNullA{}
+
+# a blocking command answered where it may not wait (in a transaction):
+# WAITAOF from the server's offsets, with its client's offset as it was
+# before the EXEC (srv.xw), the others as their pop finds the databases
+def blk.reply.at(b: Blk, +s: Srv, +ds: R.Ds) -> R.Reply:
+  match b:
+    case BlkAof{+ms, +k, w}:
+      blk.aof.reply(ms, k, srv.xw(s), s, R.ds.now(ds))
+    case other:
+      blk.reply(other, R.ds.focused(ds))
+
+# the reply of a client whose time is up, or that CLIENT UNBLOCK unblocks
+# without an error, with the server's offsets: WAITAOF's from them, with
+# the offset its client had when it began to wait (Redis's
+# replyToBlockedClientTimedOut), the others' as blk.late
+def blk.late.at(+b: Blk, +s: Srv) -> R.Reply:
+  match b:
+    case BlkAof{ms, k, +w}:
+      blk.aof.acks(blk.aof.ack(s, w))
+    case other:
+      blk.late(other)
 
 def blk.acts(b: Blk) -> List<&2, R.Act>:
   match b:
@@ -1753,6 +1930,8 @@ def blk.waits(b: Blk, db: R.Db) -> Bool:
     case BlkWait{ms}:
       True{}
     case BlkScript{rs}:
+      True{}
+    case BlkAof{ms, k, w}:
       True{}
     case _:
       False{}
@@ -1807,6 +1986,8 @@ def blk.ms(b: Blk) -> List<&2, Nat>:
       ms
     case BlkWait{ms}:
       ms
+    case BlkAof{ms, k, w}:
+      ms
     case _:
       Nil{}
 
@@ -1854,6 +2035,8 @@ def blk.at(b: Blk, +k: String) -> R.Cmd:
     case BlkWait{ms}:
       R.Bad{R.RInt{R.IPos{0n}}}
     case BlkScript{rs}:
+      R.Bad{R.RNullA{}}
+    case BlkAof{ms, k, w}:
       R.Bad{R.RNullA{}}
 
 # Databases
@@ -3552,6 +3735,8 @@ def admin.reply(+k: Nat, +args: List<&2, String>, +s: Srv, +ds: R.Ds) -> R.Reply
       R.r_ok()
     case 16n:
       R.RStatus{"Background saving started"}
+    case 17n:
+      R.role.reply(I.big.show(srv.off(s)))
     case _:
       latency.reply(k, args, s, ds)
 
@@ -3813,7 +3998,7 @@ def own_reply(+o: R.SessOp, +c: Conn, +s: Srv, +ds: R.Ds) -> Maybe<&2, R.Reply>:
     case R.SZRandMember{+k, args}:
       say(conn.mode(c), zr.reply(zr.args(args), R.ds.ent(ds, k), KV.mix(srv.rng(s))))
     case R.SBlock{+id, args}:
-      say(conn.mode(c), blk.reply(blk.parse(id, args), R.ds.focused(ds)))
+      say(conn.mode(c), blk.reply.at(blk.parse(id, args), s, ds))
     case R.SUnblock{i, e}:
       say(conn.mode(c), R.RInt{R.IPos{0n}})
     case R.SMulti{}:

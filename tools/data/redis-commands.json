@@ -36015,6 +36015,89 @@
     }
    ]
   },
+  "waitaof": {
+   "docs": {
+    "%": [
+     "summary",
+     "Blocks until all of the preceding write commands sent by the connection are written to the append-only file of the master and/or replicas.",
+     "since",
+     "7.2.0",
+     "group",
+     "generic",
+     "complexity",
+     "O(1)",
+     "arguments",
+     [
+      {
+       "%": [
+        "name",
+        "numlocal",
+        "type",
+        "integer",
+        "display_text",
+        "numlocal"
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "numreplicas",
+        "type",
+        "integer",
+        "display_text",
+        "numreplicas"
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "timeout",
+        "type",
+        "integer",
+        "display_text",
+        "timeout"
+       ]
+      }
+     ]
+    ]
+   },
+   "info": [
+    "waitaof",
+    4,
+    {
+     "~": [
+      {
+       "+": "noscript"
+      }
+     ]
+    },
+    0,
+    0,
+    0,
+    {
+     "~": [
+      {
+       "+": "@slow"
+      },
+      {
+       "+": "@connection"
+      }
+     ]
+    },
+    {
+     "~": [
+      "request_policy:all_shards",
+      "response_policy:agg_min"
+     ]
+    },
+    {
+     "~": []
+    },
+    {
+     "~": []
+    }
+   ]
+  },
   "watch": {
    "docs": {
     "%": [

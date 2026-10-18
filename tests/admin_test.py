@@ -1,14 +1,19 @@
 #!/usr/bin/env python3
 """The administrative commands against Redis: LASTSAVE, ROLE, WAIT,
-MEMORY STATS, DOCTOR, PURGE and MALLOC-STATS, LOLWUT, SHUTDOWN and
-CLUSTER.
+WAITAOF, MEMORY STATS, DOCTOR, PURGE and MALLOC-STATS, LOLWUT, SHUTDOWN
+and CLUSTER.
 
 Scenarios run on BendKV and on Redis with clients of their own, the
 transcripts compared line by line: LASTSAVE as INFO's rdb_last_save_time;
-ROLE; WAIT's errors, its answers at once (no replica asked for, in MULTI)
-and once its time is up, a client that waits as CLIENT LIST and INFO show
-it, CLIENT UNBLOCK of it both ways, one whose connection closes, a
-pipeline behind it, and its statistics; MEMORY's subcommands, STATS's
+ROLE (its offset INFO's master_repl_offset, which a WAIT or a WAITAOF
+that waits takes one further, and one at once does not); WAIT's errors,
+its answers at once (no replica asked for, in MULTI) and once its time is
+up, a client that waits as CLIENT LIST and INFO show it, CLIENT UNBLOCK
+of it both ways, one whose connection closes, a pipeline behind it, and
+its statistics; WAITAOF's errors, and, while BendKV runs without an
+append-only file as the shared Redis does, its answers without one (an
+error for numlocal), in MULTI, once its time is up and to CLIENT UNBLOCK,
+a client that waits in it as WAIT's; MEMORY's subcommands, STATS's
 fields in order (with the databases that hold keys) and the kinds of
 their values, DOCTOR on a small data set, its errors; LOLWUT's own text,
 its errors, the drawings of VERSION 5 that rand() has no part in (one or
@@ -23,9 +28,11 @@ shared ones.
 
 The checks of BendKV alone: MEMORY MALLOC-STATS answers as Redis built
 with libc's malloc does (INFO's mem_allocator), and MEMORY STATS's
-numbers are INFO's; CLIENT UNBLOCK's error to a WAIT counts the WAIT once,
-failed, where Redis 7.2.16 counts it twice (docs/UPSTREAM.md, bug 4), and
-a WAIT whose client goes counts once.
+numbers are INFO's; CLIENT UNBLOCK's error to a WAIT or a WAITAOF counts
+it once, failed, where Redis 7.2.16 counts it twice (docs/UPSTREAM.md,
+bug 4), and a WAIT whose client goes counts once; with --bin, a WAITAOF
+after a blocking pop that a write served waits for the pop's sync, which
+Redis 7.2.16 does not (bug 9).
 
 With --bin, SHUTDOWN on servers of its own (a redis-server and BendKV,
 each in a fresh directory): it stops the server (exit code 0, the
@@ -35,7 +42,13 @@ file removed, a rewrite that runs stopped and its temporary file
 removed; SAVE writes the RDB file, and a save that fails (a directory
 where its temporary file goes) stops nothing (the server goes on, the
 log says why) but with FORCE. tests/rdb_test.py has the rest of the
-saves.
+saves. And WAITAOF with the append-only file on, appendfsync always,
+everysec and no in turn: what each command adds to master_repl_offset
+(one for each command written to the file, MULTI and EXEC among them, a
+SELECT nothing, one for a WAIT or a WAITAOF that waits), its answers at
+once and once the file is synced, behind a write in a pipeline, in
+MULTI, of a client that wrote nothing, once its time is up, and after a
+rewrite with appendfsync no.
 
     python3 tests/admin_test.py --bendkv 6380 --redis 6390 [--bin build/bendkv]
 """
@@ -53,8 +66,8 @@ import time
 from blocking_test import Client, enc, info_lines, wait_blocked
 from client_test import Named
 
-STATS = ("cmdstat_wait:", "cmdstat_shutdown:", "cmdstat_exec:", "cmdstat_lastsave:", "cmdstat_role:",
-         "cmdstat_lolwut:", "cmdstat_memory|", "cmdstat_cluster|")
+STATS = ("cmdstat_wait:", "cmdstat_waitaof:", "cmdstat_shutdown:", "cmdstat_exec:", "cmdstat_lastsave:",
+         "cmdstat_role:", "cmdstat_lolwut:", "cmdstat_memory|", "cmdstat_cluster|")
 
 
 def stats(r):
@@ -67,6 +80,17 @@ def errorstats(r):
 
 def field(r, section, name):
     return info_lines(r, section, name + ":")[0].split(":", 1)[1]
+
+
+def offset(r):
+    return int(field(r, "replication", "master_repl_offset"))
+
+
+def role(r):
+    """ROLE, its offset as whether it is INFO's (the servers' offsets differ
+    by what each ran before)"""
+    x = r.cmd("ROLE")
+    return [x[0], x[1] == ":%d" % offset(r), x[2]]
 
 
 def raw(port, data, n=1, timeout=5.0):
@@ -147,15 +171,26 @@ def kinds(xs):
     return out
 
 
-def scenarios(port, log):
+def scenarios(port, log, plain):
     r = Client(port)
     r.cmd("FLUSHALL")
     r.cmd("CONFIG", "RESETSTAT")
     a, b = Named(port, "a"), Client(port)
     # 1. LASTSAVE: the time of the last save, INFO's rdb_last_save_time
     log("1 lastsave", r.cmd("LASTSAVE") == ":" + field(r, "persistence", "rdb_last_save_time"), r.cmd("LASTSAVE", "x"))
-    # 2. ROLE: a master with no replica
-    log("2 role", r.cmd("ROLE"), r.cmd("ROLE", "x"))
+    # 2. ROLE: a master with no replica, at the replication's offset, which
+    # a turn of the loop in which a WAIT or a WAITAOF waits takes one
+    # further (Redis's REPLCONF GETACK), and none that answers at once
+    log("2 role", role(r), r.cmd("ROLE", "x"))
+    o0 = offset(r)
+    r.cmd("WAIT", "1", "20")
+    o1 = offset(r)
+    r.cmd("WAIT", "0", "0")
+    r.cmd("WAITAOF", "0", "0", "0")
+    r.cmd("MULTI"), r.cmd("WAIT", "1", "0"), r.cmd("WAITAOF", "0", "1", "0"), r.cmd("EXEC")
+    o2 = offset(r)
+    r.cmd("WAITAOF", "0", "1", "20")
+    log("2 offset", o1 - o0, o2 - o1, offset(r) - o2)
     # 3. WAIT: its errors, then answers at once
     for args in ([], ["1"], ["a", "1"], ["1", "a"], ["1", "-1"], ["1", "-0"], ["1", "1.5"], ["1", "1", "1"],
                  ["99999999999999999999", "1"], ["1", "99999999999999999999"], ["-1", "-1"], ["x", "-1"]):
@@ -164,6 +199,19 @@ def scenarios(port, log):
     t = time.time()
     log("3 time up", r.cmd("WAIT", "1", "100"), time.time() - t >= 0.08)
     log("3 multi", r.cmd("MULTI"), r.cmd("WAIT", "3", "0"), r.cmd("WAIT", "x", "0"), r.cmd("EXEC"))
+    # 3b. WAITAOF: its errors, in Redis's order (numlocal, numreplicas, the
+    # timeout, then numlocal without the file); its answers without the
+    # file only where both servers run without one (plain)
+    for args in ([], ["1"], ["1", "0"], ["1", "0", "0", "0"], ["2", "0", "0"], ["-1", "0", "0"], ["x", "0", "0"],
+                 ["01", "0", "0"], ["+1", "0", "0"], ["-0", "0", "0"], ["0", "-1", "0"], ["0", "x", "0"], ["0", "00", "0"],
+                 ["0", "9223372036854775808", "0"], ["0", "0", "-1"], ["0", "0", "x"], ["0", "0", "1.5"], ["x", "y", "z"],
+                 ["1", "x", "z"], ["1", "-1", "0"], ["0", "0", "9223372036854775807"], ["1", "0", "99999999999999999999"]):
+        log("3b waitaof", args, r.cmd("WAITAOF", *args))
+    if plain:
+        log("3b no file", r.cmd("WAITAOF", "1", "0", "0"), r.cmd("WAITAOF", "0", "0", "0"), r.cmd("WAITAOF", "1", "1", "0"))
+        t = time.time()
+        log("3b time up", r.cmd("WAITAOF", "0", "1", "100"), time.time() - t >= 0.08)
+        log("3b multi", r.cmd("MULTI"), r.cmd("WAITAOF", "1", "0", "0"), r.cmd("WAITAOF", "0", "2", "0"), r.cmd("WAITAOF", "2", "0", "0"), r.cmd("EXEC"))
     # 4. a client that waits
     a.send("WAIT", "2", "0")
     log("4 blocked", wait_blocked(r, 1), field(r, "clients", "clients_in_timeout_table"))
@@ -181,6 +229,23 @@ def scenarios(port, log):
     log("4 closed", wait_blocked(r, 0))
     a.raw(enc(["WAIT", "1", "50"]) + enc(["PING"]) + enc(["WAIT", "0", "10"]))
     log("4 pipeline", a.read(), a.read(), a.read())
+    # 4b. a client that waits in WAITAOF (for a replica: no sync serves it)
+    if plain:
+        a.send("WAITAOF", "0", "2", "0")
+        log("4b blocked", wait_blocked(r, 1), field(r, "clients", "clients_in_timeout_table"))
+        line = r.cmd("CLIENT", "LIST", "ID", a.id)
+        log("4b list", re.findall(r"\b(flags|cmd|argv-mem)=(\S+)", line))
+        log("4b unblock", r.cmd("CLIENT", "UNBLOCK", a.id), a.read(), wait_blocked(r, 0))
+        a.send("WAITAOF", "0", "2", "100000")
+        log("4b timeout table", wait_blocked(r, 1), field(r, "clients", "clients_in_timeout_table"))
+        log("4b unblock timeout", r.cmd("CLIENT", "UNBLOCK", a.id, "TIMEOUT"), a.read(), wait_blocked(r, 0))
+        g = Client(port)
+        g.send("WAITAOF", "0", "1", "0")
+        log("4b gone", wait_blocked(r, 1))
+        g.close()
+        log("4b closed", wait_blocked(r, 0))
+        a.raw(enc(["WAITAOF", "0", "1", "50"]) + enc(["PING"]) + enc(["WAITAOF", "0", "0", "10"]))
+        log("4b pipeline", a.read(), a.read(), a.read())
     # 5. MEMORY's subcommands
     log("5 help", r.cmd("MEMORY", "HELP"))
     for args in ([], ["foo"], ["stats", "x"], ["doctor", "x"], ["purge", "x"], ["malloc-stats", "x"], ["help", "x"]):
@@ -239,6 +304,9 @@ def scenarios(port, log):
     a.send("WAIT", "2", "100000")
     log("9 blocked", wait_blocked(r, 1))
     log("9 unblock error", r.cmd("CLIENT", "UNBLOCK", a.id, "ERROR"), a.read(), wait_blocked(r, 0))
+    a.send("WAITAOF", "0", "2", "100000")
+    log("9 blocked", wait_blocked(r, 1))
+    log("9 unblock error", r.cmd("CLIENT", "UNBLOCK", a.id, "ERROR"), a.read(), wait_blocked(r, 0))
     log("9 errorstats", errorstats(r))
     a.close()
     b.close()
@@ -265,18 +333,21 @@ def alone(port):
     return fails
 
 
-def wait_stat(r):
-    """WAIT's calls and failed calls, as commandstats counts them."""
-    for l in info_lines(r, "commandstats", "cmdstat_wait:"):
+def wait_stat(r, name="wait"):
+    """WAIT's (or WAITAOF's) calls and failed calls, as commandstats counts
+    them."""
+    for l in info_lines(r, "commandstats", "cmdstat_%s:" % name):
         return tuple(int(re.search(k + r"=(\d+)", l).group(1)) for k in ("calls", "failed_calls"))
     return (0, 0)
 
 
-def unblock_error(port):
+def unblock_error(port, check=True):
     """CLIENT UNBLOCK's error to a WAIT counts the WAIT once, failed, as
     Redis 7.0.15 counted it and Redis 7.2.16 counts any other command
     unblocked so; 7.2.16 counts a WAIT twice then (docs/UPSTREAM.md, bug 4).
-    A WAIT whose client goes counts once too, not failed."""
+    A WAIT whose client goes counts once too, not failed. Run on Redis
+    too, unchecked, so that its offset counts the GETACKs of these waits
+    as BendKV's does (tests/info_test.py compares the two)."""
     fails = []
     r, a = Client(port), Named(port, "w")
     before = wait_stat(r)
@@ -284,15 +355,24 @@ def unblock_error(port):
     wait_blocked(r, 1)
     got = (r.cmd("CLIENT", "UNBLOCK", a.id, "ERROR"), a.read(), wait_blocked(r, 0), wait_stat(r))
     want = (":1", "-UNBLOCKED client unblocked via CLIENT UNBLOCK", 0, (before[0] + 1, before[1] + 1))
-    if got != want:
+    if check and got != want:
         fails.append("CLIENT UNBLOCK ERROR of a WAIT: %r, not %r" % (got, want))
     a.send("WAIT", "2", "0")
     wait_blocked(r, 1)
     a.close()
     got = (wait_blocked(r, 0), wait_stat(r))
     want = (0, (before[0] + 2, before[1] + 1))
-    if got != want:
+    if check and got != want:
         fails.append("a WAIT whose client goes: %r, not %r" % (got, want))
+    a = Named(port, "wa")
+    before = wait_stat(r, "waitaof")
+    a.send("WAITAOF", "0", "2", "100000")
+    wait_blocked(r, 1)
+    got = (r.cmd("CLIENT", "UNBLOCK", a.id, "ERROR"), a.read(), wait_blocked(r, 0), wait_stat(r, "waitaof"))
+    want = (":1", "-UNBLOCKED client unblocked via CLIENT UNBLOCK", 0, (before[0] + 1, before[1] + 1))
+    if check and got != want:
+        fails.append("CLIENT UNBLOCK ERROR of a WAITAOF: %r, not %r" % (got, want))
+    a.close()
     r.close()
     return fails
 
@@ -405,6 +485,82 @@ def shutdowns(exe, root, log):
     log("4 force", s.talk(enc(["SHUTDOWN", "SAVE", "FORCE"])), s.exit(), "Error trying to save the DB. Exit anyway." in s.log())
 
 
+def waitaofs(exe, root, log):
+    for policy in ("always", "everysec", "no"):
+        d = os.path.join(root, "waitaof-" + policy)
+        os.makedirs(d)
+        s = Srv(exe, d, "--appendonly", "yes", "--appendfsync", policy)
+        r, f = Client(s.port, None), Client(s.port, None)
+        log("10 start", policy, offset(r), r.cmd("WAITAOF", "1", "0", "0"), role(r))
+        steps = []
+        for cmds in ([["SET", "k", "v"]], [["SET", "k", "v"], ["GET", "k"]], [["DEL", "k"], ["SET", "k", "v"]],
+                     [["MULTI"], ["SET", "a", "1"], ["SET", "b", "2"], ["EXEC"]], [["MULTI"], ["SET", "a", "1"], ["EXEC"]],
+                     [["MULTI"], ["GET", "a"], ["EXEC"]], [["EVAL", "redis.call('SET','x','1') redis.call('SET','y','2')", "0"]],
+                     [["EVAL", "return redis.call('GET','x')", "0"]], [["EXPIRE", "a", "100"]], [["INCR", "n"]],
+                     [["SELECT", "1"], ["SET", "z", "1"], ["SELECT", "0"]], [["PUBLISH", "ch", "m"]], [["FLUSHALL"]],
+                     [["WAIT", "1", "20"]], [["WAITAOF", "0", "1", "20"]], [["WAITAOF", "0", "0", "0"]]):
+            o = offset(r)
+            for c in cmds:
+                r.cmd(*c)
+            steps.append(offset(r) - o)
+        log("10 steps", policy, steps)
+        r.cmd("SET", "k", "v")
+        if policy == "no":
+            log("10 not synced", policy, r.cmd("WAITAOF", "1", "0", "100"), r.cmd("WAITAOF", "0", "0", "0"))
+        else:
+            log("10 synced", policy, r.cmd("WAITAOF", "1", "0", "0"))
+            r.raw(enc(["SET", "k", "w"]) + enc(["WAITAOF", "1", "0", "3000"]))
+            log("10 pipeline", policy, r.read(), r.read(5.0))
+        log("10 wrote nothing", policy, f.cmd("WAITAOF", "1", "0", "0"), f.cmd("WAITAOF", "1", "1", "20"))
+        log("10 multi", policy, r.cmd("MULTI"), r.cmd("SET", "m", "1"), r.cmd("WAITAOF", "1", "0", "0"), r.cmd("EXEC"))
+        if policy != "everysec":
+            log("10 time up", policy, r.cmd("WAITAOF", "1", "1", "20"))
+        if policy == "no":
+            # each way a client's write reaches the file is its own: a
+            # script's call, a transaction, FUNCTION LOAD, a plain batch
+            # (each client's write not synced, while the client before it
+            # wrote nothing; a pop that serves it: waitaof_alone)
+            got = []
+            for i, cmds in enumerate(([["EVAL", "redis.call('SET','e','1')", "0"]], [["MULTI"], ["SET", "t", "1"], ["EXEC"]],
+                                      [["FUNCTION", "LOAD", "#!lua name=lib\nredis.register_function('f', function() return 1 end)"]],
+                                      [["SET", "p", "1"]])):
+                c = Client(s.port, None)
+                for x in cmds:
+                    c.cmd(*x)
+                got.append(c.cmd("WAITAOF", "1", "0", "50"))
+                c.close()
+            log("10 writers", policy, got)
+            log("10 rewrite", policy, r.cmd("BGREWRITEAOF"), r.cmd("WAITAOF", "1", "0", "5000"), r.cmd("WAITAOF", "1", "0", "0"))
+        log("10 role", policy, role(r))
+        r.close()
+        f.close()
+        s.talk(enc(["SHUTDOWN", "NOSAVE"]))
+        log("10 exit", policy, s.exit())
+
+
+def waitaof_alone(exe, root):
+    """a client a write serves while it waits in BLPOP has its offset after
+    the pop, which a WAITAOF after it waits for; Redis 7.2.16 leaves the
+    client's offset where it was, and answers that the pop is synced
+    (docs/UPSTREAM.md, bug 9)"""
+    fails = []
+    d = os.path.join(root, "waitaof-served")
+    os.makedirs(d)
+    s = Srv(exe, d, "--appendonly", "yes", "--appendfsync", "no")
+    r, c = Client(s.port, None), Client(s.port, None)
+    c.send("BLPOP", "bl", "0")
+    wait_blocked(r, 1)
+    r.cmd("RPUSH", "bl", "x")
+    got = (c.read(), c.cmd("WAITAOF", "1", "0", "50"))
+    if got != (["bl", "x"], [":0", ":0"]):
+        fails.append("WAITAOF after a pop that a write served: %r" % (got,))
+    r.close()
+    c.close()
+    s.talk(enc(["SHUTDOWN", "NOSAVE"]))
+    s.exit()
+    return fails
+
+
 def shutdowns_alone(exe, root):
     """a rewrite that runs is stopped, its temporary file removed"""
     fails = []
@@ -442,14 +598,16 @@ def main():
     ap.add_argument("--redis-bin", default="redis-server")
     args = ap.parse_args()
     outs = []
+    # WAITAOF's answers without the file where both servers run without one
+    plain = all(field(Client(port, None), "persistence", "aof_enabled") == "0" for port in (args.bendkv, args.redis))
     for port in (args.bendkv, args.redis):
         lines = []
         try:
-            scenarios(port, lambda *x: lines.append(" ".join(repr(v) for v in x)))
+            scenarios(port, lambda *x: lines.append(" ".join(repr(v) for v in x)), plain)
         except Exception as e:
             lines.append("EXCEPTION %r" % (e,))
         outs.append(lines)
-    fails = alone(args.bendkv) + unblock_error(args.bendkv)
+    fails = alone(args.bendkv) + unblock_error(args.bendkv) + unblock_error(args.redis, False)
     if args.bin:
         root = tempfile.mkdtemp(prefix="admin_test.")
         try:
@@ -458,11 +616,13 @@ def main():
                 lines = []
                 try:
                     shutdowns(os.path.abspath(exe) if os.path.exists(exe) else exe, os.path.join(root, name), lambda *x: lines.append(" ".join(repr(v) for v in x)))
+                    waitaofs(os.path.abspath(exe) if os.path.exists(exe) else exe, os.path.join(root, name), lambda *x: lines.append(" ".join(repr(v) for v in x)))
                 except Exception as e:
                     lines.append("EXCEPTION %r" % (e,))
                 sd.append(lines)
             outs = [outs[0] + sd[0], outs[1] + sd[1]]
             fails += shutdowns_alone(os.path.abspath(args.bin), os.path.join(root, "alone"))
+            fails += waitaof_alone(os.path.abspath(args.bin), os.path.join(root, "alone"))
         finally:
             shutil.rmtree(root, ignore_errors=True)
     bad = 0

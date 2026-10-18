@@ -6648,10 +6648,10 @@ def parse_acl(id: Nat, sub: String, args: List<&2, String>) -> SessOp:
     case _:
       e_unknown_sub(sub, "ACL")
 
-# ROLE: a master at the replication offset 0, with no replica
-# (roleCommand)
-def role.reply() -> Reply:
-  RArray{[RBulk{"master"}, RInt{IPos{0n}}, RArray{Nil{}}]}
+# ROLE: a master at its replication offset (the server's, in decimal:
+# info.bend, Rof), with no replica (roleCommand)
+def role.reply(+off: String) -> Reply:
+  RArray{[RBulk{"master"}, RIntS{off}, RArray{Nil{}}]}
 
 # WAIT numreplicas timeout, read as waitCommand reads them: numreplicas a
 # long, the timeout a long long of ms, not negative. No replica
@@ -6674,6 +6674,41 @@ def wait.of(+args: List<&2, String>) -> Cmd:
       wait.go(ll.read(n), ll.read(t), args)
     case _:
       e_arity("wait")
+
+# WAITAOF numlocal numreplicas timeout, read as waitaofCommand reads them,
+# in that order: numlocal a long of 0 or 1 (getRangeLongFromObjectOrReply),
+# numreplicas a long not negative (getPositiveLongFromObjectOrReply, whose
+# message it gives for anything else too), the timeout a long long of ms,
+# not negative. The server answers it (SBlock: session.bend, BlkAof)
+def waitaof.t(t: LL, +args: List<&2, String>) -> Cmd:
+  match t:
+    case LLBad{}:
+      Bad{RError{"ERR timeout is not an integer or out of range"}}
+    case LL{True{}, th, tl}:
+      Bad{RError{"ERR timeout is negative"}}
+    case LL{False{}, th, tl}:
+      Own{SBlock{221n, args}}
+
+def waitaof.n(n: LL, t: LL, +args: List<&2, String>) -> Cmd:
+  match n:
+    case LL{False{}, nh, nl}:
+      waitaof.t(t, args)
+    case _:
+      Bad{RError{"ERR value is out of range, must be positive"}}
+
+def waitaof.go(l: LL, n: LL, t: LL, +args: List<&2, String>) -> Cmd:
+  match l:
+    case LLBad{}:
+      Bad{e_int()}
+    case LL{+ln, +lh, +lo}:
+      Bool.pick(Cmd, Bool.or(ln, Bool.or(Nat.is_lt(0n, lh), Nat.is_lt(1n, lo))), Bad{RError{"ERR value is out of range, value must between 0 and 1"}}, waitaof.n(n, t, args))
+
+def waitaof.of(+args: List<&2, String>) -> Cmd:
+  match args:
+    case Con{+l, Con{+n, Con{+t, Nil{}}}}:
+      waitaof.go(ll.read(l), ll.read(n), ll.read(t), args)
+    case _:
+      e_arity("waitaof")
 
 # SHUTDOWN's flags, NOSAVE, SAVE, NOW, FORCE and ABORT, in any case, as
 # shutdownCommand reads them: SdBad at a word that is none of them
@@ -7081,6 +7116,8 @@ def cmd_id.l7(+n: String, c: Nat) -> Nat:
       Bool.pick(Nat, String.eq(n, "SLOWLOG"), 201n, 0n))
     case 21n:  # U
       Bool.pick(Nat, String.eq(n, "UNWATCH"), 165n, 0n)
+    case 23n:  # W
+      Bool.pick(Nat, String.eq(n, "WAITAOF"), 221n, 0n)
     case 26n:  # Z
       Bool.pick(Nat, String.eq(n, "ZINCRBY"), 122n,
       Bool.pick(Nat, String.eq(n, "ZMSCORE"), 126n,
@@ -9099,7 +9136,7 @@ def parse_id(id: Nat, name: String, args: List<&2, String>) -> Cmd:
     case 185n:  # ROLE
       match args:
         case Nil{}:
-          Own{SReply{role.reply()}}
+          Own{SAdmin{17n, Nil{}}}
         case _:
           e_arity("role")
     case 186n:  # WAIT
@@ -9236,6 +9273,8 @@ def parse_id(id: Nat, name: String, args: List<&2, String>) -> Cmd:
           xsetid.parse(k, Con{i, rest})
         case _:
           e_arity("xsetid")
+    case 221n:  # WAITAOF
+      waitaof.of(args)
     case 226n:  # BGSAVE
       bgsave.of(args)
     case 227n:  # CLUSTER
@@ -10044,10 +10083,12 @@ def stat.top(+id: Nat) -> Nat:
       219n
     case 220n:
       220n
-    case 226n:
+    case 221n:
       221n
-    case 227n:
+    case 226n:
       222n
+    case 227n:
+      223n
     case _:
       0n
 
@@ -10055,41 +10096,41 @@ def stat.top(+id: Nat) -> Nat:
 def stat.sub.client(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      223n
-    case 2n:
       224n
-    case 3n:
+    case 2n:
       225n
-    case 4n:
+    case 3n:
       226n
-    case 5n:
+    case 4n:
       227n
-    case 6n:
+    case 5n:
       228n
-    case 7n:
+    case 6n:
       229n
-    case 8n:
+    case 7n:
       230n
-    case 9n:
+    case 8n:
       231n
-    case 10n:
+    case 9n:
       232n
-    case 11n:
+    case 10n:
       233n
-    case 12n:
+    case 11n:
       234n
-    case 13n:
+    case 12n:
       235n
-    case 14n:
+    case 13n:
       236n
-    case 15n:
+    case 14n:
       237n
-    case 16n:
+    case 15n:
       238n
-    case 17n:
+    case 16n:
       239n
-    case 18n:
+    case 17n:
       240n
+    case 18n:
+      241n
     case _:
       0n
 
@@ -10097,23 +10138,23 @@ def stat.sub.client(+sub: Nat) -> Nat:
 def stat.sub.function(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      241n
-    case 2n:
       242n
-    case 3n:
+    case 2n:
       243n
-    case 4n:
+    case 3n:
       244n
-    case 5n:
+    case 4n:
       245n
-    case 6n:
+    case 5n:
       246n
-    case 7n:
+    case 6n:
       247n
-    case 8n:
+    case 7n:
       248n
-    case 9n:
+    case 8n:
       249n
+    case 9n:
+      250n
     case _:
       0n
 
@@ -10121,15 +10162,15 @@ def stat.sub.function(+sub: Nat) -> Nat:
 def stat.sub.config(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      250n
-    case 2n:
       251n
-    case 3n:
+    case 2n:
       252n
-    case 4n:
+    case 3n:
       253n
-    case 5n:
+    case 4n:
       254n
+    case 5n:
+      255n
     case _:
       0n
 
@@ -10137,19 +10178,19 @@ def stat.sub.config(+sub: Nat) -> Nat:
 def stat.sub.command(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      255n
-    case 2n:
       256n
-    case 3n:
+    case 2n:
       257n
-    case 4n:
+    case 3n:
       258n
-    case 5n:
+    case 4n:
       259n
-    case 6n:
+    case 5n:
       260n
-    case 7n:
+    case 6n:
       261n
+    case 7n:
+      262n
     case _:
       0n
 
@@ -10157,15 +10198,15 @@ def stat.sub.command(+sub: Nat) -> Nat:
 def stat.sub.object(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      262n
-    case 2n:
       263n
-    case 3n:
+    case 2n:
       264n
-    case 4n:
+    case 3n:
       265n
-    case 5n:
+    case 4n:
       266n
+    case 5n:
+      267n
     case _:
       0n
 
@@ -10173,17 +10214,17 @@ def stat.sub.object(+sub: Nat) -> Nat:
 def stat.sub.memory(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      267n
-    case 2n:
       268n
-    case 3n:
+    case 2n:
       269n
-    case 4n:
+    case 3n:
       270n
-    case 5n:
+    case 4n:
       271n
-    case 6n:
+    case 5n:
       272n
+    case 6n:
+      273n
     case _:
       0n
 
@@ -10191,17 +10232,17 @@ def stat.sub.memory(+sub: Nat) -> Nat:
 def stat.sub.pubsub(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      273n
-    case 2n:
       274n
-    case 3n:
+    case 2n:
       275n
-    case 4n:
+    case 3n:
       276n
-    case 5n:
+    case 4n:
       277n
-    case 6n:
+    case 5n:
       278n
+    case 6n:
+      279n
     case _:
       0n
 
@@ -10209,13 +10250,13 @@ def stat.sub.pubsub(+sub: Nat) -> Nat:
 def stat.sub.slowlog(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      279n
-    case 2n:
       280n
-    case 3n:
+    case 2n:
       281n
-    case 4n:
+    case 3n:
       282n
+    case 4n:
+      283n
     case _:
       0n
 
@@ -10223,19 +10264,19 @@ def stat.sub.slowlog(+sub: Nat) -> Nat:
 def stat.sub.latency(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      283n
-    case 2n:
       284n
-    case 3n:
+    case 2n:
       285n
-    case 4n:
+    case 3n:
       286n
-    case 5n:
+    case 4n:
       287n
-    case 6n:
+    case 5n:
       288n
-    case 7n:
+    case 6n:
       289n
+    case 7n:
+      290n
     case _:
       0n
 
@@ -10243,15 +10284,15 @@ def stat.sub.latency(+sub: Nat) -> Nat:
 def stat.sub.script(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      290n
-    case 2n:
       291n
-    case 3n:
+    case 2n:
       292n
-    case 4n:
+    case 3n:
       293n
-    case 5n:
+    case 4n:
       294n
+    case 5n:
+      295n
     case _:
       0n
 
@@ -10259,31 +10300,31 @@ def stat.sub.script(+sub: Nat) -> Nat:
 def stat.sub.acl(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      295n
-    case 2n:
       296n
-    case 3n:
+    case 2n:
       297n
-    case 4n:
+    case 3n:
       298n
-    case 5n:
+    case 4n:
       299n
-    case 6n:
+    case 5n:
       300n
-    case 7n:
+    case 6n:
       301n
-    case 8n:
+    case 7n:
       302n
-    case 9n:
+    case 8n:
       303n
-    case 10n:
+    case 9n:
       304n
-    case 11n:
+    case 10n:
       305n
-    case 12n:
+    case 11n:
       306n
-    case 13n:
+    case 12n:
       307n
+    case 13n:
+      308n
     case _:
       0n
 
@@ -10291,13 +10332,13 @@ def stat.sub.acl(+sub: Nat) -> Nat:
 def stat.sub.xinfo(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      308n
-    case 2n:
       309n
-    case 3n:
+    case 2n:
       310n
-    case 4n:
+    case 3n:
       311n
+    case 4n:
+      312n
     case _:
       0n
 
@@ -10305,61 +10346,61 @@ def stat.sub.xinfo(+sub: Nat) -> Nat:
 def stat.sub.cluster(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      312n
-    case 2n:
       313n
-    case 3n:
+    case 2n:
       314n
-    case 4n:
+    case 3n:
       315n
-    case 5n:
+    case 4n:
       316n
-    case 6n:
+    case 5n:
       317n
-    case 7n:
+    case 6n:
       318n
-    case 8n:
+    case 7n:
       319n
-    case 9n:
+    case 8n:
       320n
-    case 10n:
+    case 9n:
       321n
-    case 11n:
+    case 10n:
       322n
-    case 12n:
+    case 11n:
       323n
-    case 13n:
+    case 12n:
       324n
-    case 14n:
+    case 13n:
       325n
-    case 15n:
+    case 14n:
       326n
-    case 16n:
+    case 15n:
       327n
-    case 17n:
+    case 16n:
       328n
-    case 18n:
+    case 17n:
       329n
-    case 19n:
+    case 18n:
       330n
-    case 20n:
+    case 19n:
       331n
-    case 21n:
+    case 20n:
       332n
-    case 22n:
+    case 21n:
       333n
-    case 23n:
+    case 22n:
       334n
-    case 24n:
+    case 23n:
       335n
-    case 25n:
+    case 24n:
       336n
-    case 26n:
+    case 25n:
       337n
-    case 27n:
+    case 26n:
       338n
-    case 28n:
+    case 27n:
       339n
+    case 28n:
+      340n
     case _:
       0n
 
@@ -10807,242 +10848,244 @@ def stat.name(+key: Nat) -> String:
     case 220n:
       "xsetid"
     case 221n:
-      "bgsave"
+      "waitaof"
     case 222n:
-      "cluster"
+      "bgsave"
     case 223n:
-      "client|id"
+      "cluster"
     case 224n:
-      "client|help"
+      "client|id"
     case 225n:
-      "client|reply"
+      "client|help"
     case 226n:
-      "client|getname"
+      "client|reply"
     case 227n:
-      "client|setname"
+      "client|getname"
     case 228n:
-      "client|caching"
+      "client|setname"
     case 229n:
-      "client|unblock"
+      "client|caching"
     case 230n:
-      "client|getredir"
+      "client|unblock"
     case 231n:
-      "client|no-evict"
+      "client|getredir"
     case 232n:
-      "client|trackinginfo"
+      "client|no-evict"
     case 233n:
-      "client|list"
+      "client|trackinginfo"
     case 234n:
-      "client|info"
+      "client|list"
     case 235n:
-      "client|kill"
+      "client|info"
     case 236n:
-      "client|pause"
+      "client|kill"
     case 237n:
-      "client|unpause"
+      "client|pause"
     case 238n:
-      "client|tracking"
+      "client|unpause"
     case 239n:
-      "client|setinfo"
+      "client|tracking"
     case 240n:
-      "client|no-touch"
+      "client|setinfo"
     case 241n:
-      "function|flush"
+      "client|no-touch"
     case 242n:
-      "function|help"
+      "function|flush"
     case 243n:
-      "function|load"
+      "function|help"
     case 244n:
-      "function|delete"
+      "function|load"
     case 245n:
-      "function|list"
+      "function|delete"
     case 246n:
-      "function|stats"
+      "function|list"
     case 247n:
-      "function|kill"
+      "function|stats"
     case 248n:
-      "function|dump"
+      "function|kill"
     case 249n:
-      "function|restore"
+      "function|dump"
     case 250n:
-      "config|get"
+      "function|restore"
     case 251n:
-      "config|set"
+      "config|get"
     case 252n:
-      "config|resetstat"
+      "config|set"
     case 253n:
-      "config|rewrite"
+      "config|resetstat"
     case 254n:
-      "config|help"
+      "config|rewrite"
     case 255n:
-      "command|info"
+      "config|help"
     case 256n:
-      "command|docs"
+      "command|info"
     case 257n:
-      "command|list"
+      "command|docs"
     case 258n:
-      "command|help"
+      "command|list"
     case 259n:
-      "command|count"
+      "command|help"
     case 260n:
-      "command|getkeys"
+      "command|count"
     case 261n:
-      "command|getkeysandflags"
+      "command|getkeys"
     case 262n:
-      "object|help"
+      "command|getkeysandflags"
     case 263n:
-      "object|freq"
+      "object|help"
     case 264n:
-      "object|encoding"
+      "object|freq"
     case 265n:
-      "object|refcount"
+      "object|encoding"
     case 266n:
-      "object|idletime"
+      "object|refcount"
     case 267n:
-      "memory|help"
+      "object|idletime"
     case 268n:
-      "memory|usage"
+      "memory|help"
     case 269n:
-      "memory|stats"
+      "memory|usage"
     case 270n:
-      "memory|doctor"
+      "memory|stats"
     case 271n:
-      "memory|purge"
+      "memory|doctor"
     case 272n:
-      "memory|malloc-stats"
+      "memory|purge"
     case 273n:
-      "pubsub|channels"
+      "memory|malloc-stats"
     case 274n:
-      "pubsub|help"
+      "pubsub|channels"
     case 275n:
-      "pubsub|numpat"
+      "pubsub|help"
     case 276n:
-      "pubsub|numsub"
+      "pubsub|numpat"
     case 277n:
-      "pubsub|shardchannels"
+      "pubsub|numsub"
     case 278n:
-      "pubsub|shardnumsub"
+      "pubsub|shardchannels"
     case 279n:
-      "slowlog|get"
+      "pubsub|shardnumsub"
     case 280n:
-      "slowlog|len"
+      "slowlog|get"
     case 281n:
-      "slowlog|reset"
+      "slowlog|len"
     case 282n:
-      "slowlog|help"
+      "slowlog|reset"
     case 283n:
-      "latency|doctor"
+      "slowlog|help"
     case 284n:
-      "latency|graph"
+      "latency|doctor"
     case 285n:
-      "latency|help"
+      "latency|graph"
     case 286n:
-      "latency|histogram"
+      "latency|help"
     case 287n:
-      "latency|history"
+      "latency|histogram"
     case 288n:
-      "latency|latest"
+      "latency|history"
     case 289n:
-      "latency|reset"
+      "latency|latest"
     case 290n:
-      "script|load"
+      "latency|reset"
     case 291n:
-      "script|exists"
+      "script|load"
     case 292n:
-      "script|flush"
+      "script|exists"
     case 293n:
-      "script|kill"
+      "script|flush"
     case 294n:
-      "script|help"
+      "script|kill"
     case 295n:
-      "acl|cat"
+      "script|help"
     case 296n:
-      "acl|deluser"
+      "acl|cat"
     case 297n:
-      "acl|dryrun"
+      "acl|deluser"
     case 298n:
-      "acl|genpass"
+      "acl|dryrun"
     case 299n:
-      "acl|getuser"
+      "acl|genpass"
     case 300n:
-      "acl|help"
+      "acl|getuser"
     case 301n:
-      "acl|list"
+      "acl|help"
     case 302n:
-      "acl|load"
+      "acl|list"
     case 303n:
-      "acl|log"
+      "acl|load"
     case 304n:
-      "acl|save"
+      "acl|log"
     case 305n:
-      "acl|setuser"
+      "acl|save"
     case 306n:
-      "acl|users"
+      "acl|setuser"
     case 307n:
-      "acl|whoami"
+      "acl|users"
     case 308n:
-      "xinfo|help"
+      "acl|whoami"
     case 309n:
-      "xinfo|stream"
+      "xinfo|help"
     case 310n:
-      "xinfo|groups"
+      "xinfo|stream"
     case 311n:
-      "xinfo|consumers"
+      "xinfo|groups"
     case 312n:
-      "cluster|addslots"
+      "xinfo|consumers"
     case 313n:
-      "cluster|addslotsrange"
+      "cluster|addslots"
     case 314n:
-      "cluster|bumpepoch"
+      "cluster|addslotsrange"
     case 315n:
-      "cluster|count-failure-reports"
+      "cluster|bumpepoch"
     case 316n:
-      "cluster|countkeysinslot"
+      "cluster|count-failure-reports"
     case 317n:
-      "cluster|delslots"
+      "cluster|countkeysinslot"
     case 318n:
-      "cluster|delslotsrange"
+      "cluster|delslots"
     case 319n:
-      "cluster|failover"
+      "cluster|delslotsrange"
     case 320n:
-      "cluster|flushslots"
+      "cluster|failover"
     case 321n:
-      "cluster|forget"
+      "cluster|flushslots"
     case 322n:
-      "cluster|getkeysinslot"
+      "cluster|forget"
     case 323n:
-      "cluster|help"
+      "cluster|getkeysinslot"
     case 324n:
-      "cluster|info"
+      "cluster|help"
     case 325n:
-      "cluster|keyslot"
+      "cluster|info"
     case 326n:
-      "cluster|links"
+      "cluster|keyslot"
     case 327n:
-      "cluster|meet"
+      "cluster|links"
     case 328n:
-      "cluster|myid"
+      "cluster|meet"
     case 329n:
-      "cluster|myshardid"
+      "cluster|myid"
     case 330n:
-      "cluster|nodes"
+      "cluster|myshardid"
     case 331n:
-      "cluster|replicas"
+      "cluster|nodes"
     case 332n:
-      "cluster|replicate"
+      "cluster|replicas"
     case 333n:
-      "cluster|reset"
+      "cluster|replicate"
     case 334n:
-      "cluster|saveconfig"
+      "cluster|reset"
     case 335n:
-      "cluster|set-config-epoch"
+      "cluster|saveconfig"
     case 336n:
-      "cluster|setslot"
+      "cluster|set-config-epoch"
     case 337n:
-      "cluster|shards"
+      "cluster|setslot"
     case 338n:
-      "cluster|slaves"
+      "cluster|shards"
     case 339n:
+      "cluster|slaves"
+    case 340n:
       "cluster|slots"
     case _:
       ""
@@ -11492,91 +11535,91 @@ def stat.arity(+key: Nat) -> Nat:
     case 220n:
       7n
     case 221n:
-      3n
+      8n
     case 222n:
-      5n
+      3n
     case 223n:
-      4n
+      5n
     case 224n:
       4n
     case 225n:
-      6n
-    case 226n:
       4n
-    case 227n:
+    case 226n:
       6n
+    case 227n:
+      4n
     case 228n:
       6n
     case 229n:
-      7n
-    case 230n:
-      4n
-    case 231n:
       6n
-    case 232n:
-      4n
-    case 233n:
-      5n
-    case 234n:
-      4n
-    case 235n:
+    case 230n:
       7n
+    case 231n:
+      4n
+    case 232n:
+      6n
+    case 233n:
+      4n
+    case 234n:
+      5n
+    case 235n:
+      4n
     case 236n:
       7n
     case 237n:
-      4n
+      7n
     case 238n:
-      7n
+      4n
     case 239n:
-      8n
-    case 240n:
-      6n
-    case 241n:
-      5n
-    case 242n:
-      4n
-    case 243n:
       7n
-    case 244n:
+    case 240n:
+      8n
+    case 241n:
       6n
-    case 245n:
+    case 242n:
       5n
-    case 246n:
+    case 243n:
       4n
+    case 244n:
+      7n
+    case 245n:
+      6n
+    case 246n:
+      5n
     case 247n:
       4n
     case 248n:
       4n
     case 249n:
-      7n
+      4n
     case 250n:
       7n
     case 251n:
-      9n
+      7n
     case 252n:
-      4n
+      9n
     case 253n:
       4n
     case 254n:
       4n
     case 255n:
-      5n
+      4n
     case 256n:
       5n
     case 257n:
       5n
     case 258n:
-      4n
+      5n
     case 259n:
       4n
     case 260n:
-      7n
+      4n
     case 261n:
       7n
     case 262n:
-      4n
+      7n
     case 263n:
-      6n
+      4n
     case 264n:
       6n
     case 265n:
@@ -11584,11 +11627,11 @@ def stat.arity(+key: Nat) -> Nat:
     case 266n:
       6n
     case 267n:
-      4n
+      6n
     case 268n:
-      7n
-    case 269n:
       4n
+    case 269n:
+      7n
     case 270n:
       4n
     case 271n:
@@ -11596,13 +11639,13 @@ def stat.arity(+key: Nat) -> Nat:
     case 272n:
       4n
     case 273n:
-      5n
-    case 274n:
       4n
+    case 274n:
+      5n
     case 275n:
       4n
     case 276n:
-      5n
+      4n
     case 277n:
       5n
     case 278n:
@@ -11610,7 +11653,7 @@ def stat.arity(+key: Nat) -> Nat:
     case 279n:
       5n
     case 280n:
-      4n
+      5n
     case 281n:
       4n
     case 282n:
@@ -11618,116 +11661,118 @@ def stat.arity(+key: Nat) -> Nat:
     case 283n:
       4n
     case 284n:
-      6n
+      4n
     case 285n:
-      4n
+      6n
     case 286n:
-      5n
+      4n
     case 287n:
-      6n
+      5n
     case 288n:
-      4n
-    case 289n:
-      5n
-    case 290n:
       6n
-    case 291n:
-      7n
-    case 292n:
-      5n
-    case 293n:
+    case 289n:
       4n
+    case 290n:
+      5n
+    case 291n:
+      6n
+    case 292n:
+      7n
+    case 293n:
+      5n
     case 294n:
       4n
     case 295n:
-      5n
-    case 296n:
-      7n
-    case 297n:
-      9n
-    case 298n:
-      5n
-    case 299n:
-      6n
-    case 300n:
       4n
+    case 296n:
+      5n
+    case 297n:
+      7n
+    case 298n:
+      9n
+    case 299n:
+      5n
+    case 300n:
+      6n
     case 301n:
       4n
     case 302n:
       4n
     case 303n:
-      5n
+      4n
     case 304n:
-      4n
+      5n
     case 305n:
-      7n
-    case 306n:
       4n
+    case 306n:
+      7n
     case 307n:
       4n
     case 308n:
       4n
     case 309n:
-      7n
-    case 310n:
-      6n
-    case 311n:
-      8n
-    case 312n:
-      7n
-    case 313n:
-      9n
-    case 314n:
       4n
-    case 315n:
+    case 310n:
+      7n
+    case 311n:
       6n
+    case 312n:
+      8n
+    case 313n:
+      7n
+    case 314n:
+      9n
+    case 315n:
+      4n
     case 316n:
       6n
     case 317n:
-      7n
-    case 318n:
-      9n
-    case 319n:
-      5n
-    case 320n:
-      4n
-    case 321n:
       6n
-    case 322n:
-      8n
-    case 323n:
+    case 318n:
+      7n
+    case 319n:
+      9n
+    case 320n:
+      5n
+    case 321n:
       4n
+    case 322n:
+      6n
+    case 323n:
+      8n
     case 324n:
       4n
     case 325n:
-      6n
+      4n
     case 326n:
-      4n
+      6n
     case 327n:
-      9n
-    case 328n:
       4n
+    case 328n:
+      9n
     case 329n:
       4n
     case 330n:
       4n
     case 331n:
-      6n
+      4n
     case 332n:
       6n
     case 333n:
-      5n
+      6n
     case 334n:
-      4n
+      5n
     case 335n:
-      6n
-    case 336n:
-      9n
-    case 337n:
       4n
-    case 338n:
+    case 336n:
       6n
+    case 337n:
+      9n
+    case 338n:
+      4n
     case 339n:
+      6n
+    case 340n:
       4n
     case _:
       1n
@@ -11987,17 +12032,17 @@ def stat.risky(+key: Nat) -> Bool:
       True{}
     case 220n:
       True{}
-    case 263n:
+    case 264n:
       True{}
-    case 266n:
+    case 267n:
       True{}
-    case 268n:
-      True{}
-    case 309n:
+    case 269n:
       True{}
     case 310n:
       True{}
     case 311n:
+      True{}
+    case 312n:
       True{}
     case _:
       False{}
@@ -12018,9 +12063,7 @@ def stat.engine(+key: Nat) -> Bool:
       True{}
     case 209n:
       True{}
-    case 241n:
-      True{}
-    case 243n:
+    case 242n:
       True{}
     case 244n:
       True{}
@@ -12028,15 +12071,17 @@ def stat.engine(+key: Nat) -> Bool:
       True{}
     case 246n:
       True{}
-    case 248n:
+    case 247n:
       True{}
     case 249n:
       True{}
-    case 290n:
+    case 250n:
       True{}
     case 291n:
       True{}
     case 292n:
+      True{}
+    case 293n:
       True{}
     case _:
       False{}
@@ -12060,21 +12105,19 @@ def stat.unseen(+key: Nat) -> Bool:
       True{}
     case 203n:
       True{}
-    case 221n:
+    case 222n:
       True{}
-    case 229n:
+    case 230n:
       True{}
-    case 231n:
+    case 232n:
       True{}
-    case 233n:
-      True{}
-    case 235n:
+    case 234n:
       True{}
     case 236n:
       True{}
     case 237n:
       True{}
-    case 250n:
+    case 238n:
       True{}
     case 251n:
       True{}
@@ -12082,17 +12125,17 @@ def stat.unseen(+key: Nat) -> Bool:
       True{}
     case 253n:
       True{}
-    case 279n:
+    case 254n:
       True{}
     case 280n:
       True{}
     case 281n:
       True{}
-    case 283n:
+    case 282n:
       True{}
     case 284n:
       True{}
-    case 286n:
+    case 285n:
       True{}
     case 287n:
       True{}
@@ -12100,13 +12143,13 @@ def stat.unseen(+key: Nat) -> Bool:
       True{}
     case 289n:
       True{}
-    case 296n:
+    case 290n:
       True{}
     case 297n:
       True{}
-    case 299n:
+    case 298n:
       True{}
-    case 301n:
+    case 300n:
       True{}
     case 302n:
       True{}
@@ -12118,7 +12161,7 @@ def stat.unseen(+key: Nat) -> Bool:
       True{}
     case 306n:
       True{}
-    case 312n:
+    case 307n:
       True{}
     case 313n:
       True{}
@@ -12126,7 +12169,7 @@ def stat.unseen(+key: Nat) -> Bool:
       True{}
     case 315n:
       True{}
-    case 317n:
+    case 316n:
       True{}
     case 318n:
       True{}
@@ -12136,9 +12179,9 @@ def stat.unseen(+key: Nat) -> Bool:
       True{}
     case 321n:
       True{}
-    case 327n:
+    case 322n:
       True{}
-    case 331n:
+    case 328n:
       True{}
     case 332n:
       True{}
@@ -12150,7 +12193,9 @@ def stat.unseen(+key: Nat) -> Bool:
       True{}
     case 336n:
       True{}
-    case 338n:
+    case 337n:
+      True{}
+    case 339n:
       True{}
     case _:
       False{}
@@ -12519,15 +12564,13 @@ def stat.keyspace(+key: Nat) -> Bool:
       True{}
     case 220n:
       True{}
-    case 241n:
-      True{}
-    case 243n:
+    case 242n:
       True{}
     case 244n:
       True{}
-    case 249n:
+    case 245n:
       True{}
-    case 263n:
+    case 250n:
       True{}
     case 264n:
       True{}
@@ -12535,13 +12578,15 @@ def stat.keyspace(+key: Nat) -> Bool:
       True{}
     case 266n:
       True{}
-    case 268n:
+    case 267n:
       True{}
-    case 309n:
+    case 269n:
       True{}
     case 310n:
       True{}
     case 311n:
+      True{}
+    case 312n:
       True{}
     case _:
       False{}
@@ -12748,13 +12793,13 @@ def stat.pausable(+key: Nat) -> Bool:
       True{}
     case 220n:
       True{}
-    case 241n:
-      True{}
-    case 243n:
+    case 242n:
       True{}
     case 244n:
       True{}
-    case 249n:
+    case 245n:
+      True{}
+    case 250n:
       True{}
     case _:
       False{}
@@ -12951,13 +12996,13 @@ def stat.write(+key: Nat) -> Bool:
       True{}
     case 220n:
       True{}
-    case 241n:
-      True{}
-    case 243n:
+    case 242n:
       True{}
     case 244n:
       True{}
-    case 249n:
+    case 245n:
+      True{}
+    case 250n:
       True{}
     case _:
       False{}
@@ -13019,9 +13064,9 @@ def stat.noscript(+key: Nat) -> Bool:
       True{}
     case 221n:
       True{}
-    case 223n:
+    case 222n:
       True{}
-    case 225n:
+    case 224n:
       True{}
     case 226n:
       True{}
@@ -13055,7 +13100,7 @@ def stat.noscript(+key: Nat) -> Bool:
       True{}
     case 241n:
       True{}
-    case 243n:
+    case 242n:
       True{}
     case 244n:
       True{}
@@ -13077,11 +13122,11 @@ def stat.noscript(+key: Nat) -> Bool:
       True{}
     case 253n:
       True{}
-    case 283n:
+    case 254n:
       True{}
     case 284n:
       True{}
-    case 286n:
+    case 285n:
       True{}
     case 287n:
       True{}
@@ -13097,7 +13142,7 @@ def stat.noscript(+key: Nat) -> Bool:
       True{}
     case 293n:
       True{}
-    case 295n:
+    case 294n:
       True{}
     case 296n:
       True{}
@@ -13107,7 +13152,7 @@ def stat.noscript(+key: Nat) -> Bool:
       True{}
     case 299n:
       True{}
-    case 301n:
+    case 300n:
       True{}
     case 302n:
       True{}
@@ -13121,7 +13166,9 @@ def stat.noscript(+key: Nat) -> Bool:
       True{}
     case 307n:
       True{}
-    case 333n:
+    case 308n:
+      True{}
+    case 334n:
       True{}
     case _:
       False{}
@@ -13148,11 +13195,11 @@ def stat.allow_busy(+key: Nat) -> Bool:
       True{}
     case 187n:
       True{}
-    case 246n:
-      True{}
     case 247n:
       True{}
-    case 293n:
+    case 248n:
+      True{}
+    case 294n:
       True{}
     case _:
       False{}
@@ -13275,9 +13322,9 @@ def stat.denyoom(+key: Nat) -> Bool:
       True{}
     case 220n:
       True{}
-    case 243n:
+    case 244n:
       True{}
-    case 249n:
+    case 250n:
       True{}
     case _:
       False{}
@@ -13474,13 +13521,13 @@ def stat.dirty(+key: Nat) -> Nat:
       2n
     case 220n:
       1n
-    case 241n:
-      1n
-    case 243n:
+    case 242n:
       1n
     case 244n:
       1n
-    case 249n:
+    case 245n:
+      1n
+    case 250n:
       1n
     case _:
       0n
@@ -13866,21 +13913,21 @@ def stat.ro(+key: Nat) -> Bool:
       True{}
     case 216n:
       True{}
-    case 263n:
-      True{}
     case 264n:
       True{}
     case 265n:
       True{}
     case 266n:
       True{}
-    case 268n:
+    case 267n:
       True{}
-    case 309n:
+    case 269n:
       True{}
     case 310n:
       True{}
     case 311n:
+      True{}
+    case 312n:
       True{}
     case _:
       False{}
@@ -14876,6 +14923,8 @@ def stat.kw(+key: Nat) -> U32:
       1563
     case 339n:
       1565
+    case 340n:
+      1566
     case _:
       63
 
@@ -15681,6 +15730,8 @@ def stat.key.lo24(+lo: Nat) -> Nat:
       338n
     case 29n:
       339n
+    case 30n:
+      340n
     case _:
       0n
 
