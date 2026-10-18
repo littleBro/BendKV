@@ -10492,6 +10492,32 @@ count's line (refused). Redis's unit/auth, run with its `external:skip` tag take
 section 3zzzh ran unit/acl, passes its test of these limits: 6 of the 7 tests Redis
 passes there.
 
+## 3zzzzo. A client joins as its connection is taken
+
+**What differed.** Redis creates a client as it accepts its connection
+(`acceptCommonHandler`, `createClient`), and a client created while its server asks for
+no password is authenticated from then on (`clientSetDefaultAuth`). BendKV's accept loop
+spawned the connection's task, and the client joined the actor's registry (`Join`) only
+once that task ran, so a command another client sent right after the connect could reach
+the actor first. A client that connected while a password was set, just before another
+client removed it with `CONFIG SET requirepass ""`, was created authenticated, and once
+the password came back it was answered where Redis answers NOAUTH: two of the three such
+clients of `auth_test`'s scenario 15, on the build before this change.
+
+**What changed** (`src/server.bend`). The accept loop opens the connection's channel,
+reads its addresses (`TCP.name`) and sends `Join` itself (`conn_join.at`) before it
+takes the next connection, and the connection's task waits for the answer
+(`conn_start`). The loop runs on the event loop's thread, which takes the listener's
+readiness and the clients' sockets' in the order they come, as Redis's loop does: a
+client's `Join` reaches the actor before any command sent once it has connected.
+
+**What it costs.** Nothing on a request's path: the accept loop does the channel, the
+addresses and the send that the connection's task did. perfcheck: GET 3,505, SET 4,295
+and INCR 4,608 instructions a request (3,506, 4,297 and 4,614 before).
+
+`auth_test`'s scenario 15 runs it against Redis: three clients, each connected just
+before another removes the password and sets it again, then a GET from each (NOAUTH).
+
 ## 4. Where a request's time goes, and hiding the memory waits
 
 With the eight patches, BendKV ran fewer instructions on GET and SET than Redis, missed
