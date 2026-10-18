@@ -274,34 +274,152 @@ def xb.parse(+s: String, +start: Bool) -> XB:
 type XE is Data:
   XE{id: KV.XId, fv: List<&2, String>}
 
-# an entry's head: its flags, its ID and the bytes after them
+# an entry's head: its flags, its ID and where the bytes after them start
 type XEh is Data:
-  XEh{fl: Nat, id: KV.XId, t: String}
+  XEh{fl: Nat, id: KV.XId, off: Nat}
   XEhBad{}
 
-def xh.seq(+fl: Nat, +ms: KV.XN, r: D.LpR, +mid: KV.XId) -> XEh:
+# The slow way: each element read as its text (D.lp.next), and the bytes
+# after it taken (n: the entry's length)
+def xh.seq(+fl: Nat, +ms: KV.XN, r: D.LpR, +n: Nat, +mid: KV.XId) -> XEh:
   match r:
-    case D.LpOk{+v, t}:
-      XEh{fl, D.xid.plus(mid, ms, KV.xn.of_int(v)), t}
+    case D.LpOk{+v, +t}:
+      XEh{fl, D.xid.plus(mid, ms, KV.xn.of_int(v)), Nat.sub(n, String.length(t))}
     case _:
       XEhBad{}
 
-def xh.ms(+fl: Nat, r: D.LpR, +mid: KV.XId) -> XEh:
+def xh.ms(+fl: Nat, r: D.LpR, +n: Nat, +mid: KV.XId) -> XEh:
   match r:
     case D.LpOk{+v, t}:
-      xh.seq(fl, KV.xn.of_int(v), D.lp.next(t), mid)
+      xh.seq(fl, KV.xn.of_int(v), D.lp.next(t), n, mid)
     case _:
       XEhBad{}
 
-def xh.flags(r: D.LpR, +mid: KV.XId) -> XEh:
+def xh.flags(r: D.LpR, +n: Nat, +mid: KV.XId) -> XEh:
   match r:
     case D.LpOk{+v, t}:
-      xh.ms(String.dec_at(v, 0n, String.length(v)), D.lp.next(t), mid)
+      xh.ms(String.dec_at(v, 0n, String.length(v)), D.lp.next(t), n, mid)
     case _:
       XEhBad{}
+
+def xh.slow(+e: String, +n: Nat, +mid: KV.XId) -> XEh:
+  xh.flags(D.lp.next(e), n, mid)
+
+# The fast way: the three integers read where they lie, as lpGetInteger
+# reads them, with no text made and no bytes taken. An element that is
+# no integer of 32 bits at most, its backlen right (a string, a 64-bit
+# integer, flags below 0), sends the entry the slow way, which reads it
+# as Redis's listpack holds it. An integer: its sign, its magnitude, and
+# the bytes it takes with its backlen (one byte: its size)
+type XHi is Data:
+  XHi{neg: Bool, m: Nat, n: Nat}
+  XHiNo{}
+
+def xh.at(+e: String, +i: Nat) -> Nat:
+  U32.to_nat(String.code_at(e, i))
+
+# k bytes from i on, little-endian (k at most 4)
+def xh.le(k: Nat, +e: String, +i: Nat, +m: Nat, +acc: Nat) -> Nat:
+  match k:
+    case 0n:
+      acc
+    case 1n+j:
+      xh.le(j, e, Nat.add(i, 1n), Nat.mul(m, 256n), Nat.add(acc, Nat.mul(xh.at(e, i), m)))
+
+# the integer read as u, of sz bytes and signed below full (2^bits, or 0:
+# unsigned), when its backlen is right
+def xh.int.val(ok: Bool, +u: Nat, +full: Nat, +sz: Nat) -> XHi:
+  match ok:
+    case True{}:
+      +neg = Bool.and(Nat.is_lt(0n, full), Nat.is_le(Nat.div(full, 2n), u))
+      XHi{neg, Bool.pick(Nat, neg, Nat.sub(full, u), u), Nat.add(sz, 1n)}
+    case False{}:
+      XHiNo{}
+
+# 2^bits of an integer of 16, 24 or 32 bits, by its size
+def xh.int.full(sz: Nat) -> Nat:
+  match sz:
+    case 3n:
+      65536n
+    case 4n:
+      16777216n
+    case _:
+      Nat.mul(65536n, 65536n)
+
+# by its kind (D.lp.kind): 7 bits in its first byte; 13, the first
+# byte's low 5 and the next; 16, 24 or 32 after its first byte
+def xh.int.kind(k: Nat, ok: Bool, +x: Nat, +e: String, +i: Nat, +sz: Nat) -> XHi:
+  match k:
+    case 0n:
+      xh.int.val(ok, x, 0n, sz)
+    case 2n:
+      xh.int.val(ok, Nat.add(Nat.mul(Nat.sub(x, 192n), 256n), xh.at(e, Nat.add(i, 1n))), 8192n, sz)
+    case _:
+      xh.int.val(ok, xh.le(Nat.sub(sz, 1n), e, Nat.add(i, 1n), 1n, 0n), xh.int.full(sz), sz)
+
+# its bytes when it fits within e's
+def xh.int.in(in: Bool, +k: Nat, +x: Nat, +e: String, +i: Nat, +sz: Nat) -> XHi:
+  match in:
+    case True{}:
+      xh.int.kind(k, Nat.is_eq(xh.at(e, Nat.add(i, sz)), sz), x, e, i, sz)
+    case False{}:
+      XHiNo{}
+
+# the size of an integer of the kind, or 0 for the others
+def xh.int.size(k: Nat) -> Nat:
+  match k:
+    case 0n:
+      1n
+    case 2n:
+      2n
+    case 4n:
+      3n
+    case 5n:
+      4n
+    case 6n:
+      5n
+    case _:
+      0n
+
+# the integer at byte i of e (n bytes)
+def xh.int(+e: String, +i: Nat, +n: Nat) -> XHi:
+  +x = xh.at(e, i)
+  +k = D.lp.kind(x)
+  +sz = xh.int.size(k)
+  xh.int.in(Bool.and(Nat.is_lt(0n, sz), Nat.is_lt(Nat.add(i, sz), n)), k, x, e, i, sz)
+
+def xh.xn(neg: Bool, +m: Nat) -> KV.XN:
+  match neg:
+    case True{}:
+      KV.xn.neg(KV.XS{m})
+    case False{}:
+      KV.XS{m}
+
+def xh.fast.seq(h: XHi, +fl: Nat, +ms: KV.XN, +i: Nat, +e: String, +n: Nat, +mid: KV.XId) -> XEh:
+  match h:
+    case XHi{neg, +m, +k}:
+      XEh{fl, D.xid.plus(mid, ms, xh.xn(neg, m)), Nat.add(i, k)}
+    case XHiNo{}:
+      xh.slow(e, n, mid)
+
+def xh.fast.ms(h: XHi, +fl: Nat, +i: Nat, +e: String, +n: Nat, +mid: KV.XId) -> XEh:
+  match h:
+    case XHi{neg, +m, +k}:
+      +j = Nat.add(i, k)
+      xh.fast.seq(xh.int(e, j, n), fl, xh.xn(neg, m), j, e, n, mid)
+    case XHiNo{}:
+      xh.slow(e, n, mid)
+
+def xh.fast(h: XHi, +e: String, +n: Nat, +mid: KV.XId) -> XEh:
+  match h:
+    case XHi{False{}, +m, +k}:
+      xh.fast.ms(xh.int(e, k, n), m, k, e, n, mid)
+    case _:
+      xh.slow(e, n, mid)
 
 def xh.read(+e: String, +mid: KV.XId) -> XEh:
-  xh.flags(D.lp.next(e), mid)
+  +n = String.length(e)
+  xh.fast(xh.int(e, 0n, n), e, n, mid)
 
 def xh.deleted(+fl: Nat) -> Bool:
   Nat.is_eq(Nat.mod(fl, 2n), 1n)
@@ -402,15 +520,24 @@ def xns.floor(+t: KV.XNodes, +k: KV.XId) -> Maybe<&2, Nat>:
 type XWk is Data:
   XWk{acc: List<&2, XE>, c: Nat, end: Bool}
 
+# an entry's body, read from its bytes past its head (off on), or none
+# for a walk that wants IDs alone (ids)
+def xw.body(ids: Bool, +fl: Nat, +e: String, +off: Nat, +mfs: List<&2, String>, +nmf: Nat) -> List<&2, String>:
+  match ids:
+    case True{}:
+      Nil{}
+    case False{}:
+      xe.body(xh.same(fl), String.drop(e, off), mfs, nmf)
+
 # take (2), pass (0), or end (1)
-def xw.do(k: Nat, +fl: Nat, +id: KV.XId, t: String, acc: List<&2, XE>, +c: Nat, +mfs: List<&2, String>, +nmf: Nat) -> XWk:
+def xw.do(k: Nat, +fl: Nat, +id: KV.XId, +e: String, +off: Nat, acc: List<&2, XE>, +c: Nat, +mfs: List<&2, String>, +nmf: Nat, +ids: Bool) -> XWk:
   match k:
     case 0n:
       XWk{acc, c, False{}}
     case 1n:
       XWk{acc, c, True{}}
     case _:
-      XWk{XE{id, xe.body(xh.same(fl), t, mfs, nmf)} <> acc, Nat.sub(c, 1n), Nat.is_eq(c, 1n)}
+      XWk{XE{id, xw.body(ids, fl, e, off, mfs, nmf)} <> acc, Nat.sub(c, 1n), Nat.is_eq(c, 1n)}
 
 # what a forward walk does with an entry: pass one deleted or before lo,
 # end at one past hi, take the others; backwards, pass one deleted or
@@ -422,18 +549,18 @@ def xw.what(rev: Bool, +fl: Nat, +id: KV.XId, +lo: KV.XId, +hi: KV.XId) -> Nat:
     case True{}:
       Bool.pick(Nat, Bool.or(xh.deleted(fl), Cmp.is_gt(KV.xid.cmp(id, hi))), 0n, Bool.pick(Nat, Cmp.is_lt(KV.xid.cmp(id, lo)), 1n, 2n))
 
-def xw.one(h: XEh, +rev: Bool, acc: List<&2, XE>, +c: Nat, +mfs: List<&2, String>, +nmf: Nat, +lo: KV.XId, +hi: KV.XId) -> XWk:
+def xw.one(h: XEh, +e: String, +rev: Bool, acc: List<&2, XE>, +c: Nat, +mfs: List<&2, String>, +nmf: Nat, +lo: KV.XId, +hi: KV.XId, +ids: Bool) -> XWk:
   match h:
-    case XEh{+fl, +id, t}:
-      xw.do(xw.what(rev, fl, id, lo, hi), fl, id, t, acc, c, mfs, nmf)
+    case XEh{+fl, +id, +off}:
+      xw.do(xw.what(rev, fl, id, lo, hi), fl, id, e, off, acc, c, mfs, nmf, ids)
     case XEhBad{}:
       XWk{acc, c, True{}}
 
 # a walk through a node's entries es, in the walk's order
-def xw.ents(es: List<&2, String>, w: XWk, +rev: Bool, +mid: KV.XId, +mfs: List<&2, String>, +nmf: Nat, +lo: KV.XId, +hi: KV.XId) -> XWk:
+def xw.ents(es: List<&2, String>, w: XWk, +rev: Bool, +mid: KV.XId, +mfs: List<&2, String>, +nmf: Nat, +lo: KV.XId, +hi: KV.XId, +ids: Bool) -> XWk:
   match es w:
     case Con{+e, rest} XWk{acc, +c, False{}}:
-      xw.ents(rest, xw.one(xh.read(e, mid), rev, acc, c, mfs, nmf, lo, hi), rev, mid, mfs, nmf, lo, hi)
+      xw.ents(rest, xw.one(xh.read(e, mid), e, rev, acc, c, mfs, nmf, lo, hi, ids), rev, mid, mfs, nmf, lo, hi, ids)
     case _ other:
       other
 
@@ -447,18 +574,18 @@ def xw.order(rev: Bool, +es: List<&2, String>) -> List<&2, String>:
       List.reverse(&2, String, es)
 
 # a walk through a node
-def xw.node(+x: KV.XNode, w: XWk, +rev: Bool, +lo: KV.XId, +hi: KV.XId) -> XWk:
+def xw.node(+x: KV.XNode, w: XWk, +rev: Bool, +lo: KV.XId, +hi: KV.XId, +ids: Bool) -> XWk:
   match x:
     case KV.XNd{+mid, +mfs, live, dead, bytes, nel, +es}:
-      xw.ents(xw.order(rev, es), w, rev, mid, mfs, List.length(&2, String, mfs), lo, hi)
+      xw.ents(xw.order(rev, es), w, rev, mid, mfs, List.length(&2, String, mfs), lo, hi, ids)
     case KV.XNdOf{+y}:
-      xw.node(y, w, rev, lo, hi)
+      xw.node(y, w, rev, lo, hi, ids)
 
 # a walk through k nodes of t from place i on, forwards or backwards
-def xw.nodes(k: Nat, w: XWk, +t: KV.XNodes, +i: Nat, +rev: Bool, +lo: KV.XId, +hi: KV.XId) -> XWk:
+def xw.nodes(k: Nat, w: XWk, +t: KV.XNodes, +i: Nat, +rev: Bool, +lo: KV.XId, +hi: KV.XId, +ids: Bool) -> XWk:
   match k w:
     case 1n+j XWk{acc, +c, False{}}:
-      xw.nodes(j, xw.node(xns.nth(t, i), XWk{acc, c, False{}}, rev, lo, hi), t, Bool.pick(Nat, rev, Nat.sub(i, 1n), Nat.add(i, 1n)), rev, lo, hi)
+      xw.nodes(j, xw.node(xns.nth(t, i), XWk{acc, c, False{}}, rev, lo, hi, ids), t, Bool.pick(Nat, rev, Nat.sub(i, 1n), Nat.add(i, 1n)), rev, lo, hi, ids)
     case _ other:
       other
 
@@ -492,13 +619,17 @@ def xw.taken(w: XWk) -> List<&2, XE>:
       List.reverse(&2, XE, acc)
 
 # the entries of x from lo to hi, at most c of them (c at least 1), in
-# the order of the walk (rev: from hi down)
-def xs.range(+x: KV.XStream, +lo: KV.XId, +hi: KV.XId, +c: Nat, +rev: Bool) -> List<&2, XE>:
+# the order of the walk (rev: from hi down); with ids, their IDs alone
+# (their fields and values none)
+def xs.walk(+x: KV.XStream, +lo: KV.XId, +hi: KV.XId, +c: Nat, +rev: Bool, +ids: Bool) -> List<&2, XE>:
   +t = xstream.nodes(x)
   +i = xw.at(t, rev, lo, hi)
   +n = KV.xns.size(t)
   +k = Bool.pick(Nat, rev, Nat.add(i, 1n), Nat.sub(n, i))
-  xw.taken(xw.nodes(Bool.pick(Nat, Nat.is_eq(n, 0n), 0n, k), XWk{Nil{}, c, False{}}, t, i, rev, lo, hi))
+  xw.taken(xw.nodes(Bool.pick(Nat, Nat.is_eq(n, 0n), 0n, k), XWk{Nil{}, c, False{}}, t, i, rev, lo, hi, ids))
+
+def xs.range(+x: KV.XStream, +lo: KV.XId, +hi: KV.XId, +c: Nat, +rev: Bool) -> List<&2, XE>:
+  xs.walk(x, lo, hi, c, rev, False{})
 
 # A stream's header
 # -----------------
@@ -550,7 +681,7 @@ def xs.top.of(es: List<&2, XE>) -> Maybe<&2, KV.XId>:
 def xs.top(+x: KV.XStream) -> Maybe<&2, KV.XId>:
   match x:
     case KV.XStr{+n, +last, +first, +maxdel, +added, +nodes, +groups}:
-      xs.top.of(xs.range(KV.XStr{n, last, first, maxdel, added, nodes, groups}, xid.zero(), xid.max(), 1n, True{}))
+      xs.top.of(xs.walk(KV.XStr{n, last, first, maxdel, added, nodes, groups}, xid.zero(), xid.max(), 1n, True{}, True{}))
     case KV.XStrOf{+y}:
       xs.top(y)
 
@@ -1107,7 +1238,7 @@ def xnode.live(+x: KV.XNode) -> Nat:
 
 def xh.id.or(h: XEh, +d: KV.XId) -> KV.XId:
   match h:
-    case XEh{fl, +id, t}:
+    case XEh{fl, +id, off}:
       id
     case XEhBad{}:
       d
@@ -1233,7 +1364,7 @@ def xs.head.of(es: List<&2, XE>) -> KV.XId:
 def xs.head(+x: KV.XStream) -> KV.XId:
   match x:
     case KV.XStr{+n, +last, +first, +maxdel, +added, +nodes, +groups}:
-      xs.head.of(xs.range(KV.XStr{n, last, first, maxdel, added, nodes, groups}, xid.zero(), xid.max(), 1n, False{}))
+      xs.head.of(xs.walk(KV.XStr{n, last, first, maxdel, added, nodes, groups}, xid.zero(), xid.max(), 1n, False{}, True{}))
     case KV.XStrOf{+y}:
       xs.head(y)
 
@@ -1322,7 +1453,7 @@ def xt.part.at(stop: Bool, +e: String, +fl: Nat, +len: Nat, +n: Nat, acc: List<&
 
 def xt.part.one(h: XEh, +e: String, +s: XTs, +len: Nat, +n: Nat, acc: List<&2, String>) -> XMk:
   match h:
-    case XEh{+fl, +id, t}:
+    case XEh{+fl, +id, off}:
       xt.part.at(xt.stop(s, len, id), e, fl, len, n, acc)
     case XEhBad{}:
       XMk{e <> acc, len, n, True{}}
@@ -1477,7 +1608,7 @@ type XDn is Data:
 
 def xd.what.h(h: XEh, +id: KV.XId) -> Nat:
   match h:
-    case XEh{+fl, +eid, t}:
+    case XEh{+fl, +eid, off}:
       +c = KV.xid.cmp(eid, id)
       Bool.pick(Nat, Bool.or(xh.deleted(fl), Cmp.is_lt(c)), 0n, Bool.pick(Nat, Cmp.is_eq(c), 1n, 2n))
     case XEhBad{}:
@@ -1598,3 +1729,406 @@ def xids.go(ws: List<&2, String>, m: Maybe<&2, KV.XId>, acc: List<&2, KV.XId>) -
 
 def xids.parse(+ws: List<&2, String>) -> Maybe<&2, List<&2, KV.XId>>:
   xids.go(ws, xids.head(ws), Nil{})
+
+# Groups' writes
+# --------------
+# What XGROUP, XACK, XCLAIM, XAUTOCLAIM and XREADGROUP do to a stream's
+# groups, as Redis 7.2.16's t_stream.c does it (streamCreateCG,
+# streamCreateConsumer, streamDelConsumer, xackCommand, xclaimCommand,
+# xautoclaimCommand, streamReplyWithRange,
+# streamReplyWithRangeFromConsumerPEL): a group's pending entries and the
+# IDs each consumer holds of them change together, an entry given to a
+# consumer leaving the IDs of the one that held it.
+
+def xs.groups.set(+x: KV.XStream, gs: KV.XGroups) -> KV.XStream:
+  match x:
+    case KV.XStr{n, last, first, maxdel, added, nodes, groups}:
+      KV.XStr{n, last, first, maxdel, added, nodes, gs}
+    case KV.XStrOf{+y}:
+      xs.groups.set(y, gs)
+
+def xs.gput.of(m: Maybe<&2, KV.XGroup>, +g: KV.XGroup, +gs: KV.XGroups) -> KV.XGroups:
+  match m:
+    case Some{h}:
+      KV.xgs.set(g, gs)
+    case None{}:
+      KV.xgs.put(g, gs)
+
+# x with the group g in place of its group of g's name, or added
+def xs.group.put(+x: KV.XStream, +g: KV.XGroup) -> KV.XStream:
+  +gs = xstream.groups(x)
+  +name = KV.xgroup.name(g)
+  xs.groups.set(x, xs.gput.of(KV.xgs.find(gs, KV.xgs.at(gs, name), name), g, gs))
+
+def xgroup.mk(+g: KV.XGroup, +last: KV.XId, rd: KV.XRd, pel: KV.XPel, cons: KV.XCons) -> KV.XGroup:
+  KV.XGrp{KV.xgroup.name(g), last, rd, pel, cons}
+
+def xcon.ids.set(+c: KV.XCon, ids: KV.XIds) -> KV.XCon:
+  match c:
+    case KV.XCon{+name, +seen, active, x}:
+      KV.XCon{name, seen, active, ids}
+
+def xcon.times(+c: KV.XCon, +seen: Nat, act: KV.XAct) -> KV.XCon:
+  match c:
+    case KV.XCon{+name, s, a, +ids}:
+      KV.XCon{name, seen, act, ids}
+
+# whether the stream holds a live entry of the ID (streamEntryExists)
+def xs.has.of(es: List<&2, XE>) -> Bool:
+  match es:
+    case Con{e, rest}:
+      True{}
+    case Nil{}:
+      False{}
+
+def xs.has(+x: KV.XStream, +id: KV.XId) -> Bool:
+  xs.has.of(xs.walk(x, id, id, 1n, False{}, True{}))
+
+# a consumer's IDs with id among them
+def xis.add.of(m: Maybe<&2, KV.XId>, +id: KV.XId, +ids: KV.XIds) -> KV.XIds:
+  match m:
+    case Some{y}:
+      ids
+    case None{}:
+      KV.xis.put(id, ids)
+
+def xis.add(+id: KV.XId, +ids: KV.XIds) -> KV.XIds:
+  xis.add.of(KV.xis.find(ids, KV.xis.at(ids, id), id), id, ids)
+
+# the consumers cs with id taken from (put in) the IDs of the one of the
+# name, as they were when it is not there
+def xcs.unown.of(m: Maybe<&2, KV.XCon>, +cs: KV.XCons, +id: KV.XId) -> KV.XCons:
+  match m:
+    case Some{+c}:
+      KV.xcs.set(xcon.ids.set(c, KV.xis.del(id, xcon.ids(c))), cs)
+    case None{}:
+      cs
+
+def xcs.unown(+cs: KV.XCons, +name: String, +id: KV.XId) -> KV.XCons:
+  xcs.unown.of(KV.xcs.find(cs, KV.xcs.at(cs, name), name), cs, id)
+
+def xcs.own.of(m: Maybe<&2, KV.XCon>, +cs: KV.XCons, +id: KV.XId) -> KV.XCons:
+  match m:
+    case Some{+c}:
+      KV.xcs.set(xcon.ids.set(c, xis.add(id, xcon.ids(c))), cs)
+    case None{}:
+      cs
+
+def xcs.own(+cs: KV.XCons, +name: String, +id: KV.XId) -> KV.XCons:
+  xcs.own.of(KV.xcs.find(cs, KV.xcs.at(cs, name), name), cs, id)
+
+def xpl.of(+g: KV.XGroup, +id: KV.XId) -> Maybe<&2, KV.XNack>:
+  +pel = xgroup.pel(g)
+  KV.xpl.find(pel, KV.xpl.at(pel, id), id)
+
+# the group without the pending entry of id (an XACK, or an entry gone
+# from the stream), as it was when it has none
+def xg.unack.of(m: Maybe<&2, KV.XNack>, +g: KV.XGroup, +id: KV.XId) -> KV.XGroup:
+  match m:
+    case Some{+nk}:
+      xgroup.mk(g, xgroup.last(g), xgroup.read(g), KV.xpl.del(id, xgroup.pel(g)), xcs.unown(xgroup.cons(g), xnack.owner(nk), id))
+    case None{}:
+      g
+
+def xg.unack(+g: KV.XGroup, +id: KV.XId) -> KV.XGroup:
+  xg.unack.of(xpl.of(g, id), g, id)
+
+# the consumers once the entry of id goes from o's IDs to c's (none
+# moves when o is c)
+def xcs.move(same: Bool, +cs: KV.XCons, +o: String, +c: String, +id: KV.XId) -> KV.XCons:
+  match same:
+    case True{}:
+      cs
+    case False{}:
+      xcs.own(xcs.unown(cs, o, id), c, id)
+
+# the group with the entry of id pending for consumer c (who is there),
+# delivered at t, n times: made, or moved from its owner
+def xg.give.of(m: Maybe<&2, KV.XNack>, +g: KV.XGroup, +c: String, +id: KV.XId, +t: Nat, +n: KV.XN) -> KV.XGroup:
+  match m:
+    case Some{+nk}:
+      +o = xnack.owner(nk)
+      xgroup.mk(g, xgroup.last(g), xgroup.read(g), KV.xpl.set(KV.XNk{id, c, t, n}, xgroup.pel(g)), xcs.move(String.eq(o, c), xgroup.cons(g), o, c, id))
+    case None{}:
+      xgroup.mk(g, xgroup.last(g), xgroup.read(g), KV.xpl.put(KV.XNk{id, c, t, n}, xgroup.pel(g)), xcs.own(xgroup.cons(g), c, id))
+
+def xg.give(+g: KV.XGroup, +c: String, +id: KV.XId, +t: Nat, +n: KV.XN) -> KV.XGroup:
+  xg.give.of(xpl.of(g, id), g, c, id, t, n)
+
+# The write the file logs for a group (redis.bend's XWSet): consumer c
+# made, or kept, with its seen and active times; then each pending entry
+# it names (id, time, count): given to c when the stream holds the
+# entry, else taken away (as XCLAIM with TIME, RETRYCOUNT, FORCE and
+# JUSTID does it); then the group's last ID and count of entries read
+type XSn is Data:
+  XSn{id: KV.XId, time: Nat, count: KV.XN}
+
+def xg.set1.if(has: Bool, +g: KV.XGroup, +c: String, +id: KV.XId, +t: Nat, +n: KV.XN) -> KV.XGroup:
+  match has:
+    case True{}:
+      xg.give(g, c, id, t, n)
+    case False{}:
+      xg.unack(g, id)
+
+def xg.sets(ns: List<&2, XSn>, +g: KV.XGroup, +c: String, +x: KV.XStream) -> KV.XGroup:
+  match ns:
+    case Con{XSn{+id, +t, +n}, rest}:
+      xg.sets(rest, xg.set1.if(xs.has(x, id), g, c, id, t, n), c, x)
+    case Nil{}:
+      g
+
+def xg.con.of(m: Maybe<&2, KV.XCon>, +g: KV.XGroup, +c: String, +seen: Nat, act: KV.XAct) -> KV.XGroup:
+  match m:
+    case Some{+k}:
+      xgroup.mk(g, xgroup.last(g), xgroup.read(g), xgroup.pel(g), KV.xcs.set(xcon.times(k, seen, act), xgroup.cons(g)))
+    case None{}:
+      xgroup.mk(g, xgroup.last(g), xgroup.read(g), xgroup.pel(g), KV.xcs.put(KV.XCon{c, seen, act, KV.XITip{}}, xgroup.cons(g)))
+
+# the group with consumer c's times (c made when it is not there)
+def xg.con(+g: KV.XGroup, +c: String, +seen: Nat, act: KV.XAct) -> KV.XGroup:
+  xg.con.of(xgroup.con(g, c), g, c, seen, act)
+
+def xg.set(+g: KV.XGroup, +c: String, +seen: Nat, act: KV.XAct, ns: List<&2, XSn>, +x: KV.XStream, +last: KV.XId, rd: KV.XRd) -> KV.XGroup:
+  +g2 = xg.sets(ns, xg.con(g, c, seen, act), c, x)
+  xgroup.mk(g2, last, rd, xgroup.pel(g2), xgroup.cons(g2))
+
+def xs.gset.of(m: Maybe<&2, KV.XGroup>, +x: KV.XStream, +c: String, +seen: Nat, act: KV.XAct, ns: List<&2, XSn>, +last: KV.XId, rd: KV.XRd) -> Maybe<&2, KV.XStream>:
+  match m:
+    case Some{+g}:
+      Some{xs.group.put(x, xg.set(g, c, seen, act, ns, x, last, rd))}
+    case None{}:
+      None{}
+
+# the stream after the write, none when the group is not there
+def xs.gset(+x: KV.XStream, +gname: String, +c: String, +seen: Nat, act: KV.XAct, ns: List<&2, XSn>, +last: KV.XId, rd: KV.XRd) -> Maybe<&2, KV.XStream>:
+  xs.gset.of(xs.group(x, gname), x, c, seen, act, ns, last, rd)
+
+# XGROUP CREATE: a group of the name at the ID with the count of entries
+# read, none when one of the name is there (BUSYGROUP)
+def xs.gcreate.of(m: Maybe<&2, KV.XGroup>, +x: KV.XStream, +name: String, +id: KV.XId, rd: KV.XRd) -> Maybe<&2, KV.XStream>:
+  match m:
+    case Some{g}:
+      None{}
+    case None{}:
+      Some{xs.groups.set(x, KV.xgs.put(KV.XGrp{name, id, rd, KV.XPTip{}, KV.XCTip{}}, xstream.groups(x)))}
+
+def xs.gcreate(+x: KV.XStream, +name: String, +id: KV.XId, rd: KV.XRd) -> Maybe<&2, KV.XStream>:
+  xs.gcreate.of(xs.group(x, name), x, name, id, rd)
+
+# XGROUP SETID of the group g, which is there
+def xs.gsetid(+x: KV.XStream, +g: KV.XGroup, +id: KV.XId, rd: KV.XRd) -> KV.XStream:
+  xs.group.put(x, xgroup.mk(g, id, rd, xgroup.pel(g), xgroup.cons(g)))
+
+# XGROUP DESTROY of the group of the name
+def xs.gdestroy(+x: KV.XStream, +name: String) -> KV.XStream:
+  xs.groups.set(x, KV.xgs.del(name, xstream.groups(x)))
+
+def xpl.dels(ids: List<&2, KV.XId>, +pel: KV.XPel) -> KV.XPel:
+  match ids:
+    case Con{+id, rest}:
+      xpl.dels(rest, KV.xpl.del(id, pel))
+    case Nil{}:
+      pel
+
+# XGROUP DELCONSUMER of the consumer c of the group g: c gone, and its
+# pending entries from the group's
+def xs.gdelcon(+x: KV.XStream, +g: KV.XGroup, +c: KV.XCon) -> KV.XStream:
+  xs.group.put(x, xgroup.mk(g, xgroup.last(g), xgroup.read(g), xpl.dels(KV.xis.list(xcon.ids(c), Nil{}), xgroup.pel(g)), KV.xcs.del(KV.xcon.name(c), xgroup.cons(g))))
+
+# XACK of the IDs in turn: how many were pending, and the group after
+type XAk is Data:
+  XAk{n: Nat, g: KV.XGroup}
+
+def xg.ack1.of(m: Maybe<&2, KV.XNack>, +id: KV.XId, +n: Nat, +g: KV.XGroup) -> XAk:
+  match m:
+    case Some{nk}:
+      XAk{Nat.add(n, 1n), xg.unack(g, id)}
+    case None{}:
+      XAk{n, g}
+
+def xg.ack(ids: List<&2, KV.XId>, a: XAk) -> XAk:
+  match ids a:
+    case Con{+id, rest} XAk{+n, +g}:
+      xg.ack(rest, xg.ack1.of(xpl.of(g, id), id, n, g))
+    case Nil{} a0:
+      a0
+
+# XREADGROUP's delivery of new entries (streamReplyWithRange with a
+# group): each entry past the group's last ID becomes its last, its count
+# of entries read one more when it has one, its last ID is not before the
+# first entry and no entry was deleted at or after it, else the estimate
+# at the entry (xs.est; none past it); each is pending for the consumer
+# (delivered now, once), but with NOACK
+def xrd.of(+e: KV.XN) -> KV.XRd:
+  Bool.pick(KV.XRd, xn.is_max(e), KV.XRdNone{}, KV.XRdN{e})
+
+def xg.read.next(rd: KV.XRd, +x: KV.XStream, +last: KV.XId, +id: KV.XId) -> KV.XRd:
+  match rd:
+    case KV.XRdN{+n}:
+      Bool.pick(KV.XRd, Bool.and(Bool.not(Cmp.is_lt(KV.xid.cmp(last, xstream.first(x)))), Bool.not(xs.tomb(x, last))), KV.XRdN{KV.xn.add(n, xn.one())}, xrd.of(xs.est(x, id)))
+    case KV.XRdNone{}:
+      xrd.of(xs.est(x, id))
+
+def xsn.add(noack: Bool, +id: KV.XId, +now: Nat, ns: List<&2, XSn>) -> List<&2, XSn>:
+  match noack:
+    case True{}:
+      ns
+    case False{}:
+      XSn{id, now, xn.one()} <> ns
+
+# a delivery so far: the group's last ID and count of entries read, and
+# the pending entries made (the newest first)
+type XDv is Data:
+  XDv{last: KV.XId, rd: KV.XRd, ns: List<&2, XSn>}
+
+def xg.deliver(es: List<&2, XE>, +x: KV.XStream, +noack: Bool, +now: Nat, d: XDv) -> XDv:
+  match es d:
+    case Con{XE{+id, fv}, rest} XDv{+last, rd, ns}:
+      xg.deliver(rest, x, noack, now, XDv{id, xg.read.next(rd, x, last, id), xsn.add(noack, id, now, ns)})
+    case Nil{} d0:
+      d0
+
+# XREADGROUP of history (an ID but ">"): the consumer's pending entries
+# past it, at most c of them, each with its entry, or none when the
+# stream no longer holds it; those it holds delivered again now, their
+# count one more
+type XHe is Data:
+  XHe{id: KV.XId, e: Maybe<&2, XE>}
+
+def xs.entry.of(es: List<&2, XE>) -> Maybe<&2, XE>:
+  match es:
+    case Con{e, rest}:
+      Some{e}
+    case Nil{}:
+      None{}
+
+def xs.entry(+x: KV.XStream, +id: KV.XId) -> Maybe<&2, XE>:
+  xs.entry.of(xs.range(x, id, id, 1n, False{}))
+
+def xhe.sn(m: Maybe<&2, XE>, +nk: KV.XNack, +now: Nat, ns: List<&2, XSn>) -> List<&2, XSn>:
+  match m:
+    case Some{e}:
+      XSn{KV.xnack.id(nk), now, KV.xn.add(xnack.count(nk), xn.one())} <> ns
+    case None{}:
+      ns
+
+type XHs is Data:
+  XHs{hs: List<&2, XHe>, ns: List<&2, XSn>}
+
+def xg.history(nks: List<&2, KV.XNack>, +x: KV.XStream, +now: Nat, h: XHs) -> XHs:
+  match nks h:
+    case Con{+nk, rest} XHs{hs, ns}:
+      +m = xs.entry(x, KV.xnack.id(nk))
+      xg.history(rest, x, now, XHs{XHe{KV.xnack.id(nk), m} <> hs, xhe.sn(m, nk, now, ns)})
+    case Nil{} h0:
+      h0
+
+# the pending entries of consumer c of g from lo on, at most n
+def xg.of.con(m: Maybe<&2, KV.XCon>, +g: KV.XGroup, +lo: KV.XId, +n: Nat, +now: Nat) -> List<&2, KV.XNack>:
+  match m:
+    case Some{+k}:
+      xs.pending(xgroup.pel(g), Some{xcon.ids(k)}, lo, xid.max(), n, XINone{}, now)
+    case None{}:
+      Nil{}
+
+# XCLAIM of the IDs in turn (xclaimCommand), consumer c there: an entry
+# the stream no longer holds loses its pending entry; one pending (or,
+# with FORCE, one not pending yet, which counts from 1) passes when it is
+# idle at least minidle (one made by FORCE always does); it is c's, at dt,
+# its count RETRYCOUNT's, or one more but with JUSTID. The group so far,
+# the pending entries the write names (the newest first) and the IDs c
+# got (the newest first)
+type XCs is Data:
+  XCs{g: KV.XGroup, ns: List<&2, XSn>, got: List<&2, KV.XId>}
+
+def xcl.count(r: Maybe<&2, KV.XN>, +justid: Bool, +n: KV.XN) -> KV.XN:
+  match r:
+    case Some{c}:
+      c
+    case None{}:
+      Bool.pick(KV.XN, justid, n, KV.xn.add(n, xn.one()))
+
+def xcl.take(+c: String, +id: KV.XId, +dt: Nat, +n: KV.XN, s: XCs) -> XCs:
+  match s:
+    case XCs{+g, ns, got}:
+      XCs{xg.give(g, c, id, dt, n), XSn{id, dt, n} <> ns, id <> got}
+
+def xcl.idle(ok: Bool, +c: String, +id: KV.XId, +dt: Nat, +n: KV.XN, s: XCs) -> XCs:
+  match ok:
+    case True{}:
+      xcl.take(c, id, dt, n, s)
+    case False{}:
+      s
+
+def xcl.held(m: Maybe<&2, KV.XNack>, +force: Bool, +c: String, +id: KV.XId, +minidle: Nat, +dt: Nat, r: Maybe<&2, KV.XN>, +justid: Bool, +now: Nat, s: XCs) -> XCs:
+  match m:
+    case Some{+nk}:
+      xcl.idle(Bool.not(Nat.is_lt(Nat.sub(now, xnack.time(nk)), minidle)), c, id, dt, xcl.count(r, justid, xnack.count(nk)), s)
+    case None{}:
+      xcl.idle(force, c, id, dt, xcl.count(r, justid, xn.one()), s)
+
+def xcl.gone(m: Maybe<&2, KV.XNack>, +id: KV.XId, s: XCs) -> XCs:
+  match m s:
+    case Some{+nk} XCs{+g, ns, got}:
+      XCs{xg.unack(g, id), XSn{id, xnack.time(nk), xnack.count(nk)} <> ns, got}
+    case None{} s0:
+      s0
+
+def xcl.one(has: Bool, m: Maybe<&2, KV.XNack>, +force: Bool, +c: String, +id: KV.XId, +minidle: Nat, +dt: Nat, r: Maybe<&2, KV.XN>, +justid: Bool, +now: Nat, s: XCs) -> XCs:
+  match has:
+    case True{}:
+      xcl.held(m, force, c, id, minidle, dt, r, justid, now, s)
+    case False{}:
+      xcl.gone(m, id, s)
+
+def xg.claim(ids: List<&2, KV.XId>, +x: KV.XStream, +force: Bool, +c: String, +minidle: Nat, +dt: Nat, +r: Maybe<&2, KV.XN>, +justid: Bool, +now: Nat, s: XCs) -> XCs:
+  match ids s:
+    case Con{+id, rest} XCs{+g, ns, got}:
+      xg.claim(rest, x, force, c, minidle, dt, r, justid, now, xcl.one(xs.has(x, id), xpl.of(g, id), force, c, id, minidle, dt, r, justid, now, XCs{g, ns, got}))
+    case Nil{} s0:
+      s0
+
+# XAUTOCLAIM's walk of the group's pending entries from its start
+# (xautoclaimCommand): it looks at one more while it has tries left and
+# fewer than its count claimed or gone (end once it has not); an entry
+# the stream no longer holds loses its pending entry (gone); one idle at
+# least minidle is c's, delivered now, its count one more but with
+# JUSTID. The walk so far: the group, the pending entries the write
+# names, the IDs claimed and those gone (each the newest first), how many
+# more it may claim or find gone, and whether it ends; then the next
+# pending entry's ID once it ends (its cursor, 0-0 for none)
+type XAc is Data:
+  XAc{g: KV.XGroup, ns: List<&2, XSn>, got: List<&2, KV.XId>, gone: List<&2, KV.XId>, left: Nat, end: Bool}
+
+type XAw is Data:
+  XAw{a: XAc, next: KV.XId}
+
+def xac.claim(ok: Bool, +nk: KV.XNack, +c: String, +justid: Bool, +now: Nat, +tries: Nat, a: XAc) -> XAc:
+  match ok a:
+    case True{} XAc{+g, ns, got, gone, +left, e}:
+      +id = KV.xnack.id(nk)
+      +n = Bool.pick(KV.XN, justid, xnack.count(nk), KV.xn.add(xnack.count(nk), xn.one()))
+      +l2 = Nat.sub(left, 1n)
+      XAc{xg.give(g, c, id, now, n), XSn{id, now, n} <> ns, id <> got, gone, l2, Bool.or(Nat.is_eq(tries, 0n), Nat.is_eq(l2, 0n))}
+    case False{} XAc{g, ns, got, gone, +left, e}:
+      XAc{g, ns, got, gone, left, Bool.or(Nat.is_eq(tries, 0n), Nat.is_eq(left, 0n))}
+
+# a pending entry looked at, tries left after it
+def xac.one(has: Bool, +nk: KV.XNack, +c: String, +minidle: Nat, +justid: Bool, +now: Nat, +tries: Nat, a: XAc) -> XAc:
+  match has a:
+    case True{} a0:
+      xac.claim(Bool.not(Nat.is_lt(Nat.sub(now, xnack.time(nk)), minidle)), nk, c, justid, now, tries, a0)
+    case False{} XAc{+g, ns, got, gone, +left, e}:
+      +id = KV.xnack.id(nk)
+      +l2 = Nat.sub(left, 1n)
+      XAc{xg.unack(g, id), XSn{id, xnack.time(nk), xnack.count(nk)} <> ns, got, id <> gone, l2, Bool.or(Nat.is_eq(tries, 0n), Nat.is_eq(l2, 0n))}
+
+def xg.auto(nks: List<&2, KV.XNack>, +tries: Nat, +x: KV.XStream, +c: String, +minidle: Nat, +justid: Bool, +now: Nat, a: XAc) -> XAw:
+  match nks a:
+    case Con{+nk, rest} XAc{g, ns, got, gone, left, True{}}:
+      XAw{XAc{g, ns, got, gone, left, True{}}, KV.xnack.id(nk)}
+    case Con{+nk, rest} XAc{g, ns, got, gone, left, False{}}:
+      +t2 = Nat.sub(tries, 1n)
+      xg.auto(rest, t2, x, c, minidle, justid, now, xac.one(xs.has(x, KV.xnack.id(nk)), nk, c, minidle, justid, now, t2, XAc{g, ns, got, gone, left, False{}}))
+    case Nil{} a0:
+      XAw{a0, xid.zero()}

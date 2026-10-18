@@ -109,7 +109,8 @@ smoke:
 	mkdir -p build
 	$(BEND) tests/smoke.bend -o build/smoke.js
 	$(BEND) tests/aof_check.bend -o build/aof_check.js
-	sh tests/smoke_check.sh build/smoke.js build/aof_check.js
+	$(BEND) tests/stream_check.bend -o build/stream_check.js
+	sh tests/smoke_check.sh build/smoke.js build/aof_check.js build/stream_check.js
 
 run: build
 	./build/bendkv $(PORT)

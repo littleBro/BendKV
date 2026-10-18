@@ -36225,6 +36225,150 @@
     }
    ]
   },
+  "xack": {
+   "docs": {
+    "%": [
+     "summary",
+     "Returns the number of messages that were successfully acknowledged by the consumer group member of a stream.",
+     "since",
+     "5.0.0",
+     "group",
+     "stream",
+     "complexity",
+     "O(1) for each message ID processed.",
+     "arguments",
+     [
+      {
+       "%": [
+        "name",
+        "key",
+        "type",
+        "key",
+        "display_text",
+        "key",
+        "key_spec_index",
+        0
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "group",
+        "type",
+        "string",
+        "display_text",
+        "group"
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "id",
+        "type",
+        "string",
+        "display_text",
+        "id",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "multiple"
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    ]
+   },
+   "info": [
+    "xack",
+    -4,
+    {
+     "~": [
+      {
+       "+": "write"
+      },
+      {
+       "+": "fast"
+      }
+     ]
+    },
+    1,
+    1,
+    1,
+    {
+     "~": [
+      {
+       "+": "@write"
+      },
+      {
+       "+": "@stream"
+      },
+      {
+       "+": "@fast"
+      }
+     ]
+    },
+    {
+     "~": []
+    },
+    {
+     "~": [
+      {
+       "%": [
+        "flags",
+        {
+         "~": [
+          {
+           "+": "RW"
+          },
+          {
+           "+": "update"
+          }
+         ]
+        },
+        "begin_search",
+        {
+         "%": [
+          "type",
+          "index",
+          "spec",
+          {
+           "%": [
+            "index",
+            1
+           ]
+          }
+         ]
+        },
+        "find_keys",
+        {
+         "%": [
+          "type",
+          "range",
+          "spec",
+          {
+           "%": [
+            "lastkey",
+            0,
+            "keystep",
+            1,
+            "limit",
+            0
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "~": []
+    }
+   ]
+  },
   "xadd": {
    "docs": {
     "%": [
@@ -36586,6 +36730,499 @@
     }
    ]
   },
+  "xautoclaim": {
+   "docs": {
+    "%": [
+     "summary",
+     "Changes, or acquires, ownership of messages in a consumer group, as if the messages were delivered to as consumer group member.",
+     "since",
+     "6.2.0",
+     "group",
+     "stream",
+     "complexity",
+     "O(1) if COUNT is small.",
+     "history",
+     {
+      "~": [
+       [
+        "7.0.0",
+        "Added an element to the reply array, containing deleted entries the command cleared from the PEL"
+       ]
+      ]
+     },
+     "arguments",
+     [
+      {
+       "%": [
+        "name",
+        "key",
+        "type",
+        "key",
+        "display_text",
+        "key",
+        "key_spec_index",
+        0
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "group",
+        "type",
+        "string",
+        "display_text",
+        "group"
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "consumer",
+        "type",
+        "string",
+        "display_text",
+        "consumer"
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "min-idle-time",
+        "type",
+        "string",
+        "display_text",
+        "min-idle-time"
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "start",
+        "type",
+        "string",
+        "display_text",
+        "start"
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "count",
+        "type",
+        "integer",
+        "display_text",
+        "count",
+        "token",
+        "COUNT",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "justid",
+        "type",
+        "pure-token",
+        "display_text",
+        "justid",
+        "token",
+        "JUSTID",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    ]
+   },
+   "info": [
+    "xautoclaim",
+    -6,
+    {
+     "~": [
+      {
+       "+": "write"
+      },
+      {
+       "+": "fast"
+      }
+     ]
+    },
+    1,
+    1,
+    1,
+    {
+     "~": [
+      {
+       "+": "@write"
+      },
+      {
+       "+": "@stream"
+      },
+      {
+       "+": "@fast"
+      }
+     ]
+    },
+    {
+     "~": [
+      "nondeterministic_output"
+     ]
+    },
+    {
+     "~": [
+      {
+       "%": [
+        "flags",
+        {
+         "~": [
+          {
+           "+": "RW"
+          },
+          {
+           "+": "delete"
+          }
+         ]
+        },
+        "begin_search",
+        {
+         "%": [
+          "type",
+          "index",
+          "spec",
+          {
+           "%": [
+            "index",
+            1
+           ]
+          }
+         ]
+        },
+        "find_keys",
+        {
+         "%": [
+          "type",
+          "range",
+          "spec",
+          {
+           "%": [
+            "lastkey",
+            0,
+            "keystep",
+            1,
+            "limit",
+            0
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "~": []
+    }
+   ]
+  },
+  "xclaim": {
+   "docs": {
+    "%": [
+     "summary",
+     "Changes, or acquires, ownership of a message in a consumer group, as if the message was delivered a consumer group member.",
+     "since",
+     "5.0.0",
+     "group",
+     "stream",
+     "complexity",
+     "O(log N) with N being the number of messages in the PEL of the consumer group.",
+     "arguments",
+     [
+      {
+       "%": [
+        "name",
+        "key",
+        "type",
+        "key",
+        "display_text",
+        "key",
+        "key_spec_index",
+        0
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "group",
+        "type",
+        "string",
+        "display_text",
+        "group"
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "consumer",
+        "type",
+        "string",
+        "display_text",
+        "consumer"
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "min-idle-time",
+        "type",
+        "string",
+        "display_text",
+        "min-idle-time"
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "id",
+        "type",
+        "string",
+        "display_text",
+        "id",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "multiple"
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "ms",
+        "type",
+        "integer",
+        "display_text",
+        "ms",
+        "token",
+        "IDLE",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "unix-time-milliseconds",
+        "type",
+        "unix-time",
+        "display_text",
+        "unix-time-milliseconds",
+        "token",
+        "TIME",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "count",
+        "type",
+        "integer",
+        "display_text",
+        "count",
+        "token",
+        "RETRYCOUNT",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "force",
+        "type",
+        "pure-token",
+        "display_text",
+        "force",
+        "token",
+        "FORCE",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "justid",
+        "type",
+        "pure-token",
+        "display_text",
+        "justid",
+        "token",
+        "JUSTID",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "lastid",
+        "type",
+        "string",
+        "display_text",
+        "lastid",
+        "token",
+        "LASTID",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    ]
+   },
+   "info": [
+    "xclaim",
+    -6,
+    {
+     "~": [
+      {
+       "+": "write"
+      },
+      {
+       "+": "fast"
+      }
+     ]
+    },
+    1,
+    1,
+    1,
+    {
+     "~": [
+      {
+       "+": "@write"
+      },
+      {
+       "+": "@stream"
+      },
+      {
+       "+": "@fast"
+      }
+     ]
+    },
+    {
+     "~": [
+      "nondeterministic_output"
+     ]
+    },
+    {
+     "~": [
+      {
+       "%": [
+        "flags",
+        {
+         "~": [
+          {
+           "+": "RW"
+          },
+          {
+           "+": "update"
+          }
+         ]
+        },
+        "begin_search",
+        {
+         "%": [
+          "type",
+          "index",
+          "spec",
+          {
+           "%": [
+            "index",
+            1
+           ]
+          }
+         ]
+        },
+        "find_keys",
+        {
+         "%": [
+          "type",
+          "range",
+          "spec",
+          {
+           "%": [
+            "lastkey",
+            0,
+            "keystep",
+            1,
+            "limit",
+            0
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "~": []
+    }
+   ]
+  },
   "xdel": {
    "docs": {
     "%": [
@@ -36718,6 +37355,879 @@
     {
      "~": []
     }
+   ]
+  },
+  "xgroup": {
+   "docs": {
+    "%": [
+     "summary",
+     "A container for consumer groups commands.",
+     "since",
+     "5.0.0",
+     "group",
+     "stream",
+     "complexity",
+     "Depends on subcommand.",
+     "subcommands",
+     {
+      "%": [
+       "xgroup|create",
+       {
+        "%": [
+         "summary",
+         "Creates a consumer group.",
+         "since",
+         "5.0.0",
+         "group",
+         "stream",
+         "complexity",
+         "O(1)",
+         "history",
+         {
+          "~": [
+           [
+            "7.0.0",
+            "Added the `entries_read` named argument."
+           ]
+          ]
+         },
+         "arguments",
+         [
+          {
+           "%": [
+            "name",
+            "key",
+            "type",
+            "key",
+            "display_text",
+            "key",
+            "key_spec_index",
+            0
+           ]
+          },
+          {
+           "%": [
+            "name",
+            "group",
+            "type",
+            "string",
+            "display_text",
+            "group"
+           ]
+          },
+          {
+           "%": [
+            "name",
+            "id-selector",
+            "type",
+            "oneof",
+            "arguments",
+            [
+             {
+              "%": [
+               "name",
+               "id",
+               "type",
+               "string",
+               "display_text",
+               "id"
+              ]
+             },
+             {
+              "%": [
+               "name",
+               "new-id",
+               "type",
+               "pure-token",
+               "display_text",
+               "new-id",
+               "token",
+               "$"
+              ]
+             }
+            ]
+           ]
+          },
+          {
+           "%": [
+            "name",
+            "mkstream",
+            "type",
+            "pure-token",
+            "display_text",
+            "mkstream",
+            "token",
+            "MKSTREAM",
+            "flags",
+            {
+             "~": [
+              {
+               "+": "optional"
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "%": [
+            "name",
+            "entries-read",
+            "type",
+            "integer",
+            "display_text",
+            "entries-read",
+            "token",
+            "ENTRIESREAD",
+            "flags",
+            {
+             "~": [
+              {
+               "+": "optional"
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        ]
+       },
+       "xgroup|createconsumer",
+       {
+        "%": [
+         "summary",
+         "Creates a consumer in a consumer group.",
+         "since",
+         "6.2.0",
+         "group",
+         "stream",
+         "complexity",
+         "O(1)",
+         "arguments",
+         [
+          {
+           "%": [
+            "name",
+            "key",
+            "type",
+            "key",
+            "display_text",
+            "key",
+            "key_spec_index",
+            0
+           ]
+          },
+          {
+           "%": [
+            "name",
+            "group",
+            "type",
+            "string",
+            "display_text",
+            "group"
+           ]
+          },
+          {
+           "%": [
+            "name",
+            "consumer",
+            "type",
+            "string",
+            "display_text",
+            "consumer"
+           ]
+          }
+         ]
+        ]
+       },
+       "xgroup|delconsumer",
+       {
+        "%": [
+         "summary",
+         "Deletes a consumer from a consumer group.",
+         "since",
+         "5.0.0",
+         "group",
+         "stream",
+         "complexity",
+         "O(1)",
+         "arguments",
+         [
+          {
+           "%": [
+            "name",
+            "key",
+            "type",
+            "key",
+            "display_text",
+            "key",
+            "key_spec_index",
+            0
+           ]
+          },
+          {
+           "%": [
+            "name",
+            "group",
+            "type",
+            "string",
+            "display_text",
+            "group"
+           ]
+          },
+          {
+           "%": [
+            "name",
+            "consumer",
+            "type",
+            "string",
+            "display_text",
+            "consumer"
+           ]
+          }
+         ]
+        ]
+       },
+       "xgroup|destroy",
+       {
+        "%": [
+         "summary",
+         "Destroys a consumer group.",
+         "since",
+         "5.0.0",
+         "group",
+         "stream",
+         "complexity",
+         "O(N) where N is the number of entries in the group's pending entries list (PEL).",
+         "arguments",
+         [
+          {
+           "%": [
+            "name",
+            "key",
+            "type",
+            "key",
+            "display_text",
+            "key",
+            "key_spec_index",
+            0
+           ]
+          },
+          {
+           "%": [
+            "name",
+            "group",
+            "type",
+            "string",
+            "display_text",
+            "group"
+           ]
+          }
+         ]
+        ]
+       },
+       "xgroup|help",
+       {
+        "%": [
+         "summary",
+         "Returns helpful text about the different subcommands.",
+         "since",
+         "5.0.0",
+         "group",
+         "stream",
+         "complexity",
+         "O(1)"
+        ]
+       },
+       "xgroup|setid",
+       {
+        "%": [
+         "summary",
+         "Sets the last-delivered ID of a consumer group.",
+         "since",
+         "5.0.0",
+         "group",
+         "stream",
+         "complexity",
+         "O(1)",
+         "history",
+         {
+          "~": [
+           [
+            "7.0.0",
+            "Added the optional `entries_read` argument."
+           ]
+          ]
+         },
+         "arguments",
+         [
+          {
+           "%": [
+            "name",
+            "key",
+            "type",
+            "key",
+            "display_text",
+            "key",
+            "key_spec_index",
+            0
+           ]
+          },
+          {
+           "%": [
+            "name",
+            "group",
+            "type",
+            "string",
+            "display_text",
+            "group"
+           ]
+          },
+          {
+           "%": [
+            "name",
+            "id-selector",
+            "type",
+            "oneof",
+            "arguments",
+            [
+             {
+              "%": [
+               "name",
+               "id",
+               "type",
+               "string",
+               "display_text",
+               "id"
+              ]
+             },
+             {
+              "%": [
+               "name",
+               "new-id",
+               "type",
+               "pure-token",
+               "display_text",
+               "new-id",
+               "token",
+               "$"
+              ]
+             }
+            ]
+           ]
+          },
+          {
+           "%": [
+            "name",
+            "entriesread",
+            "type",
+            "integer",
+            "display_text",
+            "entries-read",
+            "token",
+            "ENTRIESREAD",
+            "flags",
+            {
+             "~": [
+              {
+               "+": "optional"
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   "info": [
+    "xgroup",
+    -2,
+    {
+     "~": []
+    },
+    0,
+    0,
+    0,
+    {
+     "~": [
+      {
+       "+": "@slow"
+      }
+     ]
+    },
+    {
+     "~": []
+    },
+    {
+     "~": []
+    },
+    [
+     [
+      "xgroup|create",
+      -5,
+      {
+       "~": [
+        {
+         "+": "write"
+        },
+        {
+         "+": "denyoom"
+        }
+       ]
+      },
+      2,
+      2,
+      1,
+      {
+       "~": [
+        {
+         "+": "@write"
+        },
+        {
+         "+": "@stream"
+        },
+        {
+         "+": "@slow"
+        }
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": [
+        {
+         "%": [
+          "flags",
+          {
+           "~": [
+            {
+             "+": "RW"
+            },
+            {
+             "+": "insert"
+            }
+           ]
+          },
+          "begin_search",
+          {
+           "%": [
+            "type",
+            "index",
+            "spec",
+            {
+             "%": [
+              "index",
+              2
+             ]
+            }
+           ]
+          },
+          "find_keys",
+          {
+           "%": [
+            "type",
+            "range",
+            "spec",
+            {
+             "%": [
+              "lastkey",
+              0,
+              "keystep",
+              1,
+              "limit",
+              0
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "xgroup|createconsumer",
+      5,
+      {
+       "~": [
+        {
+         "+": "write"
+        },
+        {
+         "+": "denyoom"
+        }
+       ]
+      },
+      2,
+      2,
+      1,
+      {
+       "~": [
+        {
+         "+": "@write"
+        },
+        {
+         "+": "@stream"
+        },
+        {
+         "+": "@slow"
+        }
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": [
+        {
+         "%": [
+          "flags",
+          {
+           "~": [
+            {
+             "+": "RW"
+            },
+            {
+             "+": "insert"
+            }
+           ]
+          },
+          "begin_search",
+          {
+           "%": [
+            "type",
+            "index",
+            "spec",
+            {
+             "%": [
+              "index",
+              2
+             ]
+            }
+           ]
+          },
+          "find_keys",
+          {
+           "%": [
+            "type",
+            "range",
+            "spec",
+            {
+             "%": [
+              "lastkey",
+              0,
+              "keystep",
+              1,
+              "limit",
+              0
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "xgroup|delconsumer",
+      5,
+      {
+       "~": [
+        {
+         "+": "write"
+        }
+       ]
+      },
+      2,
+      2,
+      1,
+      {
+       "~": [
+        {
+         "+": "@write"
+        },
+        {
+         "+": "@stream"
+        },
+        {
+         "+": "@slow"
+        }
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": [
+        {
+         "%": [
+          "flags",
+          {
+           "~": [
+            {
+             "+": "RW"
+            },
+            {
+             "+": "delete"
+            }
+           ]
+          },
+          "begin_search",
+          {
+           "%": [
+            "type",
+            "index",
+            "spec",
+            {
+             "%": [
+              "index",
+              2
+             ]
+            }
+           ]
+          },
+          "find_keys",
+          {
+           "%": [
+            "type",
+            "range",
+            "spec",
+            {
+             "%": [
+              "lastkey",
+              0,
+              "keystep",
+              1,
+              "limit",
+              0
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "xgroup|destroy",
+      4,
+      {
+       "~": [
+        {
+         "+": "write"
+        }
+       ]
+      },
+      2,
+      2,
+      1,
+      {
+       "~": [
+        {
+         "+": "@write"
+        },
+        {
+         "+": "@stream"
+        },
+        {
+         "+": "@slow"
+        }
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": [
+        {
+         "%": [
+          "flags",
+          {
+           "~": [
+            {
+             "+": "RW"
+            },
+            {
+             "+": "delete"
+            }
+           ]
+          },
+          "begin_search",
+          {
+           "%": [
+            "type",
+            "index",
+            "spec",
+            {
+             "%": [
+              "index",
+              2
+             ]
+            }
+           ]
+          },
+          "find_keys",
+          {
+           "%": [
+            "type",
+            "range",
+            "spec",
+            {
+             "%": [
+              "lastkey",
+              0,
+              "keystep",
+              1,
+              "limit",
+              0
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "xgroup|help",
+      2,
+      {
+       "~": [
+        {
+         "+": "loading"
+        },
+        {
+         "+": "stale"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@stream"
+        },
+        {
+         "+": "@slow"
+        }
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "xgroup|setid",
+      -5,
+      {
+       "~": [
+        {
+         "+": "write"
+        }
+       ]
+      },
+      2,
+      2,
+      1,
+      {
+       "~": [
+        {
+         "+": "@write"
+        },
+        {
+         "+": "@stream"
+        },
+        {
+         "+": "@slow"
+        }
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": [
+        {
+         "%": [
+          "flags",
+          {
+           "~": [
+            {
+             "+": "RW"
+            },
+            {
+             "+": "update"
+            }
+           ]
+          },
+          "begin_search",
+          {
+           "%": [
+            "type",
+            "index",
+            "spec",
+            {
+             "%": [
+              "index",
+              2
+             ]
+            }
+           ]
+          },
+          "find_keys",
+          {
+           "%": [
+            "type",
+            "range",
+            "spec",
+            {
+             "%": [
+              "lastkey",
+              0,
+              "keystep",
+              1,
+              "limit",
+              0
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "~": []
+      }
+     ]
+    ]
    ]
   },
   "xinfo": {
@@ -37920,6 +39430,267 @@
             "STREAMS",
             "startfrom",
             1
+           ]
+          }
+         ]
+        },
+        "find_keys",
+        {
+         "%": [
+          "type",
+          "range",
+          "spec",
+          {
+           "%": [
+            "lastkey",
+            -1,
+            "keystep",
+            1,
+            "limit",
+            2
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "~": []
+    }
+   ]
+  },
+  "xreadgroup": {
+   "docs": {
+    "%": [
+     "summary",
+     "Returns new or historical messages from a stream for a consumer in a group. Blocks until a message is available otherwise.",
+     "since",
+     "5.0.0",
+     "group",
+     "stream",
+     "complexity",
+     "For each stream mentioned: O(M) with M being the number of elements returned. If M is constant (e.g. always asking for the first 10 elements with COUNT), you can consider it O(1). On the other side when XREADGROUP blocks, XADD will pay the O(N) time in order to serve the N clients blocked on the stream getting new data.",
+     "arguments",
+     [
+      {
+       "%": [
+        "name",
+        "group-block",
+        "type",
+        "block",
+        "token",
+        "GROUP",
+        "arguments",
+        [
+         {
+          "%": [
+           "name",
+           "group",
+           "type",
+           "string",
+           "display_text",
+           "group"
+          ]
+         },
+         {
+          "%": [
+           "name",
+           "consumer",
+           "type",
+           "string",
+           "display_text",
+           "consumer"
+          ]
+         }
+        ]
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "count",
+        "type",
+        "integer",
+        "display_text",
+        "count",
+        "token",
+        "COUNT",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "milliseconds",
+        "type",
+        "integer",
+        "display_text",
+        "milliseconds",
+        "token",
+        "BLOCK",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "noack",
+        "type",
+        "pure-token",
+        "display_text",
+        "noack",
+        "token",
+        "NOACK",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "streams",
+        "type",
+        "block",
+        "token",
+        "STREAMS",
+        "arguments",
+        [
+         {
+          "%": [
+           "name",
+           "key",
+           "type",
+           "key",
+           "display_text",
+           "key",
+           "key_spec_index",
+           0,
+           "flags",
+           {
+            "~": [
+             {
+              "+": "multiple"
+             }
+            ]
+           }
+          ]
+         },
+         {
+          "%": [
+           "name",
+           "id",
+           "type",
+           "string",
+           "display_text",
+           "id",
+           "flags",
+           {
+            "~": [
+             {
+              "+": "multiple"
+             }
+            ]
+           }
+          ]
+         }
+        ]
+       ]
+      }
+     ]
+    ]
+   },
+   "info": [
+    "xreadgroup",
+    -7,
+    {
+     "~": [
+      {
+       "+": "write"
+      },
+      {
+       "+": "blocking"
+      },
+      {
+       "+": "movablekeys"
+      }
+     ]
+    },
+    0,
+    0,
+    0,
+    {
+     "~": [
+      {
+       "+": "@write"
+      },
+      {
+       "+": "@stream"
+      },
+      {
+       "+": "@slow"
+      },
+      {
+       "+": "@blocking"
+      }
+     ]
+    },
+    {
+     "~": []
+    },
+    {
+     "~": [
+      {
+       "%": [
+        "notes",
+        "Incomplete because a consumer/group named STREAMS (or options before GROUP) can shift the STREAMS keyword; fall back to xreadGetKeys",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "RO"
+          },
+          {
+           "+": "access"
+          },
+          {
+           "+": "incomplete"
+          }
+         ]
+        },
+        "begin_search",
+        {
+         "%": [
+          "type",
+          "keyword",
+          "spec",
+          {
+           "%": [
+            "keyword",
+            "STREAMS",
+            "startfrom",
+            4
            ]
           }
          ]

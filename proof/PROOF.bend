@@ -8689,9 +8689,14 @@ def GoodNewZ(o: R.ZOpts, ps: List<&2, R.ZPair>, z: KV.Zset) -> Type:
 # Stream writes), so none of them reads the clock. The file logs it as a
 # command that parses back to it (GoodXOp): an XADD, XTRIM or XSETID of
 # words that read (their errors none), as many as the parser takes
-# (three, two, one), or an XDEL of IDs. A new stream is the XADD of its
-# words made on an empty stream (fresh), which the file logs as its XADD
-# or as the script of a new stream.
+# (three, two, one), or an XDEL of IDs; of the groups' writes XGROUP
+# CREATE of a group, an ID and options that read, DESTROY of a group,
+# XACK of a group and IDs, and BendKV's scripts of XWSet (words that
+# read) and of XWDelCon (a group and a consumer). A new stream is the
+# XADD of its words, or XGROUP CREATE of its words with MKSTREAM, made on
+# an empty stream (fresh), which the file logs as that command or as the
+# script of a new stream (a new stream's group's: words that read as its
+# script's, R.xgnew.ok).
 def GoodXAdd(ws: List<&2, String>) -> Type:
   match ws:
     case Con{a, Con{b, Con{c, rest}}}:
@@ -8713,6 +8718,43 @@ def GoodXSetId(ws: List<&2, String>) -> Type:
     case Nil{}:
       Empty
 
+def GoodXCreate(ws: List<&2, String>) -> Type:
+  match ws:
+    case Con{g, Con{i, opts}}:
+      {R.xgo.err(True{}, "CREATE", opts) == None{} : Maybe<&2, R.Reply>}
+    case _:
+      Empty
+
+def GoodXDestroy(ws: List<&2, String>) -> Type:
+  match ws:
+    case Con{g, Nil{}}:
+      {True{} == True{} : Bool}
+    case _:
+      Empty
+
+def GoodXGroup(sub: Nat, ws: List<&2, String>) -> Type:
+  match sub:
+    case 2n:
+      GoodXCreate(ws)
+    case 4n:
+      GoodXDestroy(ws)
+    case _:
+      Empty
+
+def GoodXAck(ws: List<&2, String>) -> Type:
+  match ws:
+    case Con{g, Con{i, rest}}:
+      {True{} == True{} : Bool}
+    case _:
+      Empty
+
+def GoodXDelCon(ws: List<&2, String>) -> Type:
+  match ws:
+    case Con{g, Con{c, Nil{}}}:
+      {True{} == True{} : Bool}
+    case _:
+      Empty
+
 def GoodXOp(op: R.XWrite) -> Type:
   match op:
     case R.XWAdd{ws}:
@@ -8725,6 +8767,18 @@ def GoodXOp(op: R.XWrite) -> Type:
       GoodXSetId(ws)
     case R.XWNew{ws}:
       Empty
+    case R.XWGroup{sub, ws}:
+      GoodXGroup(sub, ws)
+    case R.XWGNew{ws}:
+      Empty
+    case R.XWAck{ws}:
+      GoodXAck(ws)
+    case R.XWKeyed{c, k, ws}:
+      Empty
+    case R.XWSet{ws}:
+      {R.xset.ok(R.xset.read(ws)) == True{} : Bool}
+    case R.XWDelCon{ws}:
+      GoodXDelCon(ws)
 
 def GoodStreamV(w: KV.Val, op: R.XWrite, xv: KV.XStream) -> Type:
   match w:
@@ -8748,8 +8802,24 @@ def GoodStream(m: Maybe<&2, KV.Item<KV.Val>>, op: R.XWrite, xv: KV.XStream) -> T
     case None{}:
       Empty
 
-def GoodNewX(ws: List<&2, String>, xv: KV.XStream) -> Type:
-  {ch_of(R.xwrite(R.XWAdd{ws}, True{}, X.xs.empty(), 0n)) == R.CStreamNew{ws, xv} : R.Change} & GoodXAdd(ws)
+def GoodNewG(sub: Nat, ws: List<&2, String>) -> Type:
+  match sub:
+    case 2n:
+      GoodXCreate(ws) & {R.xgnew.ok(ws) == True{} : Bool}
+    case _:
+      Empty
+
+def GoodNewOp(op: R.XWrite) -> Type:
+  match op:
+    case R.XWAdd{ws}:
+      GoodXAdd(ws)
+    case R.XWGroup{sub, ws}:
+      GoodNewG(sub, ws)
+    case _:
+      Empty
+
+def GoodNewX(op: R.XWrite, xv: KV.XStream) -> Type:
+  {ch_of(R.xwrite(op, True{}, X.xs.empty(), 0n)) == R.CStreamNew{op, xv} : R.Change} & GoodNewOp(op)
 
 def Good(m: Maybe<&2, KV.Item<KV.Val>>, ch: R.Change) -> Type:
   match ch:
@@ -8787,8 +8857,8 @@ def Good(m: Maybe<&2, KV.Item<KV.Val>>, ch: R.Change) -> Type:
       {D.verify(p) == True{} : Bool} & ({D.load(p) == Some{v} : Maybe<&2, KV.Val>} & {KV.clamp(f) == f : Nat})
     case R.CStream{op, xv}:
       GoodStream(m, op, xv)
-    case R.CStreamNew{ws, xv}:
-      GoodNewX(ws, xv)
+    case R.CStreamNew{op, xv}:
+      GoodNewX(op, xv)
 
 # a change, made again by its effects at time 0
 def del_replay(+t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +w: KV.Val, +e: Nat, eq: {KV.entry.at(KV.Val, t, k, KV.hash(k)) == Some{KV.Item{w, e}} : Maybe<&2, KV.Item<KV.Val>>}) -> {Laws.final(R.exec_all([R.Del{[k]}], R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CDel{}))) : R.Db}:
@@ -9354,36 +9424,130 @@ def xnew_v(w: KV.Val, +ws: List<&2, String>, +e: Nat) -> {R.xwrite(R.XWAdd{ws}, 
     case KV.VColl{KV.CStream{s0}}:
       {==}
 
-def xnew_xadd(+t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +ws: List<&2, String>, +xv: KV.XStream, eq: {KV.entry.at(KV.Val, t, k, KV.hash(k)) == None{} : Maybe<&2, KV.Item<KV.Val>>}, gn: {ch_of(R.xwrite(R.XWAdd{ws}, True{}, X.xs.empty(), 0n)) == R.CStreamNew{ws, xv} : R.Change}) -> {Laws.final(R.exec_all([R.Upd{k, R.UStream{R.XWAdd{ws}}}], R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 0n, r, R.CStreamNew{ws, xv}))) : R.Db}:
-  %fin_cons(R.Upd{k, R.UStream{R.XWAdd{ws}}}, Nil{}, R.Db{t, n, x, 0n, rr}) : {_ == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 0n, r, R.CStreamNew{ws, xv}))) : R.Db}
-  %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry.at(KV.Val, t, k, KV.hash(k)), None{}, eq) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, R.ent.code(_), R.upd.v(R.UStream{R.XWAdd{ws}}, 0n, R.ent.live(0n, _)))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 0n, r, R.CStreamNew{ws, xv}))) : R.Db}
-  %put_db(t, k, KV.hash(k), n, x, 0n, rr, 0n, R.xwrite(R.XWAdd{ws}, True{}, X.xs.empty(), 0n)) : {_ == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 0n, r, R.CStreamNew{ws, xv}))) : R.Db}
-  %Equal.sym(R.Change, ch_of(R.xwrite(R.XWAdd{ws}, True{}, X.xs.empty(), 0n)), R.CStreamNew{ws, xv}, gn) : {R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, 0n, rr, 0n, R.RNull{}, _)) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 0n, r, R.CStreamNew{ws, xv}))) : R.Db}
+def xnew_xadd(+t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +ws: List<&2, String>, +xv: KV.XStream, eq: {KV.entry.at(KV.Val, t, k, KV.hash(k)) == None{} : Maybe<&2, KV.Item<KV.Val>>}, gn: {ch_of(R.xwrite(R.XWAdd{ws}, True{}, X.xs.empty(), 0n)) == R.CStreamNew{R.XWAdd{ws}, xv} : R.Change}) -> {Laws.final(R.exec_all([R.Upd{k, R.UStream{R.XWAdd{ws}}}], R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 0n, r, R.CStreamNew{R.XWAdd{ws}, xv}))) : R.Db}:
+  %fin_cons(R.Upd{k, R.UStream{R.XWAdd{ws}}}, Nil{}, R.Db{t, n, x, 0n, rr}) : {_ == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 0n, r, R.CStreamNew{R.XWAdd{ws}, xv}))) : R.Db}
+  %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry.at(KV.Val, t, k, KV.hash(k)), None{}, eq) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, R.ent.code(_), R.upd.v(R.UStream{R.XWAdd{ws}}, 0n, R.ent.live(0n, _)))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 0n, r, R.CStreamNew{R.XWAdd{ws}, xv}))) : R.Db}
+  %put_db(t, k, KV.hash(k), n, x, 0n, rr, 0n, R.xwrite(R.XWAdd{ws}, True{}, X.xs.empty(), 0n)) : {_ == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 0n, r, R.CStreamNew{R.XWAdd{ws}, xv}))) : R.Db}
+  %Equal.sym(R.Change, ch_of(R.xwrite(R.XWAdd{ws}, True{}, X.xs.empty(), 0n)), R.CStreamNew{R.XWAdd{ws}, xv}, gn) : {R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, 0n, rr, 0n, R.RNull{}, _)) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 0n, r, R.CStreamNew{R.XWAdd{ws}, xv}))) : R.Db}
   {==}
 
-def xnew_eval(+t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +ws: List<&2, String>, +xv: KV.XStream, +w: KV.Val, +e: Nat, eq: {KV.entry.at(KV.Val, t, k, KV.hash(k)) == Some{KV.Item{w, e}} : Maybe<&2, KV.Item<KV.Val>>}, gn: {ch_of(R.xwrite(R.XWAdd{ws}, True{}, X.xs.empty(), 0n)) == R.CStreamNew{ws, xv} : R.Change}) -> {Laws.final(R.exec_all([R.Upd{k, R.UStream{R.XWNew{ws}}}], R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CStreamNew{ws, xv}))) : R.Db}:
-  %fin_cons(R.Upd{k, R.UStream{R.XWNew{ws}}}, Nil{}, R.Db{t, n, x, 0n, rr}) : {_ == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CStreamNew{ws, xv}))) : R.Db}
-  %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry.at(KV.Val, t, k, KV.hash(k)), Some{KV.Item{w, e}}, eq) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, R.ent.code(_), R.upd.v(R.UStream{R.XWNew{ws}}, 0n, R.ent.live(0n, _)))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CStreamNew{ws, xv}))) : R.Db}
-  %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, R.ent.live(0n, Some{KV.Item{w, e}}), Some{KV.Item{w, e}}, live0_ent(Some{KV.Item{w, e}})) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, 1n+e, R.upd.v(R.UStream{R.XWNew{ws}}, 0n, _))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CStreamNew{ws, xv}))) : R.Db}
-  %xnew_v(w, ws, e) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, 1n+e, _)) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CStreamNew{ws, xv}))) : R.Db}
-  %put_db(t, k, KV.hash(k), n, x, 0n, rr, 1n+e, R.xwrite(R.XWAdd{ws}, True{}, X.xs.empty(), 0n)) : {_ == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CStreamNew{ws, xv}))) : R.Db}
-  %Equal.sym(R.Change, ch_of(R.xwrite(R.XWAdd{ws}, True{}, X.xs.empty(), 0n)), R.CStreamNew{ws, xv}, gn) : {R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, 0n, rr, 1n+e, R.RNull{}, _)) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CStreamNew{ws, xv}))) : R.Db}
+def xnew_eval(+t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +ws: List<&2, String>, +xv: KV.XStream, +w: KV.Val, +e: Nat, eq: {KV.entry.at(KV.Val, t, k, KV.hash(k)) == Some{KV.Item{w, e}} : Maybe<&2, KV.Item<KV.Val>>}, gn: {ch_of(R.xwrite(R.XWAdd{ws}, True{}, X.xs.empty(), 0n)) == R.CStreamNew{R.XWAdd{ws}, xv} : R.Change}) -> {Laws.final(R.exec_all([R.Upd{k, R.UStream{R.XWNew{ws}}}], R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CStreamNew{R.XWAdd{ws}, xv}))) : R.Db}:
+  %fin_cons(R.Upd{k, R.UStream{R.XWNew{ws}}}, Nil{}, R.Db{t, n, x, 0n, rr}) : {_ == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CStreamNew{R.XWAdd{ws}, xv}))) : R.Db}
+  %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry.at(KV.Val, t, k, KV.hash(k)), Some{KV.Item{w, e}}, eq) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, R.ent.code(_), R.upd.v(R.UStream{R.XWNew{ws}}, 0n, R.ent.live(0n, _)))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CStreamNew{R.XWAdd{ws}, xv}))) : R.Db}
+  %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, R.ent.live(0n, Some{KV.Item{w, e}}), Some{KV.Item{w, e}}, live0_ent(Some{KV.Item{w, e}})) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, 1n+e, R.upd.v(R.UStream{R.XWNew{ws}}, 0n, _))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CStreamNew{R.XWAdd{ws}, xv}))) : R.Db}
+  %xnew_v(w, ws, e) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, 1n+e, _)) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CStreamNew{R.XWAdd{ws}, xv}))) : R.Db}
+  %put_db(t, k, KV.hash(k), n, x, 0n, rr, 1n+e, R.xwrite(R.XWAdd{ws}, True{}, X.xs.empty(), 0n)) : {_ == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CStreamNew{R.XWAdd{ws}, xv}))) : R.Db}
+  %Equal.sym(R.Change, ch_of(R.xwrite(R.XWAdd{ws}, True{}, X.xs.empty(), 0n)), R.CStreamNew{R.XWAdd{ws}, xv}, gn) : {R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, 0n, rr, 1n+e, R.RNull{}, _)) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CStreamNew{R.XWAdd{ws}, xv}))) : R.Db}
   {==}
 
-def xnew_xadd_g(+t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +ws: List<&2, String>, +xv: KV.XStream, eq: {KV.entry.at(KV.Val, t, k, KV.hash(k)) == None{} : Maybe<&2, KV.Item<KV.Val>>}, g: GoodNewX(ws, xv)) -> {Laws.final(R.exec_all([R.Upd{k, R.UStream{R.XWAdd{ws}}}], R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 0n, r, R.CStreamNew{ws, xv}))) : R.Db}:
+def xnew_xadd_g(+t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +ws: List<&2, String>, +xv: KV.XStream, eq: {KV.entry.at(KV.Val, t, k, KV.hash(k)) == None{} : Maybe<&2, KV.Item<KV.Val>>}, g: GoodNewX(R.XWAdd{ws}, xv)) -> {Laws.final(R.exec_all([R.Upd{k, R.UStream{R.XWAdd{ws}}}], R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 0n, r, R.CStreamNew{R.XWAdd{ws}, xv}))) : R.Db}:
   (gn, ga) = g
   xnew_xadd(t, k, n, x, now, rr, r, ws, xv, eq, gn)
 
-def xnew_eval_g(+t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +ws: List<&2, String>, +xv: KV.XStream, +w: KV.Val, +e: Nat, eq: {KV.entry.at(KV.Val, t, k, KV.hash(k)) == Some{KV.Item{w, e}} : Maybe<&2, KV.Item<KV.Val>>}, g: GoodNewX(ws, xv)) -> {Laws.final(R.exec_all([R.Upd{k, R.UStream{R.XWNew{ws}}}], R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CStreamNew{ws, xv}))) : R.Db}:
+def xnew_eval_g(+t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +ws: List<&2, String>, +xv: KV.XStream, +w: KV.Val, +e: Nat, eq: {KV.entry.at(KV.Val, t, k, KV.hash(k)) == Some{KV.Item{w, e}} : Maybe<&2, KV.Item<KV.Val>>}, g: GoodNewX(R.XWAdd{ws}, xv)) -> {Laws.final(R.exec_all([R.Upd{k, R.UStream{R.XWNew{ws}}}], R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CStreamNew{R.XWAdd{ws}, xv}))) : R.Db}:
   (gn, ga) = g
   xnew_eval(t, k, n, x, now, rr, r, ws, xv, w, e, eq, gn)
 
-def xnew_replay(m: Maybe<&2, KV.Item<KV.Val>>, +t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +ws: List<&2, String>, +xv: KV.XStream) -> {KV.entry.at(KV.Val, t, k, KV.hash(k)) == m : Maybe<&2, KV.Item<KV.Val>>} -> GoodNewX(ws, xv) -> {Laws.final(R.exec_all(A.ch.effect(k, R.ent.code(m), R.CStreamNew{ws, xv}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(m), r, R.CStreamNew{ws, xv}))) : R.Db}:
+def xnew_replay_add(m: Maybe<&2, KV.Item<KV.Val>>, +t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +ws: List<&2, String>, +xv: KV.XStream) -> {KV.entry.at(KV.Val, t, k, KV.hash(k)) == m : Maybe<&2, KV.Item<KV.Val>>} -> GoodNewX(R.XWAdd{ws}, xv) -> {Laws.final(R.exec_all(A.ch.effect(k, R.ent.code(m), R.CStreamNew{R.XWAdd{ws}, xv}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(m), r, R.CStreamNew{R.XWAdd{ws}, xv}))) : R.Db}:
   match m:
     case Some{KV.Item{+w, +e}}:
       eq => g => xnew_eval_g(t, k, n, x, now, rr, r, ws, xv, w, e, eq, g)
     case None{}:
       eq => g => xnew_xadd_g(t, k, n, x, now, rr, r, ws, xv, eq, g)
+
+# a new stream of XGROUP CREATE, made again at time 0: by its CREATE
+# where the trie held no entry for the key, by the script of a new
+# stream's group where it held one, whatever the entry held
+def xgnew_v(w: KV.Val, +ws: List<&2, String>, +e: Nat) -> {R.xwrite(R.XWGroup{2n, ws}, True{}, X.xs.empty(), 0n) == R.upd.v(R.UStream{R.XWGNew{ws}}, 0n, Some{KV.Item{w, e}}) : R.Out}:
+  match w:
+    case KV.VStr{u}:
+      {==}
+    case KV.VColl{KV.CHash{h0}}:
+      {==}
+    case KV.VColl{KV.CList{l0}}:
+      {==}
+    case KV.VColl{KV.CMems{s0}}:
+      {==}
+    case KV.VColl{KV.CZset{z0}}:
+      {==}
+    case KV.VColl{KV.CStream{s0}}:
+      {==}
+
+def xgnew_create(+t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +ws: List<&2, String>, +xv: KV.XStream, eq: {KV.entry.at(KV.Val, t, k, KV.hash(k)) == None{} : Maybe<&2, KV.Item<KV.Val>>}, gn: {ch_of(R.xwrite(R.XWGroup{2n, ws}, True{}, X.xs.empty(), 0n)) == R.CStreamNew{R.XWGroup{2n, ws}, xv} : R.Change}) -> {Laws.final(R.exec_all([R.Upd{k, R.UStream{R.XWGroup{2n, ws}}}], R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 0n, r, R.CStreamNew{R.XWGroup{2n, ws}, xv}))) : R.Db}:
+  %fin_cons(R.Upd{k, R.UStream{R.XWGroup{2n, ws}}}, Nil{}, R.Db{t, n, x, 0n, rr}) : {_ == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 0n, r, R.CStreamNew{R.XWGroup{2n, ws}, xv}))) : R.Db}
+  %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry.at(KV.Val, t, k, KV.hash(k)), None{}, eq) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, R.ent.code(_), R.upd.v(R.UStream{R.XWGroup{2n, ws}}, 0n, R.ent.live(0n, _)))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 0n, r, R.CStreamNew{R.XWGroup{2n, ws}, xv}))) : R.Db}
+  %put_db(t, k, KV.hash(k), n, x, 0n, rr, 0n, R.xwrite(R.XWGroup{2n, ws}, True{}, X.xs.empty(), 0n)) : {_ == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 0n, r, R.CStreamNew{R.XWGroup{2n, ws}, xv}))) : R.Db}
+  %Equal.sym(R.Change, ch_of(R.xwrite(R.XWGroup{2n, ws}, True{}, X.xs.empty(), 0n)), R.CStreamNew{R.XWGroup{2n, ws}, xv}, gn) : {R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, 0n, rr, 0n, R.RNull{}, _)) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 0n, r, R.CStreamNew{R.XWGroup{2n, ws}, xv}))) : R.Db}
+  {==}
+
+def xgnew_eval(+t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +ws: List<&2, String>, +xv: KV.XStream, +w: KV.Val, +e: Nat, eq: {KV.entry.at(KV.Val, t, k, KV.hash(k)) == Some{KV.Item{w, e}} : Maybe<&2, KV.Item<KV.Val>>}, gn: {ch_of(R.xwrite(R.XWGroup{2n, ws}, True{}, X.xs.empty(), 0n)) == R.CStreamNew{R.XWGroup{2n, ws}, xv} : R.Change}) -> {Laws.final(R.exec_all([R.Upd{k, R.UStream{R.XWGNew{ws}}}], R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CStreamNew{R.XWGroup{2n, ws}, xv}))) : R.Db}:
+  %fin_cons(R.Upd{k, R.UStream{R.XWGNew{ws}}}, Nil{}, R.Db{t, n, x, 0n, rr}) : {_ == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CStreamNew{R.XWGroup{2n, ws}, xv}))) : R.Db}
+  %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry.at(KV.Val, t, k, KV.hash(k)), Some{KV.Item{w, e}}, eq) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, R.ent.code(_), R.upd.v(R.UStream{R.XWGNew{ws}}, 0n, R.ent.live(0n, _)))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CStreamNew{R.XWGroup{2n, ws}, xv}))) : R.Db}
+  %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, R.ent.live(0n, Some{KV.Item{w, e}}), Some{KV.Item{w, e}}, live0_ent(Some{KV.Item{w, e}})) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, 1n+e, R.upd.v(R.UStream{R.XWGNew{ws}}, 0n, _))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CStreamNew{R.XWGroup{2n, ws}, xv}))) : R.Db}
+  %xgnew_v(w, ws, e) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, 1n+e, _)) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CStreamNew{R.XWGroup{2n, ws}, xv}))) : R.Db}
+  %put_db(t, k, KV.hash(k), n, x, 0n, rr, 1n+e, R.xwrite(R.XWGroup{2n, ws}, True{}, X.xs.empty(), 0n)) : {_ == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CStreamNew{R.XWGroup{2n, ws}, xv}))) : R.Db}
+  %Equal.sym(R.Change, ch_of(R.xwrite(R.XWGroup{2n, ws}, True{}, X.xs.empty(), 0n)), R.CStreamNew{R.XWGroup{2n, ws}, xv}, gn) : {R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, 0n, rr, 1n+e, R.RNull{}, _)) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CStreamNew{R.XWGroup{2n, ws}, xv}))) : R.Db}
+  {==}
+
+def xgnew_create_g(+t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +ws: List<&2, String>, +xv: KV.XStream, eq: {KV.entry.at(KV.Val, t, k, KV.hash(k)) == None{} : Maybe<&2, KV.Item<KV.Val>>}, g: GoodNewX(R.XWGroup{2n, ws}, xv)) -> {Laws.final(R.exec_all([R.Upd{k, R.UStream{R.XWGroup{2n, ws}}}], R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 0n, r, R.CStreamNew{R.XWGroup{2n, ws}, xv}))) : R.Db}:
+  (gn, ga) = g
+  xgnew_create(t, k, n, x, now, rr, r, ws, xv, eq, gn)
+
+def xgnew_eval_g(+t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +ws: List<&2, String>, +xv: KV.XStream, +w: KV.Val, +e: Nat, eq: {KV.entry.at(KV.Val, t, k, KV.hash(k)) == Some{KV.Item{w, e}} : Maybe<&2, KV.Item<KV.Val>>}, g: GoodNewX(R.XWGroup{2n, ws}, xv)) -> {Laws.final(R.exec_all([R.Upd{k, R.UStream{R.XWGNew{ws}}}], R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CStreamNew{R.XWGroup{2n, ws}, xv}))) : R.Db}:
+  (gn, ga) = g
+  xgnew_eval(t, k, n, x, now, rr, r, ws, xv, w, e, eq, gn)
+
+def xgnew_replay2(m: Maybe<&2, KV.Item<KV.Val>>, +t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +ws: List<&2, String>, +xv: KV.XStream) -> {KV.entry.at(KV.Val, t, k, KV.hash(k)) == m : Maybe<&2, KV.Item<KV.Val>>} -> GoodNewX(R.XWGroup{2n, ws}, xv) -> {Laws.final(R.exec_all(A.ch.effect(k, R.ent.code(m), R.CStreamNew{R.XWGroup{2n, ws}, xv}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(m), r, R.CStreamNew{R.XWGroup{2n, ws}, xv}))) : R.Db}:
+  match m:
+    case Some{KV.Item{+w, +e}}:
+      eq => g => xgnew_eval_g(t, k, n, x, now, rr, r, ws, xv, w, e, eq, g)
+    case None{}:
+      eq => g => xgnew_create_g(t, k, n, x, now, rr, r, ws, xv, eq, g)
+
+# no other write makes a new stream
+def new_absurd(-op: R.XWrite, -xv: KV.XStream, T: Type, g: {ch_of(R.xwrite(op, True{}, X.xs.empty(), 0n)) == R.CStreamNew{op, xv} : R.Change} & Empty) -> T:
+  (gc, gz) = g
+  Empty.absurd(T, gz)
+
+def xgnew_replay(sub: Nat, m: Maybe<&2, KV.Item<KV.Val>>, +t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +ws: List<&2, String>, +xv: KV.XStream) -> {KV.entry.at(KV.Val, t, k, KV.hash(k)) == m : Maybe<&2, KV.Item<KV.Val>>} -> GoodNewX(R.XWGroup{sub, ws}, xv) -> {Laws.final(R.exec_all(A.ch.effect(k, R.ent.code(m), R.CStreamNew{R.XWGroup{sub, ws}, xv}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(m), r, R.CStreamNew{R.XWGroup{sub, ws}, xv}))) : R.Db}:
+  match sub:
+    case 0n:
+      eq => g => new_absurd(R.XWGroup{0n, ws}, xv, {Laws.final(R.exec_all(A.ch.effect(k, R.ent.code(m), R.CStreamNew{R.XWGroup{0n, ws}, xv}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(m), r, R.CStreamNew{R.XWGroup{0n, ws}, xv}))) : R.Db}, g)
+    case 1n+p:
+      match p:
+        case 0n:
+          eq => g => new_absurd(R.XWGroup{1n, ws}, xv, {Laws.final(R.exec_all(A.ch.effect(k, R.ent.code(m), R.CStreamNew{R.XWGroup{1n, ws}, xv}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(m), r, R.CStreamNew{R.XWGroup{1n, ws}, xv}))) : R.Db}, g)
+        case 1n+q:
+          match q:
+            case 0n:
+              xgnew_replay2(m, t, k, n, x, now, rr, r, ws, xv)
+            case 1n+s:
+              eq => g => new_absurd(R.XWGroup{3n+s, ws}, xv, {Laws.final(R.exec_all(A.ch.effect(k, R.ent.code(m), R.CStreamNew{R.XWGroup{3n+s, ws}, xv}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(m), r, R.CStreamNew{R.XWGroup{3n+s, ws}, xv}))) : R.Db}, g)
+
+def xnew_replay(m: Maybe<&2, KV.Item<KV.Val>>, +t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, op: R.XWrite, +xv: KV.XStream) -> {KV.entry.at(KV.Val, t, k, KV.hash(k)) == m : Maybe<&2, KV.Item<KV.Val>>} -> GoodNewX(op, xv) -> {Laws.final(R.exec_all(A.ch.effect(k, R.ent.code(m), R.CStreamNew{op, xv}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(m), r, R.CStreamNew{op, xv}))) : R.Db}:
+  match op:
+    case R.XWAdd{+ws}:
+      xnew_replay_add(m, t, k, n, x, now, rr, r, ws, xv)
+    case R.XWGroup{sub, +ws}:
+      xgnew_replay(sub, m, t, k, n, x, now, rr, r, ws, xv)
+    case R.XWTrim{+ws}:
+      eq => g => new_absurd(R.XWTrim{ws}, xv, {Laws.final(R.exec_all(A.ch.effect(k, R.ent.code(m), R.CStreamNew{R.XWTrim{ws}, xv}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(m), r, R.CStreamNew{R.XWTrim{ws}, xv}))) : R.Db}, g)
+    case R.XWDel{+ids}:
+      eq => g => new_absurd(R.XWDel{ids}, xv, {Laws.final(R.exec_all(A.ch.effect(k, R.ent.code(m), R.CStreamNew{R.XWDel{ids}, xv}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(m), r, R.CStreamNew{R.XWDel{ids}, xv}))) : R.Db}, g)
+    case R.XWSetId{+ws}:
+      eq => g => new_absurd(R.XWSetId{ws}, xv, {Laws.final(R.exec_all(A.ch.effect(k, R.ent.code(m), R.CStreamNew{R.XWSetId{ws}, xv}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(m), r, R.CStreamNew{R.XWSetId{ws}, xv}))) : R.Db}, g)
+    case R.XWNew{+ws}:
+      eq => g => new_absurd(R.XWNew{ws}, xv, {Laws.final(R.exec_all(A.ch.effect(k, R.ent.code(m), R.CStreamNew{R.XWNew{ws}, xv}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(m), r, R.CStreamNew{R.XWNew{ws}, xv}))) : R.Db}, g)
+    case R.XWGNew{+ws}:
+      eq => g => new_absurd(R.XWGNew{ws}, xv, {Laws.final(R.exec_all(A.ch.effect(k, R.ent.code(m), R.CStreamNew{R.XWGNew{ws}, xv}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(m), r, R.CStreamNew{R.XWGNew{ws}, xv}))) : R.Db}, g)
+    case R.XWAck{+ws}:
+      eq => g => new_absurd(R.XWAck{ws}, xv, {Laws.final(R.exec_all(A.ch.effect(k, R.ent.code(m), R.CStreamNew{R.XWAck{ws}, xv}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(m), r, R.CStreamNew{R.XWAck{ws}, xv}))) : R.Db}, g)
+    case R.XWKeyed{+c0, +k0, +ws}:
+      eq => g => new_absurd(R.XWKeyed{c0, k0, ws}, xv, {Laws.final(R.exec_all(A.ch.effect(k, R.ent.code(m), R.CStreamNew{R.XWKeyed{c0, k0, ws}, xv}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(m), r, R.CStreamNew{R.XWKeyed{c0, k0, ws}, xv}))) : R.Db}, g)
+    case R.XWSet{+ws}:
+      eq => g => new_absurd(R.XWSet{ws}, xv, {Laws.final(R.exec_all(A.ch.effect(k, R.ent.code(m), R.CStreamNew{R.XWSet{ws}, xv}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(m), r, R.CStreamNew{R.XWSet{ws}, xv}))) : R.Db}, g)
+    case R.XWDelCon{+ws}:
+      eq => g => new_absurd(R.XWDelCon{ws}, xv, {Laws.final(R.exec_all(A.ch.effect(k, R.ent.code(m), R.CStreamNew{R.XWDelCon{ws}, xv}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(m), r, R.CStreamNew{R.XWDelCon{ws}, xv}))) : R.Db}, g)
 
 def ch_replay(ch: R.Change, m: Maybe<&2, KV.Item<KV.Val>>, +t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply) -> {KV.entry.at(KV.Val, t, k, KV.hash(k)) == m : Maybe<&2, KV.Item<KV.Val>>} -> Good(m, ch) -> {Laws.final(R.exec_all(A.ch.effect(k, R.ent.code(m), ch), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(m), r, ch))) : R.Db}:
   match ch m:
@@ -9445,8 +9609,8 @@ def ch_replay(ch: R.Change, m: Maybe<&2, KV.Item<KV.Val>>, +t: KV.Trie<KV.Val>, 
       eq => g => stream_replay_v(w, t, k, n, x, now, rr, r, op, xv, e)(eq)(g)
     case R.CStream{op, xv} None{}:
       eq => g => Empty.absurd({Laws.final(R.exec_all(A.ch.effect(k, R.ent.code(None{}), R.CStream{op, xv}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(None{}), r, R.CStream{op, xv}))) : R.Db}, g)
-    case R.CStreamNew{+ws, +xv} _:
-      eq => g => xnew_replay(m, t, k, n, x, now, rr, r, ws, xv)(eq)(g)
+    case R.CStreamNew{+op, +xv} _:
+      eq => g => xnew_replay(m, t, k, n, x, now, rr, r, op, xv)(eq)(g)
 
 # an update's effects make its change again
 def out_replay(o: R.Out, +m: Maybe<&2, KV.Item<KV.Val>>, +t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {KV.entry.at(KV.Val, t, k, KV.hash(k)) == m : Maybe<&2, KV.Item<KV.Val>>} -> Good(m, ch_of(o)) -> {Laws.final(R.exec_all(A.upd.effect(k, R.ent.code(m), o), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(m), o))) : R.Db}:
@@ -10560,7 +10724,7 @@ def NewWs(ch: R.Change, ws: List<&2, String>) -> Type:
     case R.CKeep{}:
       {True{} == True{} : Bool}
     case R.CStreamNew{w2, xv}:
-      {w2 == ws : List<&2, String>}
+      {w2 == R.XWAdd{ws} : R.XWrite}
     case _:
       Empty
 
@@ -10601,7 +10765,7 @@ def xnew_good_ch(ch: R.Change, +ws: List<&2, String>, -m: Maybe<&2, KV.Item<KV.V
     case R.CStream{f0, f1}:
       sh => Empty.absurd({ch_of(R.xwrite(R.XWAdd{ws}, True{}, X.xs.empty(), 0n)) == R.CStream{f0, f1} : R.Change} -> GoodXAdd(ws) -> Good(m, R.CStream{f0, f1}), sh)
     case R.CStreamNew{+w2, +xv}:
-      sh => %Equal.sym(List<&2, String>, w2, ws, sh) : {ch_of(R.xwrite(R.XWAdd{ws}, True{}, X.xs.empty(), 0n)) == R.CStreamNew{_, xv} : R.Change} -> GoodXAdd(ws) -> Good(m, R.CStreamNew{_, xv})
+      sh => %Equal.sym(R.XWrite, w2, R.XWAdd{ws}, sh) : {ch_of(R.xwrite(R.XWAdd{ws}, True{}, X.xs.empty(), 0n)) == R.CStreamNew{_, xv} : R.Change} -> GoodXAdd(ws) -> Good(m, R.CStreamNew{_, xv})
             ec => ga => (ec, ga)
 
 # XADD's entry added to an empty stream (fresh): its change, which the
@@ -10868,8 +11032,285 @@ def xsetid_none_good(s: R.XS, -m: Maybe<&2, KV.Item<KV.Val>>) -> Good(m, ch_of(R
     case R.XS{id, a, md}:
       {==}
 
+# XGROUP CREATE's options as they read (ec): no error
+def xgc_ok(+opts: List<&2, String>, +mk: Bool, +rd: KV.XRd, ec: {R.xgo.read(True{}, "CREATE", opts) == R.XGc{mk, rd} : R.XGc}) -> {R.xgo.err(True{}, "CREATE", opts) == None{} : Maybe<&2, R.Reply>}:
+  %Equal.sym(R.XGc, R.xgo.read(True{}, "CREATE", opts), R.XGc{mk, rd}, ec) : {R.xgc.err(_) == None{} : Maybe<&2, R.Reply>}
+  {==}
+
+# XGROUP CREATE on the stream x0 the key holds: none, or the group made,
+# which CREATE of the same words makes again (ew); its options read
+def xgc_old_out(m: Maybe<&2, KV.XStream>, +ws: List<&2, String>, +x0: KV.XStream, -e: Nat) -> {R.xwrite(R.XWGroup{2n, ws}, False{}, x0, 0n) == R.xgc.out(m, False{}, ws) : R.Out} -> GoodXGroup(2n, ws) -> Good(Some{KV.Item{KV.VColl{KV.CStream{x0}}, e}}, ch_of(R.xgc.out(m, False{}, ws))):
+  match m:
+    case Some{+x2}:
+      ew => gc => (Equal.cong(R.Out, R.Change, q => ch_of(q), R.xwrite(R.XWGroup{2n, ws}, False{}, x0, 0n), R.xgc.out(Some{x2}, False{}, ws), ew), gc)
+    case None{}:
+      ew => gc => {==}
+
+def xgc_old_at(m: Maybe<&2, KV.XId>, +rd: KV.XRd, +g: String, +i: String, +opts: List<&2, String>, +x0: KV.XStream, -e: Nat) -> {R.xwrite(R.XWGroup{2n, Con{g, Con{i, opts}}}, False{}, x0, 0n) == R.xgc.at(m, rd, False{}, g, i, opts, x0) : R.Out} -> GoodXGroup(2n, Con{g, Con{i, opts}}) -> Good(Some{KV.Item{KV.VColl{KV.CStream{x0}}, e}}, ch_of(R.xgc.at(m, rd, False{}, g, i, opts, x0))):
+  match m:
+    case Some{+id}:
+      ew => gc => xgc_old_out(X.xs.gcreate(x0, g, id, rd), Con{g, Con{i, opts}}, x0, e)(ew)(gc)
+    case None{}:
+      ew => gc => {==}
+
+def xgc_old_args(ok: Bool, +rd: KV.XRd, +g: String, +i: String, +opts: List<&2, String>, +x0: KV.XStream, -e: Nat) -> {R.xwrite(R.XWGroup{2n, Con{g, Con{i, opts}}}, False{}, x0, 0n) == R.xgc.args(ok, rd, False{}, g, i, opts, x0) : R.Out} -> GoodXGroup(2n, Con{g, Con{i, opts}}) -> Good(Some{KV.Item{KV.VColl{KV.CStream{x0}}, e}}, ch_of(R.xgc.args(ok, rd, False{}, g, i, opts, x0))):
+  match ok:
+    case True{}:
+      ew => gc => xgc_old_at(R.xgc.id(i, X.xstream.last(x0)), rd, g, i, opts, x0, e)(ew)(gc)
+    case False{}:
+      ew => gc => {==}
+
+def xgc_old_go(c: R.XGc, +g: String, +i: String, +opts: List<&2, String>, +x0: KV.XStream, -e: Nat) -> {R.xgo.read(True{}, "CREATE", opts) == c : R.XGc} -> {R.xwrite(R.XWGroup{2n, Con{g, Con{i, opts}}}, False{}, x0, 0n) == R.xgc.go(c, False{}, g, i, opts, x0) : R.Out} -> Good(Some{KV.Item{KV.VColl{KV.CStream{x0}}, e}}, ch_of(R.xgc.go(c, False{}, g, i, opts, x0))):
+  match c:
+    case R.XGc{+mk, +rd}:
+      ec => ew => xgc_old_args(Nat.is_le(List.length(&2, String, opts), 3n), rd, g, i, opts, x0, e)(ew)(xgc_ok(opts, mk, rd, ec))
+    case R.XGcBad{q}:
+      ec => ew => {==}
+
+def xgc_old(ws: List<&2, String>, +x0: KV.XStream, -e: Nat) -> Good(Some{KV.Item{KV.VColl{KV.CStream{x0}}, e}}, ch_of(R.xgc.run(ws, False{}, x0))):
+  match ws:
+    case Con{+g, Con{+i, +opts}}:
+      xgc_old_go(R.xgo.read(True{}, "CREATE", opts), g, i, opts, x0, e)({==})({==})
+    case Con{g, Nil{}}:
+      {==}
+    case Nil{}:
+      {==}
+
+# XGROUP CREATE on an empty stream (of a key not there, or the script of a
+# new stream's group): with MKSTREAM a new stream, which CREATE of the same
+# words makes again on one (ew); its words read as the script's (xgnew.ok)
+def xgnew_ok(+i: String, +opts: List<&2, String>, -g: String, +rd: KV.XRd, +id: KV.XId, ec: {R.xgo.read(True{}, "CREATE", opts) == R.XGc{True{}, rd} : R.XGc}, eo: {Nat.is_le(List.length(&2, String, opts), 3n) == True{} : Bool}, ei: {R.xgc.id(i, X.xid.zero()) == Some{id} : Maybe<&2, KV.XId>}) -> {R.xgnew.ok(Con{g, Con{i, opts}}) == True{} : Bool}:
+  %Equal.sym(R.XGc, R.xgo.read(True{}, "CREATE", opts), R.XGc{True{}, rd}, ec) : {R.xgnew.ok.of(_, List.length(&2, String, opts), R.xgc.id(i, X.xid.zero())) == True{} : Bool}
+  %Equal.sym(Maybe<&2, KV.XId>, R.xgc.id(i, X.xid.zero()), Some{id}, ei) : {R.xgnew.ok.of(R.XGc{True{}, rd}, List.length(&2, String, opts), _) == True{} : Bool}
+  eo
+
+def xgc_new_out(m: Maybe<&2, KV.XStream>, +ws: List<&2, String>, -m0: Maybe<&2, KV.Item<KV.Val>>) -> {R.xwrite(R.XWGroup{2n, ws}, True{}, X.xs.empty(), 0n) == R.xgc.out(m, True{}, ws) : R.Out} -> GoodNewG(2n, ws) -> Good(m0, ch_of(R.xgc.out(m, True{}, ws))):
+  match m:
+    case Some{+x2}:
+      ew => gn => (Equal.cong(R.Out, R.Change, q => ch_of(q), R.xwrite(R.XWGroup{2n, ws}, True{}, X.xs.empty(), 0n), R.xgc.out(Some{x2}, True{}, ws), ew), gn)
+    case None{}:
+      ew => gn => {==}
+
+def xgc_new_at(mi: Maybe<&2, KV.XId>, +rd: KV.XRd, +g: String, +i: String, +opts: List<&2, String>, -m0: Maybe<&2, KV.Item<KV.Val>>) -> {R.xgc.id(i, X.xid.zero()) == mi : Maybe<&2, KV.XId>} -> {R.xgo.read(True{}, "CREATE", opts) == R.XGc{True{}, rd} : R.XGc} -> {Nat.is_le(List.length(&2, String, opts), 3n) == True{} : Bool} -> {R.xwrite(R.XWGroup{2n, Con{g, Con{i, opts}}}, True{}, X.xs.empty(), 0n) == R.xgc.at(mi, rd, True{}, g, i, opts, X.xs.empty()) : R.Out} -> Good(m0, ch_of(R.xgc.at(mi, rd, True{}, g, i, opts, X.xs.empty()))):
+  match mi:
+    case Some{+id}:
+      ei => +ec => eo => ew => xgc_new_out(X.xs.gcreate(X.xs.empty(), g, id, rd), Con{g, Con{i, opts}}, m0)(ew)((xgc_ok(opts, True{}, rd, ec), xgnew_ok(i, opts, g, rd, id, ec, eo, ei)))
+    case None{}:
+      ei => ec => eo => ew => {==}
+
+def xgc_new_args(ok: Bool, +rd: KV.XRd, +g: String, +i: String, +opts: List<&2, String>, -m0: Maybe<&2, KV.Item<KV.Val>>) -> {Nat.is_le(List.length(&2, String, opts), 3n) == ok : Bool} -> {R.xgo.read(True{}, "CREATE", opts) == R.XGc{True{}, rd} : R.XGc} -> {R.xwrite(R.XWGroup{2n, Con{g, Con{i, opts}}}, True{}, X.xs.empty(), 0n) == R.xgc.args(ok, rd, True{}, g, i, opts, X.xs.empty()) : R.Out} -> Good(m0, ch_of(R.xgc.args(ok, rd, True{}, g, i, opts, X.xs.empty()))):
+  match ok:
+    case True{}:
+      eo => ec => ew => xgc_new_at(R.xgc.id(i, X.xstream.last(X.xs.empty())), rd, g, i, opts, m0)({==})(ec)(eo)(ew)
+    case False{}:
+      eo => ec => ew => {==}
+
+def xgc_new_mk(mk: Bool, +rd: KV.XRd, +g: String, +i: String, +opts: List<&2, String>, -m0: Maybe<&2, KV.Item<KV.Val>>) -> {R.xgo.read(True{}, "CREATE", opts) == R.XGc{mk, rd} : R.XGc} -> {R.xwrite(R.XWGroup{2n, Con{g, Con{i, opts}}}, True{}, X.xs.empty(), 0n) == R.xgc.go(R.XGc{mk, rd}, True{}, g, i, opts, X.xs.empty()) : R.Out} -> Good(m0, ch_of(R.xgc.go(R.XGc{mk, rd}, True{}, g, i, opts, X.xs.empty()))):
+  match mk:
+    case True{}:
+      ec => ew => xgc_new_args(Nat.is_le(List.length(&2, String, opts), 3n), rd, g, i, opts, m0)({==})(ec)(ew)
+    case False{}:
+      ec => ew => {==}
+
+def xgc_new_go(c: R.XGc, +g: String, +i: String, +opts: List<&2, String>, -m0: Maybe<&2, KV.Item<KV.Val>>) -> {R.xgo.read(True{}, "CREATE", opts) == c : R.XGc} -> {R.xwrite(R.XWGroup{2n, Con{g, Con{i, opts}}}, True{}, X.xs.empty(), 0n) == R.xgc.go(c, True{}, g, i, opts, X.xs.empty()) : R.Out} -> Good(m0, ch_of(R.xgc.go(c, True{}, g, i, opts, X.xs.empty()))):
+  match c:
+    case R.XGc{mk, +rd}:
+      ec => ew => xgc_new_mk(mk, rd, g, i, opts, m0)(ec)(ew)
+    case R.XGcBad{q}:
+      ec => ew => {==}
+
+def xgc_fresh(ws: List<&2, String>, -m0: Maybe<&2, KV.Item<KV.Val>>) -> Good(m0, ch_of(R.xgc.run(ws, True{}, X.xs.empty()))):
+  match ws:
+    case Con{+g, Con{+i, +opts}}:
+      xgc_new_go(R.xgo.read(True{}, "CREATE", opts), g, i, opts, m0)({==})({==})
+    case Con{g, Nil{}}:
+      {==}
+    case Nil{}:
+      {==}
+
+# XGROUP DESTROY: none, or the group gone, which DESTROY makes again
+def xgd_old_of(has: Bool, +g: String, +x0: KV.XStream, -e: Nat) -> {R.xwrite(R.XWGroup{4n, [g]}, False{}, x0, 0n) == R.xgd.of(has, g, x0) : R.Out} -> Good(Some{KV.Item{KV.VColl{KV.CStream{x0}}, e}}, ch_of(R.xgd.of(has, g, x0))):
+  match has:
+    case True{}:
+      ew => (Equal.cong(R.Out, R.Change, q => ch_of(q), R.xwrite(R.XWGroup{4n, [g]}, False{}, x0, 0n), R.xgd.of(True{}, g, x0), ew), {==})
+    case False{}:
+      ew => {==}
+
+def xgd_old(ws: List<&2, String>, +x0: KV.XStream, -e: Nat) -> Good(Some{KV.Item{KV.VColl{KV.CStream{x0}}, e}}, ch_of(R.xgd.run(ws, x0))):
+  match ws:
+    case Con{+g, Nil{}}:
+      xgd_old_of(Maybe.is_some(&2, KV.XGroup, X.xs.group(x0, g)), g, x0, e)({==})
+    case Con{g, Con{h, rest}}:
+      {==}
+    case Nil{}:
+      {==}
+
+# XGROUP of the form the file keeps (CREATE, DESTROY) on the stream x0
+def xgroup_old(sub: Nat, +ws: List<&2, String>, +x0: KV.XStream, -e: Nat) -> Good(Some{KV.Item{KV.VColl{KV.CStream{x0}}, e}}, ch_of(R.xgroup.run(sub, ws, False{}, x0))):
+  match sub:
+    case 0n:
+      {==}
+    case 1n+p:
+      match p:
+        case 0n:
+          {==}
+        case 1n+q:
+          match q:
+            case 0n:
+              xgc_old(ws, x0, e)
+            case 1n+r:
+              match r:
+                case 0n:
+                  {==}
+                case 1n+s:
+                  match s:
+                    case 0n:
+                      xgd_old(ws, x0, e)
+                    case 1n+u:
+                      {==}
+
+# of a key not there: CREATE makes a new stream, the others change nothing
+def xgroup_none(sub: Nat, +ws: List<&2, String>, -m: Maybe<&2, KV.Item<KV.Val>>, +now: Nat) -> Good(m, ch_of(R.xwrite.none(R.XWGroup{sub, ws}, now))):
+  match sub:
+    case 0n:
+      {==}
+    case 1n+p:
+      match p:
+        case 0n:
+          {==}
+        case 1n+q:
+          match q:
+            case 0n:
+              xgc_fresh(ws, m)
+            case 1n+r:
+              match r:
+                case 0n:
+                  {==}
+                case 1n+s:
+                  match s:
+                    case 0n:
+                      {==}
+                    case 1n+u:
+                      {==}
+
+# XACK on the stream x0: none, or the IDs pending acknowledged, which XACK
+# of the same words acknowledges again (ew); its words a group and IDs
+def xack_out_old(none: Bool, +n: Nat, +g2: KV.XGroup, +ws: List<&2, String>, +x0: KV.XStream, -e: Nat) -> {R.xwrite(R.XWAck{ws}, False{}, x0, 0n) == R.xack.out.of(none, n, g2, ws, x0) : R.Out} -> GoodXAck(ws) -> Good(Some{KV.Item{KV.VColl{KV.CStream{x0}}, e}}, ch_of(R.xack.out.of(none, n, g2, ws, x0))):
+  match none:
+    case True{}:
+      ew => ga => {==}
+    case False{}:
+      ew => ga => (Equal.cong(R.Out, R.Change, q => ch_of(q), R.xwrite(R.XWAck{ws}, False{}, x0, 0n), R.xack.out.of(False{}, n, g2, ws, x0), ew), ga)
+
+def xack_ak_old(a: X.XAk, +ws: List<&2, String>, +x0: KV.XStream, -e: Nat) -> {R.xwrite(R.XWAck{ws}, False{}, x0, 0n) == R.xack.out(a, ws, x0) : R.Out} -> GoodXAck(ws) -> Good(Some{KV.Item{KV.VColl{KV.CStream{x0}}, e}}, ch_of(R.xack.out(a, ws, x0))):
+  match a:
+    case X.XAk{+n, +g2}:
+      ew => ga => xack_out_old(Nat.is_eq(n, 0n), n, g2, ws, x0, e)(ew)(ga)
+
+def xack_ids_old(m: Maybe<&2, List<&2, KV.XId>>, +g2: KV.XGroup, +ws: List<&2, String>, +x0: KV.XStream, -e: Nat) -> {R.xwrite(R.XWAck{ws}, False{}, x0, 0n) == R.xack.ids(m, g2, ws, x0) : R.Out} -> GoodXAck(ws) -> Good(Some{KV.Item{KV.VColl{KV.CStream{x0}}, e}}, ch_of(R.xack.ids(m, g2, ws, x0))):
+  match m:
+    case Some{+ids}:
+      ew => ga => xack_ak_old(X.xg.ack(ids, X.XAk{0n, g2}), ws, x0, e)(ew)(ga)
+    case None{}:
+      ew => ga => {==}
+
+def xack_of_old(m: Maybe<&2, KV.XGroup>, +g: String, +i: String, +rest: List<&2, String>, +x0: KV.XStream, -e: Nat) -> {R.xwrite(R.XWAck{Con{g, Con{i, rest}}}, False{}, x0, 0n) == R.xack.of(m, Con{i, rest}, Con{g, Con{i, rest}}, x0) : R.Out} -> Good(Some{KV.Item{KV.VColl{KV.CStream{x0}}, e}}, ch_of(R.xack.of(m, Con{i, rest}, Con{g, Con{i, rest}}, x0))):
+  match m:
+    case Some{+g2}:
+      ew => xack_ids_old(X.xids.parse(Con{i, rest}), g2, Con{g, Con{i, rest}}, x0, e)(ew)({==})
+    case None{}:
+      ew => {==}
+
+def xack_nil_old(m: Maybe<&2, KV.XGroup>, +g: String, +x0: KV.XStream, -e: Nat) -> Good(Some{KV.Item{KV.VColl{KV.CStream{x0}}, e}}, ch_of(R.xack.of(m, Nil{}, Con{g, Nil{}}, x0))):
+  match m:
+    case Some{+g2}:
+      {==}
+    case None{}:
+      {==}
+
+def xack_old(ws: List<&2, String>, +x0: KV.XStream, -e: Nat) -> Good(Some{KV.Item{KV.VColl{KV.CStream{x0}}, e}}, ch_of(R.xack.run(ws, x0))):
+  match ws:
+    case Con{+g, Con{+i, +rest}}:
+      xack_of_old(X.xs.group(x0, g), g, i, rest, x0, e)({==})
+    case Con{+g, Nil{}}:
+      xack_nil_old(X.xs.group(x0, g), g, x0, e)
+    case Nil{}:
+      {==}
+
+# XWSet of the words ws on the stream x0: its words read (es) make the
+# same change again
+def xset_res(+ws: List<&2, String>, +x0: KV.XStream, +g: String, +last: KV.XId, +rd: KV.XRd, +c: Maybe<&2, R.XSetC>, es: {R.xset.read(ws) == R.XSet{g, last, rd, c} : R.XSet}) -> {R.xwrite(R.XWSet{ws}, False{}, x0, 0n) == R.xset.out(R.xset.apply(c, x0, g, last, rd), ws) : R.Out}:
+  %Equal.sym(R.XSet, R.xset.read(ws), R.XSet{g, last, rd, c}, es) : {R.xset.fin(_, ws, x0) == R.xset.out(R.xset.apply(c, x0, g, last, rd), ws) : R.Out}
+  {==}
+
+def xset_ok_of(+ws: List<&2, String>, +g: String, +last: KV.XId, +rd: KV.XRd, +c: Maybe<&2, R.XSetC>, es: {R.xset.read(ws) == R.XSet{g, last, rd, c} : R.XSet}) -> {R.xset.ok(R.xset.read(ws)) == True{} : Bool}:
+  %Equal.sym(R.XSet, R.xset.read(ws), R.XSet{g, last, rd, c}, es) : {R.xset.ok(_) == True{} : Bool}
+  {==}
+
+def xset_out_good(m: Maybe<&2, KV.XStream>, +ws: List<&2, String>, +x0: KV.XStream, -e: Nat) -> {R.xwrite(R.XWSet{ws}, False{}, x0, 0n) == R.xset.out(m, ws) : R.Out} -> {R.xset.ok(R.xset.read(ws)) == True{} : Bool} -> Good(Some{KV.Item{KV.VColl{KV.CStream{x0}}, e}}, ch_of(R.xset.out(m, ws))):
+  match m:
+    case Some{+x2}:
+      ew => gs => (Equal.cong(R.Out, R.Change, q => ch_of(q), R.xwrite(R.XWSet{ws}, False{}, x0, 0n), R.xset.out(Some{x2}, ws), ew), gs)
+    case None{}:
+      ew => gs => {==}
+
+def xset_fin_good(s: R.XSet, +ws: List<&2, String>, +x0: KV.XStream, -e: Nat) -> {R.xset.read(ws) == s : R.XSet} -> Good(Some{KV.Item{KV.VColl{KV.CStream{x0}}, e}}, ch_of(R.xset.fin(s, ws, x0))):
+  match s:
+    case R.XSet{+g, +last, +rd, +c}:
+      +es => xset_out_good(R.xset.apply(c, x0, g, last, rd), ws, x0, e)(xset_res(ws, x0, g, last, rd, c, es))(xset_ok_of(ws, g, last, rd, c, es))
+    case R.XSetBad{}:
+      es => {==}
+
+def xset_good(+ws: List<&2, String>, +x0: KV.XStream, -e: Nat) -> Good(Some{KV.Item{KV.VColl{KV.CStream{x0}}, e}}, ch_of(R.xset.fin(R.xset.read(ws), ws, x0))):
+  xset_fin_good(R.xset.read(ws), ws, x0, e)({==})
+
+# XWDelCon of a group and a consumer on the stream x0: none, or the
+# consumer gone, which the same words make again
+def xdc_con_good(m: Maybe<&2, KV.XCon>, +g2: KV.XGroup, +g: String, +c: String, +x0: KV.XStream, -e: Nat) -> {R.xwrite(R.XWDelCon{[g, c]}, False{}, x0, 0n) == R.xdelcon.con(m, g2, [g, c], x0) : R.Out} -> Good(Some{KV.Item{KV.VColl{KV.CStream{x0}}, e}}, ch_of(R.xdelcon.con(m, g2, [g, c], x0))):
+  match m:
+    case Some{+kc}:
+      ew => (Equal.cong(R.Out, R.Change, q => ch_of(q), R.xwrite(R.XWDelCon{[g, c]}, False{}, x0, 0n), R.xdelcon.con(Some{kc}, g2, [g, c], x0), ew), {==})
+    case None{}:
+      ew => {==}
+
+def xdc_of_good(m: Maybe<&2, KV.XGroup>, +g: String, +c: String, +x0: KV.XStream, -e: Nat) -> {R.xwrite(R.XWDelCon{[g, c]}, False{}, x0, 0n) == R.xdelcon.of(m, c, [g, c], x0) : R.Out} -> Good(Some{KV.Item{KV.VColl{KV.CStream{x0}}, e}}, ch_of(R.xdelcon.of(m, c, [g, c], x0))):
+  match m:
+    case Some{+g2}:
+      ew => xdc_con_good(X.xgroup.con(g2, c), g2, g, c, x0, e)(ew)
+    case None{}:
+      ew => {==}
+
+def xdelcon_good(ws: List<&2, String>, +x0: KV.XStream, -e: Nat) -> Good(Some{KV.Item{KV.VColl{KV.CStream{x0}}, e}}, ch_of(R.xdelcon.fin(ws, x0))):
+  match ws:
+    case Con{+g, Con{+c, Nil{}}}:
+      xdc_of_good(X.xs.group(x0, g), g, c, x0, e)({==})
+    case Con{g, Con{c, Con{h, rest}}}:
+      {==}
+    case Con{g, Nil{}}:
+      {==}
+    case Nil{}:
+      {==}
+
+# a write whose errors name its key, planned: its change that of the
+# XWSet or XWDelCon it makes
+def xplan_ch(+r: R.Reply, o: R.Out) -> {ch_of(R.xplan.of(r, o)) == ch_of(o) : R.Change}:
+  match o:
+    case R.Out{q, ch}:
+      {==}
+
+def xplan_good(p: R.XPlan, +x0: KV.XStream, -e: Nat) -> Good(Some{KV.Item{KV.VColl{KV.CStream{x0}}, e}}, ch_of(R.xplan.out(p, x0))):
+  match p:
+    case R.XPlanNone{r}:
+      {==}
+    case R.XPlanSet{+r, +ws, n}:
+      %Equal.sym(R.Change, ch_of(R.xplan.of(r, R.xset.fin(R.xset.read(ws), ws, x0))), ch_of(R.xset.fin(R.xset.read(ws), ws, x0)), xplan_ch(r, R.xset.fin(R.xset.read(ws), ws, x0))) : Good(Some{KV.Item{KV.VColl{KV.CStream{x0}}, e}}, _)
+      xset_good(ws, x0, e)
+    case R.XPlanDel{+ws, n}:
+      xdelcon_good(ws, x0, e)
+
 # a write of a stream to a key not there: XADD (or XWNew) makes a new
-# stream, the others change nothing
+# stream, as XGROUP CREATE with MKSTREAM (or XWGNew) does, the others
+# change nothing
 def xw_none_good(op: R.XWrite, +now: Nat, -m: Maybe<&2, KV.Item<KV.Val>>) -> Good(m, ch_of(R.xwrite.none(op, now))):
   match op:
     case R.XWAdd{+ws}:
@@ -10882,8 +11323,20 @@ def xw_none_good(op: R.XWrite, +now: Nat, -m: Maybe<&2, KV.Item<KV.Val>>) -> Goo
       xsetid_none_good(R.xsetid.read(ws), m)
     case R.XWNew{+ws}:
       xadd_fresh(ws, m, now)
+    case R.XWGroup{sub, +ws}:
+      xgroup_none(sub, ws, m, now)
+    case R.XWGNew{+ws}:
+      xgc_fresh(ws, m)
+    case R.XWAck{ws}:
+      {==}
+    case R.XWKeyed{c, k, ws}:
+      {==}
+    case R.XWSet{ws}:
+      {==}
+    case R.XWDelCon{ws}:
+      {==}
 
-# of a key of another kind: WRONGTYPE, but for XWNew
+# of a key of another kind: WRONGTYPE, but for XWNew and XWGNew
 def xw_wrong_good(op: R.XWrite, +now: Nat, -m: Maybe<&2, KV.Item<KV.Val>>) -> Good(m, ch_of(R.xwrite.wrong(op, now))):
   match op:
     case R.XWAdd{ws}:
@@ -10896,6 +11349,18 @@ def xw_wrong_good(op: R.XWrite, +now: Nat, -m: Maybe<&2, KV.Item<KV.Val>>) -> Go
       {==}
     case R.XWNew{+ws}:
       xadd_fresh(ws, m, now)
+    case R.XWGroup{sub, ws}:
+      {==}
+    case R.XWGNew{+ws}:
+      xgc_fresh(ws, m)
+    case R.XWAck{ws}:
+      {==}
+    case R.XWKeyed{c, k, ws}:
+      {==}
+    case R.XWSet{ws}:
+      {==}
+    case R.XWDelCon{ws}:
+      {==}
 
 def xw_old_good(op: R.XWrite, +x0: KV.XStream, -e: Nat, +now: Nat) -> Good(Some{KV.Item{KV.VColl{KV.CStream{x0}}, e}}, ch_of(R.xwrite(op, False{}, x0, now))):
   match op:
@@ -10909,6 +11374,18 @@ def xw_old_good(op: R.XWrite, +x0: KV.XStream, -e: Nat, +now: Nat) -> Good(Some{
       xsetid_old(ws, x0, e)
     case R.XWNew{+ws}:
       xadd_fresh(ws, Some{KV.Item{KV.VColl{KV.CStream{x0}}, e}}, now)
+    case R.XWGroup{sub, +ws}:
+      xgroup_old(sub, ws, x0, e)
+    case R.XWGNew{+ws}:
+      xgc_fresh(ws, Some{KV.Item{KV.VColl{KV.CStream{x0}}, e}})
+    case R.XWAck{+ws}:
+      xack_old(ws, x0, e)
+    case R.XWKeyed{+c, +k, +ws}:
+      xplan_good(R.xkeyed.plan(c, k, ws, x0, now), x0, e)
+    case R.XWSet{+ws}:
+      xset_good(ws, x0, e)
+    case R.XWDelCon{+ws}:
+      xdelcon_good(ws, x0, e)
 
 def good_coll_stream(op: R.XWrite, +now: Nat, c: KV.Coll, -e: Nat) -> Good(Some{KV.Item{KV.VColl{c}, e}}, ch_of(R.xwrite.coll(op, now, c))):
   match c:
@@ -13093,6 +13570,80 @@ def xsetid_args(+k: String, ws: List<&2, String>) -> GoodXSetId(ws) -> {[R.Upd{k
       ok => %Equal.sym(Maybe<&2, R.Reply>, R.xsetid.err(Con{i, rest}), None{}, ok) : {[R.Upd{k, R.UStream{R.XWSetId{Con{i, rest}}}}] == [R.xwr.cmd(_, k, R.XWSetId{Con{i, rest}})] : List<&2, R.Cmd>}
             {==}
 
+# XGROUP CREATE of a group, an ID and options that read, DESTROY of a
+# group, XACK of a group and IDs, BendKV's scripts of XWSet's words that
+# read, of XWDelCon's group and consumer, and of a new stream's group's
+# words that read as the script's
+def xcreate_args(+k: String, ws: List<&2, String>) -> GoodXCreate(ws) -> {[R.Upd{k, R.UStream{R.XWGroup{2n, ws}}}] == A.parse_all(A.args_all([R.Upd{k, R.UStream{R.XWGroup{2n, ws}}}])) : List<&2, R.Cmd>}:
+  match ws:
+    case Nil{}:
+      g => Empty.absurd({[R.Upd{k, R.UStream{R.XWGroup{2n, Nil{}}}}] == A.parse_all(A.args_all([R.Upd{k, R.UStream{R.XWGroup{2n, Nil{}}}}])) : List<&2, R.Cmd>}, g)
+    case Con{g, Nil{}}:
+      gc => Empty.absurd({[R.Upd{k, R.UStream{R.XWGroup{2n, Con{g, Nil{}}}}}] == A.parse_all(A.args_all([R.Upd{k, R.UStream{R.XWGroup{2n, Con{g, Nil{}}}}}])) : List<&2, R.Cmd>}, gc)
+    case Con{+g, Con{+i, +opts}}:
+      ok => %Equal.sym(Maybe<&2, R.Reply>, R.xgo.err(True{}, "CREATE", opts), None{}, ok) : {[R.Upd{k, R.UStream{R.XWGroup{2n, Con{g, Con{i, opts}}}}}] == [R.xgroup.cmd(_, k, R.XWGroup{2n, Con{g, Con{i, opts}}})] : List<&2, R.Cmd>}
+            {==}
+
+def xdestroy_args(+k: String, ws: List<&2, String>) -> GoodXDestroy(ws) -> {[R.Upd{k, R.UStream{R.XWGroup{4n, ws}}}] == A.parse_all(A.args_all([R.Upd{k, R.UStream{R.XWGroup{4n, ws}}}])) : List<&2, R.Cmd>}:
+  match ws:
+    case Con{g, Nil{}}:
+      d => {==}
+    case Con{g, Con{h, rest}}:
+      d => Empty.absurd({[R.Upd{k, R.UStream{R.XWGroup{4n, Con{g, Con{h, rest}}}}}] == A.parse_all(A.args_all([R.Upd{k, R.UStream{R.XWGroup{4n, Con{g, Con{h, rest}}}}}])) : List<&2, R.Cmd>}, d)
+    case Nil{}:
+      d => Empty.absurd({[R.Upd{k, R.UStream{R.XWGroup{4n, Nil{}}}}] == A.parse_all(A.args_all([R.Upd{k, R.UStream{R.XWGroup{4n, Nil{}}}}])) : List<&2, R.Cmd>}, d)
+
+def xgroup_args(sub: Nat, +k: String, ws: List<&2, String>) -> GoodXGroup(sub, ws) -> {[R.Upd{k, R.UStream{R.XWGroup{sub, ws}}}] == A.parse_all(A.args_all([R.Upd{k, R.UStream{R.XWGroup{sub, ws}}}])) : List<&2, R.Cmd>}:
+  match sub:
+    case 0n:
+      g => Empty.absurd({[R.Upd{k, R.UStream{R.XWGroup{0n, ws}}}] == A.parse_all(A.args_all([R.Upd{k, R.UStream{R.XWGroup{0n, ws}}}])) : List<&2, R.Cmd>}, g)
+    case 1n+p:
+      match p:
+        case 0n:
+          g => Empty.absurd({[R.Upd{k, R.UStream{R.XWGroup{1n, ws}}}] == A.parse_all(A.args_all([R.Upd{k, R.UStream{R.XWGroup{1n, ws}}}])) : List<&2, R.Cmd>}, g)
+        case 1n+q:
+          match q:
+            case 0n:
+              g => xcreate_args(k, ws)(g)
+            case 1n+r:
+              match r:
+                case 0n:
+                  g => Empty.absurd({[R.Upd{k, R.UStream{R.XWGroup{3n, ws}}}] == A.parse_all(A.args_all([R.Upd{k, R.UStream{R.XWGroup{3n, ws}}}])) : List<&2, R.Cmd>}, g)
+                case 1n+s:
+                  match s:
+                    case 0n:
+                      g => xdestroy_args(k, ws)(g)
+                    case 1n+u:
+                      g => Empty.absurd({[R.Upd{k, R.UStream{R.XWGroup{5n+u, ws}}}] == A.parse_all(A.args_all([R.Upd{k, R.UStream{R.XWGroup{5n+u, ws}}}])) : List<&2, R.Cmd>}, g)
+
+def xack_args(+k: String, ws: List<&2, String>) -> GoodXAck(ws) -> {[R.Upd{k, R.UStream{R.XWAck{ws}}}] == A.parse_all(A.args_all([R.Upd{k, R.UStream{R.XWAck{ws}}}])) : List<&2, R.Cmd>}:
+  match ws:
+    case Con{g, Con{i, rest}}:
+      a => {==}
+    case Con{g, Nil{}}:
+      a => Empty.absurd({[R.Upd{k, R.UStream{R.XWAck{Con{g, Nil{}}}}}] == A.parse_all(A.args_all([R.Upd{k, R.UStream{R.XWAck{Con{g, Nil{}}}}}])) : List<&2, R.Cmd>}, a)
+    case Nil{}:
+      a => Empty.absurd({[R.Upd{k, R.UStream{R.XWAck{Nil{}}}}] == A.parse_all(A.args_all([R.Upd{k, R.UStream{R.XWAck{Nil{}}}}])) : List<&2, R.Cmd>}, a)
+
+def xset_args(+k: String, ws: List<&2, String>) -> {R.xset.ok(R.xset.read(ws)) == True{} : Bool} -> {[R.Upd{k, R.UStream{R.XWSet{ws}}}] == A.parse_all(A.args_all([R.Upd{k, R.UStream{R.XWSet{ws}}}])) : List<&2, R.Cmd>}:
+  ok => %Equal.sym(Bool, R.xset.ok(R.xset.read(ws)), True{}, ok) : {[R.Upd{k, R.UStream{R.XWSet{ws}}}] == [R.parse_eval.op(_, k, R.XWSet{ws})] : List<&2, R.Cmd>}
+        {==}
+
+def xdelcon_args(+k: String, ws: List<&2, String>) -> GoodXDelCon(ws) -> {[R.Upd{k, R.UStream{R.XWDelCon{ws}}}] == A.parse_all(A.args_all([R.Upd{k, R.UStream{R.XWDelCon{ws}}}])) : List<&2, R.Cmd>}:
+  match ws:
+    case Con{g, Con{c, Nil{}}}:
+      d => {==}
+    case Con{g, Con{c, Con{h, rest}}}:
+      d => Empty.absurd({[R.Upd{k, R.UStream{R.XWDelCon{Con{g, Con{c, Con{h, rest}}}}}}] == A.parse_all(A.args_all([R.Upd{k, R.UStream{R.XWDelCon{Con{g, Con{c, Con{h, rest}}}}}}])) : List<&2, R.Cmd>}, d)
+    case Con{g, Nil{}}:
+      d => Empty.absurd({[R.Upd{k, R.UStream{R.XWDelCon{Con{g, Nil{}}}}}] == A.parse_all(A.args_all([R.Upd{k, R.UStream{R.XWDelCon{Con{g, Nil{}}}}}])) : List<&2, R.Cmd>}, d)
+    case Nil{}:
+      d => Empty.absurd({[R.Upd{k, R.UStream{R.XWDelCon{Nil{}}}}] == A.parse_all(A.args_all([R.Upd{k, R.UStream{R.XWDelCon{Nil{}}}}])) : List<&2, R.Cmd>}, d)
+
+def xgnew_eval_args(+k: String, ws: List<&2, String>) -> {R.xgnew.ok(ws) == True{} : Bool} -> {[R.Upd{k, R.UStream{R.XWGNew{ws}}}] == A.parse_all(A.args_all([R.Upd{k, R.UStream{R.XWGNew{ws}}}])) : List<&2, R.Cmd>}:
+  ok => %Equal.sym(Bool, R.xgnew.ok(ws), True{}, ok) : {[R.Upd{k, R.UStream{R.XWGNew{ws}}}] == [R.parse_eval.op(_, k, R.XWGNew{ws})] : List<&2, R.Cmd>}
+        {==}
+
 def stream_args(op: R.XWrite, +k: String) -> GoodXOp(op) -> {[R.Upd{k, R.UStream{op}}] == A.parse_all(A.args_all([R.Upd{k, R.UStream{op}}])) : List<&2, R.Cmd>}:
   match op:
     case R.XWAdd{ws}:
@@ -13105,6 +13656,18 @@ def stream_args(op: R.XWrite, +k: String) -> GoodXOp(op) -> {[R.Upd{k, R.UStream
       g => xsetid_args(k, ws)(g)
     case R.XWNew{ws}:
       g => Empty.absurd({[R.Upd{k, R.UStream{R.XWNew{ws}}}] == A.parse_all(A.args_all([R.Upd{k, R.UStream{R.XWNew{ws}}}])) : List<&2, R.Cmd>}, g)
+    case R.XWGroup{sub, ws}:
+      g => xgroup_args(sub, k, ws)(g)
+    case R.XWGNew{ws}:
+      g => Empty.absurd({[R.Upd{k, R.UStream{R.XWGNew{ws}}}] == A.parse_all(A.args_all([R.Upd{k, R.UStream{R.XWGNew{ws}}}])) : List<&2, R.Cmd>}, g)
+    case R.XWAck{ws}:
+      g => xack_args(k, ws)(g)
+    case R.XWKeyed{c, kk, ws}:
+      g => Empty.absurd({[R.Upd{k, R.UStream{R.XWKeyed{c, kk, ws}}}] == A.parse_all(A.args_all([R.Upd{k, R.UStream{R.XWKeyed{c, kk, ws}}}])) : List<&2, R.Cmd>}, g)
+    case R.XWSet{ws}:
+      g => xset_args(k, ws)(g)
+    case R.XWDelCon{ws}:
+      g => xdelcon_args(k, ws)(g)
 
 def gstream_op(-op: R.XWrite, -xv: KV.XStream, -x0: KV.XStream, g: {ch_of(R.xwrite(op, False{}, x0, 0n)) == R.CStream{op, xv} : R.Change} & GoodXOp(op)) -> GoodXOp(op):
   (gx, go) = g
@@ -13137,16 +13700,71 @@ def xnew_eval_args(+k: String, ws: List<&2, String>) -> GoodXAdd(ws) -> {[R.Upd{
       ok => %Equal.sym(Maybe<&2, R.Reply>, R.xadd.err(Con{a, Con{b, Con{c, rest}}}), None{}, ok) : {[R.Upd{k, R.UStream{R.XWNew{Con{a, Con{b, Con{c, rest}}}}}}] == [R.parse_eval.xnew.of(_, k, Con{a, Con{b, Con{c, rest}}})] : List<&2, R.Cmd>}
             {==}
 
-def xnew_args(b: Bool, +k: String, ws: List<&2, String>) -> GoodXAdd(ws) -> {A.xnew.effect(b, k, ws) == A.parse_all(A.args_all(A.xnew.effect(b, k, ws))) : List<&2, R.Cmd>}:
+def xnew_args_add(b: Bool, +k: String, ws: List<&2, String>) -> GoodXAdd(ws) -> {A.xnew.effect(b, k, R.XWAdd{ws}) == A.parse_all(A.args_all(A.xnew.effect(b, k, R.XWAdd{ws}))) : List<&2, R.Cmd>}:
   match b:
     case True{}:
       g => xadd_args(k, ws)(g)
     case False{}:
       g => xnew_eval_args(k, ws)(g)
 
-def xnew_args_g(b: Bool, +k: String, ws: List<&2, String>, -xv: KV.XStream, g: GoodNewX(ws, xv)) -> {A.xnew.effect(b, k, ws) == A.parse_all(A.args_all(A.xnew.effect(b, k, ws))) : List<&2, R.Cmd>}:
+def xgnew_args_t(+k: String, ws: List<&2, String>, g: GoodXCreate(ws) & {R.xgnew.ok(ws) == True{} : Bool}) -> {[R.Upd{k, R.UStream{R.XWGroup{2n, ws}}}] == A.parse_all(A.args_all([R.Upd{k, R.UStream{R.XWGroup{2n, ws}}}])) : List<&2, R.Cmd>}:
+  (gc, gk) = g
+  xcreate_args(k, ws)(gc)
+
+def xgnew_args_f(+k: String, ws: List<&2, String>, g: GoodXCreate(ws) & {R.xgnew.ok(ws) == True{} : Bool}) -> {[R.Upd{k, R.UStream{R.XWGNew{ws}}}] == A.parse_all(A.args_all([R.Upd{k, R.UStream{R.XWGNew{ws}}}])) : List<&2, R.Cmd>}:
+  (gc, gk) = g
+  xgnew_eval_args(k, ws)(gk)
+
+def xgnew_args(b: Bool, +k: String, ws: List<&2, String>) -> GoodNewG(2n, ws) -> {A.xnew.effect(b, k, R.XWGroup{2n, ws}) == A.parse_all(A.args_all(A.xnew.effect(b, k, R.XWGroup{2n, ws}))) : List<&2, R.Cmd>}:
+  match b:
+    case True{}:
+      g => xgnew_args_t(k, ws, g)
+    case False{}:
+      g => xgnew_args_f(k, ws, g)
+
+def xgnew_args_sub(sub: Nat, b: Bool, +k: String, ws: List<&2, String>) -> GoodNewG(sub, ws) -> {A.xnew.effect(b, k, R.XWGroup{sub, ws}) == A.parse_all(A.args_all(A.xnew.effect(b, k, R.XWGroup{sub, ws}))) : List<&2, R.Cmd>}:
+  match sub:
+    case 0n:
+      g => Empty.absurd({A.xnew.effect(b, k, R.XWGroup{0n, ws}) == A.parse_all(A.args_all(A.xnew.effect(b, k, R.XWGroup{0n, ws}))) : List<&2, R.Cmd>}, g)
+    case 1n+p:
+      match p:
+        case 0n:
+          g => Empty.absurd({A.xnew.effect(b, k, R.XWGroup{1n, ws}) == A.parse_all(A.args_all(A.xnew.effect(b, k, R.XWGroup{1n, ws}))) : List<&2, R.Cmd>}, g)
+        case 1n+q:
+          match q:
+            case 0n:
+              g => xgnew_args(b, k, ws)(g)
+            case 1n+r:
+              g => Empty.absurd({A.xnew.effect(b, k, R.XWGroup{3n+r, ws}) == A.parse_all(A.args_all(A.xnew.effect(b, k, R.XWGroup{3n+r, ws}))) : List<&2, R.Cmd>}, g)
+
+def xnew_args(b: Bool, +k: String, op: R.XWrite) -> GoodNewOp(op) -> {A.xnew.effect(b, k, op) == A.parse_all(A.args_all(A.xnew.effect(b, k, op))) : List<&2, R.Cmd>}:
+  match op:
+    case R.XWAdd{ws}:
+      g => xnew_args_add(b, k, ws)(g)
+    case R.XWGroup{sub, ws}:
+      g => xgnew_args_sub(sub, b, k, ws)(g)
+    case R.XWTrim{ws}:
+      g => Empty.absurd({A.xnew.effect(b, k, R.XWTrim{ws}) == A.parse_all(A.args_all(A.xnew.effect(b, k, R.XWTrim{ws}))) : List<&2, R.Cmd>}, g)
+    case R.XWDel{ids}:
+      g => Empty.absurd({A.xnew.effect(b, k, R.XWDel{ids}) == A.parse_all(A.args_all(A.xnew.effect(b, k, R.XWDel{ids}))) : List<&2, R.Cmd>}, g)
+    case R.XWSetId{ws}:
+      g => Empty.absurd({A.xnew.effect(b, k, R.XWSetId{ws}) == A.parse_all(A.args_all(A.xnew.effect(b, k, R.XWSetId{ws}))) : List<&2, R.Cmd>}, g)
+    case R.XWNew{ws}:
+      g => Empty.absurd({A.xnew.effect(b, k, R.XWNew{ws}) == A.parse_all(A.args_all(A.xnew.effect(b, k, R.XWNew{ws}))) : List<&2, R.Cmd>}, g)
+    case R.XWGNew{ws}:
+      g => Empty.absurd({A.xnew.effect(b, k, R.XWGNew{ws}) == A.parse_all(A.args_all(A.xnew.effect(b, k, R.XWGNew{ws}))) : List<&2, R.Cmd>}, g)
+    case R.XWAck{ws}:
+      g => Empty.absurd({A.xnew.effect(b, k, R.XWAck{ws}) == A.parse_all(A.args_all(A.xnew.effect(b, k, R.XWAck{ws}))) : List<&2, R.Cmd>}, g)
+    case R.XWKeyed{c, kk, ws}:
+      g => Empty.absurd({A.xnew.effect(b, k, R.XWKeyed{c, kk, ws}) == A.parse_all(A.args_all(A.xnew.effect(b, k, R.XWKeyed{c, kk, ws}))) : List<&2, R.Cmd>}, g)
+    case R.XWSet{ws}:
+      g => Empty.absurd({A.xnew.effect(b, k, R.XWSet{ws}) == A.parse_all(A.args_all(A.xnew.effect(b, k, R.XWSet{ws}))) : List<&2, R.Cmd>}, g)
+    case R.XWDelCon{ws}:
+      g => Empty.absurd({A.xnew.effect(b, k, R.XWDelCon{ws}) == A.parse_all(A.args_all(A.xnew.effect(b, k, R.XWDelCon{ws}))) : List<&2, R.Cmd>}, g)
+
+def xnew_args_g(b: Bool, +k: String, op: R.XWrite, -xv: KV.XStream, g: GoodNewX(op, xv)) -> {A.xnew.effect(b, k, op) == A.parse_all(A.args_all(A.xnew.effect(b, k, op))) : List<&2, R.Cmd>}:
   (gn, ga) = g
-  xnew_args(b, k, ws)(ga)
+  xnew_args(b, k, op)(ga)
 
 def ch_args(ch: R.Change, m: Maybe<&2, KV.Item<KV.Val>>, +k: String) -> Good(m, ch) -> {A.ch.effect(k, R.ent.code(m), ch) == A.parse_all(A.args_all(A.ch.effect(k, R.ent.code(m), ch))) : List<&2, R.Cmd>}:
   match ch m:
@@ -13200,8 +13818,8 @@ def ch_args(ch: R.Change, m: Maybe<&2, KV.Item<KV.Val>>, +k: String) -> Good(m, 
       g => stream_args_v(w, op, xv, k)(g)
     case R.CStream{op, xv} None{}:
       g => Empty.absurd({A.ch.effect(k, R.ent.code(None{}), R.CStream{op, xv}) == A.parse_all(A.args_all(A.ch.effect(k, R.ent.code(None{}), R.CStream{op, xv}))) : List<&2, R.Cmd>}, g)
-    case R.CStreamNew{+ws, +xv} _:
-      g => xnew_args_g(Nat.is_eq(R.ent.code(m), 0n), k, ws, xv, g)
+    case R.CStreamNew{+op, +xv} _:
+      g => xnew_args_g(Nat.is_eq(R.ent.code(m), 0n), k, op, xv, g)
 
 def out_args(o: R.Out, m: Maybe<&2, KV.Item<KV.Val>>, +k: String) -> Good(m, ch_of(o)) -> {A.upd.effect(k, R.ent.code(m), o) == A.parse_all(A.args_all(A.upd.effect(k, R.ent.code(m), o))) : List<&2, R.Cmd>}:
   match o:
@@ -13591,6 +14209,8 @@ def act_split(+a: R.Act, +ds: R.Ds) -> {(R.reply_ds(R.act(a, ds)), (aeff(a, ds),
       act_split_cmd(R.pf.merge.ds(x, d, srcs, mx), x)
     case R.AGeo{+k, +args} x:
       act_split_cmd(R.geo.store.ds(x, k, args), x)
+    case R.AXGroup{+y, +i} x:
+      act_split_cmd(R.xgr.cmd.ds(x, y, i), x)
 
 def app_nil_e(xs: List<&2, A.Eff>) -> {List.append(&2, A.Eff, xs, Nil{}) == xs : List<&2, A.Eff>}:
   match xs:
@@ -13692,12 +14312,12 @@ def znew_one(b: Bool, +k: String, +o: R.ZOpts, +ps: List<&2, R.ZPair>) -> OneEff
     case False{}:
       Inr{(R.Upd{k, R.UZset{R.ZWNew{o, ps}}}, {==})}
 
-def xnew_one(b: Bool, +k: String, +ws: List<&2, String>) -> OneEff(A.xnew.effect(b, k, ws)):
+def xnew_one(b: Bool, +k: String, +op: R.XWrite) -> OneEff(A.xnew.effect(b, k, op)):
   match b:
     case True{}:
-      Inr{(R.Upd{k, R.UStream{R.XWAdd{ws}}}, {==})}
+      Inr{(R.Upd{k, R.UStream{op}}, {==})}
     case False{}:
-      Inr{(R.Upd{k, R.UStream{R.XWNew{ws}}}, {==})}
+      Inr{(R.Upd{k, R.UStream{A.xnew.op(op)}}, {==})}
 
 def ch_one(+k: String, +c: Nat, ch: R.Change) -> OneEff(A.ch.effect(k, c, ch)):
   match ch:
@@ -13747,8 +14367,8 @@ def ch_one(+k: String, +c: Nat, ch: R.Change) -> OneEff(A.ch.effect(k, c, ch)):
           Inr{(R.Upd{k, R.URestore{p, R.TOk{R.TmN{True{}, 1n+q}}, True{}, 0n}}, {==})}
     case R.CStream{op, xv}:
       Inr{(R.Upd{k, R.UStream{op}}, {==})}
-    case R.CStreamNew{+ws, xv}:
-      xnew_one(Nat.is_eq(c, 0n), k, ws)
+    case R.CStreamNew{+op, xv}:
+      xnew_one(Nat.is_eq(c, 0n), k, op)
 
 def out_one(+k: String, +c: Nat, o: R.Out) -> OneEff(A.upd.effect(k, c, o)):
   match o:
@@ -15219,6 +15839,11 @@ def act_inv(t: R.Act, +o: R.Ds, +r: R.Ds, +sel: Nat, +n: Nat, +sm: {KV.small(n) 
       (ez, q) = inv
       (ei, en) = q
       post_run(R.geo.store.ds(o, k, args), o, r, sel, n)(ln)(sm)(ez)(ei)(en)
+    case R.AXGroup{+y, +i}:
+      (inv, ln) = st
+      (ez, q) = inv
+      (ei, en) = q
+      post_run(R.xgr.cmd.ds(o, y, i), o, r, sel, n)(ln)(sm)(ez)(ei)(en)
 
 # acts one after another keep it, effect after effect
 def acts_inv(as: List<&2, R.Act>, +o: R.Ds, +r: R.Ds, +sel: Nat, +n: Nat, +sm: {KV.small(n) == True{} : Bool}, st: Inv(r, o, sel) & Len(o, n)) -> Inv(rp(aeffs(as, o), sel, r), R.acts(as, o), A.effs.sel(aeffs(as, o), sel)) & Len(R.acts(as, o), n):
@@ -15589,6 +16214,21 @@ def mk_restore(-k: String, -p: String, t: R.TmR) -> {A.mark(A.restore.args(k, p,
     case R.TBad{r}:
       {==}
 
+def mk_xgroup(-k: String, sub: Nat, -ws: List<&2, String>) -> {A.mark(A.stream.args(k, R.XWGroup{sub, ws})) == 0n : Nat}:
+  match sub:
+    case 0n:
+      {==}
+    case 1n+p:
+      match p:
+        case 0n:
+          {==}
+        case 1n+q:
+          match q:
+            case 0n:
+              {==}
+            case 1n+r:
+              {==}
+
 def mk_stream(-k: String, op: R.XWrite) -> {A.mark(A.stream.args(k, op)) == 0n : Nat}:
   match op:
     case R.XWAdd{ws}:
@@ -15600,6 +16240,18 @@ def mk_stream(-k: String, op: R.XWrite) -> {A.mark(A.stream.args(k, op)) == 0n :
     case R.XWSetId{ws}:
       {==}
     case R.XWNew{ws}:
+      {==}
+    case R.XWGroup{sub, ws}:
+      mk_xgroup(k, sub, ws)
+    case R.XWGNew{ws}:
+      {==}
+    case R.XWAck{ws}:
+      {==}
+    case R.XWKeyed{c, kk, ws}:
+      {==}
+    case R.XWSet{ws}:
+      {==}
+    case R.XWDelCon{ws}:
       {==}
 
 def mk_upd(-k: String, op: R.UpdOp) -> {A.mark(A.upd.args(k, op)) == 0n : Nat}:
@@ -17451,6 +18103,8 @@ def act_now(t: R.Act, +o: R.Ds) -> {R.ds.now(R.ds_of(R.act(t, o))) == R.ds.now(o
       now_run(R.pf.merge.ds(o, d, srcs, mx), o)
     case R.AGeo{+k, +args}:
       now_run(R.geo.store.ds(o, k, args), o)
+    case R.AXGroup{+y, +i}:
+      now_run(R.xgr.cmd.ds(o, y, i), o)
 
 # an act run at a time leaves the databases at that time
 def act_at(+t: R.Act, +now: Nat, +x: R.Ds) -> {R.ds.at(now, R.ds_of(R.act(t, R.ds.at(now, x)))) == R.ds_of(R.act(t, R.ds.at(now, x))) : R.Ds}:
@@ -17824,6 +18478,8 @@ def one_eff(t: R.Act, +o: R.Ds) -> OneE(aeff(t, o)):
       one_run(R.pf.merge.ds(o, d, srcs, mx), o)
     case R.AGeo{+k, +args}:
       one_run(R.geo.store.ds(o, k, args), o)
+    case R.AXGroup{+y, +i}:
+      one_run(R.xgr.cmd.ds(o, y, i), o)
 
 # the first i entries of the steps ss, run from x, replayed after r: the
 # databases after the first j steps, for some j
@@ -18699,6 +19355,8 @@ def srv_same.o(o: R.SessOp, +conn: S.Conn, +srv: S.Srv, +ef: {S.authed(conn, srv
       e => Empty.absurd({S.own_srv(R.SPfCount{y0}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
     case R.SXRead{y0}:
       e => Empty.absurd({S.own_srv(R.SXRead{y0}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
+    case R.SXGroup{y0}:
+      e => Empty.absurd({S.own_srv(R.SXGroup{y0}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
     case R.SPfMerge{y0, y1}:
       e => Empty.absurd({S.own_srv(R.SPfMerge{y0, y1}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
     case R.SPfSelfTest{}:
@@ -18905,6 +19563,10 @@ def own_bad(o: R.SessOp, +ps: List<&2, R.Act>, +id: Nat, +a: Bool, +n: String, +
     case R.SXRead{y0}:
       ih =>
         %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SXRead{y0}}, _, R.Own{R.SXRead{y0}}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
+        ih
+    case R.SXGroup{y0}:
+      ih =>
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SXGroup{y0}}, _, R.Own{R.SXGroup{y0}}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
         ih
     case R.SPfMerge{y0, y1}:
       ih =>
@@ -19231,6 +19893,10 @@ def auth_own(o: R.SessOp, +id: Nat, +a: Bool, +n: String, +m: S.Mute, +sel: Nat,
     case R.SXRead{y0}:
       el =>
         %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SXRead{y0}}, _, S.Conn{id, a, n, m, False{}, sel, r3}, srv)) == False{} : Bool}
+        or_false_l(a, S.nopass(srv))(ef)
+    case R.SXGroup{y0}:
+      el =>
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SXGroup{y0}}, _, S.Conn{id, a, n, m, False{}, sel, r3}, srv)) == False{} : Bool}
         or_false_l(a, S.nopass(srv))(ef)
     case R.SPfMerge{y0, y1}:
       el =>
@@ -21529,6 +22195,8 @@ def counted_act(a: R.Act, +ds: R.Ds) -> {Laws.counted_ds(ds) == True{} : Bool} -
       counted_cmd(R.pf.merge.ds(x, d, srcs, mx), x)
     case R.AGeo{+k, +args} x:
       counted_cmd(R.geo.store.ds(x, k, args), x)
+    case R.AXGroup{+y, +i} x:
+      counted_cmd(R.xgr.cmd.ds(x, y, i), x)
 
 def counted_acts(as: List<&2, R.Act>, +ds: R.Ds) -> {Laws.counted_ds(ds) == True{} : Bool} -> {Laws.counted_ds(R.acts(as, ds)) == True{} : Bool}:
   match as:

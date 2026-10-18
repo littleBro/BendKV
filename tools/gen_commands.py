@@ -100,6 +100,8 @@ COMMANDS = {
             "save", "setuser", "users", "whoami"], "bgsave": [], "xlen": [], "xrange": [],
     "xrevrange": [], "xread": [], "xinfo": ["consumers", "groups", "help", "stream"],
     "xpending": [], "xadd": [], "xtrim": [], "xdel": [], "xsetid": [],
+    "xgroup": ["create", "createconsumer", "delconsumer", "destroy", "help", "setid"], "xack": [],
+    "xclaim": [], "xautoclaim": [], "xreadgroup": [],
     "cluster": ["addslots", "addslotsrange", "bumpepoch", "count-failure-reports",
                 "countkeysinslot", "delslots", "delslotsrange", "failover", "flushslots",
                 "forget", "getkeysinslot", "help", "info", "keyslot", "links", "meet", "myid",
@@ -490,7 +492,9 @@ SBEGIN, SEND = "# BEGIN gen_commands: stats\n", "# END gen_commands: stats\n"
 # writes of a stream on a key of another kind (WRONGTYPE), XADD on IDs
 # not past the stream's last or on elements too large, XDEL on IDs read
 # once the key is found, and XSETID on a key not there or below the
-# stream's entries.
+# stream's entries, and the commands of a stream's groups on a key of
+# another kind (WRONGTYPE), on a key or a group not there (NOGROUP), on
+# a group there (BUSYGROUP) and on IDs read once the key is found.
 # A batch of GETs or SETs looks at its replies too, as the code of a call
 # says which command it is, not whether a SET has GET.
 RISKY = {"get", "set", "getset", "getdel", "append", "strlen", "getrange", "substr", "getbit",
@@ -512,7 +516,9 @@ RISKY = {"get", "set", "getset", "getdel", "append", "strlen", "getrange", "subs
          "geoadd", "geodist", "geohash", "geopos", "georadius", "georadius_ro", "georadiusbymember",
          "georadiusbymember_ro", "geosearch", "geosearchstore", "restore", "xlen", "xrange",
          "xrevrange", "xread", "xinfo|consumers", "xinfo|groups", "xinfo|stream", "xpending",
-         "xadd", "xtrim", "xdel", "xsetid"}
+         "xadd", "xtrim", "xdel", "xsetid", "xgroup|create", "xgroup|setid", "xgroup|destroy",
+         "xgroup|createconsumer", "xgroup|delconsumer", "xack", "xclaim", "xautoclaim",
+         "xreadgroup"}
 
 # BendKV's commands that may be replicated (MAY_REPLICATE in Redis's
 # src/commands/*.json), a flag COMMAND INFO hides: a monitor may not run
@@ -577,14 +583,16 @@ DIRTY = {
     "georadiusbymember": "nstore", "geosearchstore": "nstore", "sort": "nstore",
     "function|flush": "one", "function|load": "one", "function|delete": "one",
     "function|restore": "one", "eval": "w", "xadd": "bulk", "xtrim": "int", "xdel": "int",
-    "xsetid": "one"}
+    "xsetid": "one", "xgroup|create": "one", "xgroup|setid": "one", "xgroup|destroy": "int",
+    "xgroup|createconsumer": "int", "xgroup|delconsumer": "wok", "xack": "int", "xclaim": "wok",
+    "xautoclaim": "wok", "xreadgroup": "wok"}
 
 # the parser's commands with subcommands, by the function that numbers
 # their subcommands
 CONTAINERS = {"client": "client_id", "function": "function_id", "config": "config_id",
               "command": "command_id", "object": "object_id", "memory": "memory_id",
               "pubsub": "pubsub_id", "slowlog": "slowlog_id", "latency": "latency_id",
-              "script": "script_id", "acl": "acl_id", "xinfo": "xinfo_id",
+              "script": "script_id", "acl": "acl_id", "xinfo": "xinfo_id", "xgroup": "xgroup_id",
               "cluster": "cluster_id"}
 
 # the names a numbering def of redis.bend gives its numbers

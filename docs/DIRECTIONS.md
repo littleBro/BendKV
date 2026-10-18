@@ -326,13 +326,14 @@ Where performance and proof meet: **batched execution under proved laws.**
    functions, FUNCTION and FCALL, on the same engine (done, section 3zzzp), measured by
    Redis's own test suite run against BendKV and by client libraries' test suites
    (redis-py's and go-redis's, in CI: done, section 3zy).
-   Streams are under way: a stream is a value BendKV holds (section 3zzzu), its reads
-   and writes answer as Redis's (sections 3zzzy and 3zzzza), its groups and XREAD's wait
-   next. Cluster, replication and modules are out of scope. The suite's count: of the 1,812 tests
-   Redis 7.2.16 passes against a server it did not start, BendKV passes 1,676, 1,635 of
-   the 1,688 in what it has ([COMPATIBILITY.md](COMPATIBILITY.md)); most of the other 53
-   need replication's SYNC (26) or run after a test that left its client in MULTI or
-   subscribed with a command BendKV does not have (9).
+   Streams are under way: a stream is a value BendKV holds (section 3zzzu), its reads,
+   its writes and the commands of its groups answer as Redis's (sections 3zzzy, 3zzzza
+   and 3zzzzt), XREAD's and XREADGROUP's wait next. Cluster, replication and modules are
+   out of scope. The suite's count: of the 1,812 tests Redis 7.2.16 passes against a
+   server it did not start, BendKV passes 1,719, 1,644 of the 1,688 in what it has
+   ([COMPATIBILITY.md](COMPATIBILITY.md)); most of the other 44 need replication's SYNC
+   (26) or run after a test that left its client in MULTI with a command BendKV does not
+   have (7).
    What maxmemory left to do (section 3zw): a delete takes the nodes it empties now
    (section 3zz), so the eviction gets within a limit with the keys Redis keeps, but its
    samples still walk the trie's empty buckets, and an eviction takes six times Redis's
@@ -387,7 +388,14 @@ Where performance and proof meet: **batched execution under proved laws.**
    nothing while no client's user is restricted (section 3zzzh); while one is, its
    batches run the general way, each call checked against its user's selectors, and the
    client of each other batch is looked up by its id in a trie of the restricted
-   (PERFORMANCE.md, section 70). Next within the scope: the query buffer's limits.
+   (PERFORMANCE.md, section 70). A stream's groups take 17 to 34 times Redis's time to
+   read and claim (section 3zzzzt): a walk forwards through a node turns its entries
+   around and reads each entry's head up to the one it looks for, about 1,600
+   instructions an entry where Redis takes 560, and a group's write walks two to three
+   times as often as Redis's, as it runs twice and its XWSet asks again whether the
+   stream holds each entry it names; a walk that reads a node's entries in place, and a
+   write planned once, are next (PERFORMANCE.md, section 87). Next within the scope: the
+   query buffer's limits.
 
 After that comes proving the native strings (section 5, step 1): a small piece of
 work that makes the word "verified" much stronger.
