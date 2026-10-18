@@ -231,9 +231,11 @@ LSET, LINSERT, LREM, LTRIM, LPOS (RANK, COUNT, MAXLEN, as Redis 7.2.16 reads the
 including a RANK equal to LLONG_MIN), LMOVE, RPOPLPUSH and LMPOP; arguments and errors
 where and as in Redis (a count and an index may be any long long). A list is a deque of
 two stacks, so that adding and removing at either end costs O(1) on average, and LINDEX
-and LRANGE go from the nearer end; a key holds no empty list. OBJECT ENCODING answers
-`quicklist`, as Redis 7.0 does for any list, where Redis 7.2.16 answers `listpack` for a
-small one; MEMORY USAGE estimates its size. A
+and LRANGE go from the nearer end; a key holds no empty list. Beside it a list keeps how
+Redis 7.2.16 holds it, a listpack while it is small and a quicklist past 8 KB, each
+node's count and bytes moved as Redis moves its nodes, so that OBJECT ENCODING answers
+`listpack` or `quicklist` and DUMP writes Redis's nodes (README's Lists says where
+BendKV differs); MEMORY USAGE estimates its size. A
 write to a list is logged as the write itself (LMPOP as an LPOP or RPOP, with a count,
 of the key it popped from; popping the last elements as a DEL of the key); a list made
 where an expired key still lay, as an EVAL entry of the same script as for hashes, with
@@ -246,11 +248,13 @@ SRANDMEMBER (with a count, with repeats when it is negative; chosen by the serve
 random numbers in the same ways as in Redis), SMOVE, SINTER, SUNION, SDIFF, SINTERSTORE,
 SUNIONSTORE, SDIFFSTORE and SINTERCARD (LIMIT); arguments and errors where and as in
 Redis. A set is an intset while all its members are canonical 64-bit integers and there
-are no more than 512 of them, and past that a trie of its own, for good, as Redis
-converts an intset to a hashtable: an intset returns its members in ascending order,
-and SSCAN returns it whole with cursor 0, as in Redis. OBJECT ENCODING answers `intset`
-or `hashtable`, where Redis 7.2.16 answers `listpack` for a small set of strings; MEMORY
-USAGE estimates the size, and a key holds no empty set. A write
+are no more than 512 of them, a listpack (its members in one string, in the order they
+came) while it holds at most 128 of at most 64 bytes, and past that a trie of its own,
+for good, as Redis 7.2.16 converts them, SADD sizing its set by its count of members as
+Redis does: an intset returns its members in ascending order, a listpack in its own, and
+SSCAN returns either whole with cursor 0, as in Redis. OBJECT ENCODING answers `intset`,
+`listpack` or `hashtable`; MEMORY USAGE estimates the size, and a key holds no empty
+set. A write
 to a set is logged as its SADD or SREM (SPOP as an SREM of the members popped, or a DEL
 of the key if it popped the last ones; STORE as an SADD of the resulting members, or a
 DEL of the destination if there are none); a set made where the key had an entry (a
@@ -1358,9 +1362,7 @@ The translation the kernel reads can be dumped with
   start refuses give a refusal with the entry's number and its byte, the file untouched.
   `redis-check-aof` from Redis 7 accepts BendKV's files as valid (with SELECT, SWAPDB,
   MOVE, COPY and FLUSHALL), Redis 7.0.15 and 7.2.16 load BendKV's append-only file and
-  get the same data in the same databases (7.2.16 keeps a small set in a listpack, which
-  BendKV's OBJECT ENCODING calls a hashtable until its encodings come, so that
-  `tests/aof_redis_test.py` fails there against 7.2.16), and BendKV loads an append-only
+  get the same data in the same databases, encodings too, and BendKV loads an append-only
   file written by Redis (with `SELECT`, command names in lower case, GETSET already
   rewritten as SET, and COPY as the client sent it). `tests/aof_redis_test.py` (in
   `make test`) checks this both ways: the same commands go to BendKV and to

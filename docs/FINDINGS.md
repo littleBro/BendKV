@@ -10101,7 +10101,6 @@ before.
   (`WL_FID_ENTER`, `WL_FID_CLO_APPLY`): 10 and 12 instructions more at each of the loop's
   steps, which reloaded more registers from the stack.
 - `ClfOf`, never built, makes `Clf` a node of its own, one word, and the bank is 50 again.
-
 ## 3zzzzj. The event loop's cycles, as Redis 7.2.16 times them
 
 **What Redis does** (7.2.16's `server.c` and `latency.c`).
@@ -10269,6 +10268,87 @@ unit/pubsub's PUNSUBSCRIBE without arguments, which a client sends without waiti
 its reply before another client publishes, failed in the first run, three units at once,
 and passed in the second and alone: each connection reaches the actor on its own, so the
 PUBLISH may run first. It passed against 7.0.15.
+## 3zzzzl. Lists and sets as Redis 7.2.16 holds them
+
+**What changed** (#128, kind D: `src/map.bend`, `src/rdb.bend`, `src/redis.bend`,
+`src/session.bend`). Redis 7.2 holds a small list as a listpack and a small set of
+strings as one too; OBJECT ENCODING, DUMP and the files say which.
+- **Lists.** A list is a listpack until a write would take it past 8 KB, then a quicklist
+  of nodes of 8 KB, and a listpack again when a write that takes elements out leaves one
+  node of 4 KB at most (`t_list.c`'s `listTypeTryConversion`). Which one Redis holds
+  shows in OBJECT ENCODING, and the nodes in DUMP and the files, which write each node as
+  a listpack: so BendKV keeps them. `Deq` (map.bend), now a node of its own, holds the
+  elements as before (their pieces of 2,048 bytes, section 3zzzw) and the listpack's
+  bytes or the quicklist's nodes, each its count of elements and its bytes (`QNs`): the
+  first node and the last as numbers, and the nodes between in a node of their own
+  (`QM`), two stacks dealt again as the pieces are. Each write moves them as
+  `quicklist.c` moves its nodes: a push goes into the node at its end while that node's
+  bytes, the element's length and 8 stay within 8 KB, else into a node of its own; a pop,
+  LREM and LTRIM take elements out of their nodes and drop the nodes they empty (LTRIM
+  takes whole nodes off its ends, then reads the elements it takes from the node it cuts;
+  LREM's walk through the pieces notes where it takes each element); LSET writes its
+  element in its node, whatever its size; LINSERT writes into its pivot's node when that
+  has room, else at the node's end into the next node or the one before, or into a node
+  of its own, else splits the node and merges the nodes around it that fit in 8 KB
+  together. A payload or a file's list keeps the nodes it came in (QUICKLIST,
+  QUICKLIST_2), a linked list (LIST) takes the nodes RPUSH makes, and either is a
+  listpack when it is one node of 8 KB at most; a ziplist (LIST_ZIPLIST, before Redis
+  3.2) stays a quicklist. DUMP writes a listpack as a quicklist of one node, as Redis
+  does. Before, every list was a quicklist (7.0's), and DUMP wrote the nodes RPUSH would
+  make of its elements, which were Redis's only for a list made by RPUSH alone.
+- **Sets.** BendKV already kept a set of at most 128 members of at most 64 bytes in one
+  string, in the order its members came (section 3zzzs): Redis 7.2's listpack. OBJECT
+  ENCODING now answers `listpack` for it (within `set-max-listpack-entries` and
+  `set-max-listpack-value` as they are), and SSCAN answers its members at once, in their
+  order, with cursor 0, as Redis's SSCAN of a listpack does; the walk that answered a
+  small set as a trie of its members would (`KV.ss.scan`) is gone. SADD sizes its set
+  by the count of its members first, as `setTypeCreate` and `setTypeMaybeConvert` do:
+  more than 128 of them (more than 512 integers) make a hashtable at once, whether they
+  are there already or come twice (`sadd.from`; the proofs of SADD take it).
+
+**Where BendKV differs** (README's Lists and Sets, and COMPATIBILITY). Redis makes a few
+turns where its append-only file has nothing: an LSET of an index the list does not
+have and an LINSERT whose pivot is not there turn a listpack that the element would take
+past 8 KB into a quicklist, an LTRIM that takes nothing turns a quicklist of one node of
+4 KB at most into a listpack (only a list read from a ziplist is one), and an SADD that
+adds nothing turns a set into a hashtable by the count of its members. A file that
+replays the writes would not make them again, and `log_replay` and `recover` say that it
+does, so BendKV leaves those values as they were. LMOVE pops and pushes as SPEC.bend's
+LMOVE does, whose meaning stays: it counts an integer taken from a quicklist by its
+length toward the destination's 8 KB (Redis counts none), and checks a list moved onto
+itself for 4 KB after the pop (Redis after the push). SORT's STORE makes its list as
+RPUSH does, where Redis makes it a listpack when it is one node. An element of 1 GB or
+more is kept in a node as any other (Redis's plain node). `list-max-listpack-size` and
+`list-compress-depth` move no limit, and `set-max-listpack-*` only what OBJECT ENCODING
+answers.
+
+**Tests.** `list_test` checks OBJECT ENCODING and DUMP, byte for byte (Redis with
+`rdbcompression no`), after each step of the turns either way, at 8 KB and a byte, for
+pushes of one element and of many (integers of each width), pops with and without a
+count, LTRIM, LREM, LSET, LINSERT into a node, next to it, alone and splitting it, moves
+and payloads read by each server; and its random commands check both now and then.
+A list that parts from Redis's right after one of the commands above is followed apart
+until the two meet again. `set_test` compares a listpack's SMEMBERS in order and its
+DUMP, and SADD's sizing. Against 7.2.16, `list_test` passes with four seeds, and `make
+test` but for what other kinds hold (client_test's NO-TOUCH with OBJECT FREQ, and
+`master_repl_offset` and ROLE's offset, which WAITAOF's offset gives).
+
+**What it costs** (PERFORMANCE.md, section 85: 8a4caf0's build against this change on
+it). Pipelined, as `make perfcheck` counts, LPUSH and RPUSH run 7.4 to 7.7% more
+instructions and LPOP and RPOP 12.4% more; one request at a time, 3.6 to 6.5% more, and
+LMOVE 8.7%: each write builds the list's node anew and drops the old one (`term_drop`,
+`span_fade`: about 550 of LPUSH's 880 more), and reads its element's bytes as a listpack
+holds them. LSET in the middle of 200,000 elements runs 29.9% more: it reads the element
+it replaces, for its bytes, and writes its node's bytes into the stack that holds the
+node. A read in the middle runs much less, LINDEX −70.6% and LRANGE −38.8%: the deque
+lies in the list's node now, where it was laid out in the value, and a read that borrows
+the list walks it in place; before, it sealed the fields it took apart and dropped them
+after (`term_drop` and `span_fade`, 99,000 of LINDEX's 180,000). LINSERT runs 1.5% more,
+LREM 0.3% less, and LTRIM 1 -2 19.3% less, as it turns the piece at the end it cuts once,
+which it read through on each call before. A list takes 96 bytes more, its node; a hash,
+a set or a sorted set 32 bytes less a key, as a collection's value is no longer as wide
+as a list's deque. GET, SET and INCR run as before: 3,504, 4,298 and 4,611 instructions a
+request merged with 5a2ff7c, which counts 3,501, 4,301 and 4,609.
 
 ## 4. Where a request's time goes, and hiding the memory waits
 

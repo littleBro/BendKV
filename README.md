@@ -160,8 +160,27 @@ translation stays in the trusted base.
   costs O(1) amortized, and LINDEX, LSET and LRANGE go from the nearer end a piece at a
   time. LPOS, LINSERT and LREM compare the elements where they lie, a piece at a time,
   stop at the matches they want, and write anew only the pieces they change; a key never
-  holds an empty list. OBJECT ENCODING answers `quicklist`, as Redis 7.0 does for every list,
-  where Redis 7.2.16 answers `listpack` for a small one; MEMORY USAGE estimates its bytes. A list write is logged as the write itself (LMPOP as
+  holds an empty list. Beside the pieces, a list keeps how Redis 7.2 holds it: as a
+  listpack while it is small, as a quicklist of nodes of 8 KB once a write would take it
+  past 8 KB, and as a listpack again once a write that takes elements out leaves one node
+  of 4 KB at most; each node's count of elements and bytes move as Redis's nodes move
+  (a push into the node at its end while it has room, LINSERT into its node, next to it
+  or splitting it, and so on), so that OBJECT ENCODING answers `listpack` or `quicklist`
+  and DUMP writes the nodes as Redis does (section 3zzzzl of
+  [docs/FINDINGS.md](docs/FINDINGS.md)). MEMORY USAGE estimates its bytes. Where BendKV
+  differs: an LSET of an index the list does not have and an LINSERT whose pivot is not
+  there leave the list as it was, where Redis has already made a listpack a quicklist
+  when the element would take it past 8 KB, and an LTRIM that takes nothing leaves a
+  quicklist of one node of 4 KB at most (a list read from a ziplist) as it was, where
+  Redis makes it a listpack (none of these is in Redis's append-only file); LMOVE counts
+  an integer it takes from a quicklist by its length toward its destination's 8 KB,
+  where Redis counts none, and checks a list moved onto itself for 4 KB after the pop,
+  where Redis checks after the push; SORT's STORE makes its list as RPUSH does, where
+  Redis pushes it into a quicklist that it makes a listpack when that is one node; an
+  element of 1 GB or more is kept in a node as any other, where Redis keeps it in a
+  plain node of its own; and `list-max-listpack-size` and `list-compress-depth` are
+  kept and read back but move no limit (BendKV holds lists as Redis does at their
+  defaults, -2 and 0). A list write is logged as the write itself (LMPOP as
   the LPOP or RPOP of the key it took from, with its count; a pop of the last elements as
   the DEL of the key); a list made where a key whose time had passed still lay is logged
   as the EVAL of the hash's script with the pushes, and a move onto such a key as one
@@ -173,13 +192,19 @@ translation stays in the trusted base.
   random numbers in Redis's ways of picking), SMOVE, SINTER, SUNION, SDIFF, SINTERSTORE,
   SUNIONSTORE, SDIFFSTORE and SINTERCARD (LIMIT), their arguments and errors read where
   and as Redis reads them. A set is an intset while its members are canonical 64-bit
-  integers, at most 512 of them, and a hashtable past that, for good, as Redis turns an
-  intset into a hashtable: an intset answers its members in numeric order and scans
-  whole with cursor 0, as Redis's does. A hashtable keeps its members in one string, in
-  the order they came, while it holds at most 128 of at most 64 bytes (Redis 7.2's
-  listpack limits), and in a trie of its own past that, for good. OBJECT ENCODING
-  answers `intset` or `hashtable`, where Redis 7.2.16 answers `listpack` for a set within
-  those limits; MEMORY USAGE estimates a set's bytes, and a key never holds an empty set.
+  integers, at most 512 of them; a listpack, its members in one string in the order
+  they came (an intset's in numeric order first), while it holds at most 128 of at most
+  64 bytes; and a hashtable, a trie of its own, past that, for good, as Redis 7.2 turns
+  them. SADD sizes its set by the count of its members, whether they are there already
+  or come twice, as Redis does: more than 128 (more than 512 integers) make a hashtable
+  at once. An intset and a listpack answer their members in their order and scan whole
+  with cursor 0, as Redis's do. OBJECT ENCODING answers `intset`, `listpack` or
+  `hashtable`, MEMORY USAGE estimates a set's bytes, and a key never holds an empty set.
+  Where BendKV differs: an SADD that adds no member leaves its set as it was, where Redis
+  has already made it a hashtable by the count of its members (not in Redis's
+  append-only file), and `set-max-listpack-entries`, `set-max-listpack-value` and
+  `set-max-intset-entries` move only what OBJECT ENCODING answers (BendKV holds sets as
+  Redis does at their defaults).
   A set write is logged as the SADD or SREM it makes (SPOP as the SREM of the members it
   took, or the DEL of the key when it took the last; a STORE as the SADD of the members
   it made, or the DEL of its destination when there are none); a set made where a key
@@ -277,15 +302,16 @@ translation stays in the trusted base.
   times with COUNT's partial sort (PERFORMANCE.md, section 60).
 - **DUMP and RESTORE:** a value's payload as Redis 7.2.16 writes it with `rdbcompression
   no` (the value as RDB encodes it, a listpack, an intset or a quicklist of listpacks
-  where Redis keeps one, then version 11 of the format and the CRC64), so that a payload
-  is Redis's byte for byte where both hold the value alike; RESTORE reads every type
-  Redis 7.2.16 reads but modules' (LZF's strings, ziplists, zipmaps, quicklists of
-  ziplists and streams too), checks a payload as deep as Redis does with
+  where Redis keeps one, a list's own nodes, then version 11 of the format and the
+  CRC64), so that a payload is Redis's byte for byte where both hold the value alike;
+  RESTORE reads every type Redis 7.2.16 reads but modules' (LZF's strings, ziplists,
+  zipmaps, quicklists of ziplists and the streams of 7.0 and before too), checks a
+  payload as deep as Redis does with
   `sanitize-dump-payload yes`, and takes REPLACE, ABSTTL, IDLETIME and FREQ, with
   Redis's errors in Redis's order and its keyspace events. The append-only file logs a
   RESTORE with REPLACE and ABSTTL. Where BendKV differs: DUMP writes no LZF; a hashtable's
-  pairs or members come in BendKV's order (its trie's, or a small set's own, the order its
-  members came in); RESTORE checks every payload in depth, as Redis does only with
+  pairs or members come in BendKV's order (its trie's); RESTORE checks every payload in
+  depth, as Redis does only with
   `sanitize-dump-payload yes`. A value of 100,000 elements takes 3 to 38 times Redis's
   time to dump or restore, less than the commands that make it (section 3zzu of
   [docs/FINDINGS.md](docs/FINDINGS.md), section 62 of
@@ -1059,7 +1085,7 @@ away.
 
 | file | lines of code | of them written by a generator | the laws import it |
 |---|---:|---:|---|
-| `src/map.bend` | 5,000 | 1,500 | yes |
+| `src/map.bend` | 5,700 | 1,500 | yes |
 | `src/redis.bend` | 18,000 | 6,000 | yes |
 | `src/batch.bend` | 84 |  | yes |
 | `src/aof.bend` | 1,300 |  | yes |

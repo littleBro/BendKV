@@ -17432,25 +17432,16 @@ def ms.match(xs: List<&2, String>, pat: Maybe<&2, String>) -> List<&2, Reply>:
 def sscan.rep(+next: Nat, xs: List<&2, String>, pat: Maybe<&2, String>) -> Reply:
   RArray{[RBulk{Nat.show(next)}, RArray{ms.match(xs, pat)}]}
 
-# SSCAN: an intset answers all its members at once, with cursor 0, as
-# Redis answers one; a hashtable scans its trie as HSCAN scans a hash's
-# (the options as HSCAN reads them), and a small one (KV.Mems) answers
-# the cursors, and the members a call, that a trie of its members
-# answers (KV.ss.scan, which makes none)
+# SSCAN: an intset and a small set (KV.Mems: Redis 7.2's listpack)
+# answer all their members at once, in their order, with cursor 0, as
+# Redis answers them; a hashtable scans its trie as HSCAN scans a hash's
+# (the options as HSCAN reads them)
 def sscan.big(sc: KV.Scan, pat: Maybe<&2, String>) -> Reply:
   match sc:
     case KV.Stop{+at, acc}:
       sscan.rep(Bool.pick(Nat, Nat.is_lt(at, 1048576n), at, 0n), List.reverse(&2, String, acc), pat)
     case KV.Scan{w, acc}:
       sscan.rep(0n, List.reverse(&2, String, acc), pat)
-
-# a small set's scan, its members in the order read
-def sscan.small(sc: KV.Scan, pat: Maybe<&2, String>) -> Reply:
-  match sc:
-    case KV.Stop{+at, xs}:
-      sscan.rep(Bool.pick(Nat, Nat.is_lt(at, 1048576n), at, 0n), xs, pat)
-    case KV.Scan{w, xs}:
-      sscan.rep(0n, xs, pat)
 
 def sscan.go(+s: KV.Mems, +cur: Nat, +n: Nat, pat: Maybe<&2, String>) -> Reply:
   match s:
@@ -17459,9 +17450,9 @@ def sscan.go(+s: KV.Mems, +cur: Nat, +n: Nat, pat: Maybe<&2, String>) -> Reply:
     case KV.MBig{m, +t}:
       sscan.big(KV.scan(Unit, t, cur, n, 0n), pat)
     case KV.MSmall{+m, +b}:
-      sscan.small(KV.ss.scan(m, b, cur, n), pat)
+      sscan.rep(0n, KV.ms.all(m, b), pat)
     case KV.MLong{m, +ps}:
-      sscan.small(KV.ss.scan.ps(ps, cur, n), pat)
+      sscan.rep(0n, KV.ml.all(ps), pat)
 
 def sscan.of(a: ScanArgs, +s: KV.Mems) -> Reply:
   match a:
@@ -19870,9 +19861,20 @@ def sadd.none(fresh: Bool, +ms: List<&2, String>, +added: Nat) -> Bool:
     case False{}:
       Nat.is_eq(added, 0n)
 
+# the set SADD adds its members ms to: a new one, or s, sized by their
+# count (KV.mems.create, KV.mems.maybe)
+def sadd.from(fresh: Bool, ms: List<&2, String>, s: KV.Mems) -> KV.Mems:
+  match fresh ms:
+    case True{} xs:
+      KV.mems.create(xs)
+    case False{} Nil{}:
+      s
+    case False{} Con{x, rest}:
+      KV.mems.maybe(1n+List.length(&2, String, rest), s)
+
 def sadd.out(+fresh: Bool, +ms: List<&2, String>, +s: KV.Mems) -> Out:
   +n = KV.mems.len(s)
-  +t = KV.mems.adds(ms, s)
+  +t = KV.mems.adds(ms, sadd.from(fresh, ms, s))
   +added = Nat.sub(KV.mems.len(t), n)
   sadd.of(sadd.none(fresh, ms, added), fresh, ms, t, added)
 

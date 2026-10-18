@@ -9119,8 +9119,8 @@ def snew_sadd(+t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr:
   %fin_cons(R.Upd{k, R.UMems{R.SWAdd{ms}}}, Nil{}, R.Db{t, n, x, 0n, rr}) : {_ == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 0n, r, R.CMemsNew{ms, sv}))) : R.Db}
   %db_upd_eq(t, k, n, x, 0n, rr, R.UMems{R.SWAdd{ms}}) : {R.db_of(_) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 0n, r, R.CMemsNew{ms, sv}))) : R.Db}
   %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry.at(KV.Val, t, k, KV.hash(k)), None{}, eq) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, R.ent.code(_), R.upd.v(R.UMems{R.SWAdd{ms}}, 0n, R.ent.live(0n, _)))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 0n, r, R.CMemsNew{ms, sv}))) : R.Db}
-  %Equal.sym(Bool, List.is_empty(&2, String, ms), False{}, ne) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, 0n, R.sadd.of(_, True{}, ms, KV.mems.adds(ms, KV.mems.empty()), Nat.sub(KV.mems.len(KV.mems.adds(ms, KV.mems.empty())), 0n)))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 0n, r, R.CMemsNew{ms, sv}))) : R.Db}
-  %gn : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, 0n, R.sadd.of(False{}, True{}, ms, KV.mems.adds(ms, KV.mems.empty()), Nat.sub(KV.mems.len(KV.mems.adds(ms, KV.mems.empty())), 0n)))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 0n, r, R.CMemsNew{ms, _}))) : R.Db}
+  %Equal.sym(Bool, List.is_empty(&2, String, ms), False{}, ne) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, 0n, R.sadd.of(_, True{}, ms, KV.mems.adds(ms, KV.mems.create(ms)), Nat.sub(KV.mems.len(KV.mems.adds(ms, KV.mems.create(ms))), 0n)))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 0n, r, R.CMemsNew{ms, sv}))) : R.Db}
+  %gn : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, 0n, R.sadd.of(False{}, True{}, ms, KV.mems.adds(ms, KV.mems.create(ms)), Nat.sub(KV.mems.len(KV.mems.adds(ms, KV.mems.create(ms))), 0n)))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 0n, r, R.CMemsNew{ms, _}))) : R.Db}
   {==}
 
 # the script's write, of a key that holds w: a new set of the members
@@ -10183,13 +10183,13 @@ def sw_wrong_good(op: R.SWrite, -m: Maybe<&2, KV.Item<KV.Val>>) -> Good(m, ch_of
     case R.SWPopN{c, r}:
       {==}
 
-def sadd_of_old(none: Bool, +ms: List<&2, String>, +s0: KV.Mems, -e: Nat) -> {none == Nat.is_eq(Nat.sub(KV.mems.len(KV.mems.adds(ms, s0)), KV.mems.len(s0)), 0n) : Bool} -> NeS(ms) -> Good(Some{KV.Item{KV.VColl{KV.CMems{s0}}, e}}, ch_of(R.sadd.of(none, False{}, ms, KV.mems.adds(ms, s0), Nat.sub(KV.mems.len(KV.mems.adds(ms, s0)), KV.mems.len(s0))))):
+def sadd_of_old(none: Bool, +ms: List<&2, String>, +s0: KV.Mems, -e: Nat) -> {none == Nat.is_eq(Nat.sub(KV.mems.len(KV.mems.adds(ms, R.sadd.from(False{}, ms, s0))), KV.mems.len(s0)), 0n) : Bool} -> NeS(ms) -> Good(Some{KV.Item{KV.VColl{KV.CMems{s0}}, e}}, ch_of(R.sadd.of(none, False{}, ms, KV.mems.adds(ms, R.sadd.from(False{}, ms, s0)), Nat.sub(KV.mems.len(KV.mems.adds(ms, R.sadd.from(False{}, ms, s0))), KV.mems.len(s0))))):
   match none:
     case True{}:
       en => ne => {==}
     case False{}:
       en => ne =>
-        %en : {ch_of(R.sadd.of(_, False{}, ms, KV.mems.adds(ms, s0), Nat.sub(KV.mems.len(KV.mems.adds(ms, s0)), KV.mems.len(s0)))) == R.CMems{R.SWAdd{ms}, KV.mems.adds(ms, s0)} : R.Change} & NeS(ms)
+        %en : {ch_of(R.sadd.of(_, False{}, ms, KV.mems.adds(ms, R.sadd.from(False{}, ms, s0)), Nat.sub(KV.mems.len(KV.mems.adds(ms, R.sadd.from(False{}, ms, s0))), KV.mems.len(s0)))) == R.CMems{R.SWAdd{ms}, KV.mems.adds(ms, R.sadd.from(False{}, ms, s0))} : R.Change} & NeS(ms)
         ({==}, ne)
 
 def sadd_old(ms: List<&2, String>, +s0: KV.Mems, -e: Nat) -> Good(Some{KV.Item{KV.VColl{KV.CMems{s0}}, e}}, ch_of(R.swrite(R.SWAdd{ms}, False{}, s0))):
@@ -10198,7 +10198,7 @@ def sadd_old(ms: List<&2, String>, +s0: KV.Mems, -e: Nat) -> Good(Some{KV.Item{K
       %sub_self(KV.mems.len(s0)) : Good(Some{KV.Item{KV.VColl{KV.CMems{s0}}, e}}, ch_of(R.sadd.of(Nat.is_eq(_, 0n), False{}, Nil{}, s0, _)))
       {==}
     case Con{+y, +rest}:
-      sadd_of_old(Nat.is_eq(Nat.sub(KV.mems.len(KV.mems.adds(Con{y, rest}, s0)), KV.mems.len(s0)), 0n), Con{y, rest}, s0, e)({==})({==})
+      sadd_of_old(Nat.is_eq(Nat.sub(KV.mems.len(KV.mems.adds(Con{y, rest}, R.sadd.from(False{}, Con{y, rest}, s0))), KV.mems.len(s0)), 0n), Con{y, rest}, s0, e)({==})({==})
 
 # SREM of a set the key held: nothing, the key deleted (its last member
 # taken), or the set without the members, which SREM of them makes again

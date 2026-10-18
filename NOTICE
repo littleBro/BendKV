@@ -198,6 +198,16 @@ parts of it are written from 7.2.16's sources:
   HyperLogLog's opcodes, which end at the first past the last register
   (hyperloglog.c's hllSparseRegHisto, hllMerge and hllSparseToDense), in
   src/hll.bend.
+- Encodings: lists as listpacks and quicklists, each node's count and
+  bytes moved as quicklist.c moves its nodes (_quicklistNodeAllowInsert,
+  _quicklistNodeAllowMerge, _quicklistInsert with its splits and merges,
+  quicklistReplaceEntry, quicklistDelRange) and turned as t_list.c's
+  listTypeTryConversion turns them, read and written as rdb.c's
+  rdbLoadObject and rdbSaveObject do (src/map.bend, src/rdb.bend); sets
+  as listpacks, sized by SADD's count of members as t_set.c's
+  setTypeCreate and setTypeMaybeConvert size them, and scanned whole
+  (src/map.bend, src/redis.bend); and OBJECT ENCODING of both
+  (src/session.bend).
 - The changes BITFIELD counts: each write that changed its field, or
   each when the value grows (bitops.c's bitfieldGeneric), in
   src/redis.bend and src/server.bend.
