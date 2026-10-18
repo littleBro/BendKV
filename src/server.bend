@@ -4056,6 +4056,14 @@ def ps.pz(+pb: Ps) -> Pz:
     case PsOf{+p}:
       ps.pz(p)
 
+# whether a pause holds
+def pz.on(+p: Pz) -> Bool:
+  match p:
+    case PzOff{}:
+      False{}
+    case PzOn{all, end}:
+      True{}
+
 # what the group asks of the shell once it has run: 0 nothing, 1 a save
 # (SAVE, FLUSHALL with save points, or a SHUTDOWN that saves first and
 # stops the server unless its save fails: The RDB file, SHUTDOWN), 2 a
@@ -6171,6 +6179,9 @@ def bg.cmd.run(held: Bool, +ok: Bool, +k: S.Role, +c: R.Cmd, +code: Nat, rs: Lis
     case R.Own{R.SInfo{a}}:
       +p = pb
       bg.run(held, ok, k, c, code, rs, es, conn, trk.info(ps.trk(p), srv), ds, ws, up, tx, p)
+    case R.Own{R.SRandomKey{was}}:
+      +p = pb
+      bg.run(held, ok, k, R.Own{R.SRandomKey{pz.on(ps.pz(p))}}, code, rs, es, conn, srv, ds, ws, up, tx, p)
     case _:
       bg.run(held, ok, k, c, code, rs, es, conn, srv, ds, ws, up, tx, pb)
 
@@ -8237,14 +8248,7 @@ def ps.unpause(pb: Ps) -> Ps:
     case PsOf{p}:
       ps.unpause(p)
 
-# whether a pause holds, and whether it held at now and ended
-def pz.on(+p: Pz) -> Bool:
-  match p:
-    case PzOff{}:
-      False{}
-    case PzOn{all, end}:
-      True{}
-
+# whether a pause held at now and ended (pz.on: whether one holds)
 def pz.over(+p: Pz, +now: Nat) -> Bool:
   match p:
     case PzOff{}:

@@ -10199,8 +10199,8 @@ them whole only alone in its group:
 `tools/redis_suite.py` runs Redis 7.2.16's `tests/unit` in its external mode, against
 redis-server 7.2.16 and against BendKV, as it ran 7.0.15's (docs/COMPATIBILITY.md).
 7.2.16's suite runs 1,905 tests in this mode, where 7.0.15's ran 1,757, and Redis passes
-1,812 of them (1,677). BendKV passed 1,657 at first (91.4%), and passes 1,675 (92.4%)
-since the five changes below.
+1,812 of them (1,677). BendKV passed 1,657 at first (91.4%), and passes 1,676 (92.5%)
+since the six changes below.
 
 **A HyperLogLog's walks read to its end.** unit/hyperloglog has a test of the fix of
 CVE-2025-32023: a sparse HyperLogLog of 32 MB of ZERO opcodes, 64 registers each, and a
@@ -10271,11 +10271,25 @@ until it turns dense, lowers it under a sparse value, merges sparse values under
 and sets it in the batch of a PFADD, in MULTI and before a script's PFADD, each against
 Redis.
 
-**What it did not change.** Of the 137 tests Redis passes and BendKV does not, the new
+**RANDOMKEY during a pause.** While a pause holds back writes, Redis 7.2.16 deletes no
+key whose time has passed (`expireIfNeeded` answers it expired and leaves it), and
+`dbRandomKey`, which tries a key at random until one is there, answers the key it tries
+a hundredth time when every key of the database has a time to live: so a database whose
+keys have all passed their times answers one of them, where BendKV answered nil, and
+unit/pause's "Test the randomkey command will not cause the server to get into an
+infinite loop during the client pause write" failed. RANDOMKEY (`SRandomKey`) now
+carries whether a pause holds, which the server sets on the general way, where every
+batch runs while one holds (`bg.cmd.run`), and the session answers a key there at now,
+or, while a pause holds and none is, one of every key the database holds, read at time
+0, where every key is there (`randomkey.of`). The laws see a command that carries its
+flag, so none changes. A database where some keys are there and others have passed their
+times answers one that is there, where Redis's hundred tries may land on those that
+passed. `pause_test` runs the suite's test against Redis: a SET with PX 3 and a pause of
+writes in one transaction, RANDOMKEY once the time has passed, then again once the pause
+ends.
+
+**What it did not change.** Of the 136 tests Redis passes and BendKV does not, the new
 ones of 7.2.16:
-- unit/pause's RANDOMKEY while a pause holds back writes: when every key of a database
-  has a time to live and has passed it, Redis 7.2.16, which may not delete them then,
-  answers one of them after 100 tries (`dbRandomKey`); BendKV answers nil.
 - unit/pubsub's three tests of a client that publishes to itself, in a transaction and
   in a script: the test of streams' events before them stops at XGROUP before it closes
   its client, subscribed to every channel, so that each PUBLISH counts one receiver more,

@@ -2181,11 +2181,28 @@ def mode.conn(m: Mute, +c: Conn, +s: Srv) -> Conn:
       Conn{id, a, name, m, quit, db, r3}
 
 # RANDOMKEY's reply: a key there at now in the database's trie, by r, or
-# nil
-def randomkey.of(+db: R.Db, +r: U32) -> R.Reply:
+# nil. While a pause of writes holds (paused), no key is deleted, and when
+# no key is there at now but the database holds one, every key it holds
+# has a time and has passed it: Redis 7.2's dbRandomKey answers one of
+# them after 100 tries (at now 0, every key is there: KV.live)
+def randomkey.or(paused: Bool, +t: KV.Trie<KV.Val>, +r: U32) -> Maybe<&2, String>:
+  match paused:
+    case True{}:
+      KV.pick(KV.Val, t, r, 0n)
+    case False{}:
+      None{}
+
+def randomkey.at(m: Maybe<&2, String>, paused: Bool, +t: KV.Trie<KV.Val>, +r: U32) -> Maybe<&2, String>:
+  match m:
+    case Some{k}:
+      Some{k}
+    case None{}:
+      randomkey.or(paused, t, r)
+
+def randomkey.of(+db: R.Db, +r: U32, paused: Bool) -> R.Reply:
   match db:
     case R.Db{+t, n, x, +now, rr}:
-      R.r_get(KV.pick(KV.Val, t, r, now))
+      R.r_get(randomkey.at(KV.pick(KV.Val, t, r, now), paused, t, r))
 
 # TIME: the time the batch runs at (the focus's, set from the clock for
 # each group of batches), in s and us since 1970; BendKV keeps it in ms
@@ -3797,8 +3814,8 @@ def own_reply(+o: R.SessOp, +c: Conn, +s: Srv, +ds: R.Ds) -> Maybe<&2, R.Reply>:
       say(conn.mode(c), R.RVerb{I.text(args, srv.cfg(s), srv.info(s), srv.el(s), ds)})
     case R.SCommand{args}:
       say(conn.mode(c), K.reply(args))
-    case R.SRandomKey{}:
-      say(conn.mode(c), randomkey.of(R.ds.focused(ds), KV.mix(srv.rng(s))))
+    case R.SRandomKey{+paused}:
+      say(conn.mode(c), randomkey.of(R.ds.focused(ds), KV.mix(srv.rng(s)), paused))
     case R.SSwapDb{+a, +b}:
       say(conn.mode(c), swap.reply(swap.idx(a, b, s)))
     case R.SMove{+k, +d}:
@@ -3905,7 +3922,7 @@ def own_conn(+o: R.SessOp, +c: Conn, +s: Srv) -> Conn:
       step_conn(c, s)
     case R.SCommand{a}:
       step_conn(c, s)
-    case R.SRandomKey{}:
+    case R.SRandomKey{paused}:
       step_conn(c, s)
     case R.SSwapDb{a, b}:
       step_conn(c, s)
@@ -4071,7 +4088,7 @@ def own_srv(+o: R.SessOp, +c: Conn, +s: Srv) -> Srv:
       srv.set(C.config.set(args, srv.cfg(s)), s)
     case R.SConfigResetStat{}:
       srv.reset(s)
-    case R.SRandomKey{}:
+    case R.SRandomKey{paused}:
       srv.rand(s)
     case R.SHRandField{k, a}:
       srv.rand(s)

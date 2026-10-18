@@ -20,7 +20,7 @@ throughput of Redis 7.0.15 on the same machine, with half its memory for small v
 > append-only file and its rewrite, maxmemory and its eviction, Lua scripts and
 > functions, RESP3). The goal now is a drop-in replacement for a single Redis node,
 > measured by Redis's own test suite: of the 1,812 tests Redis 7.2.16 passes against a
-> server it did not start, BendKV passes 1,675, and 1,634 of the 1,688 in what it implements
+> server it did not start, BendKV passes 1,676, and 1,635 of the 1,688 in what it implements
 > ([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)). Do not use it for data you cannot
 > lose.
 
@@ -532,17 +532,16 @@ translation stays in the trusted base.
   whose transaction queued one) or of every command (ALL), for a timeout in ms; a second
   pause keeps the more restrictive kind and the later end. A command the pause holds
   back, once Redis's checks before it passed and before MULTI queues it, waits with the
-  rest of its client's batch (CLIENT LIST's flag b, INFO's blocked_clients) and runs when
-  the pause ends, at CLIENT UNPAUSE or at its time, in the order the clients came; a
-  monitor is never held back. While the pause holds, keys are not swept as they expire,
-  nor evicted, as Redis keeps the data set still. A script is held back by its flags, as
-  Redis reads them: one that may write (EVAL without a shebang, EVALSHA, a shebang without
-  no-writes), not one that declares no-writes, and an EXEC by the scripts it queued. Where
-  BendKV differs: CLIENT UNBLOCK of a client held back answers 0, as Redis 8.10.2 and
-  Valkey 9.1.2 do, where 7.0.15 and 7.2.16 crash on it (docs/UPSTREAM.md, bug 7); and
-  while a pause holds back writes, RANDOMKEY of a database whose keys all have a time to
-  live, all past it, answers nil, where Redis 7.2.16, which may not delete them then,
-  answers one of them.
+  rest of its client's batch (CLIENT LIST's flag b, INFO's blocked_clients) and runs
+  when the pause ends, at CLIENT UNPAUSE or at its time, in the order the clients came;
+  a monitor is never held back. While the pause holds, keys are not swept as they
+  expire, nor evicted, as Redis keeps the data set still, and RANDOMKEY of a database
+  whose keys all have a time to live, all past it, answers one of them, as Redis 7.2.16
+  does (`dbRandomKey`). A script is held back by its flags, as Redis reads them: one
+  that may write (EVAL without a shebang, EVALSHA, a shebang without no-writes), not one
+  that declares no-writes, and an EXEC by the scripts it queued. Where BendKV differs:
+  CLIENT UNBLOCK of a client held back answers 0, as Redis 8.10.2 and Valkey 9.1.2 do,
+  where 7.0.15 and 7.2.16 crash on it (docs/UPSTREAM.md, bug 7).
 - **MONITOR**, as Redis 7.2.16 runs it: each call that runs after it, of any client,
   sends every monitor a line, `+<s>.<us> [<db> <ip:port>]` and the call's arguments as
   the client sent them, quoted as Redis quotes them. As in Redis, a command refused

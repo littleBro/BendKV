@@ -663,7 +663,11 @@ type SortO is Data:
 # clients (server.bend, ACL). AUTH (SAuth) and HELLO (SHello) keep their
 # arguments with each password put as its SHA-256 (auth.hashed,
 # hello.hashed), which is all the session reads of one. XREAD of several
-# keys, or with BLOCK (SXRead), reads them (Streams, below).
+# keys, or with BLOCK (SXRead), reads them (Streams, below). RANDOMKEY
+# (SRandomKey) carries whether a pause of writes holds, which the server
+# sets on the general way, where every batch runs while one holds
+# (server.bend, The pause): Redis 7.2 may answer a key whose time has
+# passed then (session.bend, randomkey.of).
 
 type SessOp is Data:
   SHello{args: List<&2, String>}
@@ -680,7 +684,7 @@ type SessOp is Data:
   SConfigResetStat{}
   SInfo{args: List<&2, String>}
   SCommand{args: List<&2, String>}
-  SRandomKey{}
+  SRandomKey{paused: Bool}
   SSwapDb{a: String, b: String}
   SMove{key: String, db: String}
   SFlushAll{}
@@ -9392,7 +9396,7 @@ def parse_sess(id: Nat, name: String, args: List<&2, String>) -> SessOp:
     case 110n:  # RANDOMKEY
       match args:
         case Nil{}:
-          SRandomKey{}
+          SRandomKey{False{}}
         case _:
           s_arity("randomkey")
     case 111n:  # SWAPDB

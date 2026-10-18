@@ -329,8 +329,8 @@ Where performance and proof meet: **batched execution under proved laws.**
    Streams are under way: a stream is a value BendKV holds (section 3zzzu), its reads
    and writes answer as Redis's (sections 3zzzy and 3zzzza), its groups and XREAD's wait
    next. Cluster, replication and modules are out of scope. The suite's count: of the 1,812 tests
-   Redis 7.2.16 passes against a server it did not start, BendKV passes 1,675, 1,634 of
-   the 1,688 in what it has ([COMPATIBILITY.md](COMPATIBILITY.md)); most of the other 54
+   Redis 7.2.16 passes against a server it did not start, BendKV passes 1,676, 1,635 of
+   the 1,688 in what it has ([COMPATIBILITY.md](COMPATIBILITY.md)); most of the other 53
    need replication's SYNC (26) or run after a test that left its client in MULTI or
    subscribed with a command BendKV does not have (9).
    What maxmemory left to do (section 3zw): a delete takes the nodes it empties now
