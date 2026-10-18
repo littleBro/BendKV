@@ -41,8 +41,8 @@
 # their edges in every argument that is one, BITFIELD's fields at
 # random, hashes, lists, sets and sorted sets, SORT and SORT_RO,
 # HyperLogLogs and GEO (each in RESP2 and RESP3), DUMP and RESTORE (of
-# streams too, which Redis makes), the reads of streams and their
-# writes, and
+# streams too, which Redis makes), the reads of streams, their
+# writes and their groups', and
 # RESP3 (its
 # scenarios, and the differential tests again in RESP3); then stops
 # them. Then the append-only file: a
@@ -59,7 +59,7 @@
 # both ways: the same commands against BendKV and a redis-server that
 # keeps its own file, then BendKV started from Redis's file and Redis
 # from BendKV's, each holding the databases the other held, and the
-# same for the writes of streams. Then files
+# same for the writes of streams and of their groups. Then files
 # whose entries, transactions and values straddle the windows the start
 # reads them in, cut short, or with a transaction left open, each started
 # on by BendKV and by Redis, with aof-load-truncated yes and no: both
@@ -223,6 +223,7 @@ for n in "" post send "post build/test.aof everysec"; do
     python3 tests/stream_dump_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
     python3 tests/stream_read_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
     python3 tests/stream_write_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
+    python3 tests/stream_group_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
     # RESP3: its scenarios, then the differential tests again with each
     # connection in RESP3 (HELLO 3)
     python3 tests/resp3_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
@@ -292,6 +293,7 @@ python3 tests/aof_fail_test.py --port "$PORT" --shim build/fail_io.so
 echo "== append-only files of Redis and of BendKV"
 python3 tests/aof_redis_test.py --bin build/bendkv --bendkv "$PORT" --redis "$((REDIS_PORT + 1))" --dir build/aofio
 python3 tests/stream_aof_test.py --bin build/bendkv --bendkv "$PORT" --redis "$((REDIS_PORT + 1))" --dir build/xaof
+python3 tests/stream_group_aof_test.py --bin build/bendkv --bendkv "$PORT" --redis "$((REDIS_PORT + 1))" --dir build/xgaof
 echo "== the append-only file read in windows, against Redis"
 python3 tests/aof_window_test.py --bin build/bendkv --bendkv "$PORT" --redis "$((REDIS_PORT + 1))" --dir build/aofwin
 echo "== resident memory after a restart from the append-only file"

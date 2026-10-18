@@ -13,14 +13,14 @@ with it. Under pipelined load it serves GET at 1.6×, SET at 1.8× and INCR at 1
 throughput of Redis 7.0.15 on the same machine, with half its memory for small values.
 
 > **Status: research prototype.** BendKV implements a subset of Redis (strings, hashes,
-> lists, sets, sorted sets, HyperLogLogs, GEO and their times to live, DUMP and RESTORE, the
+> lists, sets, sorted sets, streams, HyperLogLogs, GEO and their times to live, DUMP and RESTORE, the
 > blocking commands, transactions, pub/sub and keyspace notifications, the keyspace, several databases,
 > connection commands, CLIENT LIST, INFO, KILL, PAUSE and UNPAUSE, MONITOR, the slow log
 > and the latency monitor, ACL users, the server's administrative commands, an
 > append-only file and its rewrite, maxmemory and its eviction, Lua scripts and
 > functions, RESP3). The goal now is a drop-in replacement for a single Redis node,
 > measured by Redis's own test suite: of the 1,812 tests Redis 7.2.16 passes against a
-> server it did not start, BendKV passes 1,676, and 1,635 of the 1,688 in what it implements
+> server it did not start, BendKV passes 1,719, and 1,644 of the 1,688 in what it implements
 > ([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)). Do not use it for data you cannot
 > lose.
 
@@ -341,9 +341,26 @@ translation stays in the trusted base.
   ENTRIESADDED and MAXDELETEDID, their errors in Redis's order and their keyspace
   events; the append-only file logs each as the write it made (XADD with the ID it
   added, a trim by `~` as the exact trim it made), which Redis loads too. The commands
-  of groups (XGROUP, XREADGROUP, XACK, XCLAIM, XAUTOCLAIM) are not there yet. Where
-  BendKV differs: XREAD with BLOCK answers an error where Redis would make its client
-  wait (in MULTI, where Redis does not wait, it answers a null array, as Redis does);
+  of groups answer and write as Redis's: XGROUP CREATE (with MKSTREAM and ENTRIESREAD),
+  SETID, DESTROY, CREATECONSUMER, DELCONSUMER and HELP; XREADGROUP of one key or
+  several, at `>` or in a consumer's history, with COUNT and NOACK; XACK; XCLAIM with
+  IDLE, TIME, RETRYCOUNT, FORCE, JUSTID and LASTID; XAUTOCLAIM with COUNT and JUSTID;
+  their errors in Redis's order, their keyspace events and the changes INFO counts. The
+  append-only file logs XGROUP CREATE, DESTROY and XACK as they came, and a write that
+  reads the clock as BendKV's script of what it did (a group's last ID and entries read,
+  a consumer's times, the pending entries it got or lost with their times and counts),
+  which Redis loads too (section 3zzzzt of [docs/FINDINGS.md](docs/FINDINGS.md)). Where
+  BendKV differs: XREAD and XREADGROUP with BLOCK answer an error where Redis would make
+  their client wait (in MULTI, where Redis does not wait, they answer a null array, as
+  Redis does), and such an XREADGROUP makes no consumer, where Redis makes it before its
+  client waits; XGROUP CREATE's and SETID's syntax error for words past their last
+  option, which Redis finds once it has read the key and the group, names the subcommand
+  in capitals, where Redis names it as it came; XAUTOCLAIM with a COUNT whose room Redis
+  cannot allocate (16 bytes a count) runs, where Redis answers that it lacks the memory;
+  a consumer made or claimed for while BendKV starts from a Redis file (its XCLAIM and
+  XGROUP CREATECONSUMER) is seen and active at time 0, where Redis's start gives its own
+  time; the file holds a script for each XREADGROUP, XCLAIM and XAUTOCLAIM that changed a
+  group, longer than the XCLAIM of each entry Redis writes;
   RESTORE and the start refuse payloads Redis takes but never writes (a node with no
   entry, or whose counts or master entry are not its
   entries', live entries out of order, a pending entry no consumer holds or two hold,
@@ -357,8 +374,10 @@ translation stays in the trusted base.
   Redis file that holds a trim by `~` with LIMIT, which Redis writes as `=` with LIMIT
   (sections 3zzzu, 3zzzy and 3zzzza of [docs/FINDINGS.md](docs/FINDINGS.md)); XINFO
   STREAM takes time with the stream's nodes, as it counts the radix tree's nodes where
-  Redis keeps the count, the ranges take 3 to 7 times Redis's time, and the writes 3 to
-  12 times (sections 82 and 84 of [docs/PERFORMANCE.md](docs/PERFORMANCE.md)).
+  Redis keeps the count, the ranges take 3 to 5 times Redis's time, the writes 3 to 12
+  times, and the groups' reads and claims 17 to 34 times, as a walk that starts inside a
+  node reads its entries from the node's first (sections 82, 84 and 87 of
+  [docs/PERFORMANCE.md](docs/PERFORMANCE.md)).
 - **Clients that wait:** BLPOP, BRPOP, BLMOVE, BRPOPLPUSH, BLMPOP, BZPOPMIN, BZPOPMAX
   and BZMPOP, their timeouts (seconds, a double; 0 waits for ever) read as Redis reads
   them, with its errors. A command that finds nothing to pop makes its client wait, and
@@ -860,7 +879,7 @@ translation stays in the trusted base.
   and so does the start from a large file (PERFORMANCE.md, sections 72 and 78;
   FINDINGS.md, sections 3zzzk and 3zzzt).
 
-Not yet: the commands of a stream's groups and XREAD's wait, CONFIG REWRITE (it answers as Redis does without a configuration file).
+Not yet: XREAD's and XREADGROUP's wait, CONFIG REWRITE (it answers as Redis does without a configuration file).
 Times in ms are limited to 14 digits.
 
 ## Performance
@@ -980,8 +999,12 @@ reads of those streams, each reply compared whole in RESP2 and RESP3, over the
 streams' IDs, their neighbours and the edges, counts, groups, consumers and errors;
 `tests/stream_write_test.py`: random XADD, XTRIM, XDEL and XSETID, each reply compared
 and each stream's DUMP and XINFO after each write, the errors, the events, WATCH and
-MULTI; `tests/stream_aof_test.py`: the writes in both servers' append-only files, each
-server started from its own and from the other's),
+MULTI; `tests/stream_group_test.py`: random writes of groups (XGROUP, XREADGROUP, XACK,
+XCLAIM, XAUTOCLAIM) among XADD, XDEL and trims, each reply, each stream's XINFO and
+XPENDING, and the changes counted compared after each, the errors, the events, WATCH,
+MULTI and BLOCK; `tests/stream_aof_test.py` and `tests/stream_group_aof_test.py`: the
+writes, and those of groups, in both servers' append-only files, each server started from
+its own and from the other's),
 robustness and concurrency checks, a client that stops reading while the others are
 served (`tests/writer_test.py`), clients that wait (`tests/blocking_test.py`: 18 scenarios
 of the blocking commands on BendKV and on Redis, their transcripts compared line by line,
@@ -1124,12 +1147,12 @@ away.
 | file | lines of code | of them written by a generator | the laws import it |
 |---|---:|---:|---|
 | `src/map.bend` | 5,700 | 1,500 | yes |
-| `src/redis.bend` | 18,000 | 6,000 | yes |
+| `src/redis.bend` | 21,000 | 6,800 | yes |
 | `src/batch.bend` | 84 |  | yes |
 | `src/aof.bend` | 1,300 |  | yes |
 | `src/session.bend` | 3,000 |  | yes |
 | `src/config.bend` | 1,400 | 190 | yes |
-| `src/acl.bend` | 2,200 | 670 | no |
+| `src/acl.bend` | 2,300 | 760 | no |
 | `src/aofdir.bend` | 360 |  | no |
 | `src/command.bend` | 2,800 | 2,100 | no |
 | `src/float.bend` | 1,600 |  | no |
@@ -1143,13 +1166,13 @@ away.
 | `src/server.bend` | 15,000 |  | no |
 | `src/sha.bend` | 120 |  | no |
 | `src/startup.bend` | 460 |  | no |
-| `src/stream.bend` | 1,100 |  | no |
+| `src/stream.bend` | 1,400 |  | no |
 | `proof/LAWS.bend` | 920 | 20 |  |
 | `proof/SPEC.bend` | 370 |  |  |
 | `proof/PROOF.bend` | 18,000 | 2,800 |  |
 | `src/`, the 6 files the laws import | 31,000 | 8,200 |  |
 | `src/`, the 15 others | 32,000 | 2,800 |  |
-| `proof/` | 18,000 | 2,800 |  |
+| `proof/` | 20,000 | 2,800 |  |
 <!-- END gen_counts: numbers -->
 
 ## Documentation

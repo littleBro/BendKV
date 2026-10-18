@@ -334,8 +334,9 @@ errors in Redis's order and its keyspace events Redis's. It is logged as a RESTO
 REPLACE and ABSTTL (section 3zzu of docs/FINDINGS.md). A stream is a value BendKV holds,
 from RESTORE and the RDB file, its nodes Redis's listpacks byte for byte, with its groups
 (section 3zzzu of docs/FINDINGS.md); XLEN, XRANGE, XREVRANGE, XREAD, XINFO and XPENDING
-read it, and XADD, XTRIM, XDEL and XSETID write it, as Redis does (sections 3zzzy and
-3zzzza); the commands of groups and XREAD's wait are not there yet.
+read it, XADD, XTRIM, XDEL and XSETID write it, and XGROUP, XREADGROUP, XACK, XCLAIM and
+XAUTOCLAIM write its groups, as Redis does (sections 3zzzy, 3zzzza and 3zzzzt); XREAD's
+and XREADGROUP's wait are not there yet.
 The RDB file, as Redis 7.2.16 writes and reads it: SAVE writes it (`temp-<pid>.rdb`,
 synced, renamed onto `dbfilename`, the directory synced), SHUTDOWN saves it with SAVE or
 with save points, FLUSHALL with save points saves the emptied databases, and the start
@@ -957,18 +958,18 @@ The translation the kernel reads can be dumped with
   skipped. The reference is the same run on redis-server 7.2.16 with default settings,
   each unit on a freshly started server instance: in this mode 1,905 tests run, and
   Redis passes 1,812 (almost all the others need DEBUG, off by default in 7). BendKV
-  passes 1,676 of them (92.5%), and in the units of what it has (the protocol, the
+  passes 1,719 of them (94.9%), and in the units of what it has (the protocol, the
   connection and clients and their pause, the keyspace and databases, strings with
   ranges, bits and fields, counters, hashes, lists, sets, sorted sets, SORT, HyperLogLogs,
   GEO, DUMP and RESTORE, times to live, lazy freeing, transactions, Pub/Sub and keyspace
   notifications, introspection, the slow log and the latency monitor, client-side
-  caching, ACL users, Lua scripts and functions), 1,635 of 1,688 (96.9%); streams' values,
-  reads and writes pass 41 of the 122 tests of `unit/type/stream` and
+  caching, ACL users, Lua scripts and functions), 1,644 of 1,688 (97.4%); streams' values,
+  reads, writes and groups pass 75 of the 122 tests of `unit/type/stream` and
   `unit/type/stream-cgroups` that Redis passes. The others stop on commands that do not
-  exist (74 tests: XGROUP, SYNC…), do not run because the unit stopped earlier (24), or
-  fail on XREAD's wait and streams' groups, on clients left in MULTI or subscribed by
-  tests that failed on a command that does not exist, and on what the list in
-  docs/COMPATIBILITY.md gives (38). Against Redis 7.0.15, whose suite runs 1,757 tests
+  exist (30 tests: SYNC, MIGRATE…), do not run because the unit stopped earlier (24), or
+  fail on XREAD's and XREADGROUP's wait, on clients left in MULTI by a test that failed on
+  a command that does not exist, and on what the list in docs/COMPATIBILITY.md gives
+  (39). Against Redis 7.0.15, whose suite runs 1,757 tests
   in this mode, BendKV passed 1,556 of the 1,677 that Redis passed (92.8%), and 1,516
   of 1,565 in the units of what it has. Times to live and
   the sweep of expired keys added 78 passed tests: before them there were 135, and 30
@@ -1005,10 +1006,10 @@ The translation the kernel reads can be dumped with
   CI's heavy tier, before a pull request merges): redis-py 8.1.0's tests of its sync and asyncio clients, in
   RESP2 and in RESP3, and go-redis v9.23.0's specs, in RESP3, each against Redis 7.2.16
   and against BendKV, each on a server started for it, without their tests of modules,
-  clusters, sentinels and TLS. Of the tests Redis passes, BendKV passes 2,723 of 2,772 in
-  redis-py, the same tests in RESP2 and in RESP3, and 450 of 463 in go-redis; every other
-  one fails on what BendKV does not have (streams' groups and XREAD's wait, MODULE,
-  REPLICAOF, and COMMAND's entries of those), none on a command BendKV has
+  clusters, sentinels and TLS. Of the tests Redis passes, BendKV passes 2,768 of 2,772 in
+  redis-py, the same tests in RESP2 and in RESP3, and 462 of 463 in go-redis; every other
+  one fails on what BendKV does not have (XREAD's wait, MODULE, REPLICAOF, and COMMAND's
+  entry of MIGRATE), none on a command BendKV has
   otherwise. A test Redis passes that BendKV fails, and that is not among the
   known failures of `tools/data/clients.json`, fails CI.
 - **Differential testing against Redis 7.2.16** (`tests/diff_test.py`). Random streams
@@ -1619,8 +1620,8 @@ make clients BEND="$B" # redis-py's and go-redis's test suites on Redis and on B
    FLUSHDB, FLUSHALL, keyspace lines per database — with laws and recovery of all the
    databases from the append-only file), the ranges and bits of strings (GETRANGE,
    SETRANGE, GETBIT, SETBIT, BITCOUNT, BITPOS — with a law of SETRANGE and recovery from
-   the append-only file). Redis's suite in external mode: BendKV passes 1,676 of the
-   1,812 tests Redis 7.2.16 itself passes, and 1,635 of 1,688 in the units of what it has
+   the append-only file). Redis's suite in external mode: BendKV passes 1,719 of the
+   1,812 tests Redis 7.2.16 itself passes, and 1,644 of 1,688 in the units of what it has
    ([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)). Start-up as for redis-server (the
    command line and the configuration file). The database as a record with a count of
    keys (DBSIZE in O(1)).

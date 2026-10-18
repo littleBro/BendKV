@@ -138,6 +138,14 @@ parts of it are written from 7.2.16's sources:
   never when its client goes while it waits but in WAIT (blocked.c's
   updateStatsOnUnblock, server.c's call() and replication.c), in
   src/info.bend and src/server.bend.
+- Streams' groups: XGROUP, XREADGROUP, XACK, XCLAIM and XAUTOCLAIM, from
+  t_stream.c (xgroupCommand, xreadCommand's GROUP, xackCommand,
+  xclaimCommand, xautoclaimCommand, streamCreateCG, streamCreateConsumer,
+  streamDelConsumer, streamReplyWithRange's deliveries and
+  streamReplyWithRangeFromConsumerPEL), with their errors, keyspace events
+  and counts of changes, in src/stream.bend, src/redis.bend and
+  src/server.bend; and a stream entry's head read as listpack.c's
+  lpGetInteger reads its integers, in src/stream.bend.
 - Configuration: tools/data/redis-configs.json, the parameters of
   Redis 7.2.16's config.c, and the table tools/gen_config.py writes from
   it into src/config.bend; the checks of cluster-announce-ip,

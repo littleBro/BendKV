@@ -331,6 +331,13 @@ type XRm is Data:
   XRm{c: Nat, block: Bool, ws: List<&2, String>}
   XRmOf{x: XRm}
 
+# XREADGROUP (SXGroup, below): its group and consumer, its count (past
+# any stream's for none), whether BLOCK and NOACK came, and its keys,
+# then their IDs, as they came. XGqOf is never built.
+type XGq is Data:
+  XGq{g: String, c: String, count: Nat, block: Bool, noack: Bool, ws: List<&2, String>}
+  XGqOf{x: XGq}
+
 # XINFO of a key: STREAM with its options as they came (read once the
 # key is found; sub: the subcommand's name as it came, for the error of
 # options that are wrong), GROUPS, or CONSUMERS of a group (the key, for
@@ -368,13 +375,26 @@ type XRead is Data:
 # was whatever it held (the script the file logs for a new stream where
 # a key whose time had passed lay, as for a new hash). The parser reads
 # them as Redis reads them before it looks the key up (their errors
-# first); the write reads them again (Stream writes, below).
+# first); the write reads them again (Stream writes, below). The writes
+# of a stream's groups (Groups' writes, below): XWGroup, XGROUP's CREATE
+# (2) and DESTROY (4), the words after the key, and XWGNew, CREATE where
+# the key was whatever it held (as XWNew); XWAck, XACK's group and IDs;
+# XWKeyed, a write whose errors name its key, which it keeps: XGROUP's
+# SETID (3), CREATECONSUMER (5) and DELCONSUMER (6), XCLAIM (7) and
+# XAUTOCLAIM (8), which the file does not log; XWSet and XWDelCon, the
+# changes those make, resolved, which the file logs as BendKV's scripts.
 type XWrite is Data:
   XWAdd{ws: List<&2, String>}
   XWTrim{ws: List<&2, String>}
   XWDel{ids: List<&2, String>}
   XWSetId{ws: List<&2, String>}
   XWNew{ws: List<&2, String>}
+  XWGroup{sub: Nat, ws: List<&2, String>}
+  XWGNew{ws: List<&2, String>}
+  XWAck{ws: List<&2, String>}
+  XWKeyed{c: Nat, key: String, ws: List<&2, String>}
+  XWSet{ws: List<&2, String>}
+  XWDelCon{ws: List<&2, String>}
 
 # A read of one key whose reply depends on what the key holds at now
 # alone (its value and the time it expires at, when it is there): its
@@ -727,6 +747,7 @@ type SessOp is Data:
   SRestore{key: String, op: UpdOp}
   SAcl{kind: Nat, args: List<&2, String>}
   SXRead{q: XRm}
+  SXGroup{q: XGq}
 
 # BITOP's operation
 type BitK is Data:
@@ -6966,7 +6987,8 @@ def cmd_id.l4(+n: String, c: Nat) -> Nat:
     case 24n:  # X
       Bool.pick(Nat, String.eq(n, "XLEN"), 211n,
       Bool.pick(Nat, String.eq(n, "XADD"), 217n,
-      Bool.pick(Nat, String.eq(n, "XDEL"), 219n, 0n)))
+      Bool.pick(Nat, String.eq(n, "XDEL"), 219n,
+      Bool.pick(Nat, String.eq(n, "XACK"), 229n, 0n))))
     case 26n:  # Z
       Bool.pick(Nat, String.eq(n, "ZADD"), 121n,
       Bool.pick(Nat, String.eq(n, "ZREM"), 123n, 0n))
@@ -7084,7 +7106,9 @@ def cmd_id.l6(+n: String, c: Nat) -> Nat:
       Bool.pick(Nat, String.eq(n, "UNLINK"), 8n, 0n)
     case 24n:  # X
       Bool.pick(Nat, String.eq(n, "XRANGE"), 212n,
-      Bool.pick(Nat, String.eq(n, "XSETID"), 220n, 0n))
+      Bool.pick(Nat, String.eq(n, "XSETID"), 220n,
+      Bool.pick(Nat, String.eq(n, "XGROUP"), 228n,
+      Bool.pick(Nat, String.eq(n, "XCLAIM"), 230n, 0n))))
     case 26n:  # Z
       Bool.pick(Nat, String.eq(n, "ZSCORE"), 125n,
       Bool.pick(Nat, String.eq(n, "ZCOUNT"), 129n,
@@ -7212,6 +7236,9 @@ def cmd_id.l10(+n: String, c: Nat) -> Nat:
       Bool.pick(Nat, String.eq(n, "SINTERCARD"), 92n,
       Bool.pick(Nat, String.eq(n, "SDIFFSTORE"), 97n,
       Bool.pick(Nat, String.eq(n, "SSUBSCRIBE"), 170n, 0n))))
+    case 24n:  # X
+      Bool.pick(Nat, String.eq(n, "XAUTOCLAIM"), 231n,
+      Bool.pick(Nat, String.eq(n, "XREADGROUP"), 232n, 0n))
     case 26n:  # Z
       Bool.pick(Nat, String.eq(n, "ZINTERCARD"), 146n,
       Bool.pick(Nat, String.eq(n, "ZDIFFSTORE"), 149n, 0n))
@@ -7775,6 +7802,505 @@ def xpending.of(+n: Nat, +k: String, +g: String, +xs: List<&2, String>) -> Cmd:
 def xpending.parse(+k: String, +g: String, +xs: List<&2, String>) -> Cmd:
   xpending.of(List.length(&2, String, xs), k, g, xs)
 
+# The commands of a stream's groups (XGROUP, XACK, XCLAIM, XAUTOCLAIM,
+# XREADGROUP), read as Redis 7.2.16 reads them (t_stream.c): what Redis
+# reads before it looks the key up, the parser reads, and the rest the
+# write does (Groups' writes, below). A write whose errors name its key
+# (NOGROUP) keeps the key in its form (XWKeyed).
+
+# XGROUP CREATE key group id|$ [MKSTREAM] [ENTRIESREAD n], SETID key
+# group id|$ [ENTRIESREAD n], DESTROY key group, CREATECONSUMER key group
+# consumer, DELCONSUMER key group consumer, HELP: each with its arity,
+# then CREATE's and SETID's options from the word after the ID on, as
+# xgroupCommand reads them before it looks the key up: MKSTREAM
+# (CREATE's), ENTRIESREAD with a word after it (a long long, -1 or not
+# below 0), any other word the subcommand's syntax error
+def xgroup_id(+n: String, len: Nat) -> Nat:
+  match len:
+    case 4n:
+      Bool.pick(Nat, String.eq(n, "HELP"), 1n, 0n)
+    case 5n:
+      Bool.pick(Nat, String.eq(n, "SETID"), 3n, 0n)
+    case 6n:
+      Bool.pick(Nat, String.eq(n, "CREATE"), 2n, 0n)
+    case 7n:
+      Bool.pick(Nat, String.eq(n, "DESTROY"), 4n, 0n)
+    case 11n:
+      Bool.pick(Nat, String.eq(n, "DELCONSUMER"), 6n, 0n)
+    case 14n:
+      Bool.pick(Nat, String.eq(n, "CREATECONSUMER"), 5n, 0n)
+    case _:
+      0n
+
+def xgroup_help() -> List<&2, String>:
+  ["CREATE <key> <groupname> <id|$> [option]",
+   "    Create a new consumer group. Options are:",
+   "    * MKSTREAM",
+   "      Create the empty stream if it does not exist.",
+   "    * ENTRIESREAD entries_read",
+   "      Set the group's entries_read counter (internal use).",
+   "CREATECONSUMER <key> <groupname> <consumer>",
+   "    Create a new consumer in the specified group.",
+   "DELCONSUMER <key> <groupname> <consumer>",
+   "    Remove the specified consumer.",
+   "DESTROY <key> <groupname>",
+   "    Remove the specified group.",
+   "SETID <key> <groupname> <id|$> [ENTRIESREAD entries_read]",
+   "    Set the current group ID and entries_read counter."]
+
+def e_xentries() -> Reply:
+  RError{"ERR value for ENTRIESREAD must be positive or -1"}
+
+# CREATE's and SETID's options as they read: whether MKSTREAM came, and
+# ENTRIESREAD's count (none: -1), or their error
+type XGc is Data:
+  XGc{mk: Bool, rd: KV.XRd}
+  XGcBad{r: Reply}
+
+# the options read so far: the words left, or the end
+type XGo is Data:
+  XGoOn{mk: Bool, rd: KV.XRd, ws: List<&2, String>}
+  XGoEnd{c: XGc}
+
+# ENTRIESREAD's value v (l: as a long long): -1, or not below 0
+def xgo.er(l: LL, +v: String, +mk: Bool, more: List<&2, String>) -> XGo:
+  match l:
+    case LL{True{}, +hi, +lo}:
+      Bool.pick(XGo, Bool.and(Nat.is_eq(hi, 0n), Nat.is_eq(lo, 1n)), XGoOn{mk, KV.XRdNone{}, more}, XGoEnd{XGcBad{e_xentries()}})
+    case LL{False{}, hi, lo}:
+      XGoOn{mk, KV.XRdN{KV.xn.of_int(v)}, more}
+    case LLBad{}:
+      XGoEnd{XGcBad{e_int()}}
+
+def xgo.word(ismk: Bool, iser: Bool, rest: List<&2, String>, sub: String, +mk: Bool, rd: KV.XRd) -> XGo:
+  match ismk iser rest:
+    case True{} _ more:
+      XGoOn{True{}, rd, more}
+    case False{} True{} Con{+v, more}:
+      xgo.er(ll.read(v), v, mk, more)
+    case _ _ _:
+      XGoEnd{XGcBad{e_sub_syntax(sub, "XGROUP")}}
+
+def xgo.step(+create: Bool, sub: String, +mk: Bool, rd: KV.XRd, ws: List<&2, String>) -> XGo:
+  match ws:
+    case Nil{}:
+      XGoEnd{XGc{mk, rd}}
+    case Con{+w, rest}:
+      xgo.word(Bool.and(create, is_word(w, "MKSTREAM")), is_word(w, "ENTRIESREAD"), rest, sub, mk, rd)
+
+def xgo.loop(k: Nat, +create: Bool, +sub: String, s: XGo) -> XGc:
+  match k s:
+    case 1n+j XGoOn{+mk, rd, ws}:
+      xgo.loop(j, create, sub, xgo.step(create, sub, mk, rd, ws))
+    case _ XGoEnd{c}:
+      c
+    case _ XGoOn{+mk, rd, ws}:
+      XGc{mk, rd}
+
+# CREATE's (create) or SETID's options xs, as they read
+def xgo.read(+create: Bool, +sub: String, +xs: List<&2, String>) -> XGc:
+  xgo.loop(Nat.add(List.length(&2, String, xs), 1n), create, sub, XGoOn{False{}, KV.XRdNone{}, xs})
+
+def xgc.err(c: XGc) -> Maybe<&2, Reply>:
+  match c:
+    case XGc{mk, rd}:
+      None{}
+    case XGcBad{r}:
+      Some{r}
+
+def xgo.err(+create: Bool, +sub: String, +xs: List<&2, String>) -> Maybe<&2, Reply>:
+  xgc.err(xgo.read(create, sub, xs))
+
+# XWSet's words: [group, last ID, entries read], then, for a consumer,
+# [consumer, seen, active, then an ID, a time and a count for each
+# pending entry it names]; a time ms (a long long below 2^47), -1 for
+# none (active, entries read); an ID strict; a count and entries read a
+# uint64_t (X.su.ull)
+type XSetC is Data:
+  XSetC{c: String, seen: Nat, act: KV.XAct, ns: List<&2, X.XSn>}
+
+type XSet is Data:
+  XSet{g: String, last: KV.XId, rd: KV.XRd, con: Maybe<&2, XSetC>}
+  XSetBad{}
+
+def xset.ms.of(ok: Bool, +hi: Nat, +lo: Nat) -> Maybe<&2, Nat>:
+  match ok:
+    case True{}:
+      Some{Nat.add(Nat.mul(hi, 1000000000n), lo)}
+    case False{}:
+      None{}
+
+def xset.ms.ll(l: LL) -> Maybe<&2, Nat>:
+  match l:
+    case LL{False{}, +hi, +lo}:
+      xset.ms.of(Nat.is_lt(hi, 140737n), hi, lo)
+    case _:
+      None{}
+
+def xset.ms(+s: String) -> Maybe<&2, Nat>:
+  xset.ms.ll(ll.read(s))
+
+def xset.act.of(m: Maybe<&2, Nat>) -> Maybe<&2, KV.XAct>:
+  match m:
+    case Some{+t}:
+      Some{KV.XActAt{t}}
+    case None{}:
+      None{}
+
+def xset.act(+s: String) -> Maybe<&2, KV.XAct>:
+  Bool.pick(Maybe<&2, KV.XAct>, String.eq(s, "-1"), Some{KV.XActNone{}}, xset.act.of(xset.ms(s)))
+
+def xset.rd.of(m: Maybe<&2, KV.XN>) -> Maybe<&2, KV.XRd>:
+  match m:
+    case Some{+n}:
+      Some{KV.XRdN{n}}
+    case None{}:
+      None{}
+
+def xset.rd(+s: String) -> Maybe<&2, KV.XRd>:
+  Bool.pick(Maybe<&2, KV.XRd>, String.eq(s, "-1"), Some{KV.XRdNone{}}, xset.rd.of(X.su.ull(s)))
+
+# the pending entries' words, three at a time
+type XSq is Data:
+  XSqGo{ws: List<&2, String>, acc: List<&2, X.XSn>}
+  XSqEnd{m: Maybe<&2, List<&2, X.XSn>>}
+
+def xset.sn(mi: Maybe<&2, KV.XId>, mt: Maybe<&2, Nat>, mn: Maybe<&2, KV.XN>, rest: List<&2, String>, acc: List<&2, X.XSn>) -> XSq:
+  match mi mt mn:
+    case Some{+id} Some{+t} Some{+n}:
+      XSqGo{rest, X.XSn{id, t, n} <> acc}
+    case _ _ _:
+      XSqEnd{None{}}
+
+def xset.sq(ws: List<&2, String>, acc: List<&2, X.XSn>) -> XSq:
+  match ws:
+    case Nil{}:
+      XSqEnd{Some{List.reverse(&2, X.XSn, acc)}}
+    case Con{+i, Con{+t, Con{+n, rest}}}:
+      xset.sn(X.xid.parse(i, True{}, X.xn.zero()), xset.ms(t), X.su.ull(n), rest, acc)
+    case _:
+      XSqEnd{None{}}
+
+def xset.sq.loop(k: Nat, s: XSq) -> Maybe<&2, List<&2, X.XSn>>:
+  match k s:
+    case 1n+j XSqGo{ws, acc}:
+      xset.sq.loop(j, xset.sq(ws, acc))
+    case _ XSqEnd{m}:
+      m
+    case _ XSqGo{ws, acc}:
+      None{}
+
+def xset.ns(+ws: List<&2, String>) -> Maybe<&2, List<&2, X.XSn>>:
+  xset.sq.loop(Nat.add(List.length(&2, String, ws), 1n), XSqGo{ws, Nil{}})
+
+# the consumer's words: none (Some{None}), the consumer, or no form
+def xset.con.of(ms: Maybe<&2, Nat>, ma: Maybe<&2, KV.XAct>, mns: Maybe<&2, List<&2, X.XSn>>, +c: String) -> Maybe<&2, Maybe<&2, XSetC>>:
+  match ms ma mns:
+    case Some{+seen} Some{+a} Some{+ns}:
+      Some{Some{XSetC{c, seen, a, ns}}}
+    case _ _ _:
+      None{}
+
+def xset.con(ws: List<&2, String>) -> Maybe<&2, Maybe<&2, XSetC>>:
+  match ws:
+    case Nil{}:
+      Some{None{}}
+    case Con{+c, Con{+seen, Con{+act, +rest}}}:
+      xset.con.of(xset.ms(seen), xset.act(act), xset.ns(rest), c)
+    case _:
+      None{}
+
+def xset.of(mid: Maybe<&2, KV.XId>, mrd: Maybe<&2, KV.XRd>, mc: Maybe<&2, Maybe<&2, XSetC>>, +g: String) -> XSet:
+  match mid mrd mc:
+    case Some{+last} Some{+rd} Some{+c}:
+      XSet{g, last, rd, c}
+    case _ _ _:
+      XSetBad{}
+
+# XWSet's words, as they read
+def xset.read(ws: List<&2, String>) -> XSet:
+  match ws:
+    case Con{+g, Con{+last, Con{+rd, +rest}}}:
+      xset.of(X.xid.parse(last, True{}, X.xn.zero()), xset.rd(rd), xset.con(rest), g)
+    case _:
+      XSetBad{}
+
+def xset.ok(s: XSet) -> Bool:
+  match s:
+    case XSet{g, last, rd, c}:
+      True{}
+    case XSetBad{}:
+      False{}
+
+# XGROUP CREATE's ID: "$" the stream's last (0-0 for a key not there),
+# else strict
+def xgc.id(+s: String, +last: KV.XId) -> Maybe<&2, KV.XId>:
+  Bool.pick(Maybe<&2, KV.XId>, String.eq(cstr(s), "$"), Some{last}, X.xid.parse(s, True{}, X.xn.zero()))
+
+def xgroup.cmd(m: Maybe<&2, Reply>, +k: String, op: XWrite) -> Cmd:
+  match m:
+    case None{}:
+      Upd{k, UStream{op}}
+    case Some{r}:
+      Bad{r}
+
+def xgroup.parse(id: Nat, sub: String, args: List<&2, String>) -> Cmd:
+  match id:
+    case 1n:  # HELP
+      match args:
+        case Nil{}:
+          Own{help("XGROUP", xgroup_help())}
+        case _:
+          e_arity("xgroup|help")
+    case 2n:  # CREATE
+      match args:
+        case Con{+k, Con{+g, Con{+i, +opts}}}:
+          xgroup.cmd(xgo.err(True{}, sub, opts), k, XWGroup{2n, Con{g, Con{i, opts}}})
+        case _:
+          e_arity("xgroup|create")
+    case 3n:  # SETID
+      match args:
+        case Con{+k, Con{+g, Con{+i, +opts}}}:
+          xgroup.cmd(xgo.err(False{}, sub, opts), k, XWKeyed{3n, k, Con{g, Con{i, opts}}})
+        case _:
+          e_arity("xgroup|setid")
+    case 4n:  # DESTROY
+      match args:
+        case Con{+k, Con{+g, Nil{}}}:
+          Upd{k, UStream{XWGroup{4n, [g]}}}
+        case _:
+          e_arity("xgroup|destroy")
+    case 5n:  # CREATECONSUMER
+      match args:
+        case Con{+k, Con{+g, Con{+c, Nil{}}}}:
+          Upd{k, UStream{XWKeyed{5n, k, [g, c]}}}
+        case _:
+          e_arity("xgroup|createconsumer")
+    case 6n:  # DELCONSUMER
+      match args:
+        case Con{+k, Con{+g, Con{+c, Nil{}}}}:
+          Upd{k, UStream{XWKeyed{6n, k, [g, c]}}}
+        case _:
+          e_arity("xgroup|delconsumer")
+    case _:
+      Own{e_unknown_sub(sub, "XGROUP")}
+
+# XAUTOCLAIM key group consumer min-idle-time start [COUNT count]
+# [JUSTID], its words after the key read as xautoclaimCommand reads them
+# before it looks the key up: the time (a long long, below 0 as 0), the
+# start (an interval's, X.xb.parse), then COUNT with a word after it (a
+# long, 1 to LONG_MAX / 16) and JUSTID, any other word a syntax error.
+# A count past 2^40 counts as 2^40 (no group holds that many pending
+# entries), so that ten times it stays a Nat.
+type XAu is Data:
+  XAu{g: String, c: String, minidle: Nat, start: KV.XId, count: Nat, justid: Bool}
+  XAuBad{r: Reply}
+
+def e_xautoidle() -> Reply:
+  RError{"ERR Invalid min-idle-time argument for XAUTOCLAIM"}
+
+def e_xcount() -> Reply:
+  RError{"ERR COUNT must be > 0"}
+
+# COUNT's value: a long long from 1 to 576460752303423487 (a match, not
+# Bool.pick, so that no product past 2^48 is made)
+def xau.cap() -> Nat:
+  Nat.mul(1048576n, 1048576n)
+
+def xau.count.of(ok: Bool, big: Bool, +hi: Nat, +lo: Nat) -> Maybe<&2, Nat>:
+  match ok big:
+    case True{} True{}:
+      Some{xau.cap()}
+    case True{} False{}:
+      Some{Nat.min(Nat.add(Nat.mul(hi, 1000000000n), lo), xau.cap())}
+    case False{} _:
+      None{}
+
+def xau.count(l: LL) -> Maybe<&2, Nat>:
+  match l:
+    case LL{False{}, +hi, +lo}:
+      xau.count.of(Bool.and(Bool.or(Nat.is_lt(0n, hi), Nat.is_lt(0n, lo)), Bool.or(Nat.is_lt(hi, 576460752n), Bool.and(Nat.is_eq(hi, 576460752n), Nat.is_le(lo, 303423487n)))), Nat.is_le(1100n, hi), hi, lo)
+    case _:
+      None{}
+
+type XAs is Data:
+  XAsGo{a: XAu, ws: List<&2, String>}
+  XAsEnd{a: XAu}
+
+def xau.set(m: Maybe<&2, Nat>, a: XAu, more: List<&2, String>) -> XAs:
+  match m a:
+    case Some{+n} XAu{+g, +c, +mi, +st, cnt, +j}:
+      XAsGo{XAu{g, c, mi, st, n, j}, more}
+    case None{} _:
+      XAsEnd{XAuBad{e_xcount()}}
+    case _ bad:
+      XAsEnd{bad}
+
+def xau.just(a: XAu) -> XAu:
+  match a:
+    case XAu{+g, +c, +mi, +st, +n, j}:
+      XAu{g, c, mi, st, n, True{}}
+    case bad:
+      bad
+
+def xau.word(cnt: Bool, just: Bool, rest: List<&2, String>, a: XAu) -> XAs:
+  match cnt just rest:
+    case True{} _ Con{+v, more}:
+      xau.set(xau.count(ll.read(v)), a, more)
+    case False{} True{} more:
+      XAsGo{xau.just(a), more}
+    case _ _ _:
+      XAsEnd{XAuBad{e_syntax_r()}}
+
+def xau.step(ws: List<&2, String>, a: XAu) -> XAs:
+  match ws:
+    case Nil{}:
+      XAsEnd{a}
+    case Con{+w, rest}:
+      xau.word(is_word(w, "COUNT"), is_word(w, "JUSTID"), rest, a)
+
+def xau.loop(k: Nat, s: XAs) -> XAu:
+  match k s:
+    case 1n+j XAsGo{a, ws}:
+      xau.loop(j, xau.step(ws, a))
+    case _ XAsEnd{a}:
+      a
+    case _ XAsGo{a, ws}:
+      a
+
+def xau.start(b: X.XB, +g: String, +c: String, +mi: Nat, +opts: List<&2, String>) -> XAu:
+  match b:
+    case X.XB{+st}:
+      xau.loop(Nat.add(List.length(&2, String, opts), 1n), XAsGo{XAu{g, c, mi, st, 100n, False{}}, opts})
+    case X.XBBad{}:
+      XAuBad{e_xid()}
+    case X.XBOver{}:
+      XAuBad{e_xstart()}
+
+def xau.idle(m: Maybe<&2, Nat>, +g: String, +c: String, +s: String, +opts: List<&2, String>) -> XAu:
+  match m:
+    case Some{+mi}:
+      xau.start(X.xb.parse(s, True{}), g, c, mi, opts)
+    case None{}:
+      XAuBad{e_xautoidle()}
+
+# XAUTOCLAIM's words after its key, as they read
+def xau.read(ws: List<&2, String>) -> XAu:
+  match ws:
+    case Con{+g, Con{+c, Con{+t, Con{+s, +opts}}}}:
+      xau.idle(xc.of(ll.read(t)), g, c, s, opts)
+    case _:
+      XAuBad{RError{"ERR wrong number of arguments for 'xautoclaim' command"}}
+
+def xau.err(a: XAu) -> Maybe<&2, Reply>:
+  match a:
+    case XAu{g, c, mi, st, n, j}:
+      None{}
+    case XAuBad{r}:
+      Some{r}
+
+def xautoclaim.parse(+k: String, +ws: List<&2, String>) -> Cmd:
+  xgroup.cmd(xau.err(xau.read(ws)), k, XWKeyed{8n, k, ws})
+
+# XREADGROUP GROUP group consumer [COUNT count] [BLOCK ms] [NOACK]
+# STREAMS key... id..., read as xreadCommand reads it for XREADGROUP: its
+# options in any order up to STREAMS, the last of a kind holding (as
+# XREAD's: xro.word, xro.block, xc.of), GROUP and its two words with two
+# words after it, NOACK; STREAMS with words after it, as many keys as
+# IDs ("Unbalanced"), without STREAMS a syntax error, then without GROUP
+# its own. Its keys and IDs are read once the keys are found (XREADGROUP,
+# below).
+
+# XREADGROUP's options as read so far, a word at a time: COUNT's (0 for
+# none), whether BLOCK and NOACK came, GROUP's group and consumer, and
+# what the next word is (want: 0 an option, 1 BLOCK's value, 2 COUNT's,
+# 3 GROUP's group, 4 its consumer); or, past STREAMS, the words after it
+# (the last first); or the error that ends them
+type XGr is Data:
+  XGr{c: Nat, block: Bool, noack: Bool, g: Maybe<&2, String>, con: String, want: Nat}
+  XGrAt{c: Nat, block: Bool, noack: Bool, g: Maybe<&2, String>, con: String, ws: List<&2, String>}
+  XGrBad{r: Reply}
+
+def e_xgunbalanced() -> Reply:
+  RError{"ERR Unbalanced 'xreadgroup' list of streams: for each stream key an ID or '>' must be specified."}
+
+def xgro.opt(+k: Nat, +more: Nat, +c: Nat, +b: Bool, +na: Bool, g: Maybe<&2, String>, +con: String) -> XGr:
+  match k:
+    case 1n:
+      Bool.pick(XGr, Nat.is_lt(0n, more), XGr{c, b, na, g, con, 1n}, XGrBad{e_syntax_r()})
+    case 2n:
+      Bool.pick(XGr, Nat.is_lt(0n, more), XGr{c, b, na, g, con, 2n}, XGrBad{e_syntax_r()})
+    case 3n:
+      Bool.pick(XGr, Nat.is_lt(0n, more), Bool.pick(XGr, Nat.is_eq(Nat.mod(more, 2n), 1n), XGrBad{e_xgunbalanced()}, XGrAt{c, b, na, g, con, Nil{}}), XGrBad{e_syntax_r()})
+    case 4n:
+      Bool.pick(XGr, Nat.is_le(2n, more), XGr{c, b, na, g, con, 3n}, XGrBad{e_syntax_r()})
+    case 5n:
+      XGr{c, b, True{}, g, con, 0n}
+    case _:
+      XGrBad{e_syntax_r()}
+
+def xgro.block(l: LL, +c: Nat, +na: Bool, g: Maybe<&2, String>, +con: String) -> XGr:
+  match l:
+    case LL{True{}, hi, lo}:
+      XGrBad{RError{"ERR timeout is negative"}}
+    case LL{False{}, hi, lo}:
+      XGr{c, True{}, na, g, con, 0n}
+    case LLBad{}:
+      XGrBad{RError{"ERR timeout is not an integer or out of range"}}
+
+def xgro.count(m: Maybe<&2, Nat>, +b: Bool, +na: Bool, g: Maybe<&2, String>, +con: String) -> XGr:
+  match m:
+    case Some{+c}:
+      XGr{c, b, na, g, con, 0n}
+    case None{}:
+      XGrBad{e_int()}
+
+# the options after one more word w, more words after it
+def xgro.step(+w: String, +more: Nat, o: XGr) -> XGr:
+  match o:
+    case XGr{+c, +b, +na, g, +con, want}:
+      match want:
+        case 0n:
+          xgro.opt(xro.word(w), more, c, b, na, g, con)
+        case 1n:
+          xgro.block(ll.read(w), c, na, g, con)
+        case 2n:
+          xgro.count(xc.of(ll.read(w)), b, na, g, con)
+        case 3n:
+          XGr{c, b, na, Some{w}, con, 4n}
+        case _:
+          XGr{c, b, na, g, w, 0n}
+    case XGrAt{c, b, na, g, con, ws}:
+      XGrAt{c, b, na, g, con, w <> ws}
+    case XGrBad{r}:
+      XGrBad{r}
+
+def xgro.go(xs: List<&2, String>, +n: Nat, o: XGr) -> XGr:
+  match xs:
+    case Nil{}:
+      o
+    case Con{+w, rest}:
+      +m = Nat.sub(n, 1n)
+      xgro.go(rest, m, xgro.step(w, m, o))
+
+def xgro.cmd(o: XGr) -> Cmd:
+  match o:
+    case XGr{c, b, na, g, con, w}:
+      e_syntax()
+    case XGrAt{+c, +b, +na, Some{+g}, +con, ws}:
+      Own{SXGroup{XGq{g, con, xc.read(c), b, na, List.reverse(&2, String, ws)}}}
+    case XGrAt{c, b, na, None{}, con, ws}:
+      Bad{RError{"ERR Missing GROUP option for XREADGROUP"}}
+    case XGrBad{r}:
+      Bad{r}
+
+def xreadgroup.parse(+args: List<&2, String>) -> Cmd:
+  xgro.cmd(xgro.go(args, List.length(&2, String, args), XGr{0n, False{}, False{}, None{}, "", 0n}))
+
+# with 6 words at least (XREADGROUP's arity, -7)
+def xreadgroup.of(+args: List<&2, String>) -> Cmd:
+  Bool.pick(Cmd, Nat.is_le(6n, List.length(&2, String, args)), xreadgroup.parse(args), e_arity("xreadgroup"))
+
 # XADD key [NOMKSTREAM] [MAXLEN|MINID [=|~] threshold [LIMIT count]]
 # *|id field value [field value ...] and XTRIM key MAXLEN|MINID [=|~]
 # threshold [LIMIT count], read as streamParseAddOrTrimArgsOrReply reads
@@ -8253,9 +8779,70 @@ def parse_eval.xnew(ok: Bool, rest: List<&2, String>) -> Cmd:
     case _ _:
       e_lua()
 
+# The scripts of a stream's groups' writes (Groups' writes, below):
+# XWSet's (a consumer made, as CREATECONSUMER makes one, each pending
+# entry it names claimed with FORCE and JUSTID, at its time and with its
+# count, then the group's last ID and entries read set), XWDelCon's
+# (DELCONSUMER), and XGROUP CREATE's where a key whose time had passed lay
+# (its key deleted first, as for a new stream). BendKV reads them as
+# XWSet, XWDelCon and XWGNew when their words read so: XWSet's, as
+# xset.read reads them; XWDelCon's a group and a consumer; CREATE's a
+# group, its ID ("$" or strict) and at most three options that read,
+# MKSTREAM among them.
+def xset.script() -> String:
+  "local k,a=KEYS[1],ARGV if #a>3 then redis.call('xgroup','createconsumer',k,a[1],a[4]) for i=7,#a,3 do redis.call('xclaim',k,a[1],a[4],0,a[i],'time',a[i+1],'retrycount',a[i+2],'force','justid') end end redis.call('xgroup','setid',k,a[1],a[2],'entriesread',a[3]) return 0"
+
+def xdelcon.script() -> String:
+  "return redis.call('xgroup','delconsumer',KEYS[1],ARGV[1],ARGV[2])"
+
+def xgnew.script() -> String:
+  "redis.call('del',KEYS[1]) return redis.call('xgroup','create',KEYS[1],unpack(ARGV))"
+
+def parse_eval.op(ok: Bool, +k: String, op: XWrite) -> Cmd:
+  match ok:
+    case True{}:
+      Upd{k, UStream{op}}
+    case False{}:
+      e_lua()
+
+def parse_eval.xset(ok: Bool, rest: List<&2, String>) -> Cmd:
+  match ok rest:
+    case True{} Con{+k, +ws}:
+      parse_eval.op(xset.ok(xset.read(ws)), k, XWSet{ws})
+    case _ _:
+      e_lua()
+
+def parse_eval.xdelcon(ok: Bool, rest: List<&2, String>) -> Cmd:
+  match ok rest:
+    case True{} Con{+k, Con{+g, Con{+c, Nil{}}}}:
+      Upd{k, UStream{XWDelCon{[g, c]}}}
+    case _ _:
+      e_lua()
+
+def xgnew.ok.of(c: XGc, +n: Nat, m: Maybe<&2, KV.XId>) -> Bool:
+  match c m:
+    case XGc{True{}, rd} Some{id}:
+      Nat.is_le(n, 3n)
+    case _ _:
+      False{}
+
+def xgnew.ok(+ws: List<&2, String>) -> Bool:
+  match ws:
+    case Con{g, Con{+i, +opts}}:
+      xgnew.ok.of(xgo.read(True{}, "CREATE", opts), List.length(&2, String, opts), xgc.id(i, X.xid.zero()))
+    case _:
+      False{}
+
+def parse_eval.xgnew(ok: Bool, rest: List<&2, String>) -> Cmd:
+  match ok rest:
+    case True{} Con{+k, +ws}:
+      parse_eval.op(xgnew.ok(ws), k, XWGNew{ws})
+    case _ _:
+      e_lua()
+
 # which script: 1 a new hash's, list's or set's, 2 a list's move, 3 a
-# set's move, 4 a new sorted set's, 5 a new stream's, 0 another, the
-# engine's
+# set's move, 4 a new sorted set's, 5 a new stream's, 6 XWSet's, 7
+# XWDelCon's, 8 a new stream's group's, 0 another, the engine's
 def parse_eval.which(w: Nat, s: String, +nk: String, rest: List<&2, String>) -> Cmd:
   match w:
     case 1n:
@@ -8268,13 +8855,19 @@ def parse_eval.which(w: Nat, s: String, +nk: String, rest: List<&2, String>) -> 
       parse_eval.znew(String.eq(nk, "1"), rest)
     case 5n:
       parse_eval.xnew(String.eq(nk, "1"), rest)
+    case 6n:
+      parse_eval.xset(String.eq(nk, "1"), rest)
+    case 7n:
+      parse_eval.xdelcon(String.eq(nk, "1"), rest)
+    case 8n:
+      parse_eval.xgnew(String.eq(nk, "1"), rest)
     case _:
       eval.op(0n, s, nk, rest)
 
 def parse_eval(args: List<&2, String>) -> Cmd:
   match args:
     case Con{+s, Con{+nk, rest}}:
-      parse_eval.which(Bool.pick(Nat, String.eq(s, hnew.script()), 1n, Bool.pick(Nat, String.eq(s, lmove.script()), 2n, Bool.pick(Nat, String.eq(s, smove.script()), 3n, Bool.pick(Nat, String.eq(s, znew.script()), 4n, Bool.pick(Nat, String.eq(s, xnew.script()), 5n, 0n))))), s, nk, rest)
+      parse_eval.which(Bool.pick(Nat, String.eq(s, hnew.script()), 1n, Bool.pick(Nat, String.eq(s, lmove.script()), 2n, Bool.pick(Nat, String.eq(s, smove.script()), 3n, Bool.pick(Nat, String.eq(s, znew.script()), 4n, Bool.pick(Nat, String.eq(s, xnew.script()), 5n, Bool.pick(Nat, String.eq(s, xset.script()), 6n, Bool.pick(Nat, String.eq(s, xdelcon.script()), 7n, Bool.pick(Nat, String.eq(s, xgnew.script()), 8n, 0n)))))))), s, nk, rest)
     case _:
       e_arity("eval")
 
@@ -9302,6 +9895,33 @@ def parse_id(id: Nat, name: String, args: List<&2, String>) -> Cmd:
           +up = String.to_upper(sub)
           +n = cluster_id(up, String.length(up))
           cluster.of(n, cluster.arity.ok(n, Nat.add(List.length(&2, String, rest), 2n)), sub)
+    case 228n:  # XGROUP
+      match args:
+        case Nil{}:
+          e_arity("xgroup")
+        case Con{+sub, rest}:
+          +up = String.to_upper(sub)
+          xgroup.parse(xgroup_id(up, String.length(up)), sub, rest)
+    case 229n:  # XACK
+      match args:
+        case Con{+k, Con{+g, Con{+i, rest}}}:
+          Upd{k, UStream{XWAck{Con{g, Con{i, rest}}}}}
+        case _:
+          e_arity("xack")
+    case 230n:  # XCLAIM
+      match args:
+        case Con{+k, Con{+g, Con{+c, Con{+t, Con{+i, rest}}}}}:
+          Upd{k, UStream{XWKeyed{7n, k, Con{g, Con{c, Con{t, Con{i, rest}}}}}}}
+        case _:
+          e_arity("xclaim")
+    case 231n:  # XAUTOCLAIM
+      match args:
+        case Con{+k, Con{+g, Con{+c, Con{+t, Con{+s, rest}}}}}:
+          xautoclaim.parse(k, Con{g, Con{c, Con{t, Con{s, rest}}}})
+        case _:
+          e_arity("xautoclaim")
+    case 232n:  # XREADGROUP
+      xreadgroup.of(args)
     case _:
       e_unknown(name, args)
 
@@ -10106,6 +10726,16 @@ def stat.top(+id: Nat) -> Nat:
       222n
     case 227n:
       223n
+    case 228n:
+      224n
+    case 229n:
+      225n
+    case 230n:
+      226n
+    case 231n:
+      227n
+    case 232n:
+      228n
     case _:
       0n
 
@@ -10113,41 +10743,41 @@ def stat.top(+id: Nat) -> Nat:
 def stat.sub.client(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      224n
-    case 2n:
-      225n
-    case 3n:
-      226n
-    case 4n:
-      227n
-    case 5n:
-      228n
-    case 6n:
       229n
-    case 7n:
+    case 2n:
       230n
-    case 8n:
+    case 3n:
       231n
-    case 9n:
+    case 4n:
       232n
-    case 10n:
+    case 5n:
       233n
-    case 11n:
+    case 6n:
       234n
-    case 12n:
+    case 7n:
       235n
-    case 13n:
+    case 8n:
       236n
-    case 14n:
+    case 9n:
       237n
-    case 15n:
+    case 10n:
       238n
-    case 16n:
+    case 11n:
       239n
-    case 17n:
+    case 12n:
       240n
-    case 18n:
+    case 13n:
       241n
+    case 14n:
+      242n
+    case 15n:
+      243n
+    case 16n:
+      244n
+    case 17n:
+      245n
+    case 18n:
+      246n
     case _:
       0n
 
@@ -10155,44 +10785,28 @@ def stat.sub.client(+sub: Nat) -> Nat:
 def stat.sub.function(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      242n
-    case 2n:
-      243n
-    case 3n:
-      244n
-    case 4n:
-      245n
-    case 5n:
-      246n
-    case 6n:
       247n
-    case 7n:
+    case 2n:
       248n
-    case 8n:
+    case 3n:
       249n
-    case 9n:
+    case 4n:
       250n
+    case 5n:
+      251n
+    case 6n:
+      252n
+    case 7n:
+      253n
+    case 8n:
+      254n
+    case 9n:
+      255n
     case _:
       0n
 
 # a subcommand of CONFIG's key, by its number; 0 for none
 def stat.sub.config(+sub: Nat) -> Nat:
-  match sub:
-    case 1n:
-      251n
-    case 2n:
-      252n
-    case 3n:
-      253n
-    case 4n:
-      254n
-    case 5n:
-      255n
-    case _:
-      0n
-
-# a subcommand of COMMAND's key, by its number; 0 for none
-def stat.sub.command(+sub: Nat) -> Nat:
   match sub:
     case 1n:
       256n
@@ -10204,31 +10818,31 @@ def stat.sub.command(+sub: Nat) -> Nat:
       259n
     case 5n:
       260n
-    case 6n:
+    case _:
+      0n
+
+# a subcommand of COMMAND's key, by its number; 0 for none
+def stat.sub.command(+sub: Nat) -> Nat:
+  match sub:
+    case 1n:
       261n
-    case 7n:
+    case 2n:
       262n
+    case 3n:
+      263n
+    case 4n:
+      264n
+    case 5n:
+      265n
+    case 6n:
+      266n
+    case 7n:
+      267n
     case _:
       0n
 
 # a subcommand of OBJECT's key, by its number; 0 for none
 def stat.sub.object(+sub: Nat) -> Nat:
-  match sub:
-    case 1n:
-      263n
-    case 2n:
-      264n
-    case 3n:
-      265n
-    case 4n:
-      266n
-    case 5n:
-      267n
-    case _:
-      0n
-
-# a subcommand of MEMORY's key, by its number; 0 for none
-def stat.sub.memory(+sub: Nat) -> Nat:
   match sub:
     case 1n:
       268n
@@ -10240,8 +10854,24 @@ def stat.sub.memory(+sub: Nat) -> Nat:
       271n
     case 5n:
       272n
-    case 6n:
+    case _:
+      0n
+
+# a subcommand of MEMORY's key, by its number; 0 for none
+def stat.sub.memory(+sub: Nat) -> Nat:
+  match sub:
+    case 1n:
       273n
+    case 2n:
+      274n
+    case 3n:
+      275n
+    case 4n:
+      276n
+    case 5n:
+      277n
+    case 6n:
+      278n
     case _:
       0n
 
@@ -10249,17 +10879,17 @@ def stat.sub.memory(+sub: Nat) -> Nat:
 def stat.sub.pubsub(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      274n
-    case 2n:
-      275n
-    case 3n:
-      276n
-    case 4n:
-      277n
-    case 5n:
-      278n
-    case 6n:
       279n
+    case 2n:
+      280n
+    case 3n:
+      281n
+    case 4n:
+      282n
+    case 5n:
+      283n
+    case 6n:
+      284n
     case _:
       0n
 
@@ -10267,13 +10897,13 @@ def stat.sub.pubsub(+sub: Nat) -> Nat:
 def stat.sub.slowlog(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      280n
+      285n
     case 2n:
-      281n
+      286n
     case 3n:
-      282n
+      287n
     case 4n:
-      283n
+      288n
     case _:
       0n
 
@@ -10281,40 +10911,24 @@ def stat.sub.slowlog(+sub: Nat) -> Nat:
 def stat.sub.latency(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      284n
-    case 2n:
-      285n
-    case 3n:
-      286n
-    case 4n:
-      287n
-    case 5n:
-      288n
-    case 6n:
       289n
-    case 7n:
+    case 2n:
       290n
+    case 3n:
+      291n
+    case 4n:
+      292n
+    case 5n:
+      293n
+    case 6n:
+      294n
+    case 7n:
+      295n
     case _:
       0n
 
 # a subcommand of SCRIPT's key, by its number; 0 for none
 def stat.sub.script(+sub: Nat) -> Nat:
-  match sub:
-    case 1n:
-      291n
-    case 2n:
-      292n
-    case 3n:
-      293n
-    case 4n:
-      294n
-    case 5n:
-      295n
-    case _:
-      0n
-
-# a subcommand of ACL's key, by its number; 0 for none
-def stat.sub.acl(+sub: Nat) -> Nat:
   match sub:
     case 1n:
       296n
@@ -10326,22 +10940,38 @@ def stat.sub.acl(+sub: Nat) -> Nat:
       299n
     case 5n:
       300n
-    case 6n:
+    case _:
+      0n
+
+# a subcommand of ACL's key, by its number; 0 for none
+def stat.sub.acl(+sub: Nat) -> Nat:
+  match sub:
+    case 1n:
       301n
-    case 7n:
+    case 2n:
       302n
-    case 8n:
+    case 3n:
       303n
-    case 9n:
+    case 4n:
       304n
-    case 10n:
+    case 5n:
       305n
-    case 11n:
+    case 6n:
       306n
-    case 12n:
+    case 7n:
       307n
-    case 13n:
+    case 8n:
       308n
+    case 9n:
+      309n
+    case 10n:
+      310n
+    case 11n:
+      311n
+    case 12n:
+      312n
+    case 13n:
+      313n
     case _:
       0n
 
@@ -10349,13 +10979,31 @@ def stat.sub.acl(+sub: Nat) -> Nat:
 def stat.sub.xinfo(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      309n
+      314n
     case 2n:
-      310n
+      315n
     case 3n:
-      311n
+      316n
     case 4n:
-      312n
+      317n
+    case _:
+      0n
+
+# a subcommand of XGROUP's key, by its number; 0 for none
+def stat.sub.xgroup(+sub: Nat) -> Nat:
+  match sub:
+    case 1n:
+      318n
+    case 2n:
+      319n
+    case 3n:
+      320n
+    case 4n:
+      321n
+    case 5n:
+      322n
+    case 6n:
+      323n
     case _:
       0n
 
@@ -10363,61 +11011,61 @@ def stat.sub.xinfo(+sub: Nat) -> Nat:
 def stat.sub.cluster(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      313n
-    case 2n:
-      314n
-    case 3n:
-      315n
-    case 4n:
-      316n
-    case 5n:
-      317n
-    case 6n:
-      318n
-    case 7n:
-      319n
-    case 8n:
-      320n
-    case 9n:
-      321n
-    case 10n:
-      322n
-    case 11n:
-      323n
-    case 12n:
       324n
-    case 13n:
+    case 2n:
       325n
-    case 14n:
+    case 3n:
       326n
-    case 15n:
+    case 4n:
       327n
-    case 16n:
+    case 5n:
       328n
-    case 17n:
+    case 6n:
       329n
-    case 18n:
+    case 7n:
       330n
-    case 19n:
+    case 8n:
       331n
-    case 20n:
+    case 9n:
       332n
-    case 21n:
+    case 10n:
       333n
-    case 22n:
+    case 11n:
       334n
-    case 23n:
+    case 12n:
       335n
-    case 24n:
+    case 13n:
       336n
-    case 25n:
+    case 14n:
       337n
-    case 26n:
+    case 15n:
       338n
-    case 27n:
+    case 16n:
       339n
-    case 28n:
+    case 17n:
       340n
+    case 18n:
+      341n
+    case 19n:
+      342n
+    case 20n:
+      343n
+    case 21n:
+      344n
+    case 22n:
+      345n
+    case 23n:
+      346n
+    case 24n:
+      347n
+    case 25n:
+      348n
+    case 26n:
+      349n
+    case 27n:
+      350n
+    case 28n:
+      351n
     case _:
       0n
 
@@ -10871,238 +11519,260 @@ def stat.name(+key: Nat) -> String:
     case 223n:
       "cluster"
     case 224n:
-      "client|id"
+      "xgroup"
     case 225n:
-      "client|help"
+      "xack"
     case 226n:
-      "client|reply"
+      "xclaim"
     case 227n:
-      "client|getname"
+      "xautoclaim"
     case 228n:
-      "client|setname"
+      "xreadgroup"
     case 229n:
-      "client|caching"
+      "client|id"
     case 230n:
-      "client|unblock"
+      "client|help"
     case 231n:
-      "client|getredir"
+      "client|reply"
     case 232n:
-      "client|no-evict"
+      "client|getname"
     case 233n:
-      "client|trackinginfo"
+      "client|setname"
     case 234n:
-      "client|list"
+      "client|caching"
     case 235n:
-      "client|info"
+      "client|unblock"
     case 236n:
-      "client|kill"
+      "client|getredir"
     case 237n:
-      "client|pause"
+      "client|no-evict"
     case 238n:
-      "client|unpause"
+      "client|trackinginfo"
     case 239n:
-      "client|tracking"
+      "client|list"
     case 240n:
-      "client|setinfo"
+      "client|info"
     case 241n:
-      "client|no-touch"
+      "client|kill"
     case 242n:
-      "function|flush"
+      "client|pause"
     case 243n:
-      "function|help"
+      "client|unpause"
     case 244n:
-      "function|load"
+      "client|tracking"
     case 245n:
-      "function|delete"
+      "client|setinfo"
     case 246n:
-      "function|list"
+      "client|no-touch"
     case 247n:
-      "function|stats"
+      "function|flush"
     case 248n:
-      "function|kill"
+      "function|help"
     case 249n:
-      "function|dump"
+      "function|load"
     case 250n:
-      "function|restore"
+      "function|delete"
     case 251n:
-      "config|get"
+      "function|list"
     case 252n:
-      "config|set"
+      "function|stats"
     case 253n:
-      "config|resetstat"
+      "function|kill"
     case 254n:
-      "config|rewrite"
+      "function|dump"
     case 255n:
-      "config|help"
+      "function|restore"
     case 256n:
-      "command|info"
+      "config|get"
     case 257n:
-      "command|docs"
+      "config|set"
     case 258n:
-      "command|list"
+      "config|resetstat"
     case 259n:
-      "command|help"
+      "config|rewrite"
     case 260n:
-      "command|count"
+      "config|help"
     case 261n:
-      "command|getkeys"
+      "command|info"
     case 262n:
-      "command|getkeysandflags"
+      "command|docs"
     case 263n:
-      "object|help"
+      "command|list"
     case 264n:
-      "object|freq"
+      "command|help"
     case 265n:
-      "object|encoding"
+      "command|count"
     case 266n:
-      "object|refcount"
+      "command|getkeys"
     case 267n:
-      "object|idletime"
+      "command|getkeysandflags"
     case 268n:
-      "memory|help"
+      "object|help"
     case 269n:
-      "memory|usage"
+      "object|freq"
     case 270n:
-      "memory|stats"
+      "object|encoding"
     case 271n:
-      "memory|doctor"
+      "object|refcount"
     case 272n:
-      "memory|purge"
+      "object|idletime"
     case 273n:
-      "memory|malloc-stats"
+      "memory|help"
     case 274n:
-      "pubsub|channels"
+      "memory|usage"
     case 275n:
-      "pubsub|help"
+      "memory|stats"
     case 276n:
-      "pubsub|numpat"
+      "memory|doctor"
     case 277n:
-      "pubsub|numsub"
+      "memory|purge"
     case 278n:
-      "pubsub|shardchannels"
+      "memory|malloc-stats"
     case 279n:
-      "pubsub|shardnumsub"
+      "pubsub|channels"
     case 280n:
-      "slowlog|get"
+      "pubsub|help"
     case 281n:
-      "slowlog|len"
+      "pubsub|numpat"
     case 282n:
-      "slowlog|reset"
+      "pubsub|numsub"
     case 283n:
-      "slowlog|help"
+      "pubsub|shardchannels"
     case 284n:
-      "latency|doctor"
+      "pubsub|shardnumsub"
     case 285n:
-      "latency|graph"
+      "slowlog|get"
     case 286n:
-      "latency|help"
+      "slowlog|len"
     case 287n:
-      "latency|histogram"
+      "slowlog|reset"
     case 288n:
-      "latency|history"
+      "slowlog|help"
     case 289n:
-      "latency|latest"
+      "latency|doctor"
     case 290n:
-      "latency|reset"
+      "latency|graph"
     case 291n:
-      "script|load"
+      "latency|help"
     case 292n:
-      "script|exists"
+      "latency|histogram"
     case 293n:
-      "script|flush"
+      "latency|history"
     case 294n:
-      "script|kill"
+      "latency|latest"
     case 295n:
-      "script|help"
+      "latency|reset"
     case 296n:
-      "acl|cat"
+      "script|load"
     case 297n:
-      "acl|deluser"
+      "script|exists"
     case 298n:
-      "acl|dryrun"
+      "script|flush"
     case 299n:
-      "acl|genpass"
+      "script|kill"
     case 300n:
-      "acl|getuser"
+      "script|help"
     case 301n:
-      "acl|help"
+      "acl|cat"
     case 302n:
-      "acl|list"
+      "acl|deluser"
     case 303n:
-      "acl|load"
+      "acl|dryrun"
     case 304n:
-      "acl|log"
+      "acl|genpass"
     case 305n:
-      "acl|save"
+      "acl|getuser"
     case 306n:
-      "acl|setuser"
+      "acl|help"
     case 307n:
-      "acl|users"
+      "acl|list"
     case 308n:
-      "acl|whoami"
+      "acl|load"
     case 309n:
-      "xinfo|help"
+      "acl|log"
     case 310n:
-      "xinfo|stream"
+      "acl|save"
     case 311n:
-      "xinfo|groups"
+      "acl|setuser"
     case 312n:
-      "xinfo|consumers"
+      "acl|users"
     case 313n:
-      "cluster|addslots"
+      "acl|whoami"
     case 314n:
-      "cluster|addslotsrange"
+      "xinfo|help"
     case 315n:
-      "cluster|bumpepoch"
+      "xinfo|stream"
     case 316n:
-      "cluster|count-failure-reports"
+      "xinfo|groups"
     case 317n:
-      "cluster|countkeysinslot"
+      "xinfo|consumers"
     case 318n:
-      "cluster|delslots"
+      "xgroup|help"
     case 319n:
-      "cluster|delslotsrange"
+      "xgroup|create"
     case 320n:
-      "cluster|failover"
+      "xgroup|setid"
     case 321n:
-      "cluster|flushslots"
+      "xgroup|destroy"
     case 322n:
-      "cluster|forget"
+      "xgroup|createconsumer"
     case 323n:
-      "cluster|getkeysinslot"
+      "xgroup|delconsumer"
     case 324n:
-      "cluster|help"
+      "cluster|addslots"
     case 325n:
-      "cluster|info"
+      "cluster|addslotsrange"
     case 326n:
-      "cluster|keyslot"
+      "cluster|bumpepoch"
     case 327n:
-      "cluster|links"
+      "cluster|count-failure-reports"
     case 328n:
-      "cluster|meet"
+      "cluster|countkeysinslot"
     case 329n:
-      "cluster|myid"
+      "cluster|delslots"
     case 330n:
-      "cluster|myshardid"
+      "cluster|delslotsrange"
     case 331n:
-      "cluster|nodes"
+      "cluster|failover"
     case 332n:
-      "cluster|replicas"
+      "cluster|flushslots"
     case 333n:
-      "cluster|replicate"
+      "cluster|forget"
     case 334n:
-      "cluster|reset"
+      "cluster|getkeysinslot"
     case 335n:
-      "cluster|saveconfig"
+      "cluster|help"
     case 336n:
-      "cluster|set-config-epoch"
+      "cluster|info"
     case 337n:
-      "cluster|setslot"
+      "cluster|keyslot"
     case 338n:
-      "cluster|shards"
+      "cluster|links"
     case 339n:
-      "cluster|slaves"
+      "cluster|meet"
     case 340n:
+      "cluster|myid"
+    case 341n:
+      "cluster|myshardid"
+    case 342n:
+      "cluster|nodes"
+    case 343n:
+      "cluster|replicas"
+    case 344n:
+      "cluster|replicate"
+    case 345n:
+      "cluster|reset"
+    case 346n:
+      "cluster|saveconfig"
+    case 347n:
+      "cluster|set-config-epoch"
+    case 348n:
+      "cluster|setslot"
+    case 349n:
+      "cluster|shards"
+    case 350n:
+      "cluster|slaves"
+    case 351n:
       "cluster|slots"
     case _:
       ""
@@ -11558,238 +12228,260 @@ def stat.arity(+key: Nat) -> Nat:
     case 223n:
       5n
     case 224n:
-      4n
-    case 225n:
-      4n
-    case 226n:
-      6n
-    case 227n:
-      4n
-    case 228n:
-      6n
-    case 229n:
-      6n
-    case 230n:
-      7n
-    case 231n:
-      4n
-    case 232n:
-      6n
-    case 233n:
-      4n
-    case 234n:
       5n
-    case 235n:
+    case 225n:
+      9n
+    case 226n:
+      13n
+    case 227n:
+      13n
+    case 228n:
+      15n
+    case 229n:
       4n
+    case 230n:
+      4n
+    case 231n:
+      6n
+    case 232n:
+      4n
+    case 233n:
+      6n
+    case 234n:
+      6n
+    case 235n:
+      7n
     case 236n:
-      7n
+      4n
     case 237n:
-      7n
+      6n
     case 238n:
       4n
     case 239n:
-      7n
-    case 240n:
-      8n
-    case 241n:
-      6n
-    case 242n:
       5n
+    case 240n:
+      4n
+    case 241n:
+      7n
+    case 242n:
+      7n
     case 243n:
       4n
     case 244n:
       7n
     case 245n:
-      6n
+      8n
     case 246n:
-      5n
+      6n
     case 247n:
-      4n
+      5n
     case 248n:
       4n
     case 249n:
-      4n
+      7n
     case 250n:
-      7n
+      6n
     case 251n:
-      7n
+      5n
     case 252n:
-      9n
+      4n
     case 253n:
       4n
     case 254n:
       4n
     case 255n:
-      4n
+      7n
     case 256n:
-      5n
+      7n
     case 257n:
-      5n
+      9n
     case 258n:
-      5n
+      4n
     case 259n:
       4n
     case 260n:
       4n
     case 261n:
-      7n
+      5n
     case 262n:
-      7n
+      5n
     case 263n:
-      4n
+      5n
     case 264n:
-      6n
+      4n
     case 265n:
-      6n
+      4n
     case 266n:
-      6n
+      7n
     case 267n:
-      6n
+      7n
     case 268n:
       4n
     case 269n:
-      7n
+      6n
     case 270n:
-      4n
+      6n
     case 271n:
-      4n
+      6n
     case 272n:
-      4n
+      6n
     case 273n:
       4n
     case 274n:
-      5n
+      7n
     case 275n:
       4n
     case 276n:
       4n
     case 277n:
-      5n
+      4n
     case 278n:
-      5n
+      4n
     case 279n:
       5n
     case 280n:
-      5n
+      4n
     case 281n:
       4n
     case 282n:
-      4n
+      5n
     case 283n:
-      4n
+      5n
     case 284n:
-      4n
+      5n
     case 285n:
-      6n
+      5n
     case 286n:
       4n
     case 287n:
-      5n
+      4n
     case 288n:
-      6n
+      4n
     case 289n:
       4n
     case 290n:
-      5n
-    case 291n:
       6n
+    case 291n:
+      4n
     case 292n:
-      7n
-    case 293n:
       5n
+    case 293n:
+      6n
     case 294n:
       4n
     case 295n:
-      4n
-    case 296n:
       5n
+    case 296n:
+      6n
     case 297n:
       7n
     case 298n:
-      9n
-    case 299n:
       5n
+    case 299n:
+      4n
     case 300n:
-      6n
+      4n
     case 301n:
-      4n
+      5n
     case 302n:
-      4n
+      7n
     case 303n:
-      4n
+      9n
     case 304n:
       5n
     case 305n:
-      4n
+      6n
     case 306n:
-      7n
+      4n
     case 307n:
       4n
     case 308n:
       4n
     case 309n:
-      4n
+      5n
     case 310n:
-      7n
-    case 311n:
-      6n
-    case 312n:
-      8n
-    case 313n:
-      7n
-    case 314n:
-      9n
-    case 315n:
       4n
+    case 311n:
+      7n
+    case 312n:
+      4n
+    case 313n:
+      4n
+    case 314n:
+      4n
+    case 315n:
+      7n
     case 316n:
       6n
     case 317n:
-      6n
-    case 318n:
-      7n
-    case 319n:
-      9n
-    case 320n:
-      5n
-    case 321n:
-      4n
-    case 322n:
-      6n
-    case 323n:
       8n
+    case 318n:
+      4n
+    case 319n:
+      11n
+    case 320n:
+      11n
+    case 321n:
+      8n
+    case 322n:
+      10n
+    case 323n:
+      10n
     case 324n:
-      4n
+      7n
     case 325n:
-      4n
-    case 326n:
-      6n
-    case 327n:
-      4n
-    case 328n:
       9n
-    case 329n:
+    case 326n:
       4n
-    case 330n:
-      4n
-    case 331n:
-      4n
-    case 332n:
+    case 327n:
       6n
+    case 328n:
+      6n
+    case 329n:
+      7n
+    case 330n:
+      9n
+    case 331n:
+      5n
+    case 332n:
+      4n
     case 333n:
       6n
     case 334n:
-      5n
+      8n
     case 335n:
       4n
     case 336n:
-      6n
+      4n
     case 337n:
-      9n
+      6n
     case 338n:
       4n
     case 339n:
-      6n
+      9n
     case 340n:
+      4n
+    case 341n:
+      4n
+    case 342n:
+      4n
+    case 343n:
+      6n
+    case 344n:
+      6n
+    case 345n:
+      5n
+    case 346n:
+      4n
+    case 347n:
+      6n
+    case 348n:
+      9n
+    case 349n:
+      4n
+    case 350n:
+      6n
+    case 351n:
       4n
     case _:
       1n
@@ -12073,17 +12765,35 @@ def stat.risky(+key: Nat) -> Bool:
       True{}
     case 220n:
       True{}
-    case 264n:
+    case 225n:
       True{}
-    case 267n:
+    case 226n:
+      True{}
+    case 227n:
+      True{}
+    case 228n:
       True{}
     case 269n:
       True{}
-    case 310n:
+    case 272n:
       True{}
-    case 311n:
+    case 274n:
       True{}
-    case 312n:
+    case 315n:
+      True{}
+    case 316n:
+      True{}
+    case 317n:
+      True{}
+    case 319n:
+      True{}
+    case 320n:
+      True{}
+    case 321n:
+      True{}
+    case 322n:
+      True{}
+    case 323n:
       True{}
     case _:
       False{}
@@ -12104,25 +12814,25 @@ def stat.engine(+key: Nat) -> Bool:
       True{}
     case 209n:
       True{}
-    case 242n:
-      True{}
-    case 244n:
-      True{}
-    case 245n:
-      True{}
-    case 246n:
-      True{}
     case 247n:
       True{}
     case 249n:
       True{}
     case 250n:
       True{}
-    case 291n:
+    case 251n:
       True{}
-    case 292n:
+    case 252n:
       True{}
-    case 293n:
+    case 254n:
+      True{}
+    case 255n:
+      True{}
+    case 296n:
+      True{}
+    case 297n:
+      True{}
+    case 298n:
       True{}
     case _:
       False{}
@@ -12148,95 +12858,95 @@ def stat.unseen(+key: Nat) -> Bool:
       True{}
     case 222n:
       True{}
-    case 230n:
-      True{}
-    case 232n:
-      True{}
-    case 234n:
-      True{}
-    case 236n:
+    case 235n:
       True{}
     case 237n:
       True{}
-    case 238n:
+    case 239n:
       True{}
-    case 251n:
+    case 241n:
       True{}
-    case 252n:
+    case 242n:
       True{}
-    case 253n:
+    case 243n:
       True{}
-    case 254n:
+    case 256n:
       True{}
-    case 280n:
+    case 257n:
       True{}
-    case 281n:
+    case 258n:
       True{}
-    case 282n:
-      True{}
-    case 284n:
+    case 259n:
       True{}
     case 285n:
       True{}
-    case 287n:
+    case 286n:
       True{}
-    case 288n:
+    case 287n:
       True{}
     case 289n:
       True{}
     case 290n:
       True{}
-    case 297n:
+    case 292n:
       True{}
-    case 298n:
+    case 293n:
       True{}
-    case 300n:
+    case 294n:
+      True{}
+    case 295n:
       True{}
     case 302n:
       True{}
     case 303n:
       True{}
-    case 304n:
-      True{}
     case 305n:
-      True{}
-    case 306n:
       True{}
     case 307n:
       True{}
-    case 313n:
+    case 308n:
       True{}
-    case 314n:
+    case 309n:
       True{}
-    case 315n:
+    case 310n:
       True{}
-    case 316n:
+    case 311n:
       True{}
-    case 318n:
+    case 312n:
       True{}
-    case 319n:
+    case 324n:
       True{}
-    case 320n:
+    case 325n:
       True{}
-    case 321n:
+    case 326n:
       True{}
-    case 322n:
+    case 327n:
       True{}
-    case 328n:
+    case 329n:
+      True{}
+    case 330n:
+      True{}
+    case 331n:
       True{}
     case 332n:
       True{}
     case 333n:
       True{}
-    case 334n:
-      True{}
-    case 335n:
-      True{}
-    case 336n:
-      True{}
-    case 337n:
-      True{}
     case 339n:
+      True{}
+    case 343n:
+      True{}
+    case 344n:
+      True{}
+    case 345n:
+      True{}
+    case 346n:
+      True{}
+    case 347n:
+      True{}
+    case 348n:
+      True{}
+    case 350n:
       True{}
     case _:
       False{}
@@ -12605,29 +13315,47 @@ def stat.keyspace(+key: Nat) -> Bool:
       True{}
     case 220n:
       True{}
-    case 242n:
+    case 225n:
       True{}
-    case 244n:
+    case 226n:
       True{}
-    case 245n:
+    case 227n:
+      True{}
+    case 228n:
+      True{}
+    case 247n:
+      True{}
+    case 249n:
       True{}
     case 250n:
       True{}
-    case 264n:
-      True{}
-    case 265n:
-      True{}
-    case 266n:
-      True{}
-    case 267n:
+    case 255n:
       True{}
     case 269n:
       True{}
-    case 310n:
+    case 270n:
       True{}
-    case 311n:
+    case 271n:
       True{}
-    case 312n:
+    case 272n:
+      True{}
+    case 274n:
+      True{}
+    case 315n:
+      True{}
+    case 316n:
+      True{}
+    case 317n:
+      True{}
+    case 319n:
+      True{}
+    case 320n:
+      True{}
+    case 321n:
+      True{}
+    case 322n:
+      True{}
+    case 323n:
       True{}
     case _:
       False{}
@@ -12834,13 +13562,31 @@ def stat.pausable(+key: Nat) -> Bool:
       True{}
     case 220n:
       True{}
-    case 242n:
+    case 225n:
       True{}
-    case 244n:
+    case 226n:
       True{}
-    case 245n:
+    case 227n:
+      True{}
+    case 228n:
+      True{}
+    case 247n:
+      True{}
+    case 249n:
       True{}
     case 250n:
+      True{}
+    case 255n:
+      True{}
+    case 319n:
+      True{}
+    case 320n:
+      True{}
+    case 321n:
+      True{}
+    case 322n:
+      True{}
+    case 323n:
       True{}
     case _:
       False{}
@@ -13037,13 +13783,31 @@ def stat.write(+key: Nat) -> Bool:
       True{}
     case 220n:
       True{}
-    case 242n:
+    case 225n:
       True{}
-    case 244n:
+    case 226n:
       True{}
-    case 245n:
+    case 227n:
+      True{}
+    case 228n:
+      True{}
+    case 247n:
+      True{}
+    case 249n:
       True{}
     case 250n:
+      True{}
+    case 255n:
+      True{}
+    case 319n:
+      True{}
+    case 320n:
+      True{}
+    case 321n:
+      True{}
+    case 322n:
+      True{}
+    case 323n:
       True{}
     case _:
       False{}
@@ -13107,17 +13871,7 @@ def stat.noscript(+key: Nat) -> Bool:
       True{}
     case 222n:
       True{}
-    case 224n:
-      True{}
-    case 226n:
-      True{}
-    case 227n:
-      True{}
-    case 228n:
-      True{}
     case 229n:
-      True{}
-    case 230n:
       True{}
     case 231n:
       True{}
@@ -13143,6 +13897,8 @@ def stat.noscript(+key: Nat) -> Bool:
       True{}
     case 242n:
       True{}
+    case 243n:
+      True{}
     case 244n:
       True{}
     case 245n:
@@ -13150,8 +13906,6 @@ def stat.noscript(+key: Nat) -> Bool:
     case 246n:
       True{}
     case 247n:
-      True{}
-    case 248n:
       True{}
     case 249n:
       True{}
@@ -13165,25 +13919,27 @@ def stat.noscript(+key: Nat) -> Bool:
       True{}
     case 254n:
       True{}
-    case 284n:
+    case 255n:
       True{}
-    case 285n:
+    case 256n:
       True{}
-    case 287n:
+    case 257n:
       True{}
-    case 288n:
+    case 258n:
+      True{}
+    case 259n:
       True{}
     case 289n:
       True{}
     case 290n:
-      True{}
-    case 291n:
       True{}
     case 292n:
       True{}
     case 293n:
       True{}
     case 294n:
+      True{}
+    case 295n:
       True{}
     case 296n:
       True{}
@@ -13193,7 +13949,7 @@ def stat.noscript(+key: Nat) -> Bool:
       True{}
     case 299n:
       True{}
-    case 300n:
+    case 301n:
       True{}
     case 302n:
       True{}
@@ -13203,13 +13959,21 @@ def stat.noscript(+key: Nat) -> Bool:
       True{}
     case 305n:
       True{}
-    case 306n:
-      True{}
     case 307n:
       True{}
     case 308n:
       True{}
-    case 334n:
+    case 309n:
+      True{}
+    case 310n:
+      True{}
+    case 311n:
+      True{}
+    case 312n:
+      True{}
+    case 313n:
+      True{}
+    case 345n:
       True{}
     case _:
       False{}
@@ -13236,11 +14000,11 @@ def stat.allow_busy(+key: Nat) -> Bool:
       True{}
     case 187n:
       True{}
-    case 247n:
+    case 252n:
       True{}
-    case 248n:
+    case 253n:
       True{}
-    case 294n:
+    case 299n:
       True{}
     case _:
       False{}
@@ -13363,9 +14127,13 @@ def stat.denyoom(+key: Nat) -> Bool:
       True{}
     case 220n:
       True{}
-    case 244n:
+    case 249n:
       True{}
-    case 250n:
+    case 255n:
+      True{}
+    case 319n:
+      True{}
+    case 322n:
       True{}
     case _:
       False{}
@@ -13562,14 +14330,32 @@ def stat.dirty(+key: Nat) -> Nat:
       2n
     case 220n:
       1n
-    case 242n:
+    case 225n:
+      2n
+    case 226n:
+      10n
+    case 227n:
+      10n
+    case 228n:
+      10n
+    case 247n:
       1n
-    case 244n:
-      1n
-    case 245n:
+    case 249n:
       1n
     case 250n:
       1n
+    case 255n:
+      1n
+    case 319n:
+      1n
+    case 320n:
+      1n
+    case 321n:
+      2n
+    case 322n:
+      2n
+    case 323n:
+      10n
     case _:
       0n
 
@@ -13774,6 +14560,12 @@ def stat.fast(+key: Nat) -> Bool:
       True{}
     case 220n:
       True{}
+    case 225n:
+      True{}
+    case 226n:
+      True{}
+    case 227n:
+      True{}
     case _:
       False{}
 
@@ -13954,21 +14746,21 @@ def stat.ro(+key: Nat) -> Bool:
       True{}
     case 216n:
       True{}
-    case 264n:
-      True{}
-    case 265n:
-      True{}
-    case 266n:
-      True{}
-    case 267n:
-      True{}
     case 269n:
       True{}
-    case 310n:
+    case 270n:
       True{}
-    case 311n:
+    case 271n:
       True{}
-    case 312n:
+    case 272n:
+      True{}
+    case 274n:
+      True{}
+    case 315n:
+      True{}
+    case 316n:
+      True{}
+    case 317n:
       True{}
     case _:
       False{}
@@ -14277,6 +15069,12 @@ def stat.touch(+key: Nat) -> Bool:
     case 219n:
       True{}
     case 220n:
+      True{}
+    case 225n:
+      True{}
+    case 226n:
+      True{}
+    case 227n:
       True{}
     case _:
       False{}
@@ -14966,6 +15764,28 @@ def stat.kw(+key: Nat) -> U32:
       1565
     case 340n:
       1566
+    case 341n:
+      1575
+    case 342n:
+      1579
+    case 343n:
+      1581
+    case 344n:
+      1582
+    case 345n:
+      1587
+    case 346n:
+      1589
+    case 347n:
+      1590
+    case 348n:
+      1593
+    case 349n:
+      1594
+    case 350n:
+      1596
+    case 351n:
+      1607
     case _:
       63
 
@@ -15773,6 +16593,33 @@ def stat.key.lo24(+lo: Nat) -> Nat:
       339n
     case 30n:
       340n
+    case 39n:
+      341n
+    case 43n:
+      342n
+    case 45n:
+      343n
+    case 46n:
+      344n
+    case 51n:
+      345n
+    case 53n:
+      346n
+    case 54n:
+      347n
+    case 57n:
+      348n
+    case 58n:
+      349n
+    case 60n:
+      350n
+    case _:
+      0n
+
+def stat.key.lo25(+lo: Nat) -> Nat:
+  match lo:
+    case 7n:
+      351n
     case _:
       0n
 
@@ -15828,6 +16675,8 @@ def stat.key.hl(+hi: Nat, +lo: Nat) -> Nat:
       stat.key.lo23(lo)
     case 24n:
       stat.key.lo24(lo)
+    case 25n:
+      stat.key.lo25(lo)
     case _:
       0n
 
@@ -15851,7 +16700,7 @@ def stat.mark.restore() -> U32:
 # END gen_commands: stats
 
 # a container (CLIENT, FUNCTION, CONFIG, COMMAND, OBJECT, MEMORY, PUBSUB,
-# SLOWLOG, LATENCY, SCRIPT, ACL, XINFO, CLUSTER)
+# SLOWLOG, LATENCY, SCRIPT, ACL, XINFO, CLUSTER, XGROUP)
 # by its first argument; alone, the container itself (top)
 def stat.sub.of(id: Nat, +up: String) -> Nat:
   match id:
@@ -15879,6 +16728,8 @@ def stat.sub.of(id: Nat, +up: String) -> Nat:
       stat.sub.xinfo(xinfo_id(up, String.length(up)))
     case 227n:
       stat.sub.cluster(cluster_id(up, String.length(up)))
+    case 228n:
+      stat.sub.xgroup(xgroup_id(up, String.length(up)))
     case _:
       stat.sub.command(command_id(up, String.length(up)))
 
@@ -15918,6 +16769,8 @@ def stat.key(+id: Nat, +args: List<&2, String>) -> Nat:
       stat.key.args(stat.top(215n), 215n, args)
     case 227n:
       stat.key.args(stat.top(227n), 227n, args)
+    case 228n:
+      stat.key.args(stat.top(228n), 228n, args)
     case _:
       stat.top(id)
 
@@ -18777,8 +19630,9 @@ def peek.v(c: PeekOp, +now: Nat, m: Maybe<&2, KV.Item<KV.Val>>) -> Reply:
 # to the value v of a payload p, with its time e (CRestore: RESTORE's,
 # which the append-only file logs as the RESTORE of p); or set it to a
 # stream: one the key held, changed by a write of a stream, its time kept
-# (CStream), or a new one, with no time, made by XADD where the key was
-# not there at now (CStreamNew: the XADD's words ws); each keeps the
+# (CStream), or a new one, with no time, made where the key was not
+# there at now by XADD or XGROUP CREATE with MKSTREAM (CStreamNew: the
+# write, XWAdd or XWGroup); each keeps the
 # write resolved (Stream writes, below). Each keeps the write the
 # append-only file logs. An
 # Upd's reply and change come from the key's entry there at now alone. A
@@ -18804,7 +19658,7 @@ type Change is Data:
   CZsetNew{o: ZOpts, ps: List<&2, ZPair>, z: KV.Zset}
   CRestore{p: String, v: KV.Val, e: Nat}
   CStream{op: XWrite, x: KV.XStream}
-  CStreamNew{ws: List<&2, String>, x: KV.XStream}
+  CStreamNew{op: XWrite, x: KV.XStream}
 
 type Out is Data:
   Out{r: Reply, ch: Change}
@@ -20666,7 +21520,7 @@ def xadd.trim(t: XTo, +x1: KV.XStream) -> KV.XStream:
 def xadd.out(fresh: Bool, +ws: List<&2, String>, r: Reply, x2: KV.XStream) -> Out:
   match fresh:
     case True{}:
-      Out{r, CStreamNew{ws, x2}}
+      Out{r, CStreamNew{XWAdd{ws}, x2}}
     case False{}:
       Out{r, CStream{XWAdd{ws}, x2}}
 
@@ -20885,6 +21739,631 @@ def xsetid.none(s: XS) -> Out:
     case XS{id, a, md}:
       Out{RError{"ERR no such key"}, CKeep{}}
 
+# Groups' writes
+# --------------
+# XGROUP, XACK, XCLAIM and XAUTOCLAIM as Redis 7.2.16 runs them
+# (t_stream.c), on the stream the key holds, after the words the parser
+# read (The commands of a stream's groups, above); stream.bend's Groups'
+# writes change the groups. A write keeps what reads no clock as it came
+# (CREATE, DESTROY, XACK); one that does keeps what it did, resolved: the
+# words of XWSet (a group's last ID and entries read, and a consumer's
+# times and the pending entries it got or lost) or of XWDelCon (a
+# consumer deleted), which the file logs as BendKV's scripts. Such a
+# write is planned first (XPlan: its reply, and the words of its change
+# or none); its change is that of the words, run as the file's command
+# runs them, so that replayed it is the same.
+
+def e_xbusy() -> Reply:
+  RError{"BUSYGROUP Consumer Group name already exists"}
+
+def e_xneedkey() -> Reply:
+  RError{"ERR The XGROUP subcommand requires the key to exist. Note that for CREATE you may want to use the MKSTREAM option to create an empty stream automatically."}
+
+# XGROUP's NOGROUP (XCLAIM's and XAUTOCLAIM's is XPENDING's, e_xnogroup)
+def e_xgkey(+k: String, +g: String) -> Reply:
+  RError{e_fmt("NOGROUP No such consumer group '" ++ cstr(g) ++ "' for key name '" ++ cstr(k) ++ "'")}
+
+def xset.g.of(m: Maybe<&2, KV.XGroup>, +x: KV.XStream, +last: KV.XId, rd: KV.XRd) -> Maybe<&2, KV.XStream>:
+  match m:
+    case Some{+g}:
+      Some{X.xs.gsetid(x, g, last, rd)}
+    case None{}:
+      None{}
+
+def xset.apply(c: Maybe<&2, XSetC>, +x: KV.XStream, +g: String, +last: KV.XId, rd: KV.XRd) -> Maybe<&2, KV.XStream>:
+  match c:
+    case Some{XSetC{+cn, +seen, a, ns}}:
+      X.xs.gset(x, g, cn, seen, a, ns, last, rd)
+    case None{}:
+      xset.g.of(X.xs.group(x, g), x, last, rd)
+
+def xset.out(m: Maybe<&2, KV.XStream>, +ws: List<&2, String>) -> Out:
+  match m:
+    case Some{x2}:
+      Out{r_int(0n), CStream{XWSet{ws}, x2}}
+    case None{}:
+      Out{e_xres(), CKeep{}}
+
+# XWSet of the words ws (s: as they read) on x: 0, as its script answers
+def xset.fin(s: XSet, +ws: List<&2, String>, +x: KV.XStream) -> Out:
+  match s:
+    case XSet{+g, +last, rd, c}:
+      xset.out(xset.apply(c, x, g, last, rd), ws)
+    case XSetBad{}:
+      Out{e_xres(), CKeep{}}
+
+# XWSet's words, made
+def xset.act.show(a: KV.XAct) -> String:
+  match a:
+    case KV.XActNone{}:
+      "-1"
+    case KV.XActAt{+t}:
+      Nat.show(t)
+
+def xset.rd.show(r: KV.XRd) -> String:
+  match r:
+    case KV.XRdNone{}:
+      "-1"
+    case KV.XRdN{+n}:
+      KV.xn.show(n)
+
+# the pending entries' words, the newest of ns last
+def xset.ns.words(ns: List<&2, X.XSn>, acc: List<&2, String>) -> List<&2, String>:
+  match ns:
+    case Nil{}:
+      acc
+    case Con{X.XSn{+id, +t, +n}, rest}:
+      xset.ns.words(rest, X.xid.show(id) <> Nat.show(t) <> KV.xn.show(n) <> acc)
+
+def xset.words.g(+g: String, +last: KV.XId, rd: KV.XRd) -> List<&2, String>:
+  [g, X.xid.show(last), xset.rd.show(rd)]
+
+# the words of a group g after a write by consumer c, seen at seen, its
+# active time a, the pending entries ns it names (the newest first)
+def xset.words(+g: KV.XGroup, +c: String, +seen: Nat, a: KV.XAct, ns: List<&2, X.XSn>) -> List<&2, String>:
+  List.append(&2, String, xset.words.g(KV.xgroup.name(g), X.xgroup.last(g), X.xgroup.read(g)), c <> Nat.show(seen) <> xset.act.show(a) <> xset.ns.words(ns, Nil{}))
+
+# XWDelCon: the consumer of the group deleted, the reply its pending
+# entries (0 for none: no change)
+def xdelcon.con(m: Maybe<&2, KV.XCon>, +g: KV.XGroup, +ws: List<&2, String>, +x: KV.XStream) -> Out:
+  match m:
+    case Some{+c}:
+      Out{r_int(KV.xis.size(X.xcon.ids(c))), CStream{XWDelCon{ws}, X.xs.gdelcon(x, g, c)}}
+    case None{}:
+      Out{r_int(0n), CKeep{}}
+
+def xdelcon.of(m: Maybe<&2, KV.XGroup>, +c: String, +ws: List<&2, String>, +x: KV.XStream) -> Out:
+  match m:
+    case Some{+g}:
+      xdelcon.con(X.xgroup.con(g, c), g, ws, x)
+    case None{}:
+      Out{r_int(0n), CKeep{}}
+
+def xdelcon.fin(+ws: List<&2, String>, +x: KV.XStream) -> Out:
+  match ws:
+    case Con{+g, Con{+c, Nil{}}}:
+      xdelcon.of(X.xs.group(x, g), c, [g, c], x)
+    case _:
+      Out{e_xres(), CKeep{}}
+
+# A write planned: its reply and no change; its reply, the words of the
+# XWSet it makes and the changes Redis counts for it (server.dirty); or
+# the words of the XWDelCon it makes (its reply and change XWDelCon's)
+# and the changes counted
+type XPlan is Data:
+  XPlanNone{r: Reply}
+  XPlanSet{r: Reply, ws: List<&2, String>, n: Nat}
+  XPlanDel{ws: List<&2, String>, n: Nat}
+
+def xplan.of(+r: Reply, o: Out) -> Out:
+  match o:
+    case Out{q, ch}:
+      Out{r, ch}
+
+def xplan.out(p: XPlan, +x: KV.XStream) -> Out:
+  match p:
+    case XPlanNone{r}:
+      Out{r, CKeep{}}
+    case XPlanSet{+r, +ws, n}:
+      xplan.of(r, xset.fin(xset.read(ws), ws, x))
+    case XPlanDel{+ws, n}:
+      xdelcon.fin(ws, x)
+
+def xplan.n(p: XPlan) -> Nat:
+  match p:
+    case XPlanNone{r}:
+      0n
+    case XPlanSet{r, ws, +n}:
+      n
+    case XPlanDel{ws, +n}:
+      n
+
+# XGROUP CREATE: its group, its ID ("$" the stream's last, 0-0 for a key
+# not there; else strict), its options (c: as they read): with a key not
+# there (fresh, x empty) MKSTREAM, else the error of a key not there;
+# then 2 to 5 words, else the subcommand's syntax error (named CREATE, as
+# the write keeps no word of it); BUSYGROUP for a group of the name there
+def xgc.made(fresh: Bool, +ws: List<&2, String>, x2: KV.XStream) -> Out:
+  match fresh:
+    case True{}:
+      Out{r_ok(), CStreamNew{XWGroup{2n, ws}, x2}}
+    case False{}:
+      Out{r_ok(), CStream{XWGroup{2n, ws}, x2}}
+
+def xgc.out(m: Maybe<&2, KV.XStream>, +fresh: Bool, +ws: List<&2, String>) -> Out:
+  match m:
+    case Some{x2}:
+      xgc.made(fresh, ws, x2)
+    case None{}:
+      Out{e_xbusy(), CKeep{}}
+
+def xgc.at(m: Maybe<&2, KV.XId>, rd: KV.XRd, +fresh: Bool, +g: String, +i: String, +opts: List<&2, String>, +x: KV.XStream) -> Out:
+  match m:
+    case Some{+id}:
+      xgc.out(X.xs.gcreate(x, g, id, rd), fresh, Con{g, Con{i, opts}})
+    case None{}:
+      Out{e_xid(), CKeep{}}
+
+def xgc.args(ok: Bool, rd: KV.XRd, +fresh: Bool, +g: String, +i: String, +opts: List<&2, String>, +x: KV.XStream) -> Out:
+  match ok:
+    case True{}:
+      xgc.at(xgc.id(i, X.xstream.last(x)), rd, fresh, g, i, opts, x)
+    case False{}:
+      Out{e_sub_syntax("CREATE", "XGROUP"), CKeep{}}
+
+def xgc.mk(need: Bool, rd: KV.XRd, +fresh: Bool, +g: String, +i: String, +opts: List<&2, String>, +x: KV.XStream) -> Out:
+  match need:
+    case True{}:
+      Out{e_xneedkey(), CKeep{}}
+    case False{}:
+      xgc.args(Nat.is_le(List.length(&2, String, opts), 3n), rd, fresh, g, i, opts, x)
+
+def xgc.go(c: XGc, +fresh: Bool, +g: String, +i: String, +opts: List<&2, String>, +x: KV.XStream) -> Out:
+  match c:
+    case XGc{+mk, rd}:
+      xgc.mk(Bool.and(fresh, Bool.not(mk)), rd, fresh, g, i, opts, x)
+    case XGcBad{r}:
+      Out{r, CKeep{}}
+
+def xgc.run(+ws: List<&2, String>, +fresh: Bool, +x: KV.XStream) -> Out:
+  match ws:
+    case Con{+g, Con{+i, +opts}}:
+      xgc.go(xgo.read(True{}, "CREATE", opts), fresh, g, i, opts, x)
+    case _:
+      Out{e_xres(), CKeep{}}
+
+# XGROUP DESTROY: 1 and the group gone, 0 for none of the name
+def xgd.of(has: Bool, +g: String, +x: KV.XStream) -> Out:
+  match has:
+    case True{}:
+      Out{r_int(1n), CStream{XWGroup{4n, [g]}, X.xs.gdestroy(x, g)}}
+    case False{}:
+      Out{r_int(0n), CKeep{}}
+
+def xgd.run(+ws: List<&2, String>, +x: KV.XStream) -> Out:
+  match ws:
+    case Con{+g, Nil{}}:
+      xgd.of(Maybe.is_some(&2, KV.XGroup, X.xs.group(x, g)), g, x)
+    case _:
+      Out{e_xres(), CKeep{}}
+
+# XGROUP of the form the file keeps (CREATE, DESTROY) on x (fresh: a key
+# not there, x empty)
+def xgroup.run(+sub: Nat, +ws: List<&2, String>, +fresh: Bool, +x: KV.XStream) -> Out:
+  match sub:
+    case 2n:
+      xgc.run(ws, fresh, x)
+    case 4n:
+      xgd.run(ws, x)
+    case _:
+      Out{e_xres(), CKeep{}}
+
+# XGROUP SETID: 2 or 4 words (else its syntax error), its ID ("$" the
+# stream's last; else read as streamParseIDOrReply reads one, "-" and
+# "+" too), ENTRIESREAD's count (none: -1); OK
+def xgs.at(m: Maybe<&2, KV.XId>, rd: KV.XRd, +g: String) -> XPlan:
+  match m:
+    case Some{+id}:
+      XPlanSet{r_ok(), xset.words.g(g, id, rd), 1n}
+    case None{}:
+      XPlanNone{e_xid()}
+
+def xgs.id(+s: String, +last: KV.XId) -> Maybe<&2, KV.XId>:
+  Bool.pick(Maybe<&2, KV.XId>, String.eq(cstr(s), "$"), Some{last}, X.xid.parse(s, False{}, X.xn.zero()))
+
+def xgs.go(c: XGc, ok: Bool, +g: String, +i: String, +x: KV.XStream) -> XPlan:
+  match c ok:
+    case XGc{mk, rd} True{}:
+      xgs.at(xgs.id(i, X.xstream.last(x)), rd, g)
+    case XGc{mk, rd} False{}:
+      XPlanNone{e_sub_syntax("SETID", "XGROUP")}
+    case XGcBad{r} _:
+      XPlanNone{r}
+
+def xgs.plan(+ws: List<&2, String>, +x: KV.XStream) -> XPlan:
+  match ws:
+    case Con{+g, Con{+i, +opts}}:
+      +n = List.length(&2, String, opts)
+      xgs.go(xgo.read(False{}, "SETID", opts), Bool.or(Nat.is_eq(n, 0n), Nat.is_eq(n, 2n)), g, i, x)
+    case _:
+      XPlanNone{e_xres()}
+
+# XGROUP CREATECONSUMER: 1 and the consumer made, seen now (its active
+# time none), or 0 for one there
+def xgcc.of(m: Maybe<&2, KV.XCon>, +g: KV.XGroup, +c: String, +now: Nat) -> XPlan:
+  match m:
+    case Some{k}:
+      XPlanNone{r_int(0n)}
+    case None{}:
+      XPlanSet{r_int(1n), xset.words(g, c, now, KV.XActNone{}, Nil{}), 1n}
+
+# DELCONSUMER: XWDelCon's reply and change, and one change counted for a
+# consumer there (0 and none for one not there)
+def xgdc.of(has: Bool, +g: String, +c: String) -> XPlan:
+  match has:
+    case True{}:
+      XPlanDel{[g, c], 1n}
+    case False{}:
+      XPlanNone{r_int(0n)}
+
+def xgdc.plan(+g: KV.XGroup, +c: String) -> XPlan:
+  xgdc.of(Maybe.is_some(&2, KV.XCon, X.xgroup.con(g, c)), KV.xgroup.name(g), c)
+
+# XCLAIM key group consumer min-idle-time id... [IDLE ms] [TIME ms]
+# [RETRYCOUNT count] [FORCE] [JUSTID] [LASTID id], its words after the
+# group read as xclaimCommand reads them once the group is found: the
+# time (a long long, below 0 as 0), the IDs (strict) up to the first word
+# that is none, then the options, each of IDLE, TIME, RETRYCOUNT and
+# LASTID with a word after it (a long long; LASTID's a strict ID), FORCE
+# and JUSTID, any other word "Unrecognized XCLAIM option"; the last of a
+# kind holding. The delivery time at now: TIME's, now less IDLE's, now
+# for one below 0 or past now, or none given; RETRYCOUNT below 0 is none.
+type XCo is Data:
+  XCo{force: Bool, justid: Bool, dt: Nat, retry: Maybe<&2, KV.XN>, last: KV.XId}
+  XCoBad{r: Reply}
+
+def e_xclaimidle() -> Reply:
+  RError{"ERR Invalid min-idle-time argument for XCLAIM"}
+
+# the IDs, up to the first word that is none (m: the first word's)
+type XCi is Data:
+  XCi{ids: List<&2, KV.XId>, rest: List<&2, String>}
+
+def xci.go(ws: List<&2, String>, m: Maybe<&2, KV.XId>, acc: List<&2, KV.XId>) -> XCi:
+  match ws m:
+    case Con{w, +rest} Some{+id}:
+      xci.go(rest, X.xids.head(rest), id <> acc)
+    case other _:
+      XCi{List.reverse(&2, KV.XId, acc), other}
+
+# a time of IDLE (idle: now less it) or TIME, at now; at time 0 (a file
+# loaded: its XCLAIM's TIME, as Redis writes one) a time past now holds
+def xco.time(l: LL, +idle: Bool, +now: Nat) -> Nat:
+  match l:
+    case LL{False{}, +hi, +lo}:
+      +t = xc.of.big(Nat.is_le(140737n, hi), hi, lo)
+      Bool.pick(Nat, Bool.and(Nat.is_lt(now, t), Bool.or(idle, Nat.is_lt(0n, now))), now, Bool.pick(Nat, idle, Nat.sub(now, t), t))
+    case _:
+      now
+
+type XCs2 is Data:
+  XCsGo{o: XCo, ws: List<&2, String>}
+  XCsEnd{o: XCo}
+
+# an option of kind k (1 IDLE, 2 TIME, 3 RETRYCOUNT, 4 LASTID) and its
+# value v (l: as a long long, m: as an ID)
+def xco.set(+k: Nat, l: LL, m: Maybe<&2, KV.XId>, +v: String, +now: Nat, +f: Bool, +j: Bool, +dt: Nat, r: Maybe<&2, KV.XN>, +last: KV.XId, more: List<&2, String>) -> XCs2:
+  match k l m:
+    case 1n LL{neg, hi, lo} _:
+      XCsGo{XCo{f, j, xco.time(LL{neg, hi, lo}, True{}, now), r, last}, more}
+    case 1n LLBad{} _:
+      XCsEnd{XCoBad{RError{"ERR Invalid IDLE option argument for XCLAIM"}}}
+    case 2n LL{neg, hi, lo} _:
+      XCsGo{XCo{f, j, xco.time(LL{neg, hi, lo}, False{}, now), r, last}, more}
+    case 2n LLBad{} _:
+      XCsEnd{XCoBad{RError{"ERR Invalid TIME option argument for XCLAIM"}}}
+    case 3n LL{True{}, hi, lo} _:
+      XCsGo{XCo{f, j, dt, None{}, last}, more}
+    case 3n LL{False{}, hi, lo} _:
+      XCsGo{XCo{f, j, dt, Some{KV.xn.of_int(v)}, last}, more}
+    case 3n LLBad{} _:
+      XCsEnd{XCoBad{RError{"ERR Invalid RETRYCOUNT option argument for XCLAIM"}}}
+    case _ _ Some{+id}:
+      XCsGo{XCo{f, j, dt, r, id}, more}
+    case _ _ None{}:
+      XCsEnd{XCoBad{e_xid()}}
+
+def xco.with(+k: Nat, +v: String, +now: Nat, o: XCo, more: List<&2, String>) -> XCs2:
+  match o:
+    case XCo{+f, +j, +dt, +r, +last}:
+      xco.set(k, ll.read(v), X.xid.parse(v, True{}, X.xn.zero()), v, now, f, j, dt, r, last, more)
+    case bad:
+      XCsEnd{bad}
+
+def xco.flag(force: Bool, o: XCo) -> XCo:
+  match force o:
+    case True{} XCo{f, +j, +dt, r, +last}:
+      XCo{True{}, j, dt, r, last}
+    case False{} XCo{+f, j, +dt, r, +last}:
+      XCo{f, True{}, dt, r, last}
+    case _ bad:
+      bad
+
+# the option word w, its kind: 5 FORCE, 6 JUSTID, 1 to 4 those with a
+# value (with a word after it), 0 another
+def xco.kind(+w: String, +more: Bool) -> Nat:
+  Bool.pick(Nat, is_word(w, "FORCE"), 5n, Bool.pick(Nat, is_word(w, "JUSTID"), 6n, Bool.pick(Nat, more, Bool.pick(Nat, is_word(w, "IDLE"), 1n, Bool.pick(Nat, is_word(w, "TIME"), 2n, Bool.pick(Nat, is_word(w, "RETRYCOUNT"), 3n, Bool.pick(Nat, is_word(w, "LASTID"), 4n, 0n)))), 0n)))
+
+def xco.word(+k: Nat, +w: String, rest: List<&2, String>, +now: Nat, o: XCo) -> XCs2:
+  match k rest:
+    case 5n more:
+      XCsGo{xco.flag(True{}, o), more}
+    case 6n more:
+      XCsGo{xco.flag(False{}, o), more}
+    case 0n more:
+      XCsEnd{XCoBad{RError{e_fmt("ERR Unrecognized XCLAIM option '" ++ cstr(w) ++ "'")}}}
+    case _ Con{+v, more}:
+      xco.with(k, v, now, o, more)
+    case _ Nil{}:
+      XCsEnd{XCoBad{RError{e_fmt("ERR Unrecognized XCLAIM option '" ++ cstr(w) ++ "'")}}}
+
+def xco.step(ws: List<&2, String>, +now: Nat, o: XCo) -> XCs2:
+  match ws:
+    case Nil{}:
+      XCsEnd{o}
+    case Con{+w, +rest}:
+      xco.word(xco.kind(w, Bool.not(List.is_empty(&2, String, rest))), w, rest, now, o)
+
+def xco.loop(k: Nat, +now: Nat, s: XCs2) -> XCo:
+  match k s:
+    case 1n+j XCsGo{o, ws}:
+      xco.loop(j, now, xco.step(ws, now, o))
+    case _ XCsEnd{o}:
+      o
+    case _ XCsGo{o, ws}:
+      o
+
+def xco.read(+ws: List<&2, String>, +now: Nat) -> XCo:
+  xco.loop(Nat.add(List.length(&2, String, ws), 1n), now, XCsGo{XCo{False{}, False{}, now, None{}, X.xid.zero()}, ws})
+
+# the consumer c of g as a write finds it, seen now: its active time,
+# whether it was made (when it is not there, its active time none), and
+# the group with it
+type XSeen is Data:
+  XSeen{a: KV.XAct, made: Bool, g: KV.XGroup}
+
+def xg.seen.of(m: Maybe<&2, KV.XCon>, +g: KV.XGroup, +c: String, +now: Nat) -> XSeen:
+  match m:
+    case Some{+k}:
+      +a = X.xcon.active(k)
+      XSeen{a, False{}, X.xg.con(g, c, now, a)}
+    case None{}:
+      XSeen{KV.XActNone{}, True{}, X.xg.con(g, c, now, KV.XActNone{})}
+
+def xg.seen(+g: KV.XGroup, +c: String, +now: Nat) -> XSeen:
+  xg.seen.of(X.xgroup.con(g, c), g, c, now)
+
+def xg.made(+b: Bool) -> Nat:
+  Bool.pick(Nat, b, 1n, 0n)
+
+# a write's active time: now when it gave the consumer an entry
+def xg.active(+got: Bool, a: KV.XAct, +now: Nat) -> KV.XAct:
+  match got:
+    case True{}:
+      KV.XActAt{now}
+    case False{}:
+      a
+
+# the IDs claimed (the newest first), as entries of x or with JUSTID IDs
+def xcl.entry(m: Maybe<&2, X.XE>, +id: KV.XId) -> Reply:
+  match m:
+    case Some{e}:
+      xv.entry(e)
+    case None{}:
+      xv.id(id)
+
+def xcl.one(justid: Bool, +id: KV.XId, +x: KV.XStream) -> Reply:
+  match justid:
+    case True{}:
+      xv.id(id)
+    case False{}:
+      xcl.entry(X.xs.entry(x, id), id)
+
+def xcl.reply(ids: List<&2, KV.XId>, +justid: Bool, +x: KV.XStream, acc: List<&2, Reply>) -> List<&2, Reply>:
+  match ids:
+    case Nil{}:
+      acc
+    case Con{+id, rest}:
+      xcl.reply(rest, justid, x, xcl.one(justid, id, x) <> acc)
+
+def xcl.done(s: X.XCs, a: KV.XAct, +made: Bool, +justid: Bool, +c: String, +bump: Bool, +x: KV.XStream, +now: Nat) -> XPlan:
+  match s:
+    case X.XCs{+g3, +ns, +got}:
+      +k = List.length(&2, X.XSn, ns)
+      +n = Nat.add(Nat.add(xg.made(made), k), Bool.pick(Nat, Bool.and(bump, Nat.is_eq(k, 0n)), 1n, 0n))
+      XPlanSet{RArray{xcl.reply(got, justid, x, Nil{})}, xset.words(g3, c, now, xg.active(Bool.not(List.is_empty(&2, KV.XId, got)), a, now), ns), n}
+
+def xcl.fin(s: XSeen, +force: Bool, +justid: Bool, +dt: Nat, r: Maybe<&2, KV.XN>, +mi: Nat, ids: List<&2, KV.XId>, +c: String, +bump: Bool, +x: KV.XStream, +now: Nat) -> XPlan:
+  match s:
+    case XSeen{a, +made, +g2}:
+      xcl.done(X.xg.claim(ids, x, force, c, mi, dt, r, justid, now, X.XCs{g2, Nil{}, Nil{}}), a, made, justid, c, bump, x, now)
+
+# XCLAIM's plan once its words read: LASTID past the group's last makes
+# it the last, then each ID claimed (X.xg.claim); one change counted for
+# a consumer made, each pending entry claimed or gone, and, for none of
+# those, a last ID moved
+def xcl.go(o: XCo, +mi: Nat, ids: List<&2, KV.XId>, +g: KV.XGroup, +c: String, +x: KV.XStream, +now: Nat) -> XPlan:
+  match o:
+    case XCo{+force, +justid, +dt, r, +lastid}:
+      +bump = Cmp.is_gt(KV.xid.cmp(lastid, X.xgroup.last(g)))
+      +g1 = X.xgroup.mk(g, Bool.pick(KV.XId, bump, lastid, X.xgroup.last(g)), X.xgroup.read(g), X.xgroup.pel(g), X.xgroup.cons(g))
+      xcl.fin(xg.seen(g1, c, now), force, justid, dt, r, mi, ids, c, bump, x, now)
+    case XCoBad{e}:
+      XPlanNone{e}
+
+def xcl.ids(i: XCi, +mi: Nat, +g: KV.XGroup, +c: String, +x: KV.XStream, +now: Nat) -> XPlan:
+  match i:
+    case XCi{ids, +rest}:
+      xcl.go(xco.read(rest, now), mi, ids, g, c, x, now)
+
+def xcl.idle(m: Maybe<&2, Nat>, +ws: List<&2, String>, +g: KV.XGroup, +c: String, +x: KV.XStream, +now: Nat) -> XPlan:
+  match m:
+    case Some{+mi}:
+      xcl.ids(xci.go(ws, X.xids.head(ws), Nil{}), mi, g, c, x, now)
+    case None{}:
+      XPlanNone{e_xclaimidle()}
+
+def xcl.of(m: Maybe<&2, KV.XGroup>, +k: String, +gn: String, +c: String, +t: String, +ws: List<&2, String>, +x: KV.XStream, +now: Nat) -> XPlan:
+  match m:
+    case Some{+g}:
+      xcl.idle(xc.of(ll.read(t)), ws, g, c, x, now)
+    case None{}:
+      XPlanNone{e_xnogroup(k, gn)}
+
+def xclaim.plan(+k: String, +ws: List<&2, String>, +x: KV.XStream, +now: Nat) -> XPlan:
+  match ws:
+    case Con{+g, Con{+c, Con{+t, +rest}}}:
+      xcl.of(X.xs.group(x, g), k, g, c, t, rest, x, now)
+    case _:
+      XPlanNone{e_xres()}
+
+def xau.gone(ids: List<&2, KV.XId>, acc: List<&2, Reply>) -> List<&2, Reply>:
+  match ids:
+    case Nil{}:
+      acc
+    case Con{+id, rest}:
+      xau.gone(rest, xv.id(id) <> acc)
+
+# XAUTOCLAIM's plan once its group is found: the walk of its pending
+# entries from its start (X.xg.auto: count ten times as many looked at at
+# most, those it holds fetched first), the consumer seen now; the reply
+# the next pending entry's ID (0-0 for none), the entries claimed (IDs
+# with JUSTID) and the IDs gone; one change counted for a consumer made
+# and each entry claimed or gone
+def xau.fin(w: X.XAw, a: KV.XAct, +made: Bool, +justid: Bool, +c: String, +x: KV.XStream, +now: Nat) -> XPlan:
+  match w:
+    case X.XAw{X.XAc{+g3, +ns, +got, +gone, left, e}, +next}:
+      +n = Nat.add(xg.made(made), List.length(&2, X.XSn, ns))
+      XPlanSet{RArray{[xv.id(next), RArray{xcl.reply(got, justid, x, Nil{})}, RArray{xau.gone(gone, Nil{})}]}, xset.words(g3, c, now, xg.active(Bool.not(List.is_empty(&2, KV.XId, got)), a, now), ns), n}
+
+def xau.walk(s: XSeen, +mi: Nat, +st: KV.XId, +cnt: Nat, +justid: Bool, +c: String, +x: KV.XStream, +now: Nat) -> XPlan:
+  match s:
+    case XSeen{a, +made, +g2}:
+      +tries = Nat.mul(cnt, 10n)
+      +nks = X.xs.pending(X.xgroup.pel(g2), None{}, st, X.xid.max(), Nat.add(tries, 1n), X.XINone{}, now)
+      xau.fin(X.xg.auto(nks, tries, x, c, mi, justid, now, X.XAc{g2, Nil{}, Nil{}, Nil{}, cnt, False{}}), a, made, justid, c, x, now)
+
+def xau.of(m: Maybe<&2, KV.XGroup>, a: XAu, +k: String, +x: KV.XStream, +now: Nat) -> XPlan:
+  match m a:
+    case Some{+g} XAu{gn, +c, +mi, +st, +cnt, +j}:
+      xau.walk(xg.seen(g, c, now), mi, st, cnt, j, c, x, now)
+    case None{} XAu{+gn, c, mi, st, cnt, j}:
+      XPlanNone{e_xnogroup(k, gn)}
+    case _ XAuBad{e}:
+      XPlanNone{e}
+
+def xau.group(a: XAu, +x: KV.XStream) -> Maybe<&2, KV.XGroup>:
+  match a:
+    case XAu{+g, c, mi, st, n, j}:
+      X.xs.group(x, g)
+    case XAuBad{e}:
+      None{}
+
+def xautoclaim.plan(+k: String, +ws: List<&2, String>, +x: KV.XStream, +now: Nat) -> XPlan:
+  +a = xau.read(ws)
+  xau.of(xau.group(a, x), a, k, x, now)
+
+# a write whose errors name its key k, of kind c (3 SETID, 5
+# CREATECONSUMER, 6 DELCONSUMER, 7 XCLAIM, 8 XAUTOCLAIM), on x at now:
+# XGROUP's NOGROUP for a group not there, XCLAIM's and XAUTOCLAIM's their
+# own
+def xgk.of(m: Maybe<&2, KV.XGroup>, +c: Nat, +k: String, +gn: String, +ws: List<&2, String>, +x: KV.XStream, +now: Nat) -> XPlan:
+  match m c ws:
+    case None{} _ _:
+      XPlanNone{e_xgkey(k, gn)}
+    case Some{g} 3n w:
+      xgs.plan(w, x)
+    case Some{+g} 5n Con{gw, Con{+cn, Nil{}}}:
+      xgcc.of(X.xgroup.con(g, cn), g, cn, now)
+    case Some{+g} 6n Con{gw, Con{+cn, Nil{}}}:
+      xgdc.plan(g, cn)
+    case _ _ _:
+      XPlanNone{e_xres()}
+
+def xgk.group(+ws: List<&2, String>) -> String:
+  match ws:
+    case Con{+g, rest}:
+      g
+    case Nil{}:
+      ""
+
+def xkeyed.plan(+c: Nat, +k: String, +ws: List<&2, String>, +x: KV.XStream, +now: Nat) -> XPlan:
+  match c:
+    case 7n:
+      xclaim.plan(k, ws, x, now)
+    case 8n:
+      xautoclaim.plan(k, ws, x, now)
+    case _:
+      +gn = xgk.group(ws)
+      xgk.of(X.xs.group(x, gn), c, k, gn, ws, x, now)
+
+def xkeyed.none.auto(a: XAu, +k: String) -> Reply:
+  match a:
+    case XAu{+g, c, mi, st, n, j}:
+      e_xnogroup(k, g)
+    case XAuBad{e}:
+      e
+
+def xkeyed.none.r(+c: Nat, +k: String, +ws: List<&2, String>) -> Reply:
+  match c:
+    case 7n:
+      e_xnogroup(k, xgk.group(ws))
+    case 8n:
+      xkeyed.none.auto(xau.read(ws), k)
+    case _:
+      e_xneedkey()
+
+# of a key not there: XGROUP's error of a key not there, XCLAIM's and
+# XAUTOCLAIM's NOGROUP; no change
+def xkeyed.none(+c: Nat, +k: String, +ws: List<&2, String>) -> Out:
+  Out{xkeyed.none.r(c, k, ws), CKeep{}}
+
+# XACK: 0 for a group not there (before its IDs are read); its IDs
+# strict, else an error; the reply how many were pending, no change for
+# none
+def xack.out.of(none: Bool, +n: Nat, +g: KV.XGroup, +ws: List<&2, String>, +x: KV.XStream) -> Out:
+  match none:
+    case True{}:
+      Out{r_int(0n), CKeep{}}
+    case False{}:
+      Out{r_int(n), CStream{XWAck{ws}, X.xs.group.put(x, g)}}
+
+def xack.out(a: X.XAk, +ws: List<&2, String>, +x: KV.XStream) -> Out:
+  match a:
+    case X.XAk{+n, +g}:
+      xack.out.of(Nat.is_eq(n, 0n), n, g, ws, x)
+
+def xack.ids(m: Maybe<&2, List<&2, KV.XId>>, +g: KV.XGroup, +ws: List<&2, String>, +x: KV.XStream) -> Out:
+  match m:
+    case Some{ids}:
+      xack.out(X.xg.ack(ids, X.XAk{0n, g}), ws, x)
+    case None{}:
+      Out{e_xid(), CKeep{}}
+
+def xack.of(m: Maybe<&2, KV.XGroup>, ids: List<&2, String>, +ws: List<&2, String>, +x: KV.XStream) -> Out:
+  match m:
+    case Some{+g}:
+      xack.ids(X.xids.parse(ids), g, ws, x)
+    case None{}:
+      Out{r_int(0n), CKeep{}}
+
+def xack.run(+ws: List<&2, String>, +x: KV.XStream) -> Out:
+  match ws:
+    case Con{+g, +ids}:
+      xack.of(X.xs.group(x, g), ids, Con{g, ids}, x)
+    case Nil{}:
+      Out{r_int(0n), CKeep{}}
+
 # a write of a stream to the stream x (an empty one for a key not there:
 # fresh) at now; XWNew makes a new stream whatever x is
 def xwrite(op: XWrite, +fresh: Bool, +x: KV.XStream, +now: Nat) -> Out:
@@ -20899,9 +22378,24 @@ def xwrite(op: XWrite, +fresh: Bool, +x: KV.XStream, +now: Nat) -> Out:
       xsetid.run(ws, xsetid.read(ws), x)
     case XWNew{+ws}:
       xadd.run(ws, xadd.read(ws), True{}, X.xs.empty(), now)
+    case XWGroup{+sub, +ws}:
+      xgroup.run(sub, ws, fresh, x)
+    case XWGNew{+ws}:
+      xgc.run(ws, True{}, X.xs.empty())
+    case XWAck{+ws}:
+      xack.run(ws, x)
+    case XWKeyed{+c, +k, +ws}:
+      xplan.out(xkeyed.plan(c, k, ws, x, now), x)
+    case XWSet{+ws}:
+      xset.fin(xset.read(ws), ws, x)
+    case XWDelCon{+ws}:
+      xdelcon.fin(ws, x)
 
 # of a key not there: XADD makes it (with NOMKSTREAM a null), XTRIM and
-# XDEL answer 0, XSETID an error (after its words' errors)
+# XDEL answer 0, XSETID an error (after its words' errors); XGROUP CREATE
+# makes it with MKSTREAM, else XGROUP's error of a key not there, as the
+# others of XGROUP, XWSet and XWDelCon; XACK answers 0, XCLAIM and
+# XAUTOCLAIM NOGROUP
 def xwrite.none(op: XWrite, +now: Nat) -> Out:
   match op:
     case XWTrim{ws}:
@@ -20910,14 +22404,26 @@ def xwrite.none(op: XWrite, +now: Nat) -> Out:
       Out{r_int(0n), CKeep{}}
     case XWSetId{+ws}:
       xsetid.none(xsetid.read(ws))
+    case XWGroup{4n, ws}:
+      Out{e_xneedkey(), CKeep{}}
+    case XWAck{ws}:
+      Out{r_int(0n), CKeep{}}
+    case XWKeyed{+c, +k, +ws}:
+      xkeyed.none(c, k, ws)
+    case XWSet{ws}:
+      Out{e_xneedkey(), CKeep{}}
+    case XWDelCon{ws}:
+      Out{e_xneedkey(), CKeep{}}
     case other:
       xwrite(other, True{}, X.xs.empty(), now)
 
-# of a key that holds another kind: WRONGTYPE, but for XWNew
+# of a key that holds another kind: WRONGTYPE, but for XWNew and XWGNew
 def xwrite.wrong(op: XWrite, +now: Nat) -> Out:
   match op:
     case XWNew{+ws}:
       xwrite(XWNew{ws}, True{}, X.xs.empty(), now)
+    case XWGNew{+ws}:
+      xwrite(XWGNew{ws}, True{}, X.xs.empty(), now)
     case _:
       Out{e_wrongtype(), CKeep{}}
 
@@ -21429,7 +22935,7 @@ def upd.ch(t: KV.Trie<KV.Val>, +k: String, +h: U32, +n: Nat, +x: Nat, now: Nat, 
       (r, Db{KV.setx.at(KV.Val, t, k, v, e, h), cnt.n(c, n), cnt.x(c, e, x), now, rr})
     case CStream{op, xv}:
       (r, Db{KV.keep.at(KV.Val, t, k, KV.VColl{KV.CStream{xv}}, h), n, x, now, rr})
-    case CStreamNew{ws, xv}:
+    case CStreamNew{op, xv}:
       (r, Db{KV.setx.at(KV.Val, t, k, KV.VColl{KV.CStream{xv}}, 0n, h), cnt.n(c, n), cnt.x(c, 0n, x), now, rr})
 
 def upd.put(t: KV.Trie<KV.Val>, +k: String, +h: U32, +n: Nat, +x: Nat, now: Nat, rr: Maybe<&2, Db>, +c: Nat, o: Out) -> Reply & Db:
@@ -23779,6 +25285,418 @@ def ds.copy(+src: String, +dst: String, +j: Nat, rep: Bool, ds: Ds) -> Bool & Ds
   +xs = ds.list(x)
   ds.copy.of(src, dst, j, rep, ds.nth(j, xs), x)
 
+# XREADGROUP
+# ----------
+# XREADGROUP as Redis 7.2.16 runs it (xreadCommand with GROUP): first
+# each key in turn, its stream (WRONGTYPE for another kind), its group
+# (NOGROUP for a key or a group not there) and its ID ("$" an error, ">"
+# new entries, else a strict ID, its history; the last ID too counts as
+# ">"), the first error ending it before anything is done; then each key
+# in turn, its consumer seen now (made when it is not there). With ">",
+# a key is served when its stream's last live entry is past the group's
+# last ID: its entries from there on (at most the count), each the
+# group's last ID and one more entry read (X.xg.deliver), and pending for
+# the consumer, delivered now once (made, or taken from another), but
+# with NOACK; the consumer active now when it got one. With an ID, the
+# consumer's pending entries past it (at most the count), each with its
+# entry, delivered again now (one more delivery), or a null for an entry
+# the stream no longer holds. The reply the keys served (a null array for
+# none). Each key's change is the XWSet of its words (Groups' writes), run
+# by an act of its own (AXGroup) on the databases as the keys before it
+# left them, and the reply is made the same way (xgr.reply).
+
+def e_xgnogroup(+k: String, +g: String) -> Reply:
+  RError{e_fmt("NOGROUP No such key '" ++ cstr(k) ++ "' or consumer group '" ++ cstr(g) ++ "' in XREADGROUP with GROUP option")}
+
+def e_xgdollar() -> Reply:
+  RError{"ERR The $ ID is meaningless in the context of XREADGROUP: you want to read the history of this consumer by specifying a proper ID, or use the > ID to get new messages. The $ ID would just return an empty result set."}
+
+# a key's ID: ">" (new entries), an ID (its history), or its error
+type XGid is Data:
+  XGidNew{}
+  XGidAt{id: KV.XId}
+  XGidBad{r: Reply}
+
+def xgr.id.of(m: Maybe<&2, KV.XId>) -> XGid:
+  match m:
+    case Some{+id}:
+      Bool.pick(XGid, X.xid.is_eq(id, X.xid.max()), XGidNew{}, XGidAt{id})
+    case None{}:
+      XGidBad{e_xid()}
+
+def xgr.id(+s: String) -> XGid:
+  +c = cstr(s)
+  Bool.pick(XGid, String.eq(c, "$"), XGidBad{e_xgdollar()}, Bool.pick(XGid, String.eq(c, ">"), XGidNew{}, xgr.id.of(X.xid.parse(s, True{}, X.xn.zero()))))
+
+def xgid.err(i: XGid) -> Maybe<&2, Reply>:
+  match i:
+    case XGidBad{r}:
+      Some{r}
+    case _:
+      None{}
+
+def xgr.chk.g(has: Bool, +k: String, +g: String, +s: String) -> Maybe<&2, Reply>:
+  match has:
+    case True{}:
+      xgid.err(xgr.id(s))
+    case False{}:
+      Some{e_xgnogroup(k, g)}
+
+# a key's check: its entry m, its ID's word s
+def xgr.chk.at(m: Maybe<&2, KV.Item<KV.Val>>, +k: String, +g: String, +s: String) -> Maybe<&2, Reply>:
+  match m:
+    case Some{KV.Item{KV.VColl{KV.CStream{+x}}, e}}:
+      xgr.chk.g(Maybe.is_some(&2, KV.XGroup, X.xs.group(x, g)), k, g, s)
+    case Some{other}:
+      Some{e_wrongtype()}
+    case None{}:
+      Some{e_xgnogroup(k, g)}
+
+# the keys' checks in turn on the database d, the first error ending
+# them (m: the error so far)
+def xgr.chk(ks: List<&2, String>, ids: List<&2, String>, m: Maybe<&2, Reply>, +g: String, +d: Db) -> Maybe<&2, Reply>:
+  match ks ids m:
+    case Con{+k, krest} Con{+s, irest} None{}:
+      xgr.chk(krest, irest, xgr.chk.at(db.ent(d, k), k, g, s), g, d)
+    case _ _ other:
+      other
+
+# a key served: its reply (none for a key not served), the words of its
+# XWSet, and the changes Redis counts for it (the consumer made, the key
+# served); none for a key that is no stream or has no such group
+type XGk is Data:
+  XGk{r: Maybe<&2, Reply>, ws: List<&2, String>, n: Nat}
+  XGkNone{}
+
+def xgr.he(es: List<&2, X.XHe>, acc: List<&2, Reply>) -> List<&2, Reply>:
+  match es:
+    case Nil{}:
+      acc
+    case Con{X.XHe{+id, Some{e}}, rest}:
+      xgr.he(rest, xv.entry(e) <> acc)
+    case Con{X.XHe{+id, None{}}, rest}:
+      xgr.he(rest, RArray{[xv.id(id), RNullA{}]} <> acc)
+
+def xgr.pair(+k: String, es: List<&2, Reply>) -> Maybe<&2, Reply>:
+  Some{RKPair{[RBulk{k}, RArray{es}]}}
+
+# the history of consumer c past id
+def xgr.hist(h: X.XHs, a: KV.XAct, +made: Bool, +g: KV.XGroup, +c: String, +k: String, +now: Nat) -> XGk:
+  match h:
+    case X.XHs{hs, ns}:
+      XGk{xgr.pair(k, xgr.he(hs, Nil{})), xset.words(g, c, now, a, ns), Nat.add(xg.made(made), 1n)}
+
+# new entries: served when the stream's last live entry (top) is past the
+# group's last ID
+def xgr.fresh.at(d: X.XDv, +es: List<&2, X.XE>, a: KV.XAct, +made: Bool, +noack: Bool, +g: KV.XGroup, +c: String, +k: String, +now: Nat) -> XGk:
+  match d:
+    case X.XDv{+last, rd, ns}:
+      +g2 = X.xgroup.mk(g, last, rd, X.xgroup.pel(g), X.xgroup.cons(g))
+      +got = Bool.and(Bool.not(noack), Bool.not(List.is_empty(&2, X.XE, es)))
+      XGk{xgr.pair(k, xv.entries(es)), xset.words(g2, c, now, xg.active(got, a, now), ns), Nat.add(xg.made(made), 1n)}
+
+def xgr.fresh.go(+es: List<&2, X.XE>, a: KV.XAct, +made: Bool, +noack: Bool, +g: KV.XGroup, +c: String, +k: String, +x: KV.XStream, +now: Nat) -> XGk:
+  xgr.fresh.at(X.xg.deliver(es, x, noack, now, X.XDv{X.xgroup.last(g), X.xgroup.read(g), Nil{}}), es, a, made, noack, g, c, k, now)
+
+def xgr.fresh.if(go: Bool, a: KV.XAct, +made: Bool, +count: Nat, +noack: Bool, +g: KV.XGroup, +c: String, +k: String, +x: KV.XStream, +now: Nat) -> XGk:
+  match go:
+    case True{}:
+      xgr.fresh.go(X.xs.range(x, xv.after(X.xgroup.last(g)), X.xid.max(), count, False{}), a, made, noack, g, c, k, x, now)
+    case False{}:
+      XGk{None{}, xset.words(g, c, now, a, Nil{}), xg.made(made)}
+
+def xgr.fresh(m: Maybe<&2, KV.XId>, a: KV.XAct, +made: Bool, +count: Nat, +noack: Bool, +g: KV.XGroup, +c: String, +k: String, +x: KV.XStream, +now: Nat) -> XGk:
+  match m:
+    case Some{+top}:
+      xgr.fresh.if(Cmp.is_gt(KV.xid.cmp(top, X.xgroup.last(g))), a, made, count, noack, g, c, k, x, now)
+    case None{}:
+      XGk{None{}, xset.words(g, c, now, a, Nil{}), xg.made(made)}
+
+def xgr.serve(s: XSeen, i: XGid, +count: Nat, +noack: Bool, +c: String, +k: String, +x: KV.XStream, +now: Nat) -> XGk:
+  match s i:
+    case XSeen{a, +made, +g} XGidAt{+id}:
+      xgr.hist(X.xg.history(X.xg.of.con(X.xgroup.con(g, c), g, xv.after(id), count, now), x, now, X.XHs{Nil{}, Nil{}}), a, made, g, c, k, now)
+    case XSeen{a, +made, +g} XGidNew{}:
+      xgr.fresh(X.xs.top(x), a, made, count, noack, g, c, k, x, now)
+    case _ XGidBad{r}:
+      XGkNone{}
+
+def xgr.key.g(m: Maybe<&2, KV.XGroup>, +x: KV.XStream, +c: String, +s: String, +count: Nat, +noack: Bool, +k: String, +now: Nat) -> XGk:
+  match m:
+    case Some{+g}:
+      xgr.serve(xg.seen(g, c, now), xgr.id(s), count, noack, c, k, x, now)
+    case None{}:
+      XGkNone{}
+
+# key k served (its entry m) at now
+def xgr.key(m: Maybe<&2, KV.Item<KV.Val>>, +k: String, +g: String, +c: String, +s: String, +count: Nat, +noack: Bool, +now: Nat) -> XGk:
+  match m:
+    case Some{KV.Item{KV.VColl{KV.CStream{+x}}, e}}:
+      xgr.key.g(X.xs.group(x, g), x, c, s, count, noack, k, now)
+    case _:
+      XGkNone{}
+
+# whether consumer c of group g is there in stream x
+def xgr.has.con.of(m: Maybe<&2, KV.XGroup>, +c: String) -> Bool:
+  match m:
+    case Some{+g}:
+      Maybe.is_some(&2, KV.XCon, X.xgroup.con(g, c))
+    case None{}:
+      False{}
+
+def xgr.has.con(+x: KV.XStream, +g: String, +c: String) -> Bool:
+  xgr.has.con.of(X.xs.group(x, g), c)
+
+# the changes Redis counts for XWSet's script (a client's EVAL of it): one
+# for the consumer it makes, one for each pending entry it names that the
+# stream holds (claimed) or that is pending (taken away), one for the
+# group's last ID set; none when the group is not there
+def xset.dirty.ns(ns: List<&2, X.XSn>, +x: KV.XStream, +g: KV.XGroup, +acc: Nat) -> Nat:
+  match ns:
+    case Nil{}:
+      acc
+    case Con{X.XSn{+id, t, n}, rest}:
+      xset.dirty.ns(rest, x, g, Bool.pick(Nat, Bool.or(X.xs.has(x, id), Maybe.is_some(&2, KV.XNack, X.xpl.of(g, id))), Nat.add(acc, 1n), acc))
+
+def xset.dirty.c(c: Maybe<&2, XSetC>, +x: KV.XStream, +g: KV.XGroup) -> Nat:
+  match c:
+    case Some{XSetC{+cn, seen, a, ns}}:
+      xset.dirty.ns(ns, x, g, xg.made(Maybe.is_none(&2, KV.XCon, X.xgroup.con(g, cn))))
+    case None{}:
+      0n
+
+def xset.dirty.g(m: Maybe<&2, KV.XGroup>, c: Maybe<&2, XSetC>, +x: KV.XStream) -> Nat:
+  match m:
+    case Some{+g}:
+      Nat.add(xset.dirty.c(c, x, g), 1n)
+    case None{}:
+      0n
+
+def xset.dirty.of(s: XSet, +x: KV.XStream) -> Nat:
+  match s:
+    case XSet{+g, last, rd, c}:
+      xset.dirty.g(X.xs.group(x, g), c, x)
+    case XSetBad{}:
+      0n
+
+def xset.dirty(+ws: List<&2, String>, +x: KV.XStream) -> Nat:
+  xset.dirty.of(xset.read(ws), x)
+
+# XWDelCon's script: one for a consumer there
+def xdelcon.dirty(+ws: List<&2, String>, +x: KV.XStream) -> Nat:
+  match ws:
+    case Con{+g, Con{+c, Nil{}}}:
+      xg.made(xgr.has.con(x, g, c))
+    case _:
+      0n
+
+def xgr.keys(+ws: List<&2, String>) -> List<&2, String>:
+  List.take(&2, String, ws, Nat.div(List.length(&2, String, ws), 2n))
+
+def xgr.ids(+ws: List<&2, String>) -> List<&2, String>:
+  List.drop(&2, String, ws, Nat.div(List.length(&2, String, ws), 2n))
+
+# The keys served in turn: the replies (the newest first), the changes
+# counted, and the database the keys after read: as a key's XWSet left
+# it when that key comes again among them (a key named twice is served
+# the second time as the first left it), else as it was, since no other
+# key reads it (the XWSet each key's act runs is the change)
+type XGf is Data:
+  XGf{rs: List<&2, Reply>, n: Nat, d: Db}
+
+def xgr.push(m: Maybe<&2, Reply>, rs: List<&2, Reply>) -> List<&2, Reply>:
+  match m:
+    case Some{r}:
+      r <> rs
+    case None{}:
+      rs
+
+def xgr.later(+ks: List<&2, String>, +k: String) -> Bool:
+  match ks:
+    case Con{+x, rest}:
+      Bool.or(String.eq(x, k), xgr.later(rest, k))
+    case Nil{}:
+      False{}
+
+def xgr.after(later: Bool, +k: String, +ws: List<&2, String>, +d: Db) -> Db:
+  match later:
+    case True{}:
+      db_of(exec(Upd{k, UStream{XWSet{ws}}}, d))
+    case False{}:
+      d
+
+def xgr.step(r: XGk, +k: String, +later: Bool, rs: List<&2, Reply>, +n: Nat, +d: Db) -> XGf:
+  match r:
+    case XGk{m, +ws, +m2}:
+      XGf{xgr.push(m, rs), Nat.add(n, m2), xgr.after(later, k, ws, d)}
+    case XGkNone{}:
+      XGf{rs, n, d}
+
+def xgr.fold(ks: List<&2, String>, ids: List<&2, String>, +g: String, +c: String, +count: Nat, +noack: Bool, f: XGf) -> XGf:
+  match ks ids f:
+    case Con{+k, +krest} Con{+s, irest} XGf{rs, +n, +d}:
+      xgr.fold(krest, irest, g, c, count, noack, xgr.step(xgr.key(db.ent(d, k), k, g, c, s, count, noack, db.now(d)), k, xgr.later(krest, k), rs, n, d))
+    case _ _ f0:
+      f0
+
+def xgr.run(+ws: List<&2, String>, +g: String, +c: String, +count: Nat, +noack: Bool, +d: Db) -> XGf:
+  xgr.fold(xgr.keys(ws), xgr.ids(ws), g, c, count, noack, XGf{Nil{}, 0n, d})
+
+def xgr.err(+ws: List<&2, String>, +g: String, +d: Db) -> Maybe<&2, Reply>:
+  xgr.chk(xgr.keys(ws), xgr.ids(ws), None{}, g, d)
+
+def xgr.reply.fin(f: XGf) -> Reply:
+  match f:
+    case XGf{rs, n, d}:
+      xv.read.reply(List.reverse(&2, Reply, rs))
+
+def xgr.reply.of(m: Maybe<&2, Reply>, +ws: List<&2, String>, +g: String, +c: String, +count: Nat, +noack: Bool, +d: Db) -> Reply:
+  match m:
+    case Some{e}:
+      e
+    case None{}:
+      xgr.reply.fin(xgr.run(ws, g, c, count, noack, d))
+
+# XREADGROUP's reply on the database d (the focus, before its acts)
+def xgr.reply(q: XGq, +d: Db) -> Reply:
+  match q:
+    case XGq{+g, +c, +count, b, +noack, +ws}:
+      xgr.reply.of(xgr.err(ws, g, d), ws, g, c, count, noack, d)
+    case XGqOf{y}:
+      xgr.reply(y, d)
+
+def xgr.dirty.fin(f: XGf) -> Nat:
+  match f:
+    case XGf{rs, +n, d}:
+      n
+
+# whether a key comes twice among ks
+def xgr.twice(ks: List<&2, String>) -> Bool:
+  match ks:
+    case Con{+k, +rest}:
+      Bool.or(xgr.later(rest, k), xgr.twice(rest))
+    case Nil{}:
+      False{}
+
+# The changes a key's serving counts (XGk's n), read without serving it:
+# one for the consumer made, one when the key is served (its history,
+# or new entries, the stream's last live entry past the group's last
+# ID). Exact when no key comes twice: each key is then served on the
+# database as it was (xgr.after)
+def xgr.dnew(m: Maybe<&2, KV.XId>, +g: KV.XGroup) -> Nat:
+  match m:
+    case Some{+top}:
+      Bool.pick(Nat, Cmp.is_gt(KV.xid.cmp(top, X.xgroup.last(g))), 1n, 0n)
+    case None{}:
+      0n
+
+def xgr.dserve(s: XSeen, i: XGid, +x: KV.XStream) -> Nat:
+  match s i:
+    case XSeen{a, +made, g} XGidAt{id}:
+      Nat.add(xg.made(made), 1n)
+    case XSeen{a, +made, +g} XGidNew{}:
+      Nat.add(xg.made(made), xgr.dnew(X.xs.top(x), g))
+    case _ XGidBad{r}:
+      0n
+
+def xgr.dkey.g(m: Maybe<&2, KV.XGroup>, +x: KV.XStream, +c: String, +s: String, +now: Nat) -> Nat:
+  match m:
+    case Some{+g}:
+      xgr.dserve(xg.seen(g, c, now), xgr.id(s), x)
+    case None{}:
+      0n
+
+def xgr.dkey(m: Maybe<&2, KV.Item<KV.Val>>, +g: String, +c: String, +s: String, +now: Nat) -> Nat:
+  match m:
+    case Some{KV.Item{KV.VColl{KV.CStream{+x}}, e}}:
+      xgr.dkey.g(X.xs.group(x, g), x, c, s, now)
+    case _:
+      0n
+
+def xgr.dsum(ks: List<&2, String>, ids: List<&2, String>, +g: String, +c: String, +d: Db, +acc: Nat) -> Nat:
+  match ks ids:
+    case Con{+k, krest} Con{+s, irest}:
+      xgr.dsum(krest, irest, g, c, d, Nat.add(acc, xgr.dkey(db.ent(d, k), g, c, s, db.now(d))))
+    case _ _:
+      acc
+
+def xgr.dirty.go(twice: Bool, +ws: List<&2, String>, +g: String, +c: String, +count: Nat, +noack: Bool, +d: Db) -> Nat:
+  match twice:
+    case True{}:
+      xgr.dirty.fin(xgr.run(ws, g, c, count, noack, d))
+    case False{}:
+      xgr.dsum(xgr.keys(ws), xgr.ids(ws), g, c, d, 0n)
+
+# the changes Redis counts for it (none for an error)
+def xgr.dirty.of(m: Maybe<&2, Reply>, +ws: List<&2, String>, +g: String, +c: String, +count: Nat, +noack: Bool, +d: Db) -> Nat:
+  match m:
+    case Some{e}:
+      0n
+    case None{}:
+      xgr.dirty.go(xgr.twice(xgr.keys(ws)), ws, g, c, count, noack, d)
+
+def xgr.dirty(q: XGq, +d: Db) -> Nat:
+  match q:
+    case XGq{+g, +c, +count, b, +noack, +ws}:
+      xgr.dirty.of(xgr.err(ws, g, d), ws, g, c, count, noack, d)
+    case XGqOf{y}:
+      xgr.dirty(y, d)
+
+# whether it would wait on the database d: BLOCK came, and it answers no
+# error and serves no key (the server answers it then, as BendKV blocks
+# on no stream yet)
+def xgr.waits.fin(f: XGf) -> Bool:
+  match f:
+    case XGf{rs, n, d}:
+      List.is_empty(&2, Reply, rs)
+
+def xgr.waits.of(m: Maybe<&2, Reply>, +ws: List<&2, String>, +g: String, +c: String, +count: Nat, +noack: Bool, +d: Db) -> Bool:
+  match m:
+    case Some{e}:
+      False{}
+    case None{}:
+      xgr.waits.fin(xgr.run(ws, g, c, count, noack, d))
+
+def xgr.waits(q: XGq, +d: Db) -> Bool:
+  match q:
+    case XGq{+g, +c, +count, True{}, +noack, +ws}:
+      xgr.waits.of(xgr.err(ws, g, d), ws, g, c, count, noack, d)
+    case XGq{g, c, count, False{}, noack, ws}:
+      False{}
+    case XGqOf{y}:
+      xgr.waits(y, d)
+
+def xgr.nth(xs: List<&2, String>, +i: Nat) -> String:
+  match xs i:
+    case Con{x, rest} 0n:
+      x
+    case Con{x, rest} 1n+j:
+      xgr.nth(rest, j)
+    case Nil{} _:
+      ""
+
+def xgr.cmd.of(m: Maybe<&2, Reply>, r: XGk, +k: String) -> Cmd:
+  match m r:
+    case None{} XGk{x, +ws, n}:
+      Upd{k, UStream{XWSet{ws}}}
+    case Some{e} _:
+      Bad{e}
+    case None{} XGkNone{}:
+      Bad{e_xres()}
+
+# the command of the act of its i-th key, on the database d as the acts
+# before it left it: none (an error) for any key's error
+def xgr.cmd(q: XGq, +i: Nat, +d: Db) -> Cmd:
+  match q:
+    case XGq{+g, +c, +count, b, +noack, +ws}:
+      +k = xgr.nth(xgr.keys(ws), i)
+      xgr.cmd.of(xgr.err(ws, g, d), xgr.key(db.ent(d, k), k, g, c, xgr.nth(xgr.ids(ws), i), count, noack, db.now(d)), k)
+    case XGqOf{y}:
+      xgr.cmd(y, i, d)
+
+def xgr.cmd.ds(+ds: Ds, q: XGq, +i: Nat) -> Cmd:
+  xgr.cmd(q, i, ds.focused(ds))
+
 # What a batch does to the databases, command by command (session.bend:
 # plan): a command of one database, run on the focus; the focus moved
 # (SELECT, and RESET to 0); two databases swapped (SWAPDB); MOVE's two
@@ -23801,6 +25719,7 @@ type Act is Data:
   ASort{key: String, o: SortO}
   APfMerge{dst: String, srcs: List<&2, String>, mx: Nat}
   AGeo{kind: Nat, args: List<&2, String>}
+  AXGroup{q: XGq, i: Nat}
 
 def act.run(r: Reply & Db, pre: List<&2, Db>, post: List<&2, Db>) -> Reply & Ds:
   (x, d) = r
@@ -23896,6 +25815,9 @@ def act(a: Act, ds: Ds) -> Reply & Ds:
     case AGeo{+k, args} x:
       +y = x
       act.cmd(geo.store.ds(y, k, args), y)
+    case AXGroup{q, +i} x:
+      +y = x
+      act.cmd(xgr.cmd.ds(y, q, i), y)
 
 def ds_of(r: Reply & Ds) -> Ds:
   (x, ds) = r

@@ -4077,6 +4077,8 @@ def own_reply(+o: R.SessOp, +c: Conn, +s: Srv, +ds: R.Ds) -> Maybe<&2, R.Reply>:
       say(conn.mode(c), acl.reply(k, a, s, ds))
     case R.SXRead{q}:
       say(conn.mode(c), R.xread.many(q, R.ds.focused(ds)))
+    case R.SXGroup{q}:
+      say(conn.mode(c), R.xgr.reply(q, R.ds.focused(ds)))
 
 # the connection after a session command
 def own_conn(+o: R.SessOp, +c: Conn, +s: Srv) -> Conn:
@@ -4185,6 +4187,8 @@ def own_conn(+o: R.SessOp, +c: Conn, +s: Srv) -> Conn:
       step_conn(c, s)
     case R.SXRead{q}:
       step_conn(c, s)
+    case R.SXGroup{q}:
+      step_conn(c, s)
 
 # what a session command does to the databases: SELECT and RESET move the
 # focus to the connection's new database, SWAPDB, MOVE, COPY and FLUSHALL
@@ -4192,6 +4196,21 @@ def own_conn(+o: R.SessOp, +c: Conn, +s: Srv) -> Conn:
 # the focus, SORT with STORE, PFMERGE and a GEO search that stores write
 # their destination there, RESTORE with IDLETIME or FREQ its key, and the
 # others do nothing to them
+# XREADGROUP's acts: one for each of its keys, in turn (R.xgr.cmd)
+def xgroup.n(q: R.XGq) -> Nat:
+  match q:
+    case R.XGq{g, c, n, b, na, +ws}:
+      Nat.div(List.length(&2, String, ws), 2n)
+    case R.XGqOf{y}:
+      xgroup.n(y)
+
+def xgroup.acts(+n: Nat, +q: R.XGq, +i: Nat) -> List<&2, R.Act>:
+  match n:
+    case 0n:
+      Nil{}
+    case 1n+m:
+      R.AXGroup{q, i} <> xgroup.acts(m, q, Nat.add(i, 1n))
+
 def own_acts(+o: R.SessOp, +c: Conn, +s: Srv) -> List<&2, R.Act>:
   match o:
     case R.SSelect{+d}:
@@ -4218,6 +4237,8 @@ def own_acts(+o: R.SessOp, +c: Conn, +s: Srv) -> List<&2, R.Act>:
       [R.AGeo{k, a}]
     case R.SRestore{+k, op}:
       [R.ARun{R.Upd{k, op}}]
+    case R.SXGroup{+q}:
+      xgroup.acts(xgroup.n(q), q, 0n)
     case _:
       Nil{}
 

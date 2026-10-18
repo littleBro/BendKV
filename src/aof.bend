@@ -132,16 +132,25 @@ def znew.effect(gone: Bool, +k: String, o: R.ZOpts, ps: List<&2, R.ZPair>) -> Li
     case False{}:
       [R.Upd{k, R.UZset{R.ZWNew{o, ps}}}]
 
-# a new stream, made by the XADD of the words ws (resolved): the XADD
-# where the trie held no entry for the key (gone), else the script that
-# deletes the key and runs the XADD (R.XWNew), one entry, as for a new
-# hash
-def xnew.effect(gone: Bool, +k: String, ws: List<&2, String>) -> List<&2, R.Cmd>:
+# a new stream, made by its write op (XADD of the words it keeps,
+# resolved, or XGROUP CREATE with MKSTREAM): the write where the trie
+# held no entry for the key (gone), else the script that deletes the key
+# and runs it (R.XWNew, R.XWGNew), one entry, as for a new hash
+def xnew.op(op: R.XWrite) -> R.XWrite:
+  match op:
+    case R.XWAdd{ws}:
+      R.XWNew{ws}
+    case R.XWGroup{s, ws}:
+      R.XWGNew{ws}
+    case other:
+      other
+
+def xnew.effect(gone: Bool, +k: String, op: R.XWrite) -> List<&2, R.Cmd>:
   match gone:
     case True{}:
-      [R.Upd{k, R.UStream{R.XWAdd{ws}}}]
+      [R.Upd{k, R.UStream{op}}]
     case False{}:
-      [R.Upd{k, R.UStream{R.XWNew{ws}}}]
+      [R.Upd{k, R.UStream{xnew.op(op)}}]
 
 # the effects of an update, from the change it made to its key, whose
 # code was c (R.ent.code)
@@ -181,8 +190,8 @@ def ch.effect(+k: String, +c: Nat, +ch: R.Change) -> List<&2, R.Cmd>:
       restore.effect(k, p, e)
     case R.CStream{op, x}:
       [R.Upd{k, R.UStream{op}}]
-    case R.CStreamNew{ws, x}:
-      xnew.effect(Nat.is_eq(c, 0n), k, ws)
+    case R.CStreamNew{op, x}:
+      xnew.effect(Nat.is_eq(c, 0n), k, op)
 
 def upd.effect(+k: String, +c: Nat, +o: R.Out) -> List<&2, R.Cmd>:
   match o:
@@ -602,6 +611,9 @@ def act(a: R.Act, ds: R.Ds) -> R.Reply & (List<&2, Eff> & R.Ds):
     case R.AGeo{+k, args} x:
       +y = x
       act.cmd(R.geo.store.ds(y, k, args), y)
+    case R.AXGroup{q, +i} x:
+      +y = x
+      act.cmd(R.xgr.cmd.ds(y, q, i), y)
 
 def acts.put(es: List<&2, Eff>, r: R.Reply & (List<&2, Eff> & R.Ds)) -> List<&2, Eff> & R.Ds:
   (x, q) = r
@@ -776,8 +788,11 @@ def zset.args(+k: String, op: R.ZWrite) -> List<&2, String>:
       [zpop.name(max), k, c]
 
 # a stream's write as the file logs it: its command with the words it
-# keeps (resolved: R.xwrite), or the script of a new stream
-# (R.xnew.script)
+# keeps (resolved: R.xwrite), or BendKV's script that runs it: a new
+# stream's (R.xnew.script), XWSet's, XWDelCon's and a new stream's
+# group's (R.xset.script, R.xdelcon.script, R.xgnew.script). A write
+# whose errors name its key the file never logs (its change is an XWSet
+# or an XWDelCon): it logs it as XGROUP HELP, which changes nothing.
 def stream.args(+k: String, op: R.XWrite) -> List<&2, String>:
   match op:
     case R.XWAdd{ws}:
@@ -790,6 +805,20 @@ def stream.args(+k: String, op: R.XWrite) -> List<&2, String>:
       "XSETID" <> k <> ws
     case R.XWNew{ws}:
       "EVAL" <> R.xnew.script() <> "1" <> k <> ws
+    case R.XWGroup{2n, ws}:
+      "XGROUP" <> "CREATE" <> k <> ws
+    case R.XWGroup{s, ws}:
+      "XGROUP" <> "DESTROY" <> k <> ws
+    case R.XWGNew{ws}:
+      "EVAL" <> R.xgnew.script() <> "1" <> k <> ws
+    case R.XWAck{ws}:
+      "XACK" <> k <> ws
+    case R.XWKeyed{c, kk, ws}:
+      ["XGROUP", "HELP"]
+    case R.XWSet{ws}:
+      "EVAL" <> R.xset.script() <> "1" <> k <> ws
+    case R.XWDelCon{ws}:
+      "EVAL" <> R.xdelcon.script() <> "1" <> k <> ws
 
 # RESTORE as the file logs it: with REPLACE, and ABSTTL with a time
 def restore.args(+k: String, p: String, t: R.TmR) -> List<&2, String>:

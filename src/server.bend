@@ -598,6 +598,25 @@ def dw.is.list(+m: Maybe<&2, KV.Item<KV.Val>>) -> Bool:
 def dw.lmove(+ds: R.Ds, +s: String, +d: String) -> Nat:
   Nat.add(dw.live(ds, d), Bool.pick(Nat, Bool.and(Bool.not(String.eq(s, d)), dw.is.list(R.ds.ent(ds, s))), 1n, 0n))
 
+# the changes Redis counts for a write of a stream's groups on the
+# stream there (m), of kind w: 0 a write whose errors name its key (its
+# plan's, R.xplan.n), 1 XWSet's script, 2 XWDelCon's
+def dw.stream.of(+w: Nat, +x: KV.XStream, +c: Nat, +k: String, +ws: List<&2, String>, +now: Nat) -> Nat:
+  match w:
+    case 0n:
+      R.xplan.n(R.xkeyed.plan(c, k, ws, x, now))
+    case 1n:
+      R.xset.dirty(ws, x)
+    case _:
+      R.xdelcon.dirty(ws, x)
+
+def dw.stream(m: Maybe<&2, KV.Item<KV.Val>>, +w: Nat, +c: Nat, +k: String, +ws: List<&2, String>, +now: Nat) -> Nat:
+  match m:
+    case Some{KV.Item{KV.VColl{KV.CStream{+x}}, e}}:
+      dw.stream.of(w, x, c, k, ws, now)
+    case _:
+      0n
+
 def dw.upd(+op: R.UpdOp, +k: String, +ds: R.Ds) -> Nat:
   match op:
     case R.UGetEx{+o}:
@@ -626,6 +645,14 @@ def dw.upd(+op: R.UpdOp, +k: String, +ds: R.Ds) -> Nat:
       dw.restore(t, k, ds)
     case R.UStream{R.XWNew{+ws}}:
       Nat.add(dw.live(ds, k), 1n)
+    case R.UStream{R.XWGNew{ws}}:
+      Nat.add(dw.live(ds, k), 1n)
+    case R.UStream{R.XWKeyed{+c, +kk, +ws}}:
+      dw.stream(R.ds.ent(ds, k), 0n, c, kk, ws, R.ds.now(ds))
+    case R.UStream{R.XWSet{+ws}}:
+      dw.stream(R.ds.ent(ds, k), 1n, 0n, k, ws, 0n)
+    case R.UStream{R.XWDelCon{+ws}}:
+      dw.stream(R.ds.ent(ds, k), 2n, 0n, k, ws, 0n)
     case _:
       0n
 
@@ -644,6 +671,8 @@ def dw.own(+o: R.SessOp, +ds: R.Ds) -> Nat:
       dw.live(ds, d)
     case R.SGeoStore{+kind, +a}:
       dw.geo(R.geo.dst(kind, a), ds)
+    case R.SXGroup{q}:
+      R.xgr.dirty(q, R.ds.focused(ds))
     case _:
       0n
 
@@ -1708,6 +1737,27 @@ def tx.was(+pre: Maybe<&2, R.Ds>, +j: Nat, +k: String) -> Bool:
     case None{}:
       True{}
 
+# whether a write of a stream signals its key (signalModifiedKey): XADD,
+# XTRIM and XDEL do (XSETID, which touch.by leaves out, does not); of the
+# writes of its groups XGROUP CREATE alone, where it made the stream
+# (MKSTREAM, its key not there before: pre), and XWGNew
+def xw.signals(op: R.XWrite, +j: Nat, +k: String, +pre: Maybe<&2, R.Ds>) -> Bool:
+  match op:
+    case R.XWGroup{2n, ws}:
+      Bool.not(tx.was(pre, j, k))
+    case R.XWGroup{s, ws}:
+      False{}
+    case R.XWAck{ws}:
+      False{}
+    case R.XWSet{ws}:
+      False{}
+    case R.XWDelCon{ws}:
+      False{}
+    case R.XWKeyed{c, kk, ws}:
+      False{}
+    case _:
+      True{}
+
 def touch.key.at(any: Bool, t: Tx, +j: Nat, +k: String, +here: Bool) -> Tx:
   match any:
     case True{}:
@@ -1726,6 +1776,13 @@ def touch.key.if(w: Bool, t: Tx, +j: Nat, +k: String, +pre: Maybe<&2, R.Ds>, +po
 def touch.key(t: Tx, +j: Nat, +k: String, +pre: Maybe<&2, R.Ds>, +post: R.Ds) -> Tx:
   +x = t
   touch.key.if(tx.watched(j, k, x), x, j, k, pre, post)
+
+def touch.stream(sig: Bool, t: Tx, +j: Nat, +k: String, +pre: Maybe<&2, R.Ds>, +post: R.Ds) -> Tx:
+  match sig:
+    case True{}:
+      touch.key(t, j, k, pre, post)
+    case False{}:
+      t
 
 def touch.keys(+ks: List<&2, String>, t: Tx, +j: Nat, +pre: Maybe<&2, R.Ds>, +post: R.Ds) -> Tx:
   match ks:
@@ -1880,6 +1937,8 @@ def touch.cmd(+c: R.Cmd, t: Tx, +j: Nat, +pre: Maybe<&2, R.Ds>, +post: R.Ds) -> 
   match c:
     case R.Set{+k, v}:
       touch.key(t, j, k, pre, post)
+    case R.Upd{+k, R.UStream{op}}:
+      touch.stream(xw.signals(op, j, k, pre), t, j, k, pre, post)
     case R.Upd{+k, op}:
       touch.key(t, j, k, pre, post)
     case R.Del{+ks}:
@@ -4828,10 +4887,19 @@ def iv.dst(on: Bool, +j: Nat, +k: String, +pre: Maybe<&2, R.Ds>, +post: R.Ds, +c
     case False{}:
       v
 
+def iv.stream(sig: Bool, +j: Nat, +k: String, +pre: Maybe<&2, R.Ds>, +post: R.Ds, +cur: Nat, v: Iv) -> Iv:
+  match sig:
+    case True{}:
+      iv.write(j, k, pre, post, cur, v)
+    case False{}:
+      v
+
 def iv.cmd(+c: R.Cmd, +j: Nat, +pre: Maybe<&2, R.Ds>, +post: R.Ds, +cur: Nat, v: Iv) -> Iv:
   match c:
     case R.Set{+k, w}:
       iv.write(j, k, pre, post, cur, v)
+    case R.Upd{+k, R.UStream{op}}:
+      iv.stream(xw.signals(op, j, k, pre), j, k, pre, post, cur, v)
     case R.Upd{+k, op}:
       iv.write(j, k, pre, post, cur, v)
     case R.Del{+ks}:
@@ -5420,6 +5488,7 @@ type Ek is Data:
   EkE{j: Nat, k: String}
   EkL{j: Nat, k: String, name: String}
   EkXt{j: Nat, k: String}
+  EkXc{j: Nat, k: String, g: String, c: String}
 
 # a key in ds: gone (0), there (1), or there with its time passed (2)
 def ek.state.of(m: Maybe<&2, KV.Item<KV.Val>>, +now: Nat) -> Nat:
@@ -5447,6 +5516,17 @@ def ek.xlen(m: Maybe<&2, KV.Item<KV.Val>>, +now: Nat) -> Nat:
       Bool.pick(Nat, KV.live(now, e), KV.xstream.len(x), 0n)
     case _:
       0n
+
+# whether the stream there holds consumer c in group g
+def ek.con.of(m: Maybe<&2, KV.Item<KV.Val>>, +g: String, +c: String) -> Bool:
+  match m:
+    case Some{KV.Item{KV.VColl{KV.CStream{+x}}, e}}:
+      R.xgr.has.con(x, g, c)
+    case _:
+      False{}
+
+def ek.con(+j: Nat, +k: String, +g: String, +c: String, +ds: R.Ds) -> Bool:
+  ek.con.of(ds.entry(j, k, ds), g, c)
 
 def ev.one(on: Bool, +cls: U32, +name: String, +k: String, +j: Nat, acc: List<&2, Ev>) -> List<&2, Ev>:
   match on:
@@ -5501,6 +5581,8 @@ def ek.evs(e: Ek, +pre: R.Ds, +post: R.Ds, acc: List<&2, Ev>) -> List<&2, Ev>:
     case EkXt{+j, +k}:
       +now = R.ds.now(pre)
       ev.one(Nat.is_le(ek.xlen(ds.entry(j, k, post), now), ek.xlen(ds.entry(j, k, pre), now)), ev.t(), "xtrim", k, j, acc)
+    case EkXc{+j, +k, +g, +c}:
+      ev.one(Bool.and(Bool.not(ek.con(j, k, g, c, pre)), ek.con(j, k, g, c, post)), ev.t(), "xgroup-createconsumer", k, j, acc)
 
 def ek.evs.all(es: List<&2, Ek>, +pre: R.Ds, +post: R.Ds, acc: List<&2, Ev>) -> List<&2, Ev>:
   match es:
@@ -5588,8 +5670,34 @@ def ek.zset(op: R.ZWrite) -> String:
     case R.ZWPopN{max, c}:
       ek.zpop(max)
 
+# the writes of a stream's groups whose errors name their key: XGROUP's
+# SETID, CREATECONSUMER and DELCONSUMER their events, XCLAIM and
+# XAUTOCLAIM the consumer's when they made it
+def ek.keyed(+c: Nat, +j: Nat, +k: String, ws: List<&2, String>) -> List<&2, Ek>:
+  match c ws:
+    case 3n _:
+      [EkA{j, k, "xgroup-setid", ev.t()}]
+    case 5n _:
+      [EkA{j, k, "xgroup-createconsumer", ev.t()}]
+    case 6n _:
+      [EkA{j, k, "xgroup-delconsumer", ev.t()}]
+    case _ Con{+g, Con{+cn, rest}}:
+      [EkXc{j, k, g, cn}]
+    case _ _:
+      Nil{}
+
+# XWSet's script run by a client: the consumer's event when it made it,
+# then SETID's
+def ek.xset(+j: Nat, +k: String, ws: List<&2, String>) -> List<&2, Ek>:
+  match ws:
+    case Con{+g, Con{l, Con{r, Con{+c, rest}}}}:
+      [EkXc{j, k, g, c}, EkA{j, k, "xgroup-setid", ev.t()}]
+    case _:
+      [EkA{j, k, "xgroup-setid", ev.t()}]
+
 # a stream's write: XADD's events and its trim's, or the event of the
-# others (each when it changed the stream)
+# others (each when it changed the stream); XGROUP CREATE's new (with
+# MKSTREAM) and its own, XACK none
 def ek.stream(+j: Nat, +k: String, op: R.XWrite) -> List<&2, Ek>:
   match op:
     case R.XWAdd{ws}:
@@ -5602,6 +5710,20 @@ def ek.stream(+j: Nat, +k: String, op: R.XWrite) -> List<&2, Ek>:
       [EkA{j, k, "xdel", ev.t()}]
     case R.XWSetId{ws}:
       [EkA{j, k, "xsetid", ev.t()}]
+    case R.XWGroup{2n, ws}:
+      [EkW{j, k, "xgroup-create", ev.t()}]
+    case R.XWGroup{s, ws}:
+      [EkA{j, k, "xgroup-destroy", ev.t()}]
+    case R.XWGNew{ws}:
+      [EkW{j, k, "xgroup-create", ev.t()}]
+    case R.XWAck{ws}:
+      Nil{}
+    case R.XWKeyed{+c, kk, ws}:
+      ek.keyed(c, j, k, ws)
+    case R.XWSet{ws}:
+      ek.xset(j, k, ws)
+    case R.XWDelCon{ws}:
+      [EkA{j, k, "xgroup-delconsumer", ev.t()}]
 
 def ek.sstore(k: R.SetK) -> String:
   match k:
@@ -5786,6 +5908,36 @@ def ek.restore(op: R.UpdOp, +j: Nat, +k: String, +es: List<&2, A.Ent>) -> List<&
       Nil{}
 
 # what a command did to each key it wrote (j: its database), in order
+# XREADGROUP's events: for each of its keys (once), the consumer's when
+# it made it
+def ek.in(xs: List<&2, String>, +k: String) -> Bool:
+  match xs:
+    case Nil{}:
+      False{}
+    case Con{+x, rest}:
+      Bool.or(String.eq(x, k), ek.in(rest, k))
+
+def ek.xgr.one(dup: Bool, +j: Nat, +k: String, +g: String, +c: String, rest: List<&2, Ek>) -> List<&2, Ek>:
+  match dup:
+    case True{}:
+      rest
+    case False{}:
+      EkXc{j, k, g, c} <> rest
+
+def ek.xgr.go(ks: List<&2, String>, +seen: List<&2, String>, +j: Nat, +g: String, +c: String) -> List<&2, Ek>:
+  match ks:
+    case Nil{}:
+      Nil{}
+    case Con{+k, rest}:
+      ek.xgr.one(ek.in(seen, k), j, k, g, c, ek.xgr.go(rest, k <> seen, j, g, c))
+
+def ek.xgr(q: R.XGq, +j: Nat) -> List<&2, Ek>:
+  match q:
+    case R.XGq{+g, +c, n, b, na, +ws}:
+      ek.xgr.go(R.xgr.keys(ws), Nil{}, j, g, c)
+    case R.XGqOf{y}:
+      ek.xgr(y, j)
+
 def ek.base(+c: R.Cmd, +j: Nat, +pre: R.Ds, +es: List<&2, A.Ent>) -> List<&2, Ek>:
   match c:
     case R.Set{+k, v}:
@@ -5836,6 +5988,8 @@ def ek.base(+c: R.Cmd, +j: Nat, +pre: R.Ds, +es: List<&2, A.Ent>) -> List<&2, Ek
       [EkW{j, d, "pfadd", ev.str()}]
     case R.Own{R.SGeoStore{+k, a}}:
       ek.geo(R.geo.dst(k, a), k, j)
+    case R.Own{R.SXGroup{q}}:
+      ek.xgr(q, j)
     case R.Own{o}:
       ek.ents(es)
     case _:
@@ -6714,6 +6868,8 @@ def sh.plain(+c: R.Cmd, +code: Nat, +ds: R.Ds) -> Sh:
       sh.acl(k)
     case R.Own{R.SXRead{q}}:
       Bool.pick(Sh, R.xread.waits(q, R.ds.focused(ds)), ShNoBlock{}, ShRun{})
+    case R.Own{R.SXGroup{q}}:
+      Bool.pick(Sh, R.xgr.waits(q, R.ds.focused(ds)), ShNoBlock{}, ShRun{})
     case R.Own{R.SBad{R.RError{+m}}}:
       sh.abort.if(Nat.is_eq(R.code.key(code), R.stat.top(162n)), m)
     case _:
@@ -15492,15 +15648,17 @@ def sc.call.go(ok: Bool, +why: String, +c: R.Cmd, +code: Nat, +r3: Bool, +raw: S
 def sc.call.at(+why: String, +c: R.Cmd, +code: Nat, +r3: Bool, +raw: String, sc: Sc, +aof: Bool, +pid: U32, g: Grp, +reqs: Chan(Req)) -> IO(Grp):
   sc.call.go(String.is_empty(why), why, c, code, r3, raw, sc, aof, pid, g, reqs)
 
-# XREAD with BLOCK from a script: xreadCommand refuses it once it reads
-# BLOCK among its options with a word after it (CLIENT_SCRIPT), before
-# BLOCK's value, the keys or the IDs, as it runs: a failed call, its
-# error naming the command as the script wrote it. The options before it
-# are read as the command reads them: a COUNT with a long long after it
-# reads on, COUNT with another word is COUNT's error, and STREAMS, an
-# option of XREADGROUP's or another word ends the options or is an error
-# of its own. ws are the words after the head, k the kind of the word at
-# the head (R.xro.word: 1 BLOCK, 2 COUNT)
+# XREAD and XREADGROUP with BLOCK from a script: xreadCommand refuses it
+# once it reads BLOCK among its options with a word after it
+# (CLIENT_SCRIPT), before BLOCK's value, the keys or the IDs, as it runs: a
+# failed call, its error naming the command as the script wrote it. The
+# options before it are read as the command reads them: a COUNT with a
+# long long after it reads on, COUNT with another word is COUNT's error;
+# XREADGROUP's GROUP with two words after it and its NOACK read on (grp),
+# XREAD's are errors of their own; STREAMS or another word ends the
+# options or is an error of its own. ws are the words after the head, k
+# the kind of the word at the head (R.xro.word: 1 BLOCK, 2 COUNT, 4 GROUP,
+# 5 NOACK)
 def sc.xcount.ok(m: Maybe<&2, Nat>) -> Bool:
   match m:
     case Some{n}:
@@ -15508,20 +15666,24 @@ def sc.xcount.ok(m: Maybe<&2, Nat>) -> Bool:
     case None{}:
       False{}
 
-def sc.xblock.go(ws: List<&2, String>, +k: Nat) -> Bool:
+def sc.xblock.go(ws: List<&2, String>, +k: Nat, +grp: Bool) -> Bool:
   match ws k:
     case Con{v, rest} 1n:
       True{}
     case Con{v, Con{w, rest}} 2n:
-      sc.xblock.go(rest, Bool.pick(Nat, sc.xcount.ok(R.xc.of(R.ll.read(v))), R.xro.word(w), 0n))
+      sc.xblock.go(rest, Bool.pick(Nat, sc.xcount.ok(R.xc.of(R.ll.read(v))), R.xro.word(w), 0n), grp)
+    case Con{g, Con{c, Con{w, rest}}} 4n:
+      sc.xblock.go(rest, Bool.pick(Nat, grp, R.xro.word(w), 0n), grp)
+    case Con{w, rest} 5n:
+      sc.xblock.go(rest, Bool.pick(Nat, grp, R.xro.word(w), 0n), grp)
     case _ _:
       False{}
 
-# (ws: the call's words, its command's name first)
-def sc.xblock(ws: List<&2, String>) -> Bool:
+# (ws: the call's words, its command's name first; grp: XREADGROUP's)
+def sc.xblock(ws: List<&2, String>, +grp: Bool) -> Bool:
   match ws:
     case Con{name, Con{w, rest}}:
-      sc.xblock.go(rest, R.xro.word(w))
+      sc.xblock.go(rest, R.xro.word(w), grp)
     case _:
       False{}
 
@@ -15532,12 +15694,12 @@ def sc.xblock.name(ws: List<&2, String>) -> String:
     case Nil{}:
       ""
 
-# whether a call (x: of XREAD, by its key) is refused its BLOCK, read
-# from the call's bytes only then
-def sc.xblock.is(x: Bool, +raw: String) -> Bool:
+# whether a call (x: of XREAD or XREADGROUP, grp, by its key) is refused
+# its BLOCK, read from the call's bytes only then
+def sc.xblock.is(x: Bool, +grp: Bool, +raw: String) -> Bool:
   match x:
     case True{}:
-      sc.xblock(av.first(P.argvs(raw)))
+      sc.xblock(av.first(P.argvs(raw)), grp)
     case False{}:
       False{}
 
@@ -15559,7 +15721,8 @@ def sc.call.run(+c: R.Cmd, +code: Nat, +r3: Bool, +raw: String, +sc: Sc, +aof: B
   +noscript = R.stat.noscript(key)
   +v = grp.acl.call(Bool.not(Bool.or(unknown, Bool.or(arity, noscript))), code, raw, x)
   +clean = U32.is_eq(U32.and(grp.sc.st(x), 2), 0)
-  +xb = sc.xblock.is(Nat.is_eq(key, R.stat.top(214n)), raw)
+  +xg = Nat.is_eq(key, R.stat.top(232n))
+  +xb = sc.xblock.is(Bool.or(Nat.is_eq(key, R.stat.top(214n)), xg), xg, raw)
   sc.call.at(sc.call.why(unknown, arity, noscript, sc.acl.why(v, x), Bool.and(sc.ro(sc), R.stat.pausable(key)), Bool.and(grp.misconf(x), Bool.and(clean, R.stat.write(key))), Bool.and(Bool.not(sc.aoom(sc)), Bool.and(grp.oom(x), Bool.and(clean, R.stat.denyoom(key))))), sc.xblock.cmd(xb, raw, c), Bool.pick(Nat, xb, R.stat.code(key, 2n), code), r3, raw, sc, aof, pid, sc.acl.log(v, sc, x), reqs)
 
 @unsafe

@@ -10696,6 +10696,126 @@ functions run.
 against Redis 7.2.16: every entry deleted, and a group's last ID and the greatest
 deleted before the first entry. On the build before this change, 24 of its reads differ.
 
+## 3zzzzt. Streams' groups, as Redis 7.2.16 runs them
+
+**What there is.** XGROUP (CREATE with MKSTREAM and ENTRIESREAD, SETID, DESTROY,
+CREATECONSUMER, DELCONSUMER and HELP), XREADGROUP of one key or several, XACK, XCLAIM and
+XAUTOCLAIM, as 7.2.16's `t_stream.c` runs them. Each reads its words in Redis's order:
+what Redis reads before it looks the key up, the parser reads, and the rest the write
+reads once it holds the stream and the group. Its errors, its reply and its keyspace
+events are Redis's (`xgroup-create`, `-setid`, `-destroy`, `-createconsumer` and
+`-delconsumer`, and `new` for the stream MKSTREAM makes), and so are the key it touches
+for WATCH (CREATE's MKSTREAM alone) and the changes it counts for INFO
+(`server.dirty`). The times are the server's now:
+- a consumer's seen time, at each command that names it;
+- its active time, once it gets or claims an entry;
+- a pending entry's delivery time and count.
+
+**How it is built.** A stream's groups were part of its value already (section 3zzzu),
+with their pending entries, their consumers and their times, and XINFO and XPENDING read
+them. `src/stream.bend` adds the writes, each of 7.2.16's functions under its own name:
+`streamCreateCG`, `streamCreateConsumer`, `streamDelConsumer`, XACK's acknowledgements,
+XCLAIM's and XAUTOCLAIM's claims, the deliveries of `streamReplyWithRange` and the history
+of `streamReplyWithRangeFromConsumerPEL`. Each command is a write of a stream (`XWrite`),
+but XREADGROUP: it reads several keys and answers as one, so it is a session's op with
+an act for each key (`SXGroup`, `AXGroup`), as SORT's and GEO's STORE are.
+
+What the append-only file logs follows from what the laws ask of a write: the write it
+keeps, replayed at time 0 on the stream as it was, makes the same change (`Good`, in
+`proof/PROOF.bend`).
+- XGROUP CREATE, DESTROY and XACK read no clock, so they keep their words.
+- The others read the clock (a consumer's times, a delivery's), and their errors name
+  their key, which a write the file logs does not keep. They are planned first
+  (`XPlan`: their reply, and their change as words), and their change is that of the
+  words of a resolved write. XWSet's words are a group's last ID and entries read and,
+  for a consumer, its seen and active times and each pending entry it got or lost, with
+  its time and count. XWDelCon's are a consumer deleted.
+- The file logs those as BendKV's scripts, which Redis runs too. XWSet's makes the
+  consumer (XGROUP CREATECONSUMER), claims each entry with XCLAIM's TIME, RETRYCOUNT,
+  FORCE and JUSTID, and sets the group's ID with SETID's ENTRIESREAD. XWDelCon's is a
+  DELCONSUMER.
+- CREATE with MKSTREAM where a key whose time had passed lay is logged as a script that
+  deletes the key first, as XADD's is.
+
+A stream's reads got cheaper on the way (`src/stream.bend`). A walk through a node read
+each entry's head (its flags and the differences of its ID from the master's) as text:
+each integer of the listpack written out in decimal and read back, and the entry's bytes
+after it taken, three times an entry. A range from the middle of a node pays for the
+entries before its start (PERFORMANCE.md, section 82), and the groups' writes read ranges
+often: XREADGROUP of one entry, its reply, its count of changes and its change each
+serving the key, and its change asking of each entry it delivers whether the stream holds
+it, took 2.2 million instructions. The head's three integers are now read where they lie,
+as `lpGetInteger` reads them, and an element that is no integer of 32 bits at most (a
+string, a 64-bit integer) sends the entry the slow way, as before. A walk that wants IDs
+alone (whether an entry is there, the last one) reads no fields. XREADGROUP's reply runs
+a key's change only when the key comes again (`XREADGROUP ... STREAMS s s`), the one case
+where a key's serving reads what the one before left, and its count of changes is read
+without serving the keys (one for a consumer made, one for a key served: its history, or
+a last entry past the group's last ID) but then. `tests/stream_check.bend` (in `make
+smoke`) checks that the two ways read the same heads, at every edge of the listpack's
+integer encodings, past the master ID and before it.
+
+The proofs are the cases of these writes in what was proved for the writes of a stream:
+each change is a good one (CREATE's options read, DESTROY's group, XACK's IDs, XWSet's
+words read, a new stream's MKSTREAM and the script's words), its entry in the file
+parses back to it, and its effects are one command at most. No law changed.
+
+**What it costs** (PERFORMANCE.md, section 87). Nothing on the fast way: perfcheck counts
+GET 3,527, SET 4,319 and INCR 4,612 instructions a request (3,526, 4,325 and 4,612
+before). The groups' reads and claims take 17 to 34 times Redis's time, on a stream of
+2,000 entries as on one of 100,000: XREADGROUP of a new entry runs 10,400 times a second
+(Redis 7.2.16: 174,000), its history of ten 3,490 (119,000), XCLAIM of one entry 7,180
+(120,000) and XAUTOCLAIM of ten 2,120 (68,800); XACK takes 7 times (90,900 and 658,000)
+and XGROUP CREATECONSUMER of a consumer there 1.8 times. A walk forwards through a node
+turns its entries around and reads each entry's head up to the ID it looks for, about
+1,600 instructions an entry where Redis's iterator takes 560, and a group's write walks
+two to three times as often as Redis's: it runs twice (for its reply and its act, or its
+count of changes), and its XWSet asks again whether the stream holds each entry it names.
+The first version of this change took 2.2 million instructions for XREADGROUP of a new
+entry, which takes 593,000 now (Redis 56,000).
+
+**Where BendKV differs.**
+- XREADGROUP with BLOCK, as XREAD's, answers an error where Redis would make its client
+  wait (in MULTI a null array, and in a script the error Redis gives, as Redis answers),
+  and such a call makes no consumer, where Redis makes it before its client waits.
+- XGROUP CREATE's and SETID's syntax error for words past their options, which Redis
+  finds once it has read the key and the group, names the subcommand in capitals, as the
+  write keeps no word of it; Redis names it as it came.
+- XAUTOCLAIM with a COUNT whose room Redis cannot allocate (16 bytes a count, for at
+  most 2^59 / 2 counts) runs, where Redis answers "Insufficient memory, failed allocating
+  transient memory, COUNT too high.".
+- A consumer that BendKV's start from a Redis file makes or claims for (the file's
+  XCLAIM and XGROUP CREATECONSUMER) is seen and active at time 0, as the start replays at
+  time 0; Redis's start gives them its own time.
+- The file holds a script for each XREADGROUP, XCLAIM and XAUTOCLAIM that changed a group,
+  with every pending entry the consumer got or lost, where Redis writes an XCLAIM for each
+  entry. A consumer's history read again counts its deliveries, which Redis does not log:
+  after Redis restarts from its file, those counts are as they were before the reads;
+  after BendKV restarts, as they were after them.
+
+**Tests.**
+- `tests/stream_group_test.py` (in `make test`): random runs on three keys, in RESP2 and
+  in RESP3, against Redis 7.2.16. The groups' writes come among XADD, XDEL, trims and DEL,
+  with IDs past the clock and idle times that both servers read alike. Each reply is
+  compared, then each stream's XINFO STREAM FULL, XINFO GROUPS, XPENDING and XINFO
+  CONSUMERS, and the changes the command counted. Times may differ by up to 2 s. Then come
+  the errors in Redis's order, the keyspace events, WATCH and MULTI, and BLOCK on BendKV
+  alone: 32,236 checks in its default run, all alike.
+- `tests/stream_group_aof_test.py` (in `make test`): the groups' writes in both servers'
+  files. BendKV started from its own file holds its streams byte for byte. Redis started
+  from BendKV's file holds them too, but for the consumers' times. BendKV started from
+  Redis's file holds what Redis started from it holds.
+- `tests/script_test.py`: XREADGROUP with BLOCK called from a script, which Redis refuses
+  whatever the words before BLOCK, as it refuses XREAD's. Redis's suite found that a first
+  version ran it.
+
+On the build before this change, `stream_group_test.py` stops at its first XGROUP (an
+unknown command). Redis's own suite passes 43 tests more, 1,719 of the 1,812 that Redis
+7.2.16 passes (COMPATIBILITY.md): 34 of unit/type/stream-cgroups, and 9 of other units
+that stopped at XGROUP or on what a test stopped at it left. The client libraries' suites
+pass 45 tests more in redis-py, in each protocol (2,768 of the 2,772 Redis passes), and 12
+in go-redis (462 of 463), each of the others failing on what BendKV does not have.
+
 ## 4. Where a request's time goes, and hiding the memory waits
 
 With the eight patches, BendKV ran fewer instructions on GET and SET than Redis, missed

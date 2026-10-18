@@ -26,8 +26,8 @@ The scenarios:
    0, inf and NaN), pcall's error table and pcall(redis.call, ...)'s plain
    message, the commands a script may not call (EVAL, MULTI, SUBSCRIBE),
    the blocking ones, which run as in MULTI, without waiting (BLPOP,
-   BRPOPLPUSH, BZPOPMIN, BLMPOP, BZMPOP, WAIT), XREAD's BLOCK, which
-   Redis refuses a script,
+   BRPOPLPUSH, BZPOPMIN, BLMPOP, BZMPOP, WAIT), XREAD's and XREADGROUP's
+   BLOCK, which Redis refuses a script,
    SELECT in a script, which leaves the caller's database as it was, and
    SORT of a set by a constant, which Redis sorts with ALPHA for a script.
 3. Error texts: runtime errors, compile errors, a global not there, a
@@ -366,6 +366,13 @@ CALLS = [
     ("return redis.pcall('XREAD', 'COUNT', 'x', 'BLOCK', 0, 'STREAMS', KEYS[1], '0')", ["none"], []),
     ("return redis.pcall('XREAD', 'STREAMS', KEYS[1], 'BLOCK', '0', '0')", ["none"], []),
     ("return redis.pcall('XREAD', 'NOACK', 'BLOCK', 0, 'STREAMS', KEYS[1], '0')", ["none"], []),
+    # and XREADGROUP's, its GROUP and NOACK read first
+    ("return redis.pcall('xreadgroup', 'group', 'g', 'c', 'BLOCK', 0, 'STREAMS', KEYS[1], '>')", ["none"], []),
+    ("return redis.pcall('XREADGROUP', 'NOACK', 'COUNT', 1, 'GROUP', 'g', 'c', 'BLOCK', 10, 'STREAMS', KEYS[1], '0')", ["none"], []),
+    ("return redis.pcall('XREADGROUP', 'BLOCK', 0, 'GROUP', 'g', 'c', 'STREAMS', KEYS[1], '>')", ["str"], []),
+    ("return redis.pcall('XREADGROUP', 'GROUP', 'g', 'BLOCK', 0, 'STREAMS', KEYS[1], '>')", ["none"], []),
+    ("return redis.pcall('XREADGROUP', 'COUNT', 'x', 'BLOCK', 0, 'GROUP', 'g', 'c', 'STREAMS', KEYS[1], '>')", ["none"], []),
+    ("return redis.pcall('XREADGROUP', 'GROUP', 'g', 'c', 'STREAMS', KEYS[1], '>')", ["none"], []),
     # errors of commands, raised by call, returned by pcall
     ("return redis.call('LPUSH', KEYS[1], 'x')", ["str"], []),
     ("return redis.pcall('LPUSH', KEYS[1], 'x')", ["str"], []),
