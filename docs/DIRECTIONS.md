@@ -328,11 +328,11 @@ Where performance and proof meet: **batched execution under proved laws.**
    (redis-py's and go-redis's, in CI: done, section 3zy).
    Streams are under way: a stream is a value BendKV holds (section 3zzzu), its reads
    and writes answer as Redis's (sections 3zzzy and 3zzzza), its groups and XREAD's wait
-   next. Cluster, replication and modules are out of scope. The suite's count: of the 1,677 tests
-   Redis 7.0.15 passes against a server it did not start, BendKV passes 1,556, 1,516 of
-   the 1,565 in what it has ([COMPATIBILITY.md](COMPATIBILITY.md)); most of the other 49
-   need commands BendKV does not have (replication's SYNC, streams' groups, CLUSTER) or run
-   after a test that left its client in MULTI on one of them.
+   next. Cluster, replication and modules are out of scope. The suite's count: of the 1,812 tests
+   Redis 7.2.16 passes against a server it did not start, BendKV passes 1,675, 1,634 of
+   the 1,688 in what it has ([COMPATIBILITY.md](COMPATIBILITY.md)); most of the other 54
+   need replication's SYNC (26) or run after a test that left its client in MULTI or
+   subscribed with a command BendKV does not have (9).
    What maxmemory left to do (section 3zw): a delete takes the nodes it empties now
    (section 3zz), so the eviction gets within a limit with the keys Redis keeps, but its
    samples still walk the trie's empty buckets, and an eviction takes six times Redis's
