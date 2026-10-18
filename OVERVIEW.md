@@ -999,23 +999,22 @@ The translation the kernel reads can be dumped with
   REPLICAOF, WAITAOF, and COMMAND's entries of those), none on a command BendKV has
   otherwise. A test Redis passes that BendKV fails, and that is not among the
   known failures of `tools/data/clients.json`, fails CI.
-- **Differential testing against Redis 7.0.15** (`tests/diff_test.py`). Random streams
+- **Differential testing against Redis 7.2.16** (`tests/diff_test.py`). Random streams
   of commands with random binary arguments, pipelines of different lengths, and arity
-  and format errors go in parallel to BendKV and to real Redis. 28 runs, ≈266 thousand
-  commands: all replies identical (and ≈1,050 thousand more on the versions with a
-  16-child trie, ≈115 thousand of them on the current one). The exception is known and
-  documented: numbers of 15 or more digits (BendKV answers with an overflow error, Redis
-  computes in int64). The test recognizes exactly this case. Among the commands are
-  times to live and the options of SET, GETEX and EXPIRE: relative times (from 100 s)
-  and absolute ones (long past or far off), with bad values and overflows; the generator
-  avoids times of 10^14 ms or more (in BendKV such a time gives a key no time to live).
-  TTL, PTTL, EXPIRETIME and PEXPIRETIME read each server's clock and are compared to the
-  second. The stream moves over databases 0–3 (SELECT), moves keys between them (MOVE),
-  swaps them (SWAPDB) and empties one (FLUSHDB) or all (FLUSHALL), with bad numbers
-  among them (`01`, `-1`, `2147483648`, 20 digits): the errors too match byte for byte.
-  Ranges and bits (GETRANGE, SETRANGE, GETBIT, SETBIT, BITCOUNT, BITPOS) take small
-  offsets, and now and then wrong and huge ones, but never such that a value would grow
-  to nearly 512 MB.
+  and format errors go in parallel to BendKV and to real Redis. Against 7.2.16, 12 runs,
+  ≈163 thousand commands (3 of the runs in RESP3): all replies identical; against 7.0.15
+  before, 28 runs, ≈266 thousand commands, all replies identical (and ≈1,050 thousand
+  more on the versions with a 16-child trie, ≈115 thousand of them on the current one
+  then). Among the commands are times to live and the options of SET, GETEX and EXPIRE:
+  relative times (from 100 s) and absolute ones (long past or far off), with bad values
+  and overflows; the generator avoids times of 10^14 ms or more (in BendKV such a time
+  gives a key no time to live). TTL, PTTL, EXPIRETIME and PEXPIRETIME read each server's
+  clock and are compared to the second. The stream moves over databases 0–3 (SELECT),
+  moves keys between them (MOVE), swaps them (SWAPDB) and empties one (FLUSHDB) or all
+  (FLUSHALL), with bad numbers among them (`01`, `-1`, `2147483648`, 20 digits): the
+  errors too match byte for byte. Ranges and bits (GETRANGE, SETRANGE, GETBIT, SETBIT,
+  BITCOUNT, BITPOS) take small offsets, and now and then wrong and huge ones, but never
+  such that a value would grow to nearly 512 MB.
 - **Key expiry** (`tests/ttl_test.py`): seven scenarios set keys with short times on both
   servers, wait for the times to pass and compare the replies: reads of expired keys,
   KEYS, SCAN and RANDOMKEY when only expired keys are left, writes over expired keys
@@ -1362,13 +1361,15 @@ The translation the kernel reads can be dumped with
   `fsync` of the directory makes it refuse to start before the first reply; files the
   start refuses give a refusal with the entry's number and its byte, the file untouched.
   `redis-check-aof` from Redis 7 accepts BendKV's files as valid (with SELECT, SWAPDB,
-  MOVE, COPY and FLUSHALL), Redis 7.0.15 loads BendKV's append-only file and gets the
-  same data in the same databases, and BendKV loads an append-only file written by
-  Redis (with `SELECT`, command names in lower case, GETSET already rewritten as SET,
-  and COPY as the client sent it). `tests/aof_redis_test.py` (in `make test`) checks
-  this both ways: the same commands go to BendKV and to redis-server, each with its own
-  log, then BendKV starts from Redis's file and Redis from BendKV's, and each holds the
-  same databases the other held.
+  MOVE, COPY and FLUSHALL), Redis 7.0.15 and 7.2.16 load BendKV's append-only file and
+  get the same data in the same databases (7.2.16 keeps a small set in a listpack, which
+  BendKV's OBJECT ENCODING calls a hashtable until its encodings come, so that
+  `tests/aof_redis_test.py` fails there against 7.2.16), and BendKV loads an append-only
+  file written by Redis (with `SELECT`, command names in lower case, GETSET already
+  rewritten as SET, and COPY as the client sent it). `tests/aof_redis_test.py` (in
+  `make test`) checks this both ways: the same commands go to BendKV and to
+  redis-server, each with its own log, then BendKV starts from Redis's file and Redis
+  from BendKV's, and each holds the same databases the other held.
 
 ### Performance (`make bench`: 20 clients, 100 thousand requests, ops/s)
 
