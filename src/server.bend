@@ -13904,26 +13904,13 @@ def conn_start.of(m: Maybe<&1, Ans>, s: Socket, +ln: Link, +id: Nat) -> IO(Unit)
     case _:
       conn_loop(s, P.TailNone{}, Nil{}, 0n, 1n, ln, S.conn_new(id))
 
-# the connection's client joins the actor's registry (Join: its socket's
-# fd and addresses, TCP.name) before its first batch, which waits for the
-# actor's answer: the client's state as it joins, its authentication
-# decided where Redis decides it, as the client comes (Clients)
+# the connection's first batch waits for the actor's answer to its Join
+# (conn_join.at): the client's state as it joined
 @unsafe
-def conn_joined(n: Socket & (U32 & (String & String)), +db: Chan(Req), +back: Chan(Ans), post: Bool, tl: Chan(Tally), +id: Nat) -> IO(Unit):
-  (s, i) = n
-  (fd, a) = i
-  (addr, laddr) = a
+def conn_start(s: Socket, db: Chan(Req), +back: Chan(Ans), post: Bool, tl: Chan(Tally), +id: Nat) -> IO(Unit):
   do IO<Unit>:
-    sent : Bool <- Chan.send(Req, db, Join{id, back, fd, addr, laddr})
     m : Maybe<&1, Ans> <- Chan.recv(Ans, back)
     conn_start.of(m, s, Link{db, back, post, tl, id}, id)
-
-@unsafe
-def conn_start(s: Socket, db: Chan(Req), post: Bool, tl: Chan(Tally), +id: Nat) -> IO(Unit):
-  do IO<Unit>:
-    back : Chan(Ans) <- Chan.new(Ans, 1)
-    n : Socket & (U32 & (String & String)) <- TCP.name(s)
-    conn_joined(n, db, back, post, tl, id)
 
 @unsafe
 def tally.took(m: Maybe<&1, Tally>, +tl: Chan(Tally)) -> IO(Nat):
@@ -13978,10 +13965,26 @@ def tally.peek(+tl: Chan(Tally)) -> IO(Tally):
 
 # a connection, counted open until it ends
 @unsafe
-def conn_life(s: Socket, +db: Chan(Req), +post: Bool, +tl: Chan(Tally), id: Nat) -> IO(Unit):
+def conn_life(s: Socket, +db: Chan(Req), +back: Chan(Ans), +post: Bool, +tl: Chan(Tally), id: Nat) -> IO(Unit):
   do IO<Unit>:
-    Unit <- conn_start(s, db, post, tl, id)
+    Unit <- conn_start(s, db, back, post, tl, id)
     tally.close(tl)
+
+# the client joins the actor's registry (Join: its socket's fd and
+# addresses, TCP.name) as its connection is taken, where Redis creates it
+# (createClient, at accept): before the loop takes the next connection,
+# and so before a command another client sends once this one has
+# connected (a CONFIG SET requirepass that would decide its
+# authentication, Clients). The connection's task then waits for the
+# answer.
+@unsafe
+def conn_join.at(n: Socket & (U32 & (String & String)), +db: Chan(Req), +back: Chan(Ans), +post: Bool, +tl: Chan(Tally), +id: Nat) -> IO(Unit):
+  (s, i) = n
+  (fd, a) = i
+  (addr, laddr) = a
+  do IO<Unit>:
+    sent : Bool <- Chan.send(Req, db, Join{id, back, fd, addr, laddr})
+    IO.spawn(Unit, conn_life(s, db, back, post, tl, id))
 
 @unsafe
 def accept_next(m: Listener & Result<&1, &1, U32 & String, Socket>, +db: Chan(Req), +post: Bool, +tl: Chan(Tally)) -> IO(Listener):
@@ -13990,7 +13993,9 @@ def accept_next(m: Listener & Result<&1, &1, U32 & String, Socket>, +db: Chan(Re
     case Done{s}:
       do IO<Listener>:
         id : Nat <- tally.take(tl)
-        IO.spawn(Unit, conn_life(s, db, post, tl, id))
+        back : Chan(Ans) <- Chan.new(Ans, 1)
+        n : Socket & (U32 & (String & String)) <- TCP.name(s)
+        Unit <- conn_join.at(n, db, back, post, tl, id)
         return l
     case Fail{e}:
       IO.pure(Listener, l)

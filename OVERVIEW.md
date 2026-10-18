@@ -452,7 +452,7 @@ the replication's offset, INFO's `master_repl_offset`, which counts what the app
 file gets as Redis 7.2.16 counts it with no replica), WAIT (0: at once when it asks for
 no replica, otherwise when its timeout ends, its client waiting as a blocking command's
 does), WAITAOF (once the append-only file is synced past the client's last write, as
-`appendfsync` syncs it; section 3zzzzo of docs/FINDINGS.md), MEMORY STATS, DOCTOR, PURGE
+`appendfsync` syncs it; section 3zzzzp of docs/FINDINGS.md), MEMORY STATS, DOCTOR, PURGE
 and MALLOC-STATS (Redis's fields and advice from the numbers of INFO's memory section; no
 allocator's statistics), LOLWUT
 (Redis 7.2.16's line, and VERSION 5's and 6's drawings, byte for byte those that take

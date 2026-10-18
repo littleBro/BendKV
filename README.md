@@ -642,7 +642,7 @@ translation stays in the trusted base.
   WAITAOF after it waits for its sync; a client served by a write while it waits in a
   blocking pop waits for its pop in its next WAIT or WAITAOF, where Redis waits only for
   its writes before the pop ([docs/UPSTREAM.md](docs/UPSTREAM.md), bug 9; FINDINGS.md,
-  section 3zzzzo).
+  section 3zzzzp).
 - **Configuration:** CONFIG GET (names, aliases and glob patterns), SET (several
   parameters at once, all or none), RESETSTAT, REWRITE, HELP, over every parameter of
   Redis 7.2.16 (counted in [In numbers](#in-numbers)), taken from Redis's own table by

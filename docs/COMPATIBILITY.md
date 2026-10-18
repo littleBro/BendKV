@@ -544,7 +544,7 @@ Against Redis 7.0.15 BendKV passed 2,708 of the 2,753 tests it passes in redis-p
 447 of 460 in go-redis. 7.2.16 passes each of those, and 19 more in redis-py and 3 in
 go-redis. BendKV passes 15 of redis-py's 19 (ACL GETUSER, SETUSER and LOG with 7.2's
 fields, CLIENT NO-TOUCH, ZRANK and ZREVRANK with WITHSCORE) and all 3 of go-redis's
-(WITHSCORE's, and WAITAOF's since WAITAOF: section 3zzzzo of [FINDINGS.md](FINDINGS.md)).
+(WITHSCORE's, and WAITAOF's since WAITAOF: section 3zzzzp of [FINDINGS.md](FINDINGS.md)).
 It fails four of redis-py's, which create a stream's group (`test_xinfo_consumers`, of
 7.2, in the sync and asyncio clients, and `test_xgroup_create_entriesread`).
 

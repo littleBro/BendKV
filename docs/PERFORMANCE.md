@@ -8846,7 +8846,7 @@ with 100 clients in BLPOP, +3.1% and +3.4%.
 
 ## 86. WAITAOF and the replication's offset
 
-FINDINGS 3zzzzo. "Before" is the build of 93e2462, the integration branch this change was
+FINDINGS 3zzzzp. "Before" is the build of 93e2462, the integration branch this change was
 made on, and "now" this change on it, under callgrind (`tools/callgrind_req.sh`, 20
 clients at a depth of 16, as `make perfcheck` counts), the save points off.
 

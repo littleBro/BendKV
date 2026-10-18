@@ -22,7 +22,9 @@ and pipelined, then once it has; a failed AUTH; HELLO without AUTH;
 RESET with a password and without; a password removed and set again; a
 pipeline that sets the password and goes on; a transaction with errors
 of each kind; a subscribed client's errors; the limits of a client that
-must authenticate; and the counts of INFO.
+must authenticate; the counts of INFO; and clients that connect just
+before another removes the password, each created as it connects
+(createClient, at accept), so while there was one.
 
 The limits, as Redis 7.2.16 reads a request while its client must
 authenticate (processMultibulkBuffer): a count past 10 arguments, or a
@@ -201,6 +203,13 @@ def scenarios(port, log):
     v.close()
     # 14. the counts of INFO
     log("14 counts", counts(r))
+    # 15. clients that connect just before the password is removed: each
+    # came while there was one, and must authenticate once it is set again
+    for _ in range(3):
+        j = Client(port, db=None)
+        log("15 join", r.cmd("CONFIG", "SET", "requirepass", ""), r.cmd("CONFIG", "SET", "requirepass", "pw"),
+            j.cmd("GET", "k"))
+        j.close()
     r.cmd("CONFIG", "SET", "requirepass", "")
     for c in (r, a, n, m, u, w, x, y, s):
         c.close()

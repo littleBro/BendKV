@@ -229,6 +229,9 @@ parts of it are written from 7.2.16's sources:
   10 arguments, or with a bulk of more than 16384 bytes, refused once its
   line has come (networking.c's processMultibulkBuffer and
   authRequired), in src/resp.bend and src/server.bend.
+- A client created as its connection is accepted, before the commands
+  other clients send after its connect (networking.c's
+  acceptCommonHandler and createClient), in src/server.bend.
 - WAITAOF and the replication's offset: WAITAOF's checks, its answers
   and its waits (replication.c's waitaofCommand and
   processClientsWaitingReplicas, blocked.c's blockForAofFsync and

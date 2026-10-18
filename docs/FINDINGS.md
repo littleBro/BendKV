@@ -10464,8 +10464,9 @@ only refuse.
 
 **What it costs.** Every other client's answer is `Ans`, which leaves the tail as it is:
 its connection matches the tail once more after each answer, and the parse matches it
-once more, about 2 instructions a request under callgrind, and perfcheck counts what
-the build before counts (GET 3,499, SET 4,297 and INCR 4,613 instructions a request).
+once more, about 2 instructions a request under callgrind. perfcheck counts GET 3,506,
+SET 4,297 and INCR 4,614 instructions a request, against 3,499, 4,297 and 4,613 for the
+build before.
 The new paths reach `conn_batch` and `conn_put` through the defs that called them
 already (`conn_more`, and `conn_ans` again for an `AnsAuth`): a def called from a second
 place is entered through the work loop (section 8), and a first build that called the
@@ -10491,7 +10492,33 @@ count's line (refused). Redis's unit/auth, run with its `external:skip` tag take
 section 3zzzh ran unit/acl, passes its test of these limits: 6 of the 7 tests Redis
 passes there.
 
-## 3zzzzo. WAITAOF and the replication's offset, as Redis 7.2.16 counts them
+## 3zzzzo. A client joins as its connection is taken
+
+**What differed.** Redis creates a client as it accepts its connection
+(`acceptCommonHandler`, `createClient`), and a client created while its server asks for
+no password is authenticated from then on (`clientSetDefaultAuth`). BendKV's accept loop
+spawned the connection's task, and the client joined the actor's registry (`Join`) only
+once that task ran, so a command another client sent right after the connect could reach
+the actor first. A client that connected while a password was set, just before another
+client removed it with `CONFIG SET requirepass ""`, was created authenticated, and once
+the password came back it was answered where Redis answers NOAUTH: two of the three such
+clients of `auth_test`'s scenario 15, on the build before this change.
+
+**What changed** (`src/server.bend`). The accept loop opens the connection's channel,
+reads its addresses (`TCP.name`) and sends `Join` itself (`conn_join.at`) before it
+takes the next connection, and the connection's task waits for the answer
+(`conn_start`). The loop runs on the event loop's thread, which takes the listener's
+readiness and the clients' sockets' in the order they come, as Redis's loop does: a
+client's `Join` reaches the actor before any command sent once it has connected.
+
+**What it costs.** Nothing on a request's path: the accept loop does the channel, the
+addresses and the send that the connection's task did. perfcheck: GET 3,505, SET 4,295
+and INCR 4,608 instructions a request (3,506, 4,297 and 4,614 before).
+
+`auth_test`'s scenario 15 runs it against Redis: three clients, each connected just
+before another removes the password and sets it again, then a GET from each (NOAUTH).
+
+## 3zzzzp. WAITAOF and the replication's offset, as Redis 7.2.16 counts them
 
 **What was missing.** WAITAOF, new in Redis 7.2, was an unknown command (go-redis's test
 of it failed so), and INFO's `master_repl_offset` and ROLE's offset were 0 where Redis
