@@ -4,13 +4,18 @@ numbers, decimal and hex, with up to 800 digits, exact ties between two
 doubles or two long doubles, numbers near each end of both ranges, and
 forms strtod reads only in part (inf, infinity, nan, a sign, a point, an
 exponent with no digit), each read as Redis reads a double (string2d) and
-written as it writes one ("%.17g"), read as a long double (string2ld)
-and written for people ("%.17Lf", the zeros that end its fraction taken
-out), and read as SORT reads a score (strtod, then errno and the end it
-reached); and sums and products of doubles and sums of long doubles. A Bend
-program (build/float_check.bend) answers each line, a C program with
-glibc's strtod, strtold and printf (tests/float_ref.c) answers it as
-Redis 7.0.15 does on x86-64, and the answers must be the same bytes.
+written as "%.17g" writes it, read as a long double (string2ld) and
+written for people ("%.17Lf", the zeros that end its fraction taken out),
+and read as SORT reads a score (strtod, then errno and the end it
+reached); sums and products of doubles and sums of long doubles; and
+doubles by their bits (random ones, integers and their neighbours, short
+decimals, subnormals, every exponent's edges, NaNs, infinities and
+zeros), each written as Redis 7.2 writes a double (d2string: an integer,
+or fpconv_dtoa's Grisu2) and as its AOF rewrite does (fpconv_dtoa). A
+Bend program (build/float_check.bend) answers each line, a C program
+with glibc's strtod, strtold and printf, and Redis 7.2.16's fpconv_dtoa
+(deps/redis/deps/fpconv), answers it as Redis does on x86-64
+(tests/float_ref.c), and the answers must be the same bytes.
 
     python3 tests/float_test.py --bend "bend" --cc clang-19 --seed 1 --n 1500
 """
@@ -118,6 +123,38 @@ special = ["inf", "INF", "Infinity", "-iNfInItY", "+inf", "infinit", "infx", "na
 
 
 
+# doubles by their bits, for d2string and fpconv_dtoa: random ones,
+# integers (to past 2^62, where d2string stops writing integers) and their
+# neighbours, short decimals (Grisu2's short digits and each of its
+# layouts), subnormals and each exponent's edges
+def rbits():
+    r = rnd.random()
+    if r < 0.4:
+        return rnd.getrandbits(64)
+    if r < 0.6:
+        v = rnd.randint(-2 ** rnd.randint(1, 64), 2 ** rnd.randint(1, 64))
+        b = struct.unpack('<Q', struct.pack('<d', float(v)))[0]
+        return (b + rnd.choice([0, 0, 0, 1, -1])) % 2 ** 64
+    if r < 0.85:
+        k = rnd.randint(1, 17)
+        v = float(str(rnd.randint(1, 10 ** k)) + 'e' + str(rnd.randint(-30, 30) if rnd.random() < 0.7 else rnd.randint(-340, 300)))
+        b = struct.unpack('<Q', struct.pack('<d', v))[0]
+        return b | (1 << 63) if rnd.random() < 0.5 else b
+    b = rnd.choice([rnd.getrandbits(52), (rnd.randint(0, 2047) << 52) | rnd.choice([0, 1, 2 ** 52 - 1, rnd.getrandbits(52)])])
+    return b | (1 << 63) if rnd.random() < 0.5 else b
+
+def dbits(v):
+    return struct.unpack('<Q', struct.pack('<d', v))[0]
+
+special_bits = [0, 1 << 63, 0x7FF0000000000000, 0xFFF0000000000000, 0x7FF8000000000000, 0xFFF8000000000000,
+  0x7FF0000000000001, 0x7FFFFFFFFFFFFFFF, 1, 2, 0x000FFFFFFFFFFFFF, 0x0010000000000000, 0x7FEFFFFFFFFFFFFF] + [
+  dbits(v) for v in [1.0, -1.0, 0.1, 0.5, 0.3, 1.5, 123.456, 1e7, 1e8, 1e15, 1e16, 1e17, 1e18, 1e21, 1e22, 1e23,
+  2.0 ** 62, -2.0 ** 62, 2.0 ** 62 + 1024, -(2.0 ** 62 + 1024), 2.0 ** 63, 2.0 ** 53, 2.0 ** 53 + 2, 2.0 ** 47,
+  2.0 ** 47 + 0.5, 2.0 ** 52 + 0.5, 4611686018427387903.0, 9007199254740993.0, 12345678.0, 123456789.0,
+  1234567.5, 0.000001, 0.0000001, 0.00001234, 1e-5, 1e-6, 1e-7, 1e-300, 5e-324, 1.7976931348623157e308,
+  2.2250738585072014e-308, 3.14159, -2.5e-8, 100.0, 1000.0, 1e9, 1e10, 9.999999999999999e22, 0.1 + 0.2]]
+
+
 def inputs(n):
     global N
     N = n
@@ -172,12 +209,15 @@ import ../src/float.bend as F
 type T is Data:
   T{op: String, a: String, b: String}
 
+type W is Data:
+  W{hi: Nat, lo: Nat}
+
 def show.d(m: Maybe<&2, F.F64>) -> String:
   match m:
     case None{}:
       "ERR"
     case Some{d}:
-      F.f64.show(d)
+      F.f64.show_g(d)
 
 def show.ld(m: Maybe<&2, F.Fl>) -> String:
   match m:
@@ -219,8 +259,24 @@ def run(xs: List<&2, T>) -> IO(Unit):
         Unit <- IO.print(one(t) ++ "\\n")
         run(rest)
 
+def wone(w: W) -> String:
+  match w:
+    case W{+hi, +lo}:
+      F.f64.show(F.F64{hi, lo}) ++ " | " ++ F.f64.dtoa(F.F64{hi, lo})
+
+def wrun(xs: List<&2, W>) -> IO(Unit):
+  match xs:
+    case Nil{}:
+      IO.pure(Unit, Unit{})
+    case Con{w, rest}:
+      do IO<Unit>:
+        Unit <- IO.print(wone(w) ++ "\\n")
+        wrun(rest)
+
 def main() -> IO(Unit):
-  run([@ITEMS@])
+  do IO<Unit>:
+    Unit <- run([@ITEMS@])
+    wrun([@WITEMS@])
 """
 
 
@@ -234,17 +290,23 @@ def main():
     a = ap.parse_args()
     rnd = random.Random(a.seed)
     lines = inputs(a.n)
+    ws = special_bits + [rbits() for _ in range(a.n)]
     os.makedirs(os.path.join(ROOT, "build"), exist_ok=True)
     txt = os.path.join(ROOT, "build", "float_in.txt")
     with open(txt, "w") as f:
         for op, x, y in lines:
             f.write(op + "\t" + x + ("\t" + y if op != "p" else "") + "\n")
+        for b in ws:
+            f.write("w\t%016x\n" % b)
     items = ['T{"%s", "%s", "%s"}' % (op, esc(x), esc(y)) for op, x, y in lines]
-    src = BEND.replace("@ITEMS@", ",\n    ".join(items))
+    witems = ['W{%dn, %dn}' % (b >> 32, b & 0xFFFFFFFF) for b in ws]
+    src = BEND.replace("@ITEMS@", ",\n    ".join(items)).replace("@WITEMS@", ",\n    ".join(witems))
+    lines = lines + [('w', '%016x' % b, '') for b in ws]
     bf = os.path.join(ROOT, "build", "float_check.bend")
     open(bf, "w").write(src)
     ref = os.path.join(ROOT, "build", "float_ref")
-    subprocess.run([a.cc, "-O2", "-o", ref, os.path.join(HERE, "float_ref.c"), "-lm"], check=True)
+    fp = os.path.join(ROOT, "deps", "redis", "deps", "fpconv")
+    subprocess.run([a.cc, "-O2", "-I", fp, "-o", ref, os.path.join(HERE, "float_ref.c"), os.path.join(fp, "fpconv_dtoa.c"), "-lm"], check=True)
     want = subprocess.run([ref, txt], check=True, capture_output=True).stdout.decode("latin1").split("\n")
     env = dict(os.environ, CC=a.cc)
     got = subprocess.run(a.bend + " " + bf, shell=True, env=env, capture_output=True).stdout.decode("latin1")
@@ -260,7 +322,7 @@ def main():
     if bad or len(got) != len(want):
         print("FAIL: %d of %d differ (%d answers for %d lines)" % (bad, len(lines), len(got), len(want)))
         sys.exit(1)
-    print("OK: %d numbers read, written and added as glibc does" % len(lines))
+    print("OK: %d numbers read, written and added as glibc and Redis 7.2.16 do" % len(lines))
 
 
 if __name__ == "__main__":

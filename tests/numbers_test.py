@@ -7,7 +7,9 @@ in BITFIELD, wraps to 64), and in forms Redis refuses (+5, 1e5, 0x10,
 it at a small one (a write far out would make a value of up to 512MB).
 BendKV must answer each command, and answer as Redis does,
 but where BendKV is known to differ: SCAN with a cursor it did not give
-(the cursor is the place in each server's own table). INCRBY, DECRBY and
+(the cursor is the place in each server's own table), and LSET with an
+index past 32 bits, which Redis 7.2.16 takes modulo 2^32 (docs/UPSTREAM.md,
+bug 1) and BendKV must answer is out of range. INCRBY, DECRBY and
 HINCRBY add each to 5, to LLONG_MAX and LLONG_MIN, and to a key and a
 field that are not there. A full SCAN's keys are compared as a set:
 each server lists them in the order of its own table; the set the set
@@ -65,6 +67,19 @@ TEMPL = [
 ANSWER_ONLY = ("SCAN n",)
 
 
+def lset_bug(t, num, x, y):
+    """Whether Redis's answer is its LSET's index taken modulo 2^32
+    (docs/UPSTREAM.md, bug 1), an index past 32 bits that it answers OK,
+    BendKV answering, as 7.0.15 and 8.10.2 do, that it is out of range
+    (the list holds 5 elements)."""
+    try:
+        i = int(num)
+    except ValueError:
+        return False
+    return (t == "LSET l n v" and not -2 ** 31 <= i < 2 ** 31 and y == (b"+", b"OK")
+            and x == (b"-", b"ERR index out of range"))
+
+
 def norm(t, x):
     if t.startswith(("SCAN", "SSCAN")) and x[0] == b"*":
         return (x[0], [x[1][0], (x[1][1][0], sorted(x[1][1][1]))])
@@ -112,7 +127,7 @@ def main():
                 sys.exit(1)
             y = r.reply()
             n += 1
-            if norm(t, x) != norm(t, y) and not t.startswith(ANSWER_ONLY):
+            if norm(t, x) != norm(t, y) and not t.startswith(ANSWER_ONLY) and not lset_bug(t, num, x, y):
                 bad += 1
                 print("FAIL: %r: BendKV %r, Redis %r" % (b" ".join(args), x, y))
     for c in (b, r):

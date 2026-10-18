@@ -4,13 +4,15 @@ a pipeline too, and back with RESET), the replies RESP3 types (nulls,
 doubles, maps, sets, pairs, verbatim texts, pushes) on their own and in
 EXEC, blocking commands served and timing out, Pub/Sub's pushes (a RESP3
 client with a subscription runs any command, and gets its own messages
-and keyspace events among its replies, as Redis writes them), CLIENT
-INFO's resp=, and COMMAND's maps and sets (of commands without
-subcommands: BendKV lists them by name, Redis in the order of a hash
-table). Each scenario runs on both
-servers on fresh connections; their replies are compared as they are,
-but for what is the server's own: a client's id (HELLO, CLIENT INFO's
-line, which is compared by its kind and its resp=).
+and keyspace events after the reply of the command that made them, after
+EXEC's and a script's for theirs, as Redis 7.2 sends them; the classes
+of keyspace events and a subscription counted from the next command of
+their pipeline or transaction), CLIENT INFO's resp=, and COMMAND's maps
+and sets (of commands without subcommands: BendKV lists them by name,
+Redis in the order of a hash table). Each scenario runs on both servers
+on fresh connections; their replies are compared as they are, but for
+what is the server's own: a client's id (HELLO, CLIENT INFO's line,
+which is compared by its kind and its resp=).
 
     python3 tests/resp3_test.py --bendkv 6380 --redis 6390
 """
@@ -188,6 +190,41 @@ SCENARIOS = [
         ("a", ["GET k", "SET k v", "INCR n", "DEL k", "GET k", "EXPIRE nokey 10"]),
         ("o", ["SET k w"]),
         ("a", []),
+    ]),
+    ("own pushes in a transaction and a script", [
+        ("a", ["HELLO 3", "CONFIG SET notify-keyspace-events KEA", "SUBSCRIBE ch __keyspace@0__:k", "PSUBSCRIBE c*"]),
+        ("a", ["MULTI", "PUBLISH ch x", "SET k 1", "PING", "PUBLISH ch y", "EXEC", "PING"]),
+        ("a", ["EVAL redis.call('PUBLISH','ch','z');return(redis.call('INCR','k')) 0", "PING"]),
+        ("a", ["MULTI", "EVAL redis.call('PUBLISH','ch','w');return(1) 0", "PUBLISH ch v", "INCR k", "EXEC", "PING"]),
+        ("b", ["PUBLISH ch other"]),
+        ("a", ["PING"]),
+    ]),
+    ("own pushes of a pop served", [
+        ("a", ["HELLO 3", "CONFIG SET notify-keyspace-events KEA", "SUBSCRIBE __keyspace@0__:l"]),
+        ("w!", ["HELLO 3", "BLPOP l 5"]),
+        ("q", ["PING"]),  # w waits by now
+        ("a", ["RPUSH l x y", "PING"]),
+        ("w", []),
+        ("v!", ["HELLO 3", "SUBSCRIBE __keyspace@0__:m", "BLMOVE m n LEFT RIGHT 5"]),
+        ("q", ["PING"]),
+        ("a", ["RPUSH m z"]),
+        ("v", ["PING"]),
+    ]),
+    # the classes of events and the subscriptions count from the next
+    # command of their pipeline or their transaction: a first subscription
+    # in MULTI, the classes set, a subscription and a write in one
+    # pipeline, and the classes turned off and on in a pipeline and in EXEC
+    ("the classes of events set within a pipeline", [
+        ("c", ["CONFIG SET notify-keyspace-events KEA"]),
+        ("b", ["HELLO 3", "MULTI", "SUBSCRIBE __keyspace@0__:m", "SET m 1", "EXEC", "PING"]),
+        ("c", ["CONFIG SET notify-keyspace-events K"]),
+        ("a", ["HELLO 3", "CONFIG SET notify-keyspace-events KEA", "SUBSCRIBE __keyspace@0__:k", "SET k 1", "PING"]),
+        ("a", ["CONFIG SET notify-keyspace-events K", "SET k 2", "CONFIG SET notify-keyspace-events KEA", "SET k 3", "PING"]),
+        ("a", ["MULTI", "CONFIG SET notify-keyspace-events K", "SET k 4", "CONFIG SET notify-keyspace-events KEA",
+               "SET k 5", "EXEC", "PING"]),
+        ("c", ["SET k 6", "SET m 2"]),
+        ("a", ["PING"]),
+        ("b", ["PING"]),
     ]),
     ("pipelines of the fast way in RESP3", [
         ("a", ["HELLO 3"] + ["SET k%d %d" % (i, i) for i in range(20)] + ["GET k%d" % i for i in range(25)]

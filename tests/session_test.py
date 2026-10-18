@@ -35,7 +35,11 @@ CASES = [
     ("hello: a name with a space", lines(b'HELLO 2 SETNAME "a b"', b"CLIENT GETNAME"), False),
     ("hello: setname then a bad option", lines(b"HELLO 2 SETNAME n1 NOPE", b"CLIENT GETNAME"), False),
     # AUTH, with no password
-    ("auth", lines(b"AUTH x", b"AUTH default y", b"AUTH bob y", b"AUTH a b c", b"AUTH"), False),
+    ("auth", lines(b"AUTH x", b"AUTH default y"), False),
+    # a failed AUTH first in its pipeline: Redis 7.2.16 drops the reply of
+    # one that comes after replies not yet written (docs/UPSTREAM.md, 2),
+    # where BendKV answers it, as 7.0.15 does (failed_auth, below)
+    ("auth: no such user", lines(b"AUTH bob y", b"AUTH a b c", b"AUTH"), False),
     # SELECT
     ("select", lines(b"SELECT 0", b"SELECT 1", b"SELECT x", b"SELECT -1", b"SELECT", b"SELECT 0 1"), False),
     # TYPE
@@ -134,6 +138,15 @@ CASES = [
 ]
 
 
+# a failed AUTH after replies not yet written: BendKV answers it, as Redis
+# 7.0.15 and Valkey do, where Redis 7.2.16 and 8 give it no reply
+# (docs/UPSTREAM.md, 2), so this checks BendKV alone
+def failed_auth(bendkv):
+    data, closed = exchange(bendkv, lines(b"PING", b"AUTH bob y", b"PING"))
+    want = b"+PONG\r\n-WRONGPASS invalid username-password pair or user is disabled.\r\n+PONG\r\n"
+    return data == want and not closed
+
+
 # TIME: two bulk strings, s and us since 1970, within a second of Redis's
 def time_close(bendkv, redis):
     def seconds(port):
@@ -174,6 +187,9 @@ def main():
     same = time_close(a.bendkv, a.redis)
     ok &= same
     print("%s %s" % ("ok  " if same else "FAIL", "time: within a second of Redis's"))
+    same = failed_auth(a.bendkv)
+    ok &= same
+    print("%s %s" % ("ok  " if same else "FAIL", "auth: a failed AUTH in a pipeline is answered (BendKV alone)"))
     print("ALL OK" if ok else "SOME CHECKS FAILED")
     return ok
 

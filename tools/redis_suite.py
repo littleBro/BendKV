@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """redis_suite.py: Redis's own test suite against BendKV, and against Redis
 itself, the same way: each unit of tests/unit (and tests/unit/type) of a
-Redis 7.0.15 source tree runs in Redis's external mode, against a server
+Redis 7.2.16 source tree runs in Redis's external mode, against a server
 already started, with the options Redis has for compatible servers: no
 checks of object encodings or of DEBUG DIGEST (--ignore-encoding,
 --ignore-digest), and every test run even after one fails with an error

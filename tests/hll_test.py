@@ -4,10 +4,23 @@ cases of Redis's unit/hyperloglog and of hyperloglog.c (the sparse
 opcodes split and merged, the turn to dense, the count kept in the value
 and when it is made again, the union of several, the errors and their
 order), values made by hand (registers past 32, every register at its
-most, opcodes that do not cover 16384 registers or end within an XZERO),
-values corrupted at random bytes, then random sequences of the commands
-over a few keys. Every reply is compared, and after each write the
-value itself (GET), byte for byte.
+most, opcodes that do not cover 16384 registers, end within an XZERO or
+pass the last register, 4 MB of them too, answered within 5 s),
+values corrupted at random bytes, hll-sparse-max-bytes from 0 to 20000
+bytes (PFADD and PFMERGE turn a value dense past it as it is set at the
+time: by CONFIG SET, in a pipeline before them, in MULTI, from a
+script), then random sequences of the commands over a few keys. Every
+reply is compared, and after each write the value itself (GET), byte for
+byte.
+
+But for a value whose opcodes end within an XZERO (docs/UPSTREAM.md, bug
+6): Redis reads the byte after the value's end as the XZERO's second, and
+what lies there turns on how Redis grew the value's buffer, by the sizes
+of jemalloc's classes. BendKV reads the byte as 0 when a command starts,
+and as the byte a split it made wrote there in the same command. A
+command that reads such a value and is answered otherwise, or leaves
+other values, is counted, not failed, and both servers go on from Redis's
+values; BendKV's reading of one such value is checked alone.
 
     python3 tests/hll_test.py --bendkv 6380 --redis 6390 [--rounds 3000] [--seed 1]
 """
@@ -15,6 +28,7 @@ import argparse
 import random
 import struct
 import sys
+import time
 
 from diff_test import Conn
 
@@ -27,8 +41,17 @@ def run(c, cmd):
     return c.reply()
 
 
+# while a command reads a value cut within an XZERO, its differences
+# (held: bug 6), and the commands that had some
+held = None
+cuts = 0
+
+
 def fail(cmd, x, y):
     global bad
+    if held is not None:
+        held.append(cmd)
+        return
     bad += 1
     if bad <= 20:
         print("FAIL: %r: BendKV %r, Redis %r" % (b" ".join(cmd)[:200], str(x)[:300], str(y)[:300]))
@@ -50,9 +73,48 @@ def ttl_of(rep):
     return v if v < 0 else (v + 500) // 1000
 
 
+# whether v (a GET's reply) is a sparse value whose opcodes end within an
+# XZERO: its second byte past the value's end
+def cut_xzero(rep):
+    v = rep[1] if isinstance(rep, tuple) else None
+    if not isinstance(v, bytes) or len(v) < 17 or v[:4] != b"HYLL" or v[4] != 1:
+        return False
+    i = 16
+    while i < len(v):
+        if v[i] & 0xC0 == 0x40:
+            if i + 1 == len(v):
+                return True
+            i += 2
+        else:
+            i += 1
+    return False
+
+
+# the keys a command of the test reads
+def reads(cmd):
+    if cmd[0] in (b"PFCOUNT", b"PFMERGE"):
+        return list(cmd[1:])
+    return list(cmd[2:3] if cmd[0] == b"PFDEBUG" else cmd[1:2])
+
+
+# both servers set to Redis's value of k, its time to live too
+def resync(b, r, k):
+    v, t = run(r, [b"GET", k]), int(run(r, [b"PTTL", k])[1])
+    if v[0] == b"-":
+        return
+    both(b, r, [b"DEL", k])
+    if v[1] is not None:
+        both(b, r, [b"SET", k, v[1]])
+        if t > 0:
+            both(b, r, [b"PEXPIRE", k, str(t).encode()])
+
+
 # a write, then the values of the keys it may have changed read back
 def write(b, r, cmd, keys):
-    global n
+    global n, held, cuts
+    rs = reads(cmd)
+    if any(cut_xzero(run(r, [b"GET", k])) for k in rs):
+        held = []
     same(b, r, cmd)
     for k in keys:
         same(b, r, [b"GET", k])
@@ -60,6 +122,28 @@ def write(b, r, cmd, keys):
         x, y = run(b, [b"PTTL", k]), run(r, [b"PTTL", k])
         if ttl_of(x) != ttl_of(y):
             fail([b"PTTL", k], x, y)
+    if held:
+        cuts += 1
+        for k in rs + keys:
+            resync(b, r, k)
+    held = None
+
+
+# BendKV alone: a value cut within an XZERO (bug 6), whose first set splits
+# the XZERO and writes its last byte past the value's end, and the second
+# reads it there, in the same PFADD (7.0.15's reading; 7.2.16 writes a NUL
+# there first, as it grows the value's buffer)
+def bug6(b):
+    global n
+    n += 1
+    v = hll(1, ops=b"\x00" * 23 + b"\x7f", card=b"\x00" * 7 + b"\x80")
+    run(b, [b"SET", b"cut6", v])
+    run(b, [b"PFADD", b"cut6", b"a3", b"b3"])
+    got = run(b, [b"GET", b"cut6"])
+    want = v[:16] + b"\x00" * 23 + bytes.fromhex("4827846b4f884b")
+    run(b, [b"DEL", b"cut6"])
+    if got != (b"$", want):
+        fail([b"PFADD", b"cut6", b"a3", b"b3"], got, (b"$", want))
 
 
 def both(b, r, cmd):
@@ -226,11 +310,28 @@ def script(b, r):
             both(b, r, [b"DEL", b"m", b"m2"])
             both(b, r, [b"SET", b"m", v])
             write(b, r, c, [b"m", b"m2"])
+    # opcodes that pass the last register: a walk ends at the first that
+    # does (the fix of CVE-2025-32023, in Redis 7.2.16), and so answers
+    # one of 4 MB of zeros at once, where BendKV's walks read on to the end
+    # in a time that grew with the square of the length (1.5 s for 1 MB;
+    # Redis's unit/hyperloglog sets 32 MB)
+    for ops in (zero(64) * 300 + val(32, 4), xzero(16384) + zero(1), val(1, 4) * 4097,
+                zero(64) * 4000000 + bytes([0xff])):
+        for c in ([b"PFCOUNT", b"m"], [b"PFCOUNT", b"m", b"m"], [b"PFADD", b"m", b"a"],
+                  [b"PFDEBUG", b"GETREG", b"m"], [b"PFDEBUG", b"TODENSE", b"m"],
+                  [b"PFMERGE", b"m2", b"m"]):
+            both(b, r, [b"DEL", b"m", b"m2"])
+            both(b, r, [b"SET", b"m", hll(1, ops=ops)])
+            t = time.time()
+            write(b, r, c, [b"m", b"m2"])
+            if time.time() - t > 5:
+                fail(c, b"%.1f s" % (time.time() - t), b"at once")
     # opcodes that end within an XZERO: Redis reads the byte past the
     # string's end as its second (the NUL of its sds string, as a command
     # starts); a set that splits it writes the last byte of the opcodes it
     # makes there, which the sets after it in the same PFADD or PFMERGE
-    # read (c0 and c12 split it in turn, the second where that byte counts)
+    # read (c0 and c12 split it in turn, the second where that byte counts),
+    # while the value's buffer has room (docs/UPSTREAM.md, bug 6)
     cut = hll(1, ops=b"\x7f", card=b"\x00" * 7 + b"\x80")
     for els in ([b"c0", b"c12"], [b"c0", b"c14"], [b"c0", b"c26"], [b"c%d" % i for i in range(40)]):
         both(b, r, [b"DEL", b"m"])
@@ -250,6 +351,80 @@ def script(b, r):
         both(b, r, [b"PFADD", b"e", b"el%d" % i])
         if i > 1000 and i % 10 == 0:
             same(b, r, [b"GET", b"e"])
+
+
+# the replies of commands sent at once, in a batch of their own
+def pipe(b, r, cmds):
+    global n
+    n += 1
+    for c in (b, r):
+        c.send(cmds)
+    x = [b.reply() for _ in cmds]
+    y = [r.reply() for _ in cmds]
+    if x != y:
+        fail(cmds[-1], x, y)
+
+
+def config_max(b, r, mx):
+    same(b, r, [b"CONFIG", b"SET", b"hll-sparse-max-bytes", mx])
+    same(b, r, [b"CONFIG", b"GET", b"hll-sparse-max-bytes"])
+
+
+# hll-sparse-max-bytes as Redis reads it in hllSparseSet: a PFADD or a
+# PFMERGE that would grow a sparse value past it turns the value dense,
+# with the parameter as it is when the command runs (unit/hyperloglog's
+# "Change hll-sparse-max-bytes" and "Hyperloglog promote to dense well in
+# different hll-sparse-max-bytes")
+def sparse_max(b, r):
+    k, k2, d = b"hsm", b"hsm2", b"hsmd"
+    rnd = random.Random(11)
+    for mx in (b"0", b"1", b"18", b"30", b"100", b"500", b"3000", b"3001", b"20000"):
+        config_max(b, r, mx)
+        both(b, r, [b"DEL", k])
+        write(b, r, [b"PFADD", k], [k])
+        for i in range(60):
+            els = [("%.17f" % rnd.random()).encode() for _ in range(rnd.choice([1, 3, 10, 40]))]
+            write(b, r, [b"PFADD", k] + els, [k])
+            same(b, r, [b"PFDEBUG", b"ENCODING", k])
+            if run(r, [b"PFDEBUG", b"ENCODING", k]) == (b"+", b"dense"):
+                break
+    # a value sparse under one, a PFADD past a lower one
+    config_max(b, r, b"3000")
+    both(b, r, [b"DEL", k])
+    write(b, r, [b"PFADD", k] + [x.encode() for x in "abcdedghijk"], [k])
+    config_max(b, r, b"30")
+    write(b, r, [b"PFADD", k, b"new_element"], [k])
+    same(b, r, [b"PFDEBUG", b"ENCODING", k])
+    # PFMERGE of sparse values into a new key and into a sparse one
+    config_max(b, r, b"3000")
+    both(b, r, [b"DEL", k, k2, d])
+    write(b, r, [b"PFADD", k] + [b"a%d" % i for i in range(60)], [k])
+    write(b, r, [b"PFADD", k2] + [b"b%d" % i for i in range(60)], [k2])
+    write(b, r, [b"PFADD", d, b"x", b"y"], [d])
+    for mx in (b"100", b"300", b"500"):
+        config_max(b, r, mx)
+        write(b, r, [b"PFMERGE", b"hsm3", k, k2], [b"hsm3"])
+        same(b, r, [b"PFDEBUG", b"ENCODING", b"hsm3"])
+        both(b, r, [b"DEL", b"hsm3"])
+    config_max(b, r, b"200")
+    write(b, r, [b"PFMERGE", d, k], [d])
+    same(b, r, [b"PFDEBUG", b"ENCODING", d])
+    # the parameter set in the batch of the PFADD, in MULTI, and a script's
+    config_max(b, r, b"3000")
+    both(b, r, [b"DEL", k, k2])
+    write(b, r, [b"PFADD", k] + [b"c%d" % i for i in range(20)], [k])
+    pipe(b, r, [[b"CONFIG", b"SET", b"hll-sparse-max-bytes", b"40"], [b"PFADD", k, b"p1", b"p2"], [b"GET", k],
+                [b"CONFIG", b"SET", b"hll-sparse-max-bytes", b"3000"], [b"PFADD", k2, b"q1", b"q2"], [b"GET", k2]])
+    both(b, r, [b"DEL", k, k2])
+    write(b, r, [b"PFADD", k] + [b"m%d" % i for i in range(20)], [k])
+    pipe(b, r, [[b"MULTI"], [b"CONFIG", b"SET", b"hll-sparse-max-bytes", b"40"], [b"PFADD", k, b"t1", b"t2"],
+                [b"PFADD", k2, b"t3"], [b"EXEC"], [b"GET", k], [b"GET", k2]])
+    both(b, r, [b"DEL", k])
+    write(b, r, [b"PFADD", k] + [b"s%d" % i for i in range(20)], [k])
+    write(b, r, [b"EVAL", b"return redis.call('PFADD', KEYS[1], ARGV[1], ARGV[2])", b"1", k, b"e1", b"e2"], [k])
+    same(b, r, [b"PFDEBUG", b"ENCODING", k])
+    config_max(b, r, b"3000")
+    both(b, r, [b"DEL", k, k2, d])
 
 
 def fuzz(b, r, rnd, rounds):
@@ -320,12 +495,15 @@ def main():
         b, r = Conn(a.bendkv, resp3), Conn(a.redis, resp3)
         both(b, r, [b"FLUSHALL"])
         script(b, r)
+        sparse_max(b, r)
+        bug6(b)
         if not resp3:
             fuzz(b, r, rnd, a.rounds // 10)
             random_ops(b, r, rnd, a.rounds)
         else:
             random_ops(b, r, rnd, a.rounds // 5)
-    print("hll: %d commands, %d differ" % (n, bad))
+    print("hll: %d commands, %d differ; %d on values cut within an XZERO answered otherwise"
+          " (docs/UPSTREAM.md, bug 6)" % (n, bad, cuts))
     sys.exit(1 if bad else 0)
 
 

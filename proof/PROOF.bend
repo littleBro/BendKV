@@ -9119,8 +9119,8 @@ def snew_sadd(+t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr:
   %fin_cons(R.Upd{k, R.UMems{R.SWAdd{ms}}}, Nil{}, R.Db{t, n, x, 0n, rr}) : {_ == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 0n, r, R.CMemsNew{ms, sv}))) : R.Db}
   %db_upd_eq(t, k, n, x, 0n, rr, R.UMems{R.SWAdd{ms}}) : {R.db_of(_) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 0n, r, R.CMemsNew{ms, sv}))) : R.Db}
   %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry.at(KV.Val, t, k, KV.hash(k)), None{}, eq) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, R.ent.code(_), R.upd.v(R.UMems{R.SWAdd{ms}}, 0n, R.ent.live(0n, _)))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 0n, r, R.CMemsNew{ms, sv}))) : R.Db}
-  %Equal.sym(Bool, List.is_empty(&2, String, ms), False{}, ne) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, 0n, R.sadd.of(_, True{}, ms, KV.mems.adds(ms, KV.mems.empty()), Nat.sub(KV.mems.len(KV.mems.adds(ms, KV.mems.empty())), 0n)))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 0n, r, R.CMemsNew{ms, sv}))) : R.Db}
-  %gn : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, 0n, R.sadd.of(False{}, True{}, ms, KV.mems.adds(ms, KV.mems.empty()), Nat.sub(KV.mems.len(KV.mems.adds(ms, KV.mems.empty())), 0n)))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 0n, r, R.CMemsNew{ms, _}))) : R.Db}
+  %Equal.sym(Bool, List.is_empty(&2, String, ms), False{}, ne) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, 0n, R.sadd.of(_, True{}, ms, KV.mems.adds(ms, KV.mems.create(ms)), Nat.sub(KV.mems.len(KV.mems.adds(ms, KV.mems.create(ms))), 0n)))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 0n, r, R.CMemsNew{ms, sv}))) : R.Db}
+  %gn : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, 0n, R.sadd.of(False{}, True{}, ms, KV.mems.adds(ms, KV.mems.create(ms)), Nat.sub(KV.mems.len(KV.mems.adds(ms, KV.mems.create(ms))), 0n)))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 0n, r, R.CMemsNew{ms, _}))) : R.Db}
   {==}
 
 # the script's write, of a key that holds w: a new set of the members
@@ -9569,7 +9569,7 @@ def bf_res_none(ch: Bool, +r: R.Reply, +lo: Nat, +sp: String, -m: Maybe<&2, KV.I
 
 def bf_none(st: R.BfRun, +lo: Nat, -m: Maybe<&2, KV.Item<KV.Val>>) -> Good(m, ch_of(R.bf.fin(st, lo, None{}))):
   match st:
-    case R.BfRun{+sp, ch, rs}:
+    case R.BfRun{+sp, ch, rs, g, n}:
       bf_res_none(ch, R.RArray{List.reverse(&2, R.Reply, rs)}, lo, sp, m)
 
 def bf_put_some(ok: Bool, +r: R.Reply, +lo: Nat, +sp: String, +w: String, +e: Nat) -> Good(Some{KV.Item{KV.VStr{w}, e}}, ch_of(R.bf.put(ok, r, lo, sp, Some{KV.Item{w, e}}))):
@@ -9589,7 +9589,7 @@ def bf_res_some(ch: Bool, +r: R.Reply, +lo: Nat, +sp: String, +w: String, +e: Na
 
 def bf_some(st: R.BfRun, +lo: Nat, +w: String, +e: Nat) -> Good(Some{KV.Item{KV.VStr{w}, e}}, ch_of(R.bf.fin(st, lo, Some{KV.Item{w, e}}))):
   match st:
-    case R.BfRun{+sp, ch, rs}:
+    case R.BfRun{+sp, ch, rs, g, n}:
       bf_res_some(ch, R.RArray{List.reverse(&2, R.Reply, rs)}, lo, sp, w, e)
 
 # A write of a hash: a new one's change is good whatever the key's entry
@@ -10183,13 +10183,13 @@ def sw_wrong_good(op: R.SWrite, -m: Maybe<&2, KV.Item<KV.Val>>) -> Good(m, ch_of
     case R.SWPopN{c, r}:
       {==}
 
-def sadd_of_old(none: Bool, +ms: List<&2, String>, +s0: KV.Mems, -e: Nat) -> {none == Nat.is_eq(Nat.sub(KV.mems.len(KV.mems.adds(ms, s0)), KV.mems.len(s0)), 0n) : Bool} -> NeS(ms) -> Good(Some{KV.Item{KV.VColl{KV.CMems{s0}}, e}}, ch_of(R.sadd.of(none, False{}, ms, KV.mems.adds(ms, s0), Nat.sub(KV.mems.len(KV.mems.adds(ms, s0)), KV.mems.len(s0))))):
+def sadd_of_old(none: Bool, +ms: List<&2, String>, +s0: KV.Mems, -e: Nat) -> {none == Nat.is_eq(Nat.sub(KV.mems.len(KV.mems.adds(ms, R.sadd.from(False{}, ms, s0))), KV.mems.len(s0)), 0n) : Bool} -> NeS(ms) -> Good(Some{KV.Item{KV.VColl{KV.CMems{s0}}, e}}, ch_of(R.sadd.of(none, False{}, ms, KV.mems.adds(ms, R.sadd.from(False{}, ms, s0)), Nat.sub(KV.mems.len(KV.mems.adds(ms, R.sadd.from(False{}, ms, s0))), KV.mems.len(s0))))):
   match none:
     case True{}:
       en => ne => {==}
     case False{}:
       en => ne =>
-        %en : {ch_of(R.sadd.of(_, False{}, ms, KV.mems.adds(ms, s0), Nat.sub(KV.mems.len(KV.mems.adds(ms, s0)), KV.mems.len(s0)))) == R.CMems{R.SWAdd{ms}, KV.mems.adds(ms, s0)} : R.Change} & NeS(ms)
+        %en : {ch_of(R.sadd.of(_, False{}, ms, KV.mems.adds(ms, R.sadd.from(False{}, ms, s0)), Nat.sub(KV.mems.len(KV.mems.adds(ms, R.sadd.from(False{}, ms, s0))), KV.mems.len(s0)))) == R.CMems{R.SWAdd{ms}, KV.mems.adds(ms, R.sadd.from(False{}, ms, s0))} : R.Change} & NeS(ms)
         ({==}, ne)
 
 def sadd_old(ms: List<&2, String>, +s0: KV.Mems, -e: Nat) -> Good(Some{KV.Item{KV.VColl{KV.CMems{s0}}, e}}, ch_of(R.swrite(R.SWAdd{ms}, False{}, s0))):
@@ -10198,7 +10198,7 @@ def sadd_old(ms: List<&2, String>, +s0: KV.Mems, -e: Nat) -> Good(Some{KV.Item{K
       %sub_self(KV.mems.len(s0)) : Good(Some{KV.Item{KV.VColl{KV.CMems{s0}}, e}}, ch_of(R.sadd.of(Nat.is_eq(_, 0n), False{}, Nil{}, s0, _)))
       {==}
     case Con{+y, +rest}:
-      sadd_of_old(Nat.is_eq(Nat.sub(KV.mems.len(KV.mems.adds(Con{y, rest}, s0)), KV.mems.len(s0)), 0n), Con{y, rest}, s0, e)({==})({==})
+      sadd_of_old(Nat.is_eq(Nat.sub(KV.mems.len(KV.mems.adds(Con{y, rest}, R.sadd.from(False{}, Con{y, rest}, s0))), KV.mems.len(s0)), 0n), Con{y, rest}, s0, e)({==})({==})
 
 # SREM of a set the key held: nothing, the key deleted (its last member
 # taken), or the set without the members, which SREM of them makes again
@@ -10814,7 +10814,11 @@ def xsetid_chk_old(c: Nat, +id: KV.XId, +added: Maybe<&2, KV.XN>, +md: KV.XId, +
         case 0n:
           ew => gs => {==}
         case 1n+q:
-          ew => gs => {==}
+          match q:
+            case 0n:
+              ew => gs => {==}
+            case 1n+r:
+              ew => gs => {==}
 
 def xsetid_old_of(s: R.XS, +i: String, +rest: List<&2, String>, +x0: KV.XStream, -e: Nat) -> {R.xsetid.read(Con{i, rest}) == s : R.XS} -> Good(Some{KV.Item{KV.VColl{KV.CStream{x0}}, e}}, ch_of(R.xsetid.run.of(Con{i, rest}, s, x0))):
   match s:
@@ -10912,8 +10916,8 @@ def pfadd_none(o: H.AddOut, -m: Maybe<&2, KV.Item<KV.Val>>) -> Good(m, ch_of(R.p
 
 def hll_none(op: R.HllOp, -m: Maybe<&2, KV.Item<KV.Val>>) -> Good(m, ch_of(R.hll.upd(op, None{}))):
   match op:
-    case R.HAdd{+els}:
-      pfadd_none(H.add(True{}, H.fresh(), R.hll.max(), els), m)
+    case R.HAdd{+els, +mx}:
+      pfadd_none(H.add(True{}, H.fresh(), mx, els), m)
     case R.HCount{}:
       {==}
     case R.HDebug{sub}:
@@ -11168,10 +11172,10 @@ def pfadd_some_out(o: H.AddOut, -w: String, -e: Nat) -> Good(Some{KV.Item{KV.VSt
         case False{}:
           {==}
 
-def pfadd_some(ok: Bool, +w: String, els: List<&2, String>, -e: Nat) -> Good(Some{KV.Item{KV.VStr{w}, e}}, ch_of(R.pfadd.some(ok, w, els))):
+def pfadd_some(ok: Bool, +w: String, els: List<&2, String>, +mx: Nat, -e: Nat) -> Good(Some{KV.Item{KV.VStr{w}, e}}, ch_of(R.pfadd.some(ok, w, els, mx))):
   match ok:
     case True{}:
-      pfadd_some_out(H.add(False{}, w, R.hll.max(), els), w, e)
+      pfadd_some_out(H.add(False{}, w, mx, els), w, e)
     case False{}:
       {==}
 
@@ -11238,8 +11242,8 @@ def pfdebug_some(ok: Bool, +sub: String, +w: String, -e: Nat) -> Good(Some{KV.It
 
 def hll_some(op: R.HllOp, +w: String, -e: Nat) -> Good(Some{KV.Item{KV.VStr{w}, e}}, ch_of(R.hll.upd(op, Some{KV.Item{w, e}}))):
   match op:
-    case R.HAdd{+els}:
-      pfadd_some(H.valid(w), w, els, e)
+    case R.HAdd{+els, +mx}:
+      pfadd_some(H.valid(w), w, els, mx, e)
     case R.HCount{}:
       pfcount_some(H.valid(w), w, e)
     case R.HDebug{+sub}:
@@ -13556,8 +13560,8 @@ def act_split(+a: R.Act, +ds: R.Ds) -> {(R.reply_ds(R.act(a, ds)), (aeff(a, ds),
       {==}
     case R.ASort{+k, +ob} x:
       act_split_cmd(R.sort.write.ds(x, k, ob), x)
-    case R.APfMerge{+d, +srcs} x:
-      act_split_cmd(R.pf.merge.ds(x, d, srcs), x)
+    case R.APfMerge{+d, +srcs, +mx} x:
+      act_split_cmd(R.pf.merge.ds(x, d, srcs, mx), x)
     case R.AGeo{+k, +args} x:
       act_split_cmd(R.geo.store.ds(x, k, args), x)
 
@@ -15178,11 +15182,11 @@ def act_inv(t: R.Act, +o: R.Ds, +r: R.Ds, +sel: Nat, +n: Nat, +sm: {KV.small(n) 
       (ez, q) = inv
       (ei, en) = q
       post_run(R.sort.write.ds(o, k, ob), o, r, sel, n)(ln)(sm)(ez)(ei)(en)
-    case R.APfMerge{+d, +srcs}:
+    case R.APfMerge{+d, +srcs, +mx}:
       (inv, ln) = st
       (ez, q) = inv
       (ei, en) = q
-      post_run(R.pf.merge.ds(o, d, srcs), o, r, sel, n)(ln)(sm)(ez)(ei)(en)
+      post_run(R.pf.merge.ds(o, d, srcs, mx), o, r, sel, n)(ln)(sm)(ez)(ei)(en)
     case R.AGeo{+k, +args}:
       (inv, ln) = st
       (ez, q) = inv
@@ -17416,8 +17420,8 @@ def act_now(t: R.Act, +o: R.Ds) -> {R.ds.now(R.ds_of(R.act(t, o))) == R.ds.now(o
       now_wipe(o)
     case R.ASort{+k, +ob}:
       now_run(R.sort.write.ds(o, k, ob), o)
-    case R.APfMerge{+d, +srcs}:
-      now_run(R.pf.merge.ds(o, d, srcs), o)
+    case R.APfMerge{+d, +srcs, +mx}:
+      now_run(R.pf.merge.ds(o, d, srcs, mx), o)
     case R.AGeo{+k, +args}:
       now_run(R.geo.store.ds(o, k, args), o)
 
@@ -17789,8 +17793,8 @@ def one_eff(t: R.Act, +o: R.Ds) -> OneE(aeff(t, o)):
       Inr{(A.EWipe{}, {==})}
     case R.ASort{+k, +ob}:
       one_run(R.sort.write.ds(o, k, ob), o)
-    case R.APfMerge{+d, +srcs}:
-      one_run(R.pf.merge.ds(o, d, srcs), o)
+    case R.APfMerge{+d, +srcs, +mx}:
+      one_run(R.pf.merge.ds(o, d, srcs, mx), o)
     case R.AGeo{+k, +args}:
       one_run(R.geo.store.ds(o, k, args), o)
 
@@ -19420,13 +19424,25 @@ def sg.end(+n: String, +v: String, +items: List<&2, C.CItem>, +name: String, +al
 # the new value is the old one
 def sg.same(same: Bool, +msg: String, +n: String, +v: String, +items: List<&2, C.CItem>, +name: String, +alias: String, +imm: Bool, +hidden: Bool, +prot: Bool, +multi: Bool, +ty: C.CTy, +old: String, +nv: String, +items2: List<&2, C.CItem>, e1: {C.item.find(items, String.to_lower(n)) == Some{C.CItem{C.CParam{name, alias, imm, hidden, prot, multi, ty, C.AppFixed{msg}}, old}} : Maybe<&2, C.CItem>})
   -> {same == String.eq(old, nv) : Bool}
-  -> {C.set.fixed(Maybe.or(&2, String, C.fixed.of(C.AppFixed{msg}, String.to_lower(n), String.eq(old, nv)), None{}), [C.VOk{C.CItem{C.CParam{name, alias, imm, hidden, prot, multi, ty, C.AppFixed{msg}}, old}, String.to_lower(n), nv}], items) == Done{items2} : Result<&2, &2, R.Reply, List<&2, C.CItem>>}
+  -> {C.set.fixed(Maybe.or(&2, String, C.fixed.of(C.AppFixed{msg}, String.to_lower(n), nv, String.eq(old, nv)), None{}), [C.VOk{C.CItem{C.CParam{name, alias, imm, hidden, prot, multi, ty, C.AppFixed{msg}}, old}, String.to_lower(n), nv}], items) == Done{items2} : Result<&2, &2, R.Reply, List<&2, C.CItem>>}
   -> {C.item.find(items2, String.to_lower(n)) == Some{Laws.with(C.CItem{C.CParam{name, alias, imm, hidden, prot, multi, ty, C.AppFixed{msg}}, old}, nv)} : Maybe<&2, C.CItem>}:
   match same:
     case True{}:
-      es => e => sg.end(n, v, items, name, alias, imm, hidden, prot, multi, ty, C.AppFixed{msg}, old, nv, items2, e1)(Equal.trans(Result<&2, &2, R.Reply, List<&2, C.CItem>>, C.set.fixed(Maybe.or(&2, String, C.fixed.of(C.AppFixed{msg}, String.to_lower(n), True{}), None{}), [C.VOk{C.CItem{C.CParam{name, alias, imm, hidden, prot, multi, ty, C.AppFixed{msg}}, old}, String.to_lower(n), nv}], items), C.set.fixed(Maybe.or(&2, String, C.fixed.of(C.AppFixed{msg}, String.to_lower(n), String.eq(old, nv)), None{}), [C.VOk{C.CItem{C.CParam{name, alias, imm, hidden, prot, multi, ty, C.AppFixed{msg}}, old}, String.to_lower(n), nv}], items), Done{items2}, Equal.cong(Bool, Result<&2, &2, R.Reply, List<&2, C.CItem>>, z => C.set.fixed(Maybe.or(&2, String, C.fixed.of(C.AppFixed{msg}, String.to_lower(n), z), None{}), [C.VOk{C.CItem{C.CParam{name, alias, imm, hidden, prot, multi, ty, C.AppFixed{msg}}, old}, String.to_lower(n), nv}], items), True{}, String.eq(old, nv), es), e))
+      es => e => sg.end(n, v, items, name, alias, imm, hidden, prot, multi, ty, C.AppFixed{msg}, old, nv, items2, e1)(Equal.trans(Result<&2, &2, R.Reply, List<&2, C.CItem>>, C.set.fixed(Maybe.or(&2, String, C.fixed.of(C.AppFixed{msg}, String.to_lower(n), nv, True{}), None{}), [C.VOk{C.CItem{C.CParam{name, alias, imm, hidden, prot, multi, ty, C.AppFixed{msg}}, old}, String.to_lower(n), nv}], items), C.set.fixed(Maybe.or(&2, String, C.fixed.of(C.AppFixed{msg}, String.to_lower(n), nv, String.eq(old, nv)), None{}), [C.VOk{C.CItem{C.CParam{name, alias, imm, hidden, prot, multi, ty, C.AppFixed{msg}}, old}, String.to_lower(n), nv}], items), Done{items2}, Equal.cong(Bool, Result<&2, &2, R.Reply, List<&2, C.CItem>>, z => C.set.fixed(Maybe.or(&2, String, C.fixed.of(C.AppFixed{msg}, String.to_lower(n), nv, z), None{}), [C.VOk{C.CItem{C.CParam{name, alias, imm, hidden, prot, multi, ty, C.AppFixed{msg}}, old}, String.to_lower(n), nv}], items), True{}, String.eq(old, nv), es), e))
     case False{}:
-      es => e => Empty.absurd({C.item.find(items2, String.to_lower(n)) == Some{Laws.with(C.CItem{C.CParam{name, alias, imm, hidden, prot, multi, ty, C.AppFixed{msg}}, old}, nv)} : Maybe<&2, C.CItem>}, cfg_fail_done(R.RError{C.e.set(String.to_lower(n), msg)}, items2, Equal.trans(Result<&2, &2, R.Reply, List<&2, C.CItem>>, C.set.fixed(Maybe.or(&2, String, C.fixed.of(C.AppFixed{msg}, String.to_lower(n), False{}), None{}), [C.VOk{C.CItem{C.CParam{name, alias, imm, hidden, prot, multi, ty, C.AppFixed{msg}}, old}, String.to_lower(n), nv}], items), C.set.fixed(Maybe.or(&2, String, C.fixed.of(C.AppFixed{msg}, String.to_lower(n), String.eq(old, nv)), None{}), [C.VOk{C.CItem{C.CParam{name, alias, imm, hidden, prot, multi, ty, C.AppFixed{msg}}, old}, String.to_lower(n), nv}], items), Done{items2}, Equal.cong(Bool, Result<&2, &2, R.Reply, List<&2, C.CItem>>, z => C.set.fixed(Maybe.or(&2, String, C.fixed.of(C.AppFixed{msg}, String.to_lower(n), z), None{}), [C.VOk{C.CItem{C.CParam{name, alias, imm, hidden, prot, multi, ty, C.AppFixed{msg}}, old}, String.to_lower(n), nv}], items), False{}, String.eq(old, nv), es), e)))
+      es => e => Empty.absurd({C.item.find(items2, String.to_lower(n)) == Some{Laws.with(C.CItem{C.CParam{name, alias, imm, hidden, prot, multi, ty, C.AppFixed{msg}}, old}, nv)} : Maybe<&2, C.CItem>}, cfg_fail_done(R.RError{C.e.set(String.to_lower(n), msg)}, items2, Equal.trans(Result<&2, &2, R.Reply, List<&2, C.CItem>>, C.set.fixed(Maybe.or(&2, String, C.fixed.of(C.AppFixed{msg}, String.to_lower(n), nv, False{}), None{}), [C.VOk{C.CItem{C.CParam{name, alias, imm, hidden, prot, multi, ty, C.AppFixed{msg}}, old}, String.to_lower(n), nv}], items), C.set.fixed(Maybe.or(&2, String, C.fixed.of(C.AppFixed{msg}, String.to_lower(n), nv, String.eq(old, nv)), None{}), [C.VOk{C.CItem{C.CParam{name, alias, imm, hidden, prot, multi, ty, C.AppFixed{msg}}, old}, String.to_lower(n), nv}], items), Done{items2}, Equal.cong(Bool, Result<&2, &2, R.Reply, List<&2, C.CItem>>, z => C.set.fixed(Maybe.or(&2, String, C.fixed.of(C.AppFixed{msg}, String.to_lower(n), nv, z), None{}), [C.VOk{C.CItem{C.CParam{name, alias, imm, hidden, prot, multi, ty, C.AppFixed{msg}}, old}, String.to_lower(n), nv}], items), False{}, String.eq(old, nv), es), e)))
+
+# a locale for collation (locale-collate): ok is whether the new value is
+# the old one or a locale BendKV collates by
+def sg.loc(ok: Bool, +n: String, +v: String, +items: List<&2, C.CItem>, +name: String, +alias: String, +imm: Bool, +hidden: Bool, +prot: Bool, +multi: Bool, +ty: C.CTy, +old: String, +nv: String, +items2: List<&2, C.CItem>, e1: {C.item.find(items, String.to_lower(n)) == Some{C.CItem{C.CParam{name, alias, imm, hidden, prot, multi, ty, C.AppLocale{}}, old}} : Maybe<&2, C.CItem>})
+  -> {ok == Bool.or(String.eq(old, nv), C.text.locale(nv)) : Bool}
+  -> {C.set.fixed(Maybe.or(&2, String, C.fixed.fail(String.to_lower(n), "Invalid locale name", Bool.or(String.eq(old, nv), C.text.locale(nv))), None{}), [C.VOk{C.CItem{C.CParam{name, alias, imm, hidden, prot, multi, ty, C.AppLocale{}}, old}, String.to_lower(n), nv}], items) == Done{items2} : Result<&2, &2, R.Reply, List<&2, C.CItem>>}
+  -> {C.item.find(items2, String.to_lower(n)) == Some{Laws.with(C.CItem{C.CParam{name, alias, imm, hidden, prot, multi, ty, C.AppLocale{}}, old}, nv)} : Maybe<&2, C.CItem>}:
+  match ok:
+    case True{}:
+      es => e => sg.end(n, v, items, name, alias, imm, hidden, prot, multi, ty, C.AppLocale{}, old, nv, items2, e1)(Equal.trans(Result<&2, &2, R.Reply, List<&2, C.CItem>>, C.set.fixed(Maybe.or(&2, String, C.fixed.fail(String.to_lower(n), "Invalid locale name", True{}), None{}), [C.VOk{C.CItem{C.CParam{name, alias, imm, hidden, prot, multi, ty, C.AppLocale{}}, old}, String.to_lower(n), nv}], items), C.set.fixed(Maybe.or(&2, String, C.fixed.fail(String.to_lower(n), "Invalid locale name", Bool.or(String.eq(old, nv), C.text.locale(nv))), None{}), [C.VOk{C.CItem{C.CParam{name, alias, imm, hidden, prot, multi, ty, C.AppLocale{}}, old}, String.to_lower(n), nv}], items), Done{items2}, Equal.cong(Bool, Result<&2, &2, R.Reply, List<&2, C.CItem>>, z => C.set.fixed(Maybe.or(&2, String, C.fixed.fail(String.to_lower(n), "Invalid locale name", z), None{}), [C.VOk{C.CItem{C.CParam{name, alias, imm, hidden, prot, multi, ty, C.AppLocale{}}, old}, String.to_lower(n), nv}], items), True{}, Bool.or(String.eq(old, nv), C.text.locale(nv)), es), e))
+    case False{}:
+      es => e => Empty.absurd({C.item.find(items2, String.to_lower(n)) == Some{Laws.with(C.CItem{C.CParam{name, alias, imm, hidden, prot, multi, ty, C.AppLocale{}}, old}, nv)} : Maybe<&2, C.CItem>}, cfg_fail_done(R.RError{C.e.set(String.to_lower(n), "Invalid locale name")}, items2, Equal.trans(Result<&2, &2, R.Reply, List<&2, C.CItem>>, C.set.fixed(Maybe.or(&2, String, C.fixed.fail(String.to_lower(n), "Invalid locale name", False{}), None{}), [C.VOk{C.CItem{C.CParam{name, alias, imm, hidden, prot, multi, ty, C.AppLocale{}}, old}, String.to_lower(n), nv}], items), C.set.fixed(Maybe.or(&2, String, C.fixed.fail(String.to_lower(n), "Invalid locale name", Bool.or(String.eq(old, nv), C.text.locale(nv))), None{}), [C.VOk{C.CItem{C.CParam{name, alias, imm, hidden, prot, multi, ty, C.AppLocale{}}, old}, String.to_lower(n), nv}], items), Done{items2}, Equal.cong(Bool, Result<&2, &2, R.Reply, List<&2, C.CItem>>, z => C.set.fixed(Maybe.or(&2, String, C.fixed.fail(String.to_lower(n), "Invalid locale name", z), None{}), [C.VOk{C.CItem{C.CParam{name, alias, imm, hidden, prot, multi, ty, C.AppLocale{}}, old}, String.to_lower(n), nv}], items), False{}, Bool.or(String.eq(old, nv), C.text.locale(nv)), es), e)))
 
 # what the new value does: only a parameter that cannot change may fail
 def sg.app(+n: String, +v: String, +items: List<&2, C.CItem>, +name: String, +alias: String, +imm: Bool, +hidden: Bool, +prot: Bool, +multi: Bool, +ty: C.CTy, +app: C.CApp, +old: String, +nv: String, +items2: List<&2, C.CItem>, e1: {C.item.find(items, String.to_lower(n)) == Some{C.CItem{C.CParam{name, alias, imm, hidden, prot, multi, ty, app}, old}} : Maybe<&2, C.CItem>})
@@ -19443,6 +19459,8 @@ def sg.app(+n: String, +v: String, +items: List<&2, C.CItem>, +name: String, +al
       e => sg.end(n, v, items, name, alias, imm, hidden, prot, multi, ty, C.AppPass{}, old, nv, items2, e1)(e)
     case C.AppFixed{+msg}:
       e => sg.same(String.eq(old, nv), msg, n, v, items, name, alias, imm, hidden, prot, multi, ty, old, nv, items2, e1)({==})(e)
+    case C.AppLocale{}:
+      e => sg.loc(Bool.or(String.eq(old, nv), C.text.locale(nv)), n, v, items, name, alias, imm, hidden, prot, multi, ty, old, nv, items2, e1)({==})(e)
 
 # past the checks of its name: its value is checked (e2)
 def sg.ok(+n: String, +v: String, +items: List<&2, C.CItem>, +name: String, +alias: String, +imm: Bool, +hidden: Bool, +prot: Bool, +multi: Bool, +ty: C.CTy, +app: C.CApp, +old: String, +nv: String, +items2: List<&2, C.CItem>, e1: {C.item.find(items, String.to_lower(n)) == Some{C.CItem{C.CParam{name, alias, imm, hidden, prot, multi, ty, app}, old}} : Maybe<&2, C.CItem>}, e2: {C.item.set(C.CItem{C.CParam{name, alias, imm, hidden, prot, multi, ty, app}, old}, v) == Done{nv} : Result<&2, &2, String, String>})
@@ -21480,8 +21498,8 @@ def counted_act(a: R.Act, +ds: R.Ds) -> {Laws.counted_ds(ds) == True{} : Bool} -
       e => counted_wipe(x)
     case R.ASort{+k, +ob} x:
       counted_cmd(R.sort.write.ds(x, k, ob), x)
-    case R.APfMerge{+d, +srcs} x:
-      counted_cmd(R.pf.merge.ds(x, d, srcs), x)
+    case R.APfMerge{+d, +srcs, +mx} x:
+      counted_cmd(R.pf.merge.ds(x, d, srcs, mx), x)
     case R.AGeo{+k, +args} x:
       counted_cmd(R.geo.store.ds(x, k, args), x)
 

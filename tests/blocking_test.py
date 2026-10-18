@@ -16,9 +16,10 @@ RENAME, MOVE and SWAPDB, CLIENT REPLY OFF, a client served then waiting
 again in the rest of its batch, blocked_clients and
 clients_in_timeout_table, a SELECT in the batch of a blocking command, a
 QUIT behind one, a pipeline that pushes to a key a client waits on and
-then pops (the client is served between them), and pipelines that write
+then pops (the client is served between them), pipelines that write
 other keys while 100 clients wait (the fast way, server.bend's Heeded
-keys; one of GETs, SETs and INCRs alone), then a key among theirs.
+keys; one of GETs, SETs and INCRs alone), then a key among theirs, and
+the changes a client served by a push counts (rdb_changes_since_last_save).
 
 The checks under load: 300 clients waiting on 300 keys, each served; 100
 timeouts at once; 100 clients that close their connections while they
@@ -305,6 +306,22 @@ def scenarios(port, log):
     for w in ws:
         w.close()
     log("20 gone", wait_blocked(r, 0, 1000))
+    # 21. the changes a client served by a push counts, as its call counts
+    # them (Redis 7.2.16 runs the command again for the client it serves;
+    # unit/type/list's "BLPOP/BLMOVE should increase dirty")
+    def dirty():
+        return int(info_lines(r, "persistence", "rdb_changes_since_last_save:")[0].split(":")[1])
+    for pop, push in ((["BLPOP", "d21", "0"], ["LPUSH", "d21", "a"]),
+                      (["BRPOPLPUSH", "d21", "d21b", "0"], ["LPUSH", "d21", "a"]),
+                      (["BLMOVE", "d21", "d21b", "LEFT", "LEFT", "0"], ["LPUSH", "d21", "a"]),
+                      (["BLMPOP", "0", "1", "d21", "LEFT", "COUNT", "3"], ["RPUSH", "d21", "a", "b"]),
+                      (["BZPOPMIN", "z21", "0"], ["ZADD", "z21", "1", "a"]),
+                      (["BZMPOP", "0", "1", "z21", "MIN", "COUNT", "2"], ["ZADD", "z21", "1", "a", "2", "b"])):
+        r.cmd("DEL", "d21", "d21b", "z21")
+        d0 = dirty()
+        a.send(*pop)
+        wait_blocked(r, 1)
+        log("21 " + pop[0], r.cmd(*push), a.read(), wait_blocked(r, 0), dirty() - d0)
     a.close()
     b.close()
     r.cmd("FLUSHALL")

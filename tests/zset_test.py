@@ -140,6 +140,19 @@ zcard nokey
 zrank z a
 zrevrank z a
 zrank z nope
+zrank z a withscore
+zrevrank z a WITHSCORE
+zrank z c withscore
+zrank z nope withscore
+zrevrank z nope withscore
+zrank nokey a withscore
+zrevrank nokey a withscore
+zrank nokey a
+zrank z a withscores
+zrank z a withscore x
+zrevrank z a withscore x
+zrank z
+zrank z a x y z
 zincrby z 2.5 b
 zincrby z inf b
 zincrby z -inf b
@@ -258,6 +271,10 @@ zpopmin s
 zrem s a
 zremrangebyrank s 0 1
 zrank s a
+zrank s a withscore
+zrevrank s a withscore
+zrank s a bad
+zrank s a withscore extra
 type lex
 zmscore lex a e nope
 zmscore nokey a
@@ -532,6 +549,8 @@ def wide_reads(b, r, key, ms, rng):
     for m in rng.sample(ms, min(3, len(ms))) + [b"nope"]:
         for name in (b"ZSCORE", b"ZRANK", b"ZREVRANK"):
             same(b, r, [name, key, m])
+        for name in (b"ZRANK", b"ZREVRANK"):
+            same(b, r, [name, key, m, b"WITHSCORE"])
     if run(r, [b"OBJECT", b"ENCODING", key]) == (b"$", b"listpack"):
         for cmd in ([b"ZRANGEBYLEX", key, b"[m", b"(n"], [b"ZLEXCOUNT", key, b"-", b"+"], [b"ZSCAN", key, b"0", b"COUNT", b"1000"]):
             same(b, r, cmd)
@@ -662,7 +681,8 @@ def rand_cmd(r):
     if k < 0.86:
         return [b"ZSCAN", key, b"0"] + r.choice([[], [b"COUNT", b"2"], [b"MATCH", b"*1*"], [b"MATCH", b"[ab]"]])
     return r.choice([[b"ZCARD", key], [b"ZSCORE", key, m()], [b"ZMSCORE", key, m(), m()], [b"ZRANK", key, m()],
-                     [b"ZREVRANK", key, m()], [b"ZCOUNT", key, rnd_zbound(r), rnd_zbound(r)],
+                     [b"ZREVRANK", key, m()], [b"ZRANK", key, m(), b"WITHSCORE"], [b"ZREVRANK", key, m(), b"WITHSCORE"],
+                     [b"ZCOUNT", key, rnd_zbound(r), rnd_zbound(r)],
                      [b"ZLEXCOUNT", lk, rnd_zlex(r), rnd_zlex(r)], [b"TYPE", key], [b"EXISTS", key], [b"TTL", key],
                      [b"OBJECT", b"ENCODING", key], [b"ZRANGE", key, b"0", b"-1", b"WITHSCORES"]])
 

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """The administrative commands against Redis: LASTSAVE, ROLE, WAIT,
-MEMORY STATS, DOCTOR, PURGE and MALLOC-STATS, LOLWUT and SHUTDOWN.
+MEMORY STATS, DOCTOR, PURGE and MALLOC-STATS, LOLWUT, SHUTDOWN and
+CLUSTER.
 
 Scenarios run on BendKV and on Redis with clients of their own, the
 transcripts compared line by line: LASTSAVE as INFO's rdb_last_save_time;
@@ -13,13 +14,18 @@ their values, DOCTOR on a small data set, its errors; LOLWUT's own text,
 its errors, the drawings of VERSION 5 that rand() has no part in (one or
 two rows of squares, which must be the same bytes), the others' shapes
 (their lines and their widths), VERSION 6's (its lines of pixels), and
-the verbatim reply of RESP3; SHUTDOWN's errors and its refusal in MULTI,
-with their statistics. No scenario stops a server: they run against the
+the verbatim reply of RESP3; SHUTDOWN's errors and its refusal in MULTI;
+CLUSTER as Redis answers it with cluster support disabled (each of its
+subcommands, MYSHARDID and HELP too, once its arity passes; an unknown
+one and a wrong number of arguments refused, in MULTI too); with their
+statistics. No scenario stops a server: they run against the
 shared ones.
 
 The checks of BendKV alone: MEMORY MALLOC-STATS answers as Redis built
 with libc's malloc does (INFO's mem_allocator), and MEMORY STATS's
-numbers are INFO's.
+numbers are INFO's; CLIENT UNBLOCK's error to a WAIT counts the WAIT once,
+failed, where Redis 7.2.16 counts it twice (docs/UPSTREAM.md, bug 4), and
+a WAIT whose client goes counts once.
 
 With --bin, SHUTDOWN on servers of its own (a redis-server and BendKV,
 each in a fresh directory): it stops the server (exit code 0, the
@@ -48,7 +54,7 @@ from blocking_test import Client, enc, info_lines, wait_blocked
 from client_test import Named
 
 STATS = ("cmdstat_wait:", "cmdstat_shutdown:", "cmdstat_exec:", "cmdstat_lastsave:", "cmdstat_role:",
-         "cmdstat_lolwut:", "cmdstat_memory|")
+         "cmdstat_lolwut:", "cmdstat_memory|", "cmdstat_cluster|")
 
 
 def stats(r):
@@ -111,7 +117,7 @@ def shape5(text):
     """a drawing of VERSION 5: its lines' widths, its characters other
     than braille's, its last line"""
     lines = text.split("\n")
-    odd = sorted({c for c in text if not ("⠀" <= c <= "⣿") and c != "\n"} - set("Georg Nees - schotter, plotter on paper, 1968. Redis ver. 7.0.15"))
+    odd = sorted({c for c in text if not ("⠀" <= c <= "⣿") and c != "\n"} - set("Georg Nees - schotter, plotter on paper, 1968. Redis ver. 7.2.16"))
     return [len(lines), sorted({len(l) for l in lines[:-3]}), odd, lines[-2:]]
 
 
@@ -166,7 +172,7 @@ def scenarios(port, log):
     log("4 unblock", r.cmd("CLIENT", "UNBLOCK", a.id), a.read(), wait_blocked(r, 0))
     a.send("WAIT", "2", "100000")
     log("4 timeout table", wait_blocked(r, 1), field(r, "clients", "clients_in_timeout_table"))
-    log("4 unblock error", r.cmd("CLIENT", "UNBLOCK", a.id, "ERROR"), a.read(), wait_blocked(r, 0))
+    log("4 unblock timeout", r.cmd("CLIENT", "UNBLOCK", a.id, "TIMEOUT"), a.read(), wait_blocked(r, 0))
     log("4 not waiting", r.cmd("CLIENT", "UNBLOCK", a.id))
     g = Client(port)
     g.send("WAIT", "1", "0")
@@ -212,9 +218,28 @@ def scenarios(port, log):
         log("7 shutdown", args, r.cmd("SHUTDOWN", *args))
     log("7 multi", r.cmd("MULTI"), r.cmd("SHUTDOWN"), r.cmd("SHUTDOWN", "foo"), r.cmd("GET", "k"), r.cmd("EXEC"), r.cmd("GET", "k"))
     log("7 discard", r.cmd("MULTI"), r.cmd("SHUTDOWN", "NOSAVE"), r.cmd("DISCARD"))
+    # 7b. CLUSTER with cluster support disabled
+    for args in ([], ["INFO"], ["info"], ["MYSHARDID"], ["MyShardId"], ["MYID"], ["HELP"], ["SLOTS"], ["SHARDS"],
+                 ["NODES"], ["LINKS"], ["KEYSLOT", "k"], ["COUNTKEYSINSLOT", "1"], ["GETKEYSINSLOT", "1", "2"],
+                 ["ADDSLOTS", "1", "2"], ["ADDSLOTSRANGE", "1", "2"], ["DELSLOTS", "1"], ["SETSLOT", "1", "NODE", "x"],
+                 ["MEET", "127.0.0.1", "7000"], ["FAILOVER"], ["FAILOVER", "FORCE"], ["RESET", "HARD"],
+                 ["COUNT-FAILURE-REPORTS", "x"], ["SET-CONFIG-EPOCH", "1"], ["SAVECONFIG"], ["BUMPEPOCH"],
+                 ["FLUSHSLOTS"], ["FORGET", "x"], ["REPLICATE", "x"], ["REPLICAS", "x"], ["SLAVES", "x"],
+                 ["DELSLOTSRANGE", "1", "2"], ["INFO", "x"], ["MYSHARDID", "x"], ["KEYSLOT"], ["ADDSLOTS"],
+                 ["GETKEYSINSLOT", "1"], ["ADDSLOTSRANGE", "1"], ["MEET", "x"], ["NOSUCH"], ["nosuch", "x"], ["a" * 200]):
+        log("7b cluster", args, r.cmd("CLUSTER", *args))
+    log("7b multi", r.cmd("MULTI"), r.cmd("CLUSTER", "INFO"), r.cmd("CLUSTER", "MYSHARDID"), r.cmd("EXEC"))
+    log("7b multi refused", r.cmd("MULTI"), r.cmd("CLUSTER", "NOSUCH"), r.cmd("EXEC"))
     # 8. the statistics
     log("8 stats", stats(r))
     log("8 errorstats", errorstats(r))
+    # 9. CLIENT UNBLOCK's error to a WAIT, after the statistics: Redis 7.2.16
+    # counts the WAIT twice then (docs/UPSTREAM.md, bug 4), and BendKV once
+    # (unblock_error, BendKV alone)
+    a.send("WAIT", "2", "100000")
+    log("9 blocked", wait_blocked(r, 1))
+    log("9 unblock error", r.cmd("CLIENT", "UNBLOCK", a.id, "ERROR"), a.read(), wait_blocked(r, 0))
+    log("9 errorstats", errorstats(r))
     a.close()
     b.close()
 
@@ -236,6 +261,38 @@ def alone(port):
         fails.append("keys.count %r, INFO says %d" % (st["keys.count"], keys))
     if st["rss-overhead.ratio"] != "1" or st["allocator.resident"] != ":" + field(r, "memory", "allocator_resident") and False:
         fails.append("rss-overhead.ratio %r" % st["rss-overhead.ratio"])
+    r.close()
+    return fails
+
+
+def wait_stat(r):
+    """WAIT's calls and failed calls, as commandstats counts them."""
+    for l in info_lines(r, "commandstats", "cmdstat_wait:"):
+        return tuple(int(re.search(k + r"=(\d+)", l).group(1)) for k in ("calls", "failed_calls"))
+    return (0, 0)
+
+
+def unblock_error(port):
+    """CLIENT UNBLOCK's error to a WAIT counts the WAIT once, failed, as
+    Redis 7.0.15 counted it and Redis 7.2.16 counts any other command
+    unblocked so; 7.2.16 counts a WAIT twice then (docs/UPSTREAM.md, bug 4).
+    A WAIT whose client goes counts once too, not failed."""
+    fails = []
+    r, a = Client(port), Named(port, "w")
+    before = wait_stat(r)
+    a.send("WAIT", "2", "100000")
+    wait_blocked(r, 1)
+    got = (r.cmd("CLIENT", "UNBLOCK", a.id, "ERROR"), a.read(), wait_blocked(r, 0), wait_stat(r))
+    want = (":1", "-UNBLOCKED client unblocked via CLIENT UNBLOCK", 0, (before[0] + 1, before[1] + 1))
+    if got != want:
+        fails.append("CLIENT UNBLOCK ERROR of a WAIT: %r, not %r" % (got, want))
+    a.send("WAIT", "2", "0")
+    wait_blocked(r, 1)
+    a.close()
+    got = (wait_blocked(r, 0), wait_stat(r))
+    want = (0, (before[0] + 2, before[1] + 1))
+    if got != want:
+        fails.append("a WAIT whose client goes: %r, not %r" % (got, want))
     r.close()
     return fails
 
@@ -392,7 +449,7 @@ def main():
         except Exception as e:
             lines.append("EXCEPTION %r" % (e,))
         outs.append(lines)
-    fails = alone(args.bendkv)
+    fails = alone(args.bendkv) + unblock_error(args.bendkv)
     if args.bin:
         root = tempfile.mkdtemp(prefix="admin_test.")
         try:

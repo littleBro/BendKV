@@ -1,12 +1,13 @@
 // The engine of BendKV's scripts
 // ==============================
-// Redis 7.0.15's own Lua (deps/redis/deps/lua: Lua 5.1.5 with Redis's
+// Redis 7.2.16's own Lua (deps/redis/deps/lua: Lua 5.1.5 with Redis's
 // changes, cjson, cmsgpack, struct and bit) with the glue of its script_lua.c,
-// eval.c and script.c ported here, so that a script's results, errors,
-// tostring, the order of pairs, table.sort and cjson are Redis's byte for
-// byte. Bend declares the effects below in src/script.bend, and the
-// compiler splices this file into the program after its runtime
-// (bend2/guide/EFFECTS.md), so every runtime symbol is in scope.
+// eval.c, script.c, function_lua.c and functions.c ported here, so that a
+// script's results, errors, tostring, the order of pairs, table.sort and
+// cjson are Redis's byte for byte. Bend declares the effects below in
+// src/script.bend, and the compiler splices this file into the program
+// after its runtime (bend2/guide/EFFECTS.md), so every runtime symbol is
+// in scope.
 //
 // Bend drives a script as an automaton. A run gets a C stack of its own
 // (makecontext, swapcontext), on which Lua runs the script; whenever the
@@ -28,7 +29,8 @@
 //     with Engine.next(1, "");
 //   kind 4, redis.acl_check_cmd's arguments as a request, answered with
 //     ":1" when the caller's user may run the command, ":0" when it may
-//     not, or "-" when the command is not known.
+//     not, "-" when the command is not known, or "!" when its arity does
+//     not allow the request's number of words.
 //
 // The word of a step: bits 0 to 3 its kind; 4 to 7 the script client's
 // protocol (redis.setresp: 2 or 3), in which Bend encodes the reply to a
@@ -65,6 +67,7 @@
 #include <lua.h>
 #include <lualib.h>
 
+#include "fpconv_dtoa.h"
 #include "rand.h"
 #include "resp_parser.h"
 #include "server.h"
@@ -761,17 +764,46 @@ static void sc_bulk(ScBuf* b, const char* s, size_t n) {
   sc_buf_add(b, "\r\n", 2);
 }
 
-static void sc_double(ScRun* r, ScBuf* b, double d) {
-  if (isinf(d)) {
-    if (r->caller_resp == 2) {
-      sc_buf_str(b, d > 0 ? "$3\r\ninf\r\n" : "$4\r\n-inf\r\n");
-    } else {
-      sc_buf_str(b, d > 0 ? ",inf\r\n" : ",-inf\r\n");
-    }
-    return;
+// util.c's double2ll: whether d is an integer that a long long holds
+// without loss (within 2^62 either way), and which. A NaN fails the range's
+// test before the cast, which Redis makes of it too and C leaves undefined
+static int sc_double2ll(double d, long long* out) {
+  if (!(d >= (double)(-LLONG_MAX / 2) && d <= (double)(LLONG_MAX / 2))) {
+    return 0;
   }
-  char dbuf[5 * 1024 + 32];
-  int n = snprintf(dbuf, sizeof(dbuf), "%.17g", d);
+  long long ll = (long long)d;
+  if ((double)ll == d) {
+    *out = ll;
+    return 1;
+  }
+  return 0;
+}
+
+// util.c's d2string, as Redis 7.2 writes a double reply (addReplyDouble):
+// nan, inf and -inf, 0 and -0, an integer as one, any other in
+// fpconv_dtoa's shortest form; its length
+static int sc_d2string(char* buf, size_t len, double d) {
+  if (isnan(d)) {
+    return snprintf(buf, len, "nan");
+  }
+  if (isinf(d)) {
+    return snprintf(buf, len, d < 0 ? "-inf" : "inf");
+  }
+  if (d == 0) {
+    return snprintf(buf, len, signbit(d) ? "-0" : "0");
+  }
+  long long ll;
+  if (sc_double2ll(d, &ll)) {
+    return snprintf(buf, len, "%lld", ll);
+  }
+  int n = fpconv_dtoa(d, buf);
+  buf[n] = '\0';
+  return n;
+}
+
+static void sc_double(ScRun* r, ScBuf* b, double d) {
+  char dbuf[64];
+  int n = sc_d2string(dbuf, sizeof(dbuf), d);
   if (r->caller_resp == 2) {
     sc_bulk(b, dbuf, (size_t)n);
   } else {
@@ -1001,8 +1033,10 @@ static void sc_lua_to_reply(ScRun* r, lua_State* L, ScBuf* b) {
 // -------------
 
 // the arguments of a call as a RESP request in r->out: a number is
-// written as "%.17g", as Redis writes it; 0 and an error pushed when one
-// is neither a string nor a number
+// written as luaArgsToRedisArgv writes it, an integer as one, any other in
+// fpconv_dtoa's shortest form (-0 as 0, and a NaN as fpconv_dtoa has it,
+// nan or -nan); 0 and an error pushed when one is neither a string nor a
+// number
 static int sc_args_to_request(lua_State* L, ScRun* r) {
   int argc = lua_gettop(L);
   if (argc == 0) {
@@ -1015,7 +1049,9 @@ static int sc_args_to_request(lua_State* L, ScRun* r) {
   for (j = 0; j < argc; j += 1) {
     if (lua_type(L, j + 1) == LUA_TNUMBER) {
       char dbuf[64];
-      int n = snprintf(dbuf, sizeof(dbuf), "%.17g", (double)lua_tonumber(L, j + 1));
+      double num = (double)lua_tonumber(L, j + 1);
+      long long ll;
+      int n = sc_double2ll(num, &ll) ? snprintf(dbuf, sizeof(dbuf), "%lld", ll) : fpconv_dtoa(num, dbuf);
       sc_bulk(&r->out, dbuf, (size_t)n);
     } else {
       size_t n;
@@ -1152,7 +1188,7 @@ static int sc_set_repl(lua_State* L) {
     return lua_error(L);
   }
   if (lua_gettop(L) != 1) {
-    sc_push_error(L, "redis.set_repl() requires two arguments.");
+    sc_push_error(L, "redis.set_repl() requires one argument.");
     return lua_error(L);
   }
   int flags = luai_num2int(lua_tonumber(L, -1));
@@ -1178,6 +1214,10 @@ static int sc_acl_check_cmd(lua_State* L) {
   if (r->in_len >= 2 && r->in[0] == ':' && (r->in[1] == '1' || r->in[1] == '0')) {
     lua_pushboolean(L, r->in[1] == '1');
     return 1;
+  }
+  if (r->in_len >= 1 && r->in[0] == '!') {
+    sc_push_error(L, "Wrong number of args for redis.acl_check_cmd()");
+    return lua_error(L);
   }
   sc_push_error(L, "Invalid command passed to redis.acl_check_cmd()");
   return lua_error(L);
@@ -1257,9 +1297,6 @@ static int sc_replicate_commands(lua_State* L) {
 // math.random and math.randomseed on Redis's own generator, the same
 // sequence on every machine
 static int sc_math_random(lua_State* L) {
-  if (!sc_run.live) {
-    return luaL_error(L, "math.random can only be called inside a script invocation");
-  }
   lua_Number r = (lua_Number)(redisLrand48() % REDIS_LRAND48_MAX) /
     (lua_Number)REDIS_LRAND48_MAX;
   switch (lua_gettop(L)) {
@@ -1286,9 +1323,6 @@ static int sc_math_random(lua_State* L) {
 }
 
 static int sc_math_randomseed(lua_State* L) {
-  if (!sc_run.live) {
-    return luaL_error(L, "math.randomseed can only be called inside a script invocation");
-  }
   redisSrand48(luaL_checkint(L, 1));
   return 0;
 }
@@ -1325,16 +1359,22 @@ static const char* sc_redis_api_allow_list[] = {
 };
 
 static const char* sc_lua_builtins_allow_list[] = {
-  "xpcall", "tostring", "getfenv", "setmetatable", "next", "assert",
+  "xpcall", "tostring", "setmetatable", "next", "assert",
   "tonumber", "rawequal", "collectgarbage", "getmetatable", "rawset",
   "pcall", "coroutine", "type", "_G", "select", "unpack", "gcinfo",
-  "pairs", "rawget", "loadstring", "ipairs", "_VERSION", "setfenv",
+  "pairs", "rawget", "loadstring", "ipairs", "_VERSION",
   "load", "error", NULL,
 };
 
-static const char* sc_lua_builtins_not_documented_allow_list[] = {
-  "newproxy", NULL,
+// the builtins Redis 7.2 deprecates for the sandbox's sake: kept out of
+// the globals unless lua-enable-deprecated-api is yes, which only the
+// start sets (Engine.deprecated: the parameter is immutable), before any
+// state is made
+static const char* sc_lua_builtins_deprecated[] = {
+  "newproxy", "setfenv", "getfenv", NULL,
 };
+
+static int sc_lua_enable_deprecated_api = 0;
 
 static const char* sc_lua_builtins_removed_after_initialization_allow_list[] = {
   "debug", NULL,
@@ -1344,7 +1384,6 @@ static const char** sc_allow_lists[] = {
   sc_libraries_allow_list,
   sc_redis_api_allow_list,
   sc_lua_builtins_allow_list,
-  sc_lua_builtins_not_documented_allow_list,
   sc_lua_builtins_removed_after_initialization_allow_list,
   NULL,
 };
@@ -1394,7 +1433,16 @@ static int sc_new_index_allow_list(lua_State* L) {
       break;
     }
   }
-  if (*allow_l) {
+  int allowed = (*allow_l != NULL);
+  if (!allowed) {
+    for (const char** c = sc_lua_builtins_deprecated; *c; ++c) {
+      if (strcmp(*c, variable_name) == 0) {
+        allowed = sc_lua_enable_deprecated_api;
+        break;
+      }
+    }
+  }
+  if (allowed) {
     lua_rawset(L, -3);
   }
   return 0;
@@ -1424,6 +1472,33 @@ static void sc_set_table_protection_recursively(lua_State* L) {
   }
   if (lua_getmetatable(L, -1)) {
     sc_set_table_protection_recursively(L);
+    lua_pop(L, 1);
+  }
+}
+
+// the metatables of the basic types (a string's, a number's and the
+// others') made readonly, as Redis 7.2's luaSetTableProtectionForBasicTypes
+// makes them (CVE-2025-46818: a script could change the string metatable
+// that the next script, of another user, runs with)
+static void sc_set_table_protection_for_basic_types(lua_State* L) {
+  static const int types[] = {
+    LUA_TSTRING, LUA_TNUMBER, LUA_TBOOLEAN, LUA_TNIL, LUA_TFUNCTION,
+    LUA_TTHREAD, LUA_TLIGHTUSERDATA,
+  };
+  for (size_t i = 0; i < sizeof(types) / sizeof(types[0]); i += 1) {
+    switch (types[i]) {
+      case LUA_TSTRING: lua_pushstring(L, ""); break;
+      case LUA_TNUMBER: lua_pushnumber(L, 0); break;
+      case LUA_TBOOLEAN: lua_pushboolean(L, 0); break;
+      case LUA_TNIL: lua_pushnil(L); break;
+      case LUA_TFUNCTION: lua_pushcfunction(L, NULL); break;
+      case LUA_TTHREAD: lua_newthread(L); break;
+      case LUA_TLIGHTUSERDATA: lua_pushlightuserdata(L, (void*)L); break;
+    }
+    if (lua_getmetatable(L, -1)) {
+      sc_set_table_protection_recursively(L);
+      lua_pop(L, 1);
+    }
     lua_pop(L, 1);
   }
 }
@@ -1463,9 +1538,10 @@ static void sc_set_field_num(lua_State* L, const char* name, lua_Number n) {
   lua_settable(L, -3);
 }
 
-// REDIS_VERSION and REDIS_VERSION_NUM, Redis 7.0.15's
-#define SC_REDIS_VERSION "7.0.15"
-#define SC_REDIS_VERSION_NUM 0x0007000f
+// REDIS_VERSION and REDIS_VERSION_NUM, those of the Redis BendKV answers
+// as (7.2.16: its version_num is 0x00070210)
+#define SC_REDIS_VERSION "7.2.16"
+#define SC_REDIS_VERSION_NUM 0x00070210
 
 // luaRegisterRedisAPI, and with eval scriptingInit's additions (the
 // debugger's breakpoint and debug, replicate_commands), which the
@@ -1548,6 +1624,7 @@ static void sc_init_state(void) {
   sc_set_error_metatable(L);
   sc_set_table_protection_recursively(L);
   lua_pop(L, 1);
+  sc_set_table_protection_for_basic_types(L);
   sc_lua = L;
 }
 
@@ -1887,6 +1964,10 @@ static void sc_finish(ScRun* r, lua_State* L, int err, const char* name) {
         r->nostats = info.ignore;
         sc_err_info_free(&info);
       }
+      // with every "\r" and "\n" a space, as addReplyErrorFormat and
+      // Redis 7.2's addReplyErrorSdsExSafe send it (7.0 sent the second
+      // kind as it came, a newline in it breaking the protocol)
+      sc_one_line(r->out.p, r->out.n);
       lua_pop(L, 1);
     } else if (lua_istable(L, -1) && (lua_pushstring(L, "err"), lua_rawget(L, -2),
         lua_type(L, -1) == LUA_TSTRING ? (lua_pop(L, 1), 1) : (lua_pop(L, 1), 0))) {
@@ -1936,7 +2017,7 @@ static void sc_main_script(ScRun* r) {
 
 // Functions
 // ---------
-// FUNCTION and FCALL, as Redis 7.0.15 has them (functions.c and
+// FUNCTION and FCALL, as Redis 7.2.16 has them (functions.c and
 // function_lua.c). A library is its code, whose first line names it
 // ("#!lua name=<library>"), and the functions its code registered with
 // redis.register_function when FUNCTION LOAD ran it; FCALL calls a
@@ -2343,6 +2424,7 @@ static void fn_init_state(void) {
   lua_setmetatable(L, -2);
   lua_enablereadonlytable(L, -1, 1);
   lua_replace(L, LUA_GLOBALSINDEX);
+  sc_set_table_protection_for_basic_types(L);
   fn_lua = L;
 }
 
@@ -2895,6 +2977,22 @@ static void __attribute__((constructor)) engine_next_use(void) {
 
 #endif
 
+#ifdef CID(Engine.deprecated)
+
+// Engine.deprecated(on): lua-enable-deprecated-api, as the start reads it
+// (1: yes), for the states made from then on
+Term engine_deprecated_run(Env e, Term* f, IoWork* w) {
+  (void)e; (void)w;
+  sc_lua_enable_deprecated_api = (u64)f[0] != 0;
+  return term_pak(CID(Unit), 0);
+}
+
+static void __attribute__((constructor)) engine_deprecated_use(void) {
+  io_eff(CID(Engine.deprecated), engine_deprecated_run);
+}
+
+#endif
+
 #ifdef CID(Engine.flush)
 
 // Engine.flush(): the cache emptied and the state made anew, SCRIPT FLUSH
@@ -2902,9 +3000,8 @@ Term engine_flush_run(Env e, Term* f, IoWork* w) {
   (void)e; (void)f; (void)w;
   if (sc_lua != NULL) {
     // a full collection first, as eval.c's scriptingRelease does since the
-    // fix of CVE-2024-46981, which the reference's 7.0.15 carries: closed
-    // in the middle of a cycle, Lua could free a userdata that a __gc
-    // callback still reads
+    // fix of CVE-2024-46981: closed in the middle of a cycle, Lua could
+    // free a userdata that a __gc callback still reads
     lua_gc(sc_lua, LUA_GCCOLLECT, 0);
     lua_close(sc_lua);
     sc_lua = NULL;
@@ -2976,8 +3073,8 @@ static void __attribute__((constructor)) engine_cache_mem_use(void) {
 // INFO shows as used_memory_vm_functions; BendKV's is 0 until a load)
 
 // stringmatchlen, with the bound on nesting of Redis's fix for
-// CVE-2024-31228 (in the 7.0.15 the tests run against): FUNCTION LIST's
-// LIBRARYNAME pattern, which matches in any case
+// CVE-2024-31228: FUNCTION LIST's LIBRARYNAME pattern, which matches in
+// any case
 static int fn_match_impl(const char* pattern, int patternLen, const char* string,
   int stringLen, int nocase, int* skipLongerMatches, int nesting) {
   if (nesting > 1000) {

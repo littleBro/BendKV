@@ -7,14 +7,16 @@ one string) made and taken apart every way, read, popped, moved, copied,
 sorted, combined with sets of each kind and restored from each server's
 payload, sets whose key's time has passed, then random commands on a few
 keys (moves and the operations of several sets among them), replies
-compared one by one.
+compared one by one. SADD sizes a set by the count of its members, as Redis 7.2
+does.
 
-An intset keeps its members in numeric order on both servers, and those
-replies are compared as they are, and its DUMP byte for byte (each
-member in the width Redis's intset gives it); a hashtable answers in the
-order of each server's own table, so a whole set (SMEMBERS, SINTER,
-SUNION, SDIFF) is compared as a set, and SSCAN by the members its whole
-walk answers. SRANDMEMBER and SPOP pick at random: their replies are
+An intset keeps its members in numeric order on both servers, and a
+listpack (Redis 7.2's small set of strings) in the order they came:
+those replies are compared as they are, and their DUMP byte for byte
+(each member of an intset in the width Redis's intset gives it); a
+hashtable answers in the order of each server's own table, so a whole
+set (SMEMBERS, SINTER, SUNION, SDIFF) is compared as a set, and SSCAN by
+the members its whole walk answers. SRANDMEMBER and SPOP pick at random: their replies are
 compared by kind and size, each member checked against the set it was
 picked from (distinct where they must be), and the set an SPOP leaves
 against the set less the members it answered; then the key is made
@@ -166,15 +168,15 @@ def same(b, r, cmd):
         fail(cmd, x, y)
 
 
-# a whole set as it is: in order, for an intset, and its DUMP byte for
-# byte (Redis runs with rdbcompression no: BendKV writes no LZF), each
-# member in the width Redis's intset gives them
+# a whole set as it is: in order, for an intset or a listpack, and its
+# DUMP byte for byte (Redis runs with rdbcompression no: BendKV writes no
+# LZF), each member of an intset in the width Redis's intset gives them
 def exact(b, r, key):
     global n
     n += 1
     cmd = [b"SMEMBERS", key]
     x, y = run(b, cmd), run(r, cmd)
-    if encoding(r, key) == (b"$", b"intset"):
+    if encoding(r, key) in ((b"$", b"intset"), (b"$", b"listpack")):
         if x != y:
             fail(cmd, x, y)
         n += 1
@@ -197,7 +199,7 @@ SCRIPT = [
     [b"SREM", b"s", b"a", b"zz", b"a"], [b"SREM", b"s"], [b"SREM", b"nope", b"a"], [b"SREM", b"s", b"b", b"c", b"1", b"2"],
     [b"EXISTS", b"s"], [b"SREM", b"s", b"a"],
     # intsets: canonical int64s alone, in numeric order; any other member
-    # makes a hashtable, which stays one
+    # makes a listpack (Redis 7.2's small set of strings), which stays one
     [b"SADD", b"i", b"3", b"-1", b"20", b"2"], [b"OBJECT", b"ENCODING", b"i"], [b"SMEMBERS", b"i"],
     [b"SADD", b"i", LLONG_MIN, LLONG_MAX, b"0"], [b"SMEMBERS", b"i"], [b"SISMEMBER", b"i", LLONG_MIN],
     [b"SISMEMBER", b"i", b"03"], [b"SREM", b"i", b"03"], [b"SREM", b"i", b"3", LLONG_MAX], [b"SMEMBERS", b"i"],
@@ -413,6 +415,20 @@ def packed(b, r):
         reads(key, ints + [x], b"-601")
         cmds([b"SREM", key, x], [b"OBJECT", b"ENCODING", key], [b"SADD", key, b"12345678901234567890"],
              [b"SMEMBERS", key])
+    # SADD sizes its set by the count of its members, whether they are
+    # there already or come twice (setTypeCreate, setTypeMaybeConvert): a
+    # hashtable for more than 128 of them (more than 512 integers), however
+    # few the set then holds
+    for key, items in ((b"ph1", [b"x"] * 129), (b"ph2", [b"x"] * 128), (b"ph3", [b"7"] * 513), (b"ph4", [b"7"] * 512),
+                       (b"ph5", [b"7"] + [b"x"] * 128), (b"ph6", [b"x"] + [b"7"] * 200)):
+        cmds([b"SADD", key] + items, [b"OBJECT", b"ENCODING", key])
+        exact(b, r, key)
+    cmds([b"SADD", b"ph7", b"a", b"b"], [b"SADD", b"ph7"] + [b"a"] * 128 + [b"c"], [b"OBJECT", b"ENCODING", b"ph7"],
+         [b"SADD", b"ph8", b"1", b"2"], [b"SADD", b"ph8"] + [b"1"] * 512 + [b"3"], [b"OBJECT", b"ENCODING", b"ph8"],
+         [b"SADD", b"ph9", b"1", b"2"], [b"SADD", b"ph9"] + [b"1"] * 200 + [b"3"], [b"OBJECT", b"ENCODING", b"ph9"])
+    for key in (b"ph7", b"ph8", b"ph9"):
+        exact(b, r, key)
+    cmds([b"DEL"] + [b"ph%d" % i for i in range(1, 10)])
     # SPOP and SRANDMEMBER of each count on small sets
     for size in (1, 3, 10, 128):
         ms = [m(i) for i in range(size)]

@@ -10,7 +10,7 @@
 #   one it applies that is not there, or one it applies twice is an
 #   error);
 # - the constructors of Cmd, a parsed command, in src/redis.bend;
-# - Redis 7.0.15's parameters, all of which CONFIG serves
+# - Redis 7.2.16's parameters, all of which CONFIG serves
 #   (tools/data/redis-configs.json);
 # - the lines of code of each file of src/ and proof/, comments and blank
 #   lines left out, and among them those a generator writes (between a
@@ -155,7 +155,7 @@ def block(kept):
            f"| laws | {sum(n for _, n in sections)} | `proof/LAWS.bend` (by group: [What is proved](#what-is-proved)) |",
            f"| patches to the Bend compiler | {len(patches())} | `bend-patches/apply.sh` |",
            f"| constructors of `Cmd`, a parsed command | {len(cmd)} | `src/redis.bend` |",
-           f"| Redis 7.0.15's parameters, all of which CONFIG serves | {len(json.loads(CONFIGS.read_text()))} | `tools/data/redis-configs.json` |",
+           f"| Redis 7.2.16's parameters, all of which CONFIG serves | {len(json.loads(CONFIGS.read_text()))} | `tools/data/redis-configs.json` |",
            "",
            "| file | lines of code | of them written by a generator | the laws import it |",
            "|---|---:|---:|---|"]
