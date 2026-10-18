@@ -11108,6 +11108,118 @@ checks), `tests/stream_group_test.py` (32,233), `tests/stream_write_test.py` (32
 `tests/stream_check.bend` reads 3,856 heads alike both ways and makes its 185,856
 decisions alike.
 
+## 3zzzzx. The append-only file turned on and off at run time
+
+**What there is.** CONFIG SET appendonly yes and no turn the append-only file on and off
+while the server runs, as Redis 7.2.16's `startAppendOnly` and `stopAppendOnly` do. Before,
+CONFIG SET appendonly yes failed with Redis's "Unable to turn on AOF. Check server logs.",
+and Redis's own suite, which turns the file on that way in its external mode (the
+`appendonly yes` of a `start_server`'s overrides), stopped there. Two bugs of the file came
+out on the way, both fixed.
+
+**How it is built** (`src/server.bend`, section Turning the file on and off;
+`src/info.bend`; `src/session.bend`).
+- **appendonly as the server has it.** Rof's `on`, which WAITAOF's error and INFO read,
+  is now the configuration's `appendonly`, set at once by a CONFIG SET (`info.cfg`), as
+  Redis's `aof_enabled` is. The actor keeps the file's own state with its rewrite (Rw's
+  `aof`): 0 off, 1 on, 2 turning on (Redis's `AOF_WAIT_REWRITE`), 3 just turned on. Once a
+  group is answered, `rw.switch` compares the two and asks the shell to turn the file on
+  (9) or off (10) before any other step.
+- **Turning on.** The state 2, the offset synced 0 (Redis's `fsynced_reploff`), and a
+  rewrite begun with the temporary incremental file the actor appends to while it runs,
+  opened empty (`temp-appendonly.aof.incr`, in the directory or next to the single file:
+  `step.wait`, with Redis's "Creating AOF incr file ... on background rewrite"); the
+  rewrite counted once that file is open, as Redis counts it past
+  `openNewIncrAofForAppend`. A BGREWRITEAOF that runs is stopped first ("AOF was enabled
+  but there is already an AOF rewriting in background. Stopping background AOF and
+  starting a rewrite now."); while a background save runs, the rewrite is scheduled and
+  the cron starts it. Until it ends the file is not synced, and WAITAOF with numlocal
+  counts no sync. Its end puts its base in place and renames the temporary file as the
+  new incremental file (the manifest written with it, the files before made history:
+  "Successfully renamed the temporary AOF incr file ..."), or, with the single file,
+  renames the base with the entries kept as it ran onto the file and removes the
+  temporary file; then `appendfsync` is read and the file is on (state 3, then 1).
+- **A rewrite that fails** while the file turns on is scheduled again, its temporary
+  incremental file removed ("Removing the temp incr aof file ... in the background"), its
+  failures counted in a row as any rewrite's, so that after the third the cron holds its
+  tries back a minute, then two, as Redis's `aofRewriteLimited` does. Scheduling it again
+  keeps that count (`rws.again`; BGREWRITEAOF's scheduling clears it, as Redis's command
+  does). A temporary incremental file that cannot be opened stops the first try: the log
+  says why and "Redis needs to enable the AOF but can't trigger a background AOF rewrite
+  operation. Check the above logs for more info about the error.", and appendonly reads
+  no again, as Redis's CONFIG SET restores it; a later try is not counted, and stays
+  scheduled.
+- **Turning off.** The rewrite that runs stopped ("Killing running AOF rewrite child"),
+  the file synced and closed, none scheduled; the clients that wait in WAITAOF with
+  numlocal are answered Redis's error ("ERR WAITAOF cannot be used when numlocal is set
+  but appendonly is disabled.", counted in errorstats and not as a failed call, as
+  Redis's `updateStatsOnUnblock` counts it).
+- **The syncer** of `everysec` lives as long as the process: started with the file at
+  the start or the first time it turns on with `everysec`, it asks the actor before each
+  sync, which answers "off" while the file is off, turning on, or synced otherwise, and
+  the round is skipped (`sync.asked`, Rof's `sv`).
+- **SHUTDOWN while the file turns on.** Redis's `finishShutdown` refuses to stop while the
+  rewrite that turns the file on runs ("Writing initial AOF, can't exit."), unless FORCE
+  ("Writing initial AOF. Exit anyway."). The rewrite's account in INFO keeps whether the
+  rewrite that runs is that one (Rws's `wt`), so that the actor answers a SHUTDOWN
+  without FORCE Redis's "ERR Errors trying to SHUTDOWN. Check logs." at once, before any
+  save, the rest of its batch going on, and a SIGTERM or SIGINT without force changes
+  nothing; it counts the refusals (`dn`), and the shell logs Redis's three lines for each
+  once the group is answered, telling the signals' handler that the shutdown failed
+  (Redis's `cancelShutdown`), so that a SIGINT after it is not taken for a second one.
+
+**Two bugs of the file.**
+- **Writes during a rewrite in the directory replayed twice.** With the directory of
+  files, the writes made while a rewrite ran went to the new incremental file and were
+  also kept for the base, which only the single file needs (`rw.keep` had lost its
+  question to the directory): after a restart, each was replayed twice (a list pushed 30
+  times while a rewrite ran held 60 elements). A rewrite now keeps them only for the
+  single file.
+- **WAITAOF after a BGREWRITEAOF with appendonly no.** The end of any rewrite marked the
+  file on in Rof's account, so that WAITAOF 1 0 0 answered [1, 0] where Redis refuses
+  it (numlocal with appendonly no), and WAITAOF 0 0 0 answered [1, 0] where Redis
+  answers [0, 0]. The account now follows appendonly alone.
+
+And one line was missing: a SHUTDOWN while a BGREWRITEAOF runs now logs Redis's "Killing
+running AOF rewrite child: <pid>" after "There is a child rewriting the AOF. Killing
+it!" (BendKV's pid, as there is no child).
+
+**Where BendKV differs.** The file turns on or off once the group of requests of the
+CONFIG SET is answered: a write after CONFIG SET appendonly no in the same pipeline still
+reaches the file, an INFO or a SHUTDOWN in it finds no rewrite yet, and in EXEC the
+rewrite starts after the EXEC where Redis schedules it ("AOF was enabled during a
+transaction"). A temporary incremental file that cannot be made has its CONFIG SET
+answered OK by then, where Redis answers "Unable to turn on AOF. Check server logs.".
+Without `appenddirname`, the single file turns on through a temporary file next to it.
+`appendfsync` acts as the file turns on, not at a CONFIG SET of it. A rewrite scheduled
+while the file turns on, then started by BGREWRITEAOF, is answered as started even when
+its temporary incremental file cannot be opened.
+
+The proofs are as before. No law changed.
+
+**What it costs** (PERFORMANCE.md, section 91). GET, SET and INCR take 0.6 to 0.8%
+more instructions a request (3,567, 4,356 and 4,643, where main's took 3,542, 4,320 and
+4,614): the look the actor takes once a group is answered asks two things more, whether
+appendonly is the file's state and whether a SHUTDOWN was refused.
+
+**Tests.** `tests/aof_switch_test.py` runs ten scenarios on BendKV and on Redis 7.2.16,
+each on a directory of its own, and compares their replies, INFO's fields, files,
+manifests, the lines they log and their databases after a restart: the file turned on,
+off and on again in the directory and as the single file; WAITAOF before, during and
+after; writes while the rewrite that turns the file on runs; a rewrite stopped by the
+file turned on, and by the file turned off; the rewrite scheduled behind a background
+save; a temporary incremental file that cannot be made; writes while a BGREWRITEAOF runs
+with the file on (the first bug); a rewrite that fails three times as it ends; SHUTDOWN
+and SIGTERM while the file turns on, then SHUTDOWN FORCE: 126 checks, all alike. The
+build before this change fails the checks of both bugs. Redis's own suite, whose units
+of streams turn the file on with CONFIG SET appendonly yes, now runs their 23 tests
+that never ran: 22 passed at once, and the 23rd found a bug of XADD, fixed here. XADD of
+`<ms>-*` past the last sequence of ms answered "Elements are too large to be stored",
+where Redis answers that the ID is not past the stream's last ("The ID specified in XADD
+is equal or smaller than the target stream top item"); `tests/stream_write_test.py`
+asks it now. The suite passes 1,764 of the 1,812 tests Redis 7.2.16 passes
+([COMPATIBILITY.md](COMPATIBILITY.md)).
+
 ## 4. Where a request's time goes, and hiding the memory waits
 
 With the eight patches, BendKV ran fewer instructions on GET and SET than Redis, missed

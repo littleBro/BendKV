@@ -39,7 +39,7 @@ make suite REDIS_SRC=../redis      # both runs and the table, in build/suite/
 ## The result
 
 Redis 7.2.16, October 2026. Of the 1,812 tests Redis passes in this mode, BendKV passes
-**1,741 (96.1%)**; of the 1,688 in the units of what BendKV has, 1,644 (97.4%), and 97
+**1,764 (97.4%)**; of the 1,688 in the units of what BendKV has, 1,644 (97.4%), and 120
 of the 122 of streams'.
 
 7.2.16's suite runs 148 tests more in this mode than 7.0.15's, and Redis passes 135 more.
@@ -113,6 +113,14 @@ the streams' units that waited in XREAD or XREADGROUP:
   a list or on the stream before it, run again without an endless loop; and an XREAD
   that goes on waiting while its key is deleted or set, served by the XADD after it. Its
   other 7 never run, as the unit stops at the same command.
+
+The append-only file turned on at run time (section 3zzzzx of [FINDINGS.md](FINDINGS.md))
+brought 23, the tests of the streams' units that never ran, as each unit stopped at
+`CONFIG SET appendonly yes`: unit/type/stream passes 64 of its 66 (the other two set
+`stream-node-max-entries`), and unit/type/stream-cgroups all its 56. One of them, XADD
+with a partial ID at the maximal sequence, found a bug: XADD of `<ms>-*` past the last
+sequence of ms answered "Elements are too large to be stored", where Redis answers that
+the ID is not past the stream's last; it does now.
 
 ### Against Redis 7.0.15
 
@@ -350,7 +358,7 @@ source): 9 of the 17. The other 7 need MULTI and WATCH, Lua or lists (then).
 | area | units | Redis passes | BendKV passes |
 |---|---|---:|---:|
 | what BendKV has: the protocol, connections and clients and their pause, the keyspace and its databases, strings and their ranges, bits and fields, counters and floats, hashes, lists, sets, sorted sets and the commands that wait on them, SORT, HyperLogLogs, GEO, DUMP and RESTORE, times to live, lazy freeing, transactions, pub/sub and keyspace notifications, introspection, the slow log and the latency monitor, client-side caching, ACL users, Lua scripts and functions | protocol, quit, keyspace, type/string, type/incr, type/hash, type/list, list-2, list-3, type/set, type/zset, sort, hyperloglog, geo, dump, scan, bitops, bitfield, expire, lazyfree, violations, multi, pubsub, pause, introspection, introspection-2, other, info-command, latency-monitor, slowlog, tracking, scripting, functions | 1688 | **1644** |
-| streams: their values, reads, writes, groups and waits | type/stream, type/stream-cgroups | 122 | **97** |
+| streams: their values, reads, writes, groups and waits | type/stream, type/stream-cgroups | 122 | **120** |
 | the query buffer, not yet | querybuf | 2 | 0 |
 
 Of the first row's, unit/lazyfree's first two pass on BendKV's account of its heap, and
@@ -396,14 +404,14 @@ wait):
 | unit/type/list-2 | 2 | 2 | 2 |
 | unit/type/list-3 | 11 | 11 | 11 |
 | unit/type/set | 118 | 114 | 113 |
-| unit/type/stream | 75 | 66 | 48 |
-| unit/type/stream-cgroups | 59 | 56 | 49 |
+| unit/type/stream | 75 | 66 | 64 |
+| unit/type/stream-cgroups | 59 | 56 | 56 |
 | unit/type/string | 82 | 82 | 79 |
 | unit/type/zset | 303 | 300 | 298 |
 | unit/violations | 1 | 1 | 1 |
-| **all** | **1905** | **1812** | **1741 (96.1%)** |
+| **all** | **1905** | **1812** | **1764 (97.4%)** |
 
-## Why the other 71 fail
+## Why the other 48 fail
 
 Against Redis 7.2.16:
 
@@ -411,10 +419,7 @@ Against Redis 7.2.16:
   - SYNC 26: tests that read the replication stream, 12 of them unit/multi's of what a
     transaction propagates and 3 unit/scripting's of what a script propagates;
   - MIGRATE 2, REPLICAOF 1 and MODULE 1.
-- **24 never ran**: their unit ended before them.
-  - 23 are type/stream's and type/stream-cgroups', on a command outside any test:
-    `CONFIG SET appendonly yes`. BendKV turns its append-only file on only at its start.
-  - One test runs only on a server that names jemalloc as its allocator.
+- **One never ran**: it runs only on a server that names jemalloc as its allocator.
 - **17 fail with another error.**
   - 3 are streams': the tests that set `stream-node-max-entries`, one of them
     unit/lazyfree's.
@@ -437,9 +442,8 @@ INFO's statistics per command, which `info-command` looked for, made 3 more test
 SCAN and RANDOMKEY pass all their tests on keys: SCAN's basic iteration, COUNT, MATCH,
 TYPE, and its guarantee under a load of writes, and RANDOMKEY's three.
 
-So what the suite counts next is `CONFIG SET appendonly yes`, which 23 tests after it
-wait for, then replication, whose SYNC stops 26 tests, then the query buffer of the
-third row (2 tests).
+So what the suite counts next is replication, whose SYNC stops 26 tests, then the query
+buffer of the third row (2 tests).
 
 ## What it found
 
@@ -518,10 +522,15 @@ changes), and the append-only file's
 rewrite (`tests/rewrite_test.py`: BGREWRITEAOF's replies
 and INFO's fields against Redis's, the rewritten file against Redis's base, writes during a
 rewrite, BendKV and Redis started from the new file; Redis's unit/aofrw is tagged
-`external:skip`, and most of it needs `DEBUG LOADAOF` and `CONFIG SET appendonly yes`).
-Redis 7's directory of files, `appendonlydir`, has `tests/aofdir_test.py`: BendKV and
-Redis each started on a copy of the same directory, and rewriting in it, with the same
-databases, manifests and lines logged. Where BendKV differs: without the directory,
+`external:skip`, and most of it needs `DEBUG LOADAOF`). Redis 7's directory of files,
+`appendonlydir`, has `tests/aofdir_test.py`: BendKV and Redis each started on a copy of
+the same directory, and rewriting in it, with the same databases, manifests and lines
+logged; and the file turned on and off at run time, `tests/aof_switch_test.py`: BendKV
+and Redis each on a directory of its own, the file turned on, off and on again (in the
+directory and as the single file), with WAITAOF, writes while it turns on, the
+rewrites it stops and schedules, the ones that fail, and SHUTDOWN and SIGTERM refused
+while it turns on, with the same replies, INFO fields, files, manifests, lines logged and
+databases after a restart (FINDINGS 3zzzzx). Where BendKV differs: without the directory,
 which the runtime cannot make, BendKV keeps Redis 6's single file; it writes its bases as
 commands whatever `aof-use-rdb-preamble` says; an RDB base followed by commands stops
 its start, where Redis loads both; a base or history line whose sequence number is

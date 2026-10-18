@@ -9202,3 +9202,28 @@ last-level misses 2.84, 3.15 and 3.31; with 100 clients in BLPOP, GET 3,639 and 
 The next steps are section 89's: a group's write on a stream taken out of the keyspace,
 XCLAIM's plan made of words alone, and the walks of XREADGROUP's reply and act made one.
 XADD's words read once a request, where they are read three times, is a fourth.
+
+## 91. The append-only file turned on and off at run time
+
+FINDINGS 3zzzzx. "Before" is main's build (096404a), "now" this change on it, both
+counted by `tools/perf_guard.sh` on the same machine in the same hour.
+
+**Instructions a request:**
+
+| request | before | now | |
+|---|---:|---:|---:|
+| GET | 3,542 | 3,567 | +0.7% |
+| SET | 4,320 | 4,356 | +0.8% |
+| INCR | 4,614 | 4,643 | +0.6% |
+| GET, 100 clients in BLPOP | 3,641 | 3,674 | +0.9% |
+| SET, 100 clients in BLPOP | 4,476 | 4,514 | +0.8% |
+
+The last-level misses (2.84, 3.15 and 3.34) and the prefetches (3.68, 3.98 to 3.99 and
+3.92) are as before. What grew is the look the actor takes once a group is answered
+(`rw.what`), which every group pays, before the cron's or a rewrite's step: it asks
+first whether appendonly, as the server has it, is the file's state (`rw.switch`), and
+whether the group refused a SHUTDOWN while the file turns on, each read through the
+server's state into the file's account (Rof) or the rewrite's (Rws). A group of a few
+requests pays them a few times over, a long pipeline's once. Turning the file on costs
+what a BGREWRITEAOF costs (section 47), its slices between the groups as before; while
+it runs, the actor appends to the temporary incremental file without syncing it.
