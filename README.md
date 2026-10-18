@@ -662,14 +662,16 @@ translation stays in the trusted base.
   eviction and the refusal past maxmemory count the dataset's change by its number of
   keys, each at the average size when the job started (a value grown in place counts
   when the job ends), where Redis's parent counts what it allocates and not the pages
-  its child's snapshot keeps; BendKV's snapshot holds the values the writes replace,
-  and INFO's `used_memory` with it (FINDINGS.md, section 3zzzk); the uses
-  are kept in a table of 2^20 words by the key's hash, which keys whose hashes share
-  their low 20 bits share, and a request marks its first key alone, before it runs, as a
-  script's call does as it runs (MGET's others are not marked); evicting many keys at once is about ten times
-  slower than in Redis; and BendKV has no defragmentation: `activedefrag yes` fails as
-  in a Redis built without its own jemalloc, where Redis built from its tarball turns
-  it on.
+  its child's snapshot keeps; BendKV's snapshot holds the values the writes replace, and
+  INFO's `used_memory` with it (FINDINGS.md, section 3zzzk); the uses are kept in a
+  table of 2^20 words by the key's hash, which keys whose hashes share their low 20 bits
+  share, and a key deleted and made again by a command but RESTORE finds its word as the
+  old key left it (under an LFU policy its counter goes on from the old key's, where
+  Redis's new key starts again at 5); a request marks its first key alone, before it
+  runs, as a script's call does as it runs (MGET's others are not marked); evicting many
+  keys at once is about ten times slower than in Redis; and BendKV has no
+  defragmentation: `activedefrag yes` fails as in a Redis built without its own
+  jemalloc, where Redis built from its tarball turns it on.
 - **Start:** as `redis-server` starts: a configuration file, `--name value` options and
   `-` for the standard input, read line by line as Redis reads them (includes, `dir`
   changing the directory at once, save points that add up, the same errors at the same

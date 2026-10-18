@@ -226,24 +226,27 @@ def scenarios(port, log):
         a.cmd("CLIENT", "NO-EVICT", "on"), norm(b.cmd("CLIENT", "LIST", "ID", a.id), cs),
         a.cmd("RESET"), norm(b.cmd("CLIENT", "LIST", "ID", a.id), cs), a.cmd("CLIENT", "NO-TOUCH", "ON"),
         a.cmd("CLIENT", "NO-TOUCH", "Off"), norm(b.cmd("CLIENT", "LIST", "ID", a.id), cs), a.cmd("SELECT", "9"))
+    # a key no other test uses: a key deleted and made again finds its word of
+    # uses as the old key left it in BendKV (README, Memory), so that under
+    # an LFU policy its counter would go on from another test's key
     log("5 no-touch freq", r.cmd("CONFIG", "SET", "maxmemory-policy", "allkeys-lfu"), r.cmd("CONFIG", "SET", "lfu-log-factor", "0"),
-        a.cmd("SET", "f", "v"), r.cmd("OBJECT", "FREQ", "f"), a.cmd("CLIENT", "NO-TOUCH", "on"),
-        [a.cmd("GET", "f") for _ in range(5)], a.cmd("STRLEN", "f"), r.cmd("OBJECT", "FREQ", "f"),
-        a.cmd("TOUCH", "f"), r.cmd("OBJECT", "FREQ", "f"), b.cmd("GET", "f"), r.cmd("OBJECT", "FREQ", "f"),
-        a.cmd("MULTI"), a.cmd("GET", "f"), a.cmd("TOUCH", "f"), a.cmd("EXEC"), r.cmd("OBJECT", "FREQ", "f"),
-        a.cmd("CLIENT", "NO-TOUCH", "off"), a.cmd("GET", "f"), r.cmd("OBJECT", "FREQ", "f"))
-    a.raw(enc(["CLIENT", "NO-TOUCH", "on"]) + enc(["GET", "f"]) + enc(["GET", "f"]))
-    log("5 no-touch pipelined", a.read(), a.read(), a.read(), r.cmd("OBJECT", "FREQ", "f"))
-    a.raw(enc(["CLIENT", "NO-TOUCH", "off"]) + enc(["GET", "f"]))
-    log("5 no-touch off pipelined", a.read(), a.read(), r.cmd("OBJECT", "FREQ", "f"))
+        a.cmd("SET", "ntf", "v"), r.cmd("OBJECT", "FREQ", "ntf"), a.cmd("CLIENT", "NO-TOUCH", "on"),
+        [a.cmd("GET", "ntf") for _ in range(5)], a.cmd("STRLEN", "ntf"), r.cmd("OBJECT", "FREQ", "ntf"),
+        a.cmd("TOUCH", "ntf"), r.cmd("OBJECT", "FREQ", "ntf"), b.cmd("GET", "ntf"), r.cmd("OBJECT", "FREQ", "ntf"),
+        a.cmd("MULTI"), a.cmd("GET", "ntf"), a.cmd("TOUCH", "ntf"), a.cmd("EXEC"), r.cmd("OBJECT", "FREQ", "ntf"),
+        a.cmd("CLIENT", "NO-TOUCH", "off"), a.cmd("GET", "ntf"), r.cmd("OBJECT", "FREQ", "ntf"))
+    a.raw(enc(["CLIENT", "NO-TOUCH", "on"]) + enc(["GET", "ntf"]) + enc(["GET", "ntf"]))
+    log("5 no-touch pipelined", a.read(), a.read(), a.read(), r.cmd("OBJECT", "FREQ", "ntf"))
+    a.raw(enc(["CLIENT", "NO-TOUCH", "off"]) + enc(["GET", "ntf"]))
+    log("5 no-touch off pipelined", a.read(), a.read(), r.cmd("OBJECT", "FREQ", "ntf"))
     get1, touch1 = "return redis.call('GET', KEYS[1])", "return redis.call('TOUCH', KEYS[1])"
-    log("5 no-touch scripts", a.cmd("EVAL", get1, "1", "f"), r.cmd("OBJECT", "FREQ", "f"),
-        a.cmd("EVAL", touch1, "1", "f"), r.cmd("OBJECT", "FREQ", "f"), a.cmd("CLIENT", "NO-TOUCH", "on"),
-        a.cmd("EVAL", get1, "1", "f"), a.cmd("EVAL_RO", get1, "1", "f"), r.cmd("OBJECT", "FREQ", "f"),
-        a.cmd("EVAL", touch1, "1", "f"), r.cmd("OBJECT", "FREQ", "f"),
-        a.cmd("MULTI"), a.cmd("EVAL", get1, "1", "f"), a.cmd("EXEC"), r.cmd("OBJECT", "FREQ", "f"),
-        b.cmd("EVAL", get1, "1", "f"), r.cmd("OBJECT", "FREQ", "f"), a.cmd("CLIENT", "NO-TOUCH", "off"),
-        a.cmd("EVAL", get1, "1", "f"), r.cmd("OBJECT", "FREQ", "f"),
+    log("5 no-touch scripts", a.cmd("EVAL", get1, "1", "ntf"), r.cmd("OBJECT", "FREQ", "ntf"),
+        a.cmd("EVAL", touch1, "1", "ntf"), r.cmd("OBJECT", "FREQ", "ntf"), a.cmd("CLIENT", "NO-TOUCH", "on"),
+        a.cmd("EVAL", get1, "1", "ntf"), a.cmd("EVAL_RO", get1, "1", "ntf"), r.cmd("OBJECT", "FREQ", "ntf"),
+        a.cmd("EVAL", touch1, "1", "ntf"), r.cmd("OBJECT", "FREQ", "ntf"),
+        a.cmd("MULTI"), a.cmd("EVAL", get1, "1", "ntf"), a.cmd("EXEC"), r.cmd("OBJECT", "FREQ", "ntf"),
+        b.cmd("EVAL", get1, "1", "ntf"), r.cmd("OBJECT", "FREQ", "ntf"), a.cmd("CLIENT", "NO-TOUCH", "off"),
+        a.cmd("EVAL", get1, "1", "ntf"), r.cmd("OBJECT", "FREQ", "ntf"),
         r.cmd("CONFIG", "SET", "maxmemory-policy", "noeviction"), r.cmd("CONFIG", "SET", "lfu-log-factor", "10"))
     log("5 no-touch idle", a.cmd("SET", "g", "v"), a.cmd("CLIENT", "NO-TOUCH", "on"))
     time.sleep(2.1)
