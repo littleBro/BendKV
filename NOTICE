@@ -174,7 +174,9 @@ parts of it are written from 7.2.16's sources:
   src/aof.bend, src/acl.bend and src/info.bend; and d2string and
   double2ll in tests/float_ref.c.
 - XINFO STREAM FULL's active-time and XINFO CONSUMERS' inactive
-  (t_stream.c), in src/redis.bend and src/stream.bend.
+  (t_stream.c), in src/redis.bend and src/stream.bend; and a group's lag
+  (t_stream.c's streamReplyWithCGLag, streamRangeHasTombstones and
+  streamEstimateDistanceFromFirstEverEntry), in src/stream.bend.
 - New commands and options: CLIENT SETINFO, its checks and the library
   CLIENT LIST shows, and CLIENT NO-TOUCH and its flag (networking.c's
   clientSetinfoCommand, validateClientAttr, clientCommand and

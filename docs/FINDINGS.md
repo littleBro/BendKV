@@ -10672,6 +10672,30 @@ compared. The three cases of #101, and those of #77 (pushes in a transaction, wh
 pushes after the reply of section 3zzzzg had already put after EXEC's array), answer as
 Redis does.
 
+## 3zzzzs. A group's lag, as Redis 7.2.16 reckons it
+
+**What differed.** XINFO GROUPS and XINFO STREAM FULL give each group's lag, the entries
+added that it has not read yet. BendKV reckoned it as Redis 7.0.15 does; Redis 7.2.16's
+`streamReplyWithCGLag` asks more first, and its helpers ask less:
+- a stream whose entries are all gone (deleted one by one, its count of entries added
+  above 0) has a lag of 0, where BendKV took the entries added less the group's count of
+  entries read;
+- a group whose last ID and the stream's greatest deleted ID are both before its first
+  entry has the stream's length as its lag;
+- `streamRangeHasTombstones` no longer asks that the greatest deleted ID be past the first
+  entry, and `streamEstimateDistanceFromFirstEverEntry` gives none for an ID (but 0-0)
+  before the greatest deleted one.
+
+On a stream of three entries whose group read the first, then lost the second to XDEL
+and the first to XTRIM, BendKV answered a lag of 2 where Redis 7.2.16 answers 1.
+
+**What changed** (`src/stream.bend`): `xs.lag`, `xs.tomb` and `xs.est`, as 7.2.16's three
+functions run.
+
+`tests/stream_dump_test.py` has the two shapes, which `tests/stream_read_test.py` reads
+against Redis 7.2.16: every entry deleted, and a group's last ID and the greatest
+deleted before the first entry. On the build before this change, 24 of its reads differ.
+
 ## 4. Where a request's time goes, and hiding the memory waits
 
 With the eight patches, BendKV ran fewer instructions on GET and SET than Redis, missed

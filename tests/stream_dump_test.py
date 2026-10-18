@@ -158,6 +158,17 @@ def shapes(rnd):
     add("groups: entries delivered, claimed, acknowledged; consumers with none pending", grp)
     add("groups of a stream with no entry", [cmd("XGROUP", "CREATE", "s", "g", "$", "MKSTREAM"), cmd("XGROUP", "CREATE", "s", "h", "5-5"),
                                             cmd("XGROUP", "CREATECONSUMER", "s", "g", "c")])
+    # a group's lag as Redis 7.2 reckons it (streamReplyWithCGLag): 0 once
+    # every entry is deleted, and the stream's length when the group's
+    # last ID and the greatest deleted are both before the first entry
+    add("a group's lag: every entry deleted",
+        [xadd("30-1", "f", "1"), xadd("30-2", "f", "2"), cmd("XGROUP", "CREATE", "s", "g", "0"),
+         cmd("XREADGROUP", "GROUP", "g", "c", "COUNT", 1, "STREAMS", "s", ">"), cmd("XDEL", "s", "30-1", "30-2")])
+    add("a group's lag: its last ID and the greatest deleted before the first entry",
+        [xadd("31-%d" % i, "f", str(i)) for i in range(1, 4)] +
+        [cmd("XGROUP", "CREATE", "s", "g", "0"), cmd("XGROUP", "CREATE", "s", "h", "0", "ENTRIESREAD", 0),
+         cmd("XREADGROUP", "GROUP", "g", "c", "COUNT", 1, "STREAMS", "s", ">"), cmd("XDEL", "s", "31-2"),
+         cmd("XTRIM", "s", "MINID", "31-3")])
     many = [xadd("21-%d" % i, "f", str(i % 100)) for i in range(400)]
     many += [cmd("XGROUP", "CREATE", "s", "g%d" % i, "21-%d" % (i * 7)) for i in range(30)]
     many += [cmd("XREADGROUP", "GROUP", "g%d" % (i % 30), "c%d" % i, "COUNT", 3 + i % 4, "STREAMS", "s", ">") for i in range(120)]

@@ -737,12 +737,14 @@ def xnack.count(+x: KV.XNack) -> KV.XN:
 # The count of entries read and the lag
 # -------------------------------------
 
-# streamEstimateDistanceFromFirstEverEntry: id's count of entries read,
-# as a long long's 64 bits, 2^64 - 1 (-1) for none: 0 in a stream no
-# entry was ever added to; the count of entries added at the last ID,
-# and at any ID up to it in an empty stream; none past it; with no entry
-# deleted after the first live one, the entries added less the live ones
-# before the first live entry, one more at it; else none
+# streamEstimateDistanceFromFirstEverEntry, as Redis 7.2.16 reckons it:
+# id's count of entries read, as a long long's 64 bits, 2^64 - 1 (-1) for
+# none: 0 in a stream no entry was ever added to; the count of entries
+# added at any ID up to the last in an empty stream; none for an ID (but
+# 0-0) before the greatest one deleted; the count of entries added at the
+# last ID; none past it; with no entry deleted after the first live one,
+# the entries added less the live ones before the first live entry, one
+# more at it; else none
 def xs.est.first(c: Cmp, +added: KV.XN, +n: Nat) -> KV.XN:
   match c:
     case LT{}:
@@ -766,14 +768,18 @@ def xs.est(+x: KV.XStream, +id: KV.XId) -> KV.XN:
   +n = KV.xstream.len(x)
   +last = xstream.last(x)
   +c = KV.xid.cmp(id, last)
-  Bool.pick(KV.XN, KV.xn.is_eq(added, xn.zero()), xn.zero(), Bool.pick(KV.XN, Bool.and(Nat.is_eq(n, 0n), Bool.not(Cmp.is_gt(c))), added, xs.est.last(c, added, n, xstream.first(x), xstream.maxdel(x), id)))
+  +maxdel = xstream.maxdel(x)
+  +frag = Bool.and(Bool.not(xid.is_zero(id)), Cmp.is_lt(KV.xid.cmp(id, maxdel)))
+  Bool.pick(KV.XN, KV.xn.is_eq(added, xn.zero()), xn.zero(), Bool.pick(KV.XN, Bool.and(Nat.is_eq(n, 0n), Bool.not(Cmp.is_gt(c))), added, Bool.pick(KV.XN, frag, D.xn.max(), xs.est.last(c, added, n, xstream.first(x), maxdel, id))))
 
-# streamRangeHasTombstones from start to the last ID: whether an entry
-# was deleted at or after start, past the first live entry
+# streamRangeHasTombstones from start to the last ID, as Redis 7.2.16
+# reckons it: whether the stream holds entries and an entry was deleted at
+# or after start (7.0 also asked that the deletion be past the first live
+# entry)
 def xs.tomb(+x: KV.XStream, +start: KV.XId) -> Bool:
   +maxdel = xstream.maxdel(x)
   +live = Bool.and(Nat.is_lt(0n, KV.xstream.len(x)), Bool.not(xid.is_zero(maxdel)))
-  Bool.and(live, Bool.and(Bool.not(Cmp.is_gt(KV.xid.cmp(xstream.first(x), maxdel))), Bool.not(Cmp.is_gt(KV.xid.cmp(start, maxdel)))))
+  Bool.and(live, Bool.not(Cmp.is_gt(KV.xid.cmp(start, maxdel))))
 
 def xs.lag.est(+added: KV.XN, +e: KV.XN) -> Maybe<&2, KV.XN>:
   Bool.pick(Maybe<&2, KV.XN>, xn.is_max(e), None{}, Some{xn.sub(added, e)})
@@ -785,10 +791,20 @@ def xs.lag.of(rd: KV.XRd, +x: KV.XStream, +last: KV.XId, +added: KV.XN) -> Maybe
     case KV.XRdNone{}:
       xs.lag.est(added, xs.est(x, last))
 
-# streamReplyWithCGLag: a group's lag, as a long long's 64 bits, or none
+# streamReplyWithCGLag, as Redis 7.2.16 reckons it: a group's lag, as a
+# long long's 64 bits, or none: 0 for a stream no entry was ever added
+# to, and for one whose entries are all gone; the stream's length when
+# both the group's last ID and the greatest ID deleted are before its
+# first entry; else from the group's count of entries read, when it has
+# one and no entry was deleted at or after its last ID, or from the
+# estimate of the count at its last ID
 def xs.lag(+x: KV.XStream, +g: KV.XGroup) -> Maybe<&2, KV.XN>:
   +added = xstream.added(x)
-  Bool.pick(Maybe<&2, KV.XN>, KV.xn.is_eq(added, xn.zero()), Some{xn.zero()}, xs.lag.of(xgroup.read(g), x, xgroup.last(g), added))
+  +n = KV.xstream.len(x)
+  +last = xgroup.last(g)
+  +first = xstream.first(x)
+  +behind = Bool.and(Cmp.is_lt(KV.xid.cmp(last, first)), Cmp.is_lt(KV.xid.cmp(xstream.maxdel(x), first)))
+  Bool.pick(Maybe<&2, KV.XN>, Bool.or(KV.xn.is_eq(added, xn.zero()), Nat.is_eq(n, 0n)), Some{xn.zero()}, Bool.pick(Maybe<&2, KV.XN>, behind, Some{KV.xn.of(n)}, xs.lag.of(xgroup.read(g), x, last, added)))
 
 # Pending entries
 # ---------------
