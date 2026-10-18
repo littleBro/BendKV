@@ -694,9 +694,9 @@ translation stays in the trusted base.
   IPv4 or IPv6 address as `inet_pton` reads one, `cluster-announce-human-nodename` without
   the bytes a cluster's file of nodes cannot hold). requirepass is the
   default user's password, hz is capped as in Redis and notify-keyspace-events picks the events
-  published (above); `loglevel nothing` logs nothing; the port, the addresses, TLS and the append-only
-  file cannot change while BendKV runs (a new value fails as it does when Redis cannot
-  apply it); maxmemory and its policy, samples, tenacity and LFU parameters limit the
+  published (above); `loglevel nothing` logs nothing; the port, the addresses and TLS
+  cannot change while BendKV runs (a new value fails as it does when Redis cannot apply
+  it); `appendonly` turns the append-only file on and off (Persistence, below); maxmemory and its policy, samples, tenacity and LFU parameters limit the
   memory and choose what is evicted (below); `save`, `dbfilename` and `rdbchecksum`
   act on the RDB file (Persistence, below); the other parameters are kept and read
   back but tune nothing, since BendKV has no replication or encodings for them to tune.
@@ -844,7 +844,26 @@ translation stays in the trusted base.
   an RDB file, and one that does not load stops the start, the file left as it was (Redis
   7.0.15, when its RDB part ends early, cuts it to nothing with `aof-load-truncated
   yes`); a BGREWRITEAOF whose new incremental file cannot be made is answered as
-  started, then fails, where Redis answers with an error. The RDB file as Redis 7.2.16
+  started, then fails, where Redis answers with an error. CONFIG SET appendonly yes
+  turns the file on as Redis 7.2.16 does: a rewrite starts (a BGREWRITEAOF that runs
+  then is stopped first; while a background save runs, the rewrite is scheduled), the
+  writes meanwhile go to a temporary incremental file (`temp-appendonly.aof.incr`), and
+  as the rewrite ends that file becomes the new incremental file and its base the base;
+  WAITAOF with numlocal counts no sync until then; a rewrite that fails is scheduled
+  again, its failures counted in a row until the third holds the cron's tries back, as
+  Redis's `aofRewriteLimited` does; SHUTDOWN without FORCE, and SIGTERM and SIGINT, are
+  refused while it runs, with Redis's error and lines ("Writing initial AOF, can't
+  exit."). CONFIG SET appendonly no syncs and closes the file, stops the rewrite that
+  runs, and answers the clients waiting in WAITAOF with numlocal Redis's error (section
+  3zzzzx of [docs/FINDINGS.md](docs/FINDINGS.md)). Where BendKV differs: the file turns
+  on or off once the group of requests of the CONFIG SET is answered, so that a write
+  after CONFIG SET appendonly no in the same pipeline still reaches the file, an INFO or
+  a SHUTDOWN in it finds no rewrite yet, and in EXEC the rewrite starts after the EXEC
+  instead of being scheduled; a temporary incremental file that cannot be made turns
+  appendonly back to no with Redis's lines, the CONFIG SET answered OK by then, where
+  Redis answers an error; without `appenddirname` the single file turns on through a
+  temporary file next to it, removed as the rewrite ends; `appendfsync` acts as the file
+  turns on (or at the start), not at a CONFIG SET of it. The RDB file as Redis 7.2.16
   writes it (`REDIS0011` and its AUX fields, the libraries of functions, each database's
   SELECTDB and RESIZEDB, each key's EXPIRETIME_MS and value as DUMP writes it, EOF and
   the CRC64, or eight zero bytes with `rdbchecksum no`): SAVE writes it into `temp-<pid>.rdb`, syncs it, renames it onto `dbfilename` and
@@ -1190,7 +1209,7 @@ away.
 | `proof/SPEC.bend` | 370 |  |  |
 | `proof/PROOF.bend` | 18,000 | 2,800 |  |
 | `src/`, the 6 files the laws import | 31,000 | 8,200 |  |
-| `src/`, the 15 others | 32,000 | 2,800 |  |
+| `src/`, the 15 others | 36,000 | 3,100 |  |
 | `proof/` | 20,000 | 2,800 |  |
 <!-- END gen_counts: numbers -->
 

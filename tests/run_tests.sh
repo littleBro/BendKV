@@ -79,7 +79,14 @@
 # to move in; manifests Redis refuses; files cut short or not there;
 # history files; libraries of functions in a base and FUNCTION commands
 # in the incremental files) and rewriting in it, with the same
-# databases, libraries, manifests and lines logged. Then maxmemory and
+# databases, libraries, manifests and lines logged. Then the file turned
+# on and off at run time (CONFIG SET appendonly,
+# tests/aof_switch_test.py): in the directory and as the single file,
+# WAITAOF, writes while the rewrite that turns it on runs, a rewrite it
+# stops, one it schedules after a background save, a temporary file that
+# cannot be made, and writes while a BGREWRITEAOF runs with the file on,
+# with Redis's replies, INFO, files, manifests, lines logged and
+# databases after a restart. Then maxmemory and
 # eviction: the refusals past maxmemory (OOM), OBJECT
 # IDLETIME and FREQ and the evicted event against Redis's, Redis's own
 # tests of the policies on both, and BendKV's warnings, an eviction that
@@ -304,6 +311,8 @@ echo "== the rewrite of the append-only file"
 python3 tests/rewrite_test.py --bin build/bendkv --bendkv "$PORT" --redis "$((REDIS_PORT + 1))" --dir build/rewrite
 echo "== Redis 7's multi-part append-only file, against Redis"
 python3 tests/aofdir_test.py --bin build/bendkv --bendkv "$PORT" --redis "$((REDIS_PORT + 1))" --dir build/aofdir
+echo "== the append-only file turned on and off at run time, against Redis"
+python3 tests/aof_switch_test.py --bin build/bendkv --bendkv "$PORT" --redis "$((REDIS_PORT + 1))" --dir build/aofswitch
 echo "== maxmemory and eviction"
 python3 tests/maxmemory_test.py --bin build/bendkv --bendkv "$PORT" --redis "$((REDIS_PORT + 1))" --dir build/maxmemory
 echo "== the RDB file"

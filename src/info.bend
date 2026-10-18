@@ -1726,62 +1726,120 @@ type Exp is Data:
 # the one that runs started (ms since 1970), how long the last one took
 # (s; none before the first), whether the last one ended well, how many
 # started and how many failed in a row (CONFIG RESETSTAT counts both
-# again)
+# again); and whether the one that runs turns the file on (wt: CONFIG SET
+# appendonly yes, Redis's AOF_WAIT_REWRITE with its child), with the
+# SHUTDOWNs refused for it that the shell is yet to log (dn)
 type Rws is Data:
-  IRws{on: Bool, sched: Bool, start: Nat, last: Maybe<&2, Nat>, ok: Bool, n: Nat, fails: Nat}
+  IRws{on: Bool, sched: Bool, start: Nat, last: Maybe<&2, Nat>, ok: Bool, n: Nat, fails: Nat, wt: Bool, dn: Nat}
 
 def rws.zero() -> Rws:
-  IRws{False{}, False{}, 0n, None{}, True{}, 0n, 0n}
+  IRws{False{}, False{}, 0n, None{}, True{}, 0n, 0n, False{}, 0n}
 
 def rws.on(+r: Rws) -> Bool:
   match r:
-    case IRws{+on, sched, start, last, ok, n, fails}:
+    case IRws{+on, sched, start, last, ok, n, fails, wt, dn}:
       on
 
 def rws.sched(+r: Rws) -> Bool:
   match r:
-    case IRws{on, +sched, start, last, ok, n, fails}:
+    case IRws{on, +sched, start, last, ok, n, fails, wt, dn}:
       sched
 
 def rws.fails(+r: Rws) -> Nat:
   match r:
-    case IRws{on, sched, start, last, ok, n, +fails}:
+    case IRws{on, sched, start, last, ok, n, +fails, wt, dn}:
       fails
 
 # a rewrite starts at ms (Redis's rewriteAppendOnlyFileBackground): it
 # runs, none is scheduled any more, and it is counted
 def rws.go(r: Rws, +ms: Nat) -> Rws:
   match r:
-    case IRws{on, sched, start, last, ok, +n, fails}:
-      IRws{True{}, False{}, ms, last, ok, 1n+n, fails}
+    case IRws{on, sched, start, last, ok, +n, fails, wt, dn}:
+      IRws{True{}, False{}, ms, last, ok, 1n+n, fails, False{}, dn}
 
 # BGREWRITEAOF in EXEC: a rewrite scheduled, and the failures in a row
 # forgotten, so that the cron starts it at once (bgrewriteaofCommand)
 def rws.later(r: Rws) -> Rws:
   match r:
-    case IRws{on, sched, start, last, ok, n, fails}:
-      IRws{on, True{}, start, last, ok, n, 0n}
+    case IRws{on, sched, start, last, ok, n, fails, wt, dn}:
+      IRws{on, True{}, start, last, ok, n, 0n, wt, dn}
+
+# a rewrite scheduled again, the failures in a row kept: the one that
+# turns the file on, while a background save runs or after it failed
+# (Redis's startAppendOnly and backgroundRewriteDoneHandler set
+# aof_rewrite_scheduled alone, so that aofRewriteLimited still holds the
+# cron's tries back after three failures)
+def rws.again(r: Rws) -> Rws:
+  match r:
+    case IRws{on, sched, start, last, ok, n, fails, wt, dn}:
+      IRws{on, True{}, start, last, ok, n, fails, wt, dn}
 
 # the rewrite that ran ended at ms, well or not: the seconds it took are
 # the difference of the two times in whole seconds, as Redis's time()
 def rws.end(r: Rws, +well: Bool, +ms: Nat) -> Rws:
   match r:
-    case IRws{on, sched, +start, last, ok, n, +fails}:
-      IRws{False{}, sched, start, Some{Nat.sub(Nat.div(ms, 1000n), Nat.div(start, 1000n))}, well, n, Bool.pick(Nat, well, 0n, 1n+fails)}
+    case IRws{on, sched, +start, last, ok, n, +fails, wt, dn}:
+      IRws{False{}, sched, start, Some{Nat.sub(Nat.div(ms, 1000n), Nat.div(start, 1000n))}, well, n, Bool.pick(Nat, well, 0n, 1n+fails), wt, dn}
 
 # a rewrite that runs stopped, neither done nor failed, as Redis's
 # killAppendOnlyChild stops it (a SHUTDOWN whose save failed)
 def rws.stop(r: Rws) -> Rws:
   match r:
-    case IRws{on, sched, start, last, ok, n, fails}:
-      IRws{False{}, sched, start, last, ok, n, fails}
+    case IRws{on, sched, start, last, ok, n, fails, wt, dn}:
+      IRws{False{}, sched, start, last, ok, n, fails, wt, dn}
+
+# a rewrite that could not begin (its temporary incremental file could
+# not be opened, as Redis's rewriteAppendOnlyFileBackground fails before
+# its fork): only the last status err, nothing counted, none running
+def rws.err(r: Rws) -> Rws:
+  match r:
+    case IRws{on, sched, start, last, ok, n, fails, wt, dn}:
+      IRws{False{}, sched, start, last, False{}, n, fails, wt, dn}
+
+# the file turned off (Redis's stopAppendOnly): the rewrite that runs
+# stopped as rws.stop stops it, and none scheduled
+def rws.off(r: Rws) -> Rws:
+  match r:
+    case IRws{on, sched, start, last, ok, n, fails, wt, dn}:
+      IRws{False{}, False{}, start, last, ok, n, fails, wt, dn}
 
 # CONFIG RESETSTAT: the rewrites and the failures in a row counted again
 # (resetServerStats)
 def rws.reset(r: Rws) -> Rws:
   match r:
-    case IRws{on, sched, start, last, ok, n, fails}:
-      IRws{on, sched, start, last, ok, 0n, 0n}
+    case IRws{on, sched, start, last, ok, n, fails, wt, dn}:
+      IRws{on, sched, start, last, ok, 0n, 0n, wt, dn}
+
+# the rewrite that runs turns the file on (server.bend, Turning the file
+# on and off); whether one does, which a SHUTDOWN without FORCE may not
+# stop (Redis's finishShutdown with AOF_WAIT_REWRITE: "Writing initial
+# AOF, can't exit.")
+def rws.waiting(r: Rws) -> Rws:
+  match r:
+    case IRws{on, sched, start, last, ok, n, fails, wt, dn}:
+      IRws{on, sched, start, last, ok, n, fails, True{}, dn}
+
+def rws.initial(+r: Rws) -> Bool:
+  match r:
+    case IRws{+on, sched, start, last, ok, n, fails, +wt, dn}:
+      Bool.and(on, wt)
+
+# a SHUTDOWN (or a signal) refused for it, which the shell logs once the
+# group is answered (rws.downs), then forgets (rws.downs.clear)
+def rws.down(r: Rws) -> Rws:
+  match r:
+    case IRws{on, sched, start, last, ok, n, fails, wt, +dn}:
+      IRws{on, sched, start, last, ok, n, fails, wt, 1n+dn}
+
+def rws.downs(+r: Rws) -> Nat:
+  match r:
+    case IRws{on, sched, start, last, ok, n, fails, wt, +dn}:
+      dn
+
+def rws.downs.clear(r: Rws) -> Rws:
+  match r:
+    case IRws{on, sched, start, last, ok, n, fails, wt, dn}:
+      IRws{on, sched, start, last, ok, n, fails, wt, 0n}
 
 # The parameters a background save keeps from its start, as Redis's
 # child keeps those of its fork (rdbSaveBackground hands it
@@ -2353,10 +2411,10 @@ def rdb.sched.go(+r: Rdb, +s: Nat) -> Bool:
   Bool.and(bgs.sched(rdb.bg(r)), rdb.retry(r, s))
 
 # The append-only file's account and the replication's offset (Rof): the
-# bytes in the file (aof_current_size); whether the server appends to a
-# file; the offset of the replication stream, Redis 7.2.16's
-# master_repl_offset with no replica (a count that may pass 2^48, as a
-# long long goes on: Big): one for each command written to the file,
+# bytes in the file (aof_current_size); whether the file is on
+# (appendonly: rof.on.set); the offset of the replication stream, Redis
+# 7.2.16's master_repl_offset with no replica (a count that may pass 2^48,
+# as a long long goes on: Big): one for each command written to the file,
 # MULTI and EXEC among them and no SELECT (replicationFeedSlaves counts
 # each command it feeds to no replica, before it would select a database
 # for one), and one for each cycle of the event loop in which a client
@@ -2364,67 +2422,68 @@ def rdb.sched.go(+r: Rdb, +s: Nat) -> Bool:
 # gk: the last one's cycle, one past El's count of the cycles before it),
 # kept while a pause holds for the pause's end (ask); the offset known
 # synced to the disk (fsynced_reploff, 0 at the start); each client's
-# offset after its last write (c->woff), by its id, a client that wrote
-# in a group given one past the offset before the group's entries (the
-# file is synced between groups, so that this offset and the one after
-# the client's own entry are synced together: WAITAOF); the offset of the
+# offset after its last write (c->woff), by its id, a client that wrote in
+# a group given one past the offset before the group's entries (the file
+# is synced between groups, so that this offset and the one after the
+# client's own entry are synced together: WAITAOF); the offset of the
 # client whose EXEC runs, as it was before the EXEC (Redis sets c->woff
 # after EXEC's call); whether a client may wait in WAITAOF for a sync
 # (aw); and the offset when the syncer last asked for it (sa: everysec,
-# server.bend's The append-only file). RofOf, never built, makes Rof a
-# node of its own: one word of Info
+# server.bend's The append-only file); and what the syncer does (sv:
+# rof.sv). RofOf, never built, makes Rof a node of its own: one word of
+# Info
 type Rof is Data:
-  Rof{n: Nat, on: Bool, off: Big, synced: Big, ask: Bool, wo: KV.Trie<Big>, xw: Big, aw: Bool, gk: Nat, sa: Big}
+  Rof{n: Nat, on: Bool, off: Big, synced: Big, ask: Bool, wo: KV.Trie<Big>, xw: Big, aw: Bool, gk: Nat, sa: Big, sv: Nat}
   RofOf{r: Rof}
 
 def rof.new() -> Rof:
-  Rof{0n, False{}, big.zero(), big.zero(), False{}, KV.empty(Big), big.zero(), False{}, 0n, big.zero()}
+  Rof{0n, False{}, big.zero(), big.zero(), False{}, KV.empty(Big), big.zero(), False{}, 0n, big.zero(), 0n}
 
 def rof.n(+r: Rof) -> Nat:
   match r:
-    case Rof{+n, on, off, sy, ask, wo, xw, aw, gk, sa}:
+    case Rof{+n, on, off, sy, ask, wo, xw, aw, gk, sa, sv}:
       n
     case RofOf{+x}:
       rof.n(x)
 
 def rof.on(+r: Rof) -> Bool:
   match r:
-    case Rof{n, +on, off, sy, ask, wo, xw, aw, gk, sa}:
+    case Rof{n, +on, off, sy, ask, wo, xw, aw, gk, sa, sv}:
       on
     case RofOf{+x}:
       rof.on(x)
 
 def rof.off(+r: Rof) -> Big:
   match r:
-    case Rof{n, on, +off, sy, ask, wo, xw, aw, gk, sa}:
+    case Rof{n, on, +off, sy, ask, wo, xw, aw, gk, sa, sv}:
       off
     case RofOf{+x}:
       rof.off(x)
 
 def rof.synced(+r: Rof) -> Big:
   match r:
-    case Rof{n, on, off, +sy, ask, wo, xw, aw, gk, sa}:
+    case Rof{n, on, off, +sy, ask, wo, xw, aw, gk, sa, sv}:
       sy
     case RofOf{+x}:
       rof.synced(x)
 
 def rof.asked(+r: Rof) -> Bool:
   match r:
-    case Rof{n, on, off, sy, +ask, wo, xw, aw, gk, sa}:
+    case Rof{n, on, off, sy, +ask, wo, xw, aw, gk, sa, sv}:
       ask
     case RofOf{+x}:
       rof.asked(x)
 
 def rof.xw(+r: Rof) -> Big:
   match r:
-    case Rof{n, on, off, sy, ask, wo, +xw, aw, gk, sa}:
+    case Rof{n, on, off, sy, ask, wo, +xw, aw, gk, sa, sv}:
       xw
     case RofOf{+x}:
       rof.xw(x)
 
 def rof.gk(+r: Rof) -> Nat:
   match r:
-    case Rof{n, on, off, sy, ask, wo, xw, aw, +gk, sa}:
+    case Rof{n, on, off, sy, ask, wo, xw, aw, +gk, sa, sv}:
       gk
     case RofOf{+x}:
       rof.gk(x)
@@ -2438,7 +2497,7 @@ def rof.woff.of(m: Maybe<&2, Big>) -> Big:
 
 def rof.woff(+r: Rof, +id: Nat) -> Big:
   match r:
-    case Rof{n, on, off, sy, ask, +wo, xw, aw, gk, sa}:
+    case Rof{n, on, off, sy, ask, +wo, xw, aw, gk, sa, sv}:
       rof.woff.of(KV.get(Big, wo, Nat.show(id)))
     case RofOf{+x}:
       rof.woff(x, id)
@@ -2446,7 +2505,7 @@ def rof.woff(+r: Rof, +id: Nat) -> Big:
 # whether a client may wait in WAITAOF for a sync
 def rof.due(+r: Rof) -> Bool:
   match r:
-    case Rof{n, on, off, sy, ask, wo, xw, +aw, gk, sa}:
+    case Rof{n, on, off, sy, ask, wo, xw, +aw, gk, sa, sv}:
       aw
     case RofOf{+x}:
       rof.due(x)
@@ -2455,17 +2514,27 @@ def rof.due(+r: Rof) -> Bool:
 # start or after a rewrite
 def rof.put(r: Rof, +k: Nat, +c: Nat) -> Rof:
   match r:
-    case Rof{n, on, off, sy, ask, wo, xw, aw, gk, sa}:
-      Rof{Nat.add(n, k), on, big.add(off, c), sy, ask, wo, xw, aw, gk, sa}
+    case Rof{n, on, off, sy, ask, wo, xw, aw, gk, sa, sv}:
+      Rof{Nat.add(n, k), on, big.add(off, c), sy, ask, wo, xw, aw, gk, sa, sv}
     case RofOf{x}:
       rof.put(x, k, c)
 
 def rof.size(r: Rof, +k: Nat) -> Rof:
   match r:
-    case Rof{n, on, off, sy, ask, wo, xw, aw, gk, sa}:
-      Rof{k, True{}, off, sy, ask, wo, xw, aw, gk, sa}
+    case Rof{n, on, off, sy, ask, wo, xw, aw, gk, sa, sv}:
+      Rof{k, on, off, sy, ask, wo, xw, aw, gk, sa, sv}
     case RofOf{x}:
       rof.size(x, k)
+
+# the file on or off, as appendonly says (at the start, and at once at a
+# CONFIG SET, as Redis's aof_enabled is): a rewrite with appendonly no
+# writes the file without turning it on
+def rof.on.set(r: Rof, +on: Bool) -> Rof:
+  match r:
+    case Rof{n, old, off, sy, ask, wo, xw, aw, gk, sa, sv}:
+      Rof{n, on, off, sy, ask, wo, xw, aw, gk, sa, sv}
+    case RofOf{x}:
+      rof.on.set(x, on)
 
 # a client began to wait in WAIT or WAITAOF in the cycle cyc: a GETACK
 # counted, unless one was in the cycle (now), or kept for the end of the
@@ -2473,12 +2542,12 @@ def rof.size(r: Rof, +k: Nat) -> Rof:
 # (Redis sends it at the first cycle's end with no pause)
 def rof.getack.of(held: Bool, now: Bool, r: Rof, +cyc: Nat) -> Rof:
   match held now r:
-    case True{} _ Rof{n, on, off, sy, ask, wo, xw, aw, gk, sa}:
-      Rof{n, on, off, sy, True{}, wo, xw, aw, gk, sa}
+    case True{} _ Rof{n, on, off, sy, ask, wo, xw, aw, gk, sa, sv}:
+      Rof{n, on, off, sy, True{}, wo, xw, aw, gk, sa, sv}
     case False{} True{} r0:
       r0
-    case False{} False{} Rof{n, on, off, sy, ask, wo, xw, aw, gk, sa}:
-      Rof{n, on, big.add(off, 1n), sy, False{}, wo, xw, aw, 1n+cyc, sa}
+    case False{} False{} Rof{n, on, off, sy, ask, wo, xw, aw, gk, sa, sv}:
+      Rof{n, on, big.add(off, 1n), sy, False{}, wo, xw, aw, 1n+cyc, sa, sv}
     case h t RofOf{x}:
       rof.getack.of(h, t, x, cyc)
 
@@ -2488,8 +2557,8 @@ def rof.getack(r: Rof, +held: Bool, +cyc: Nat) -> Rof:
 
 def rof.unpaused.of(go: Bool, r: Rof, +cyc: Nat) -> Rof:
   match go r:
-    case True{} Rof{n, on, off, sy, ask, wo, xw, aw, +gk, sa}:
-      Rof{n, on, big.add(off, Bool.pick(Nat, Nat.is_eq(gk, 1n+cyc), 0n, 1n)), sy, False{}, wo, xw, aw, 1n+cyc, sa}
+    case True{} Rof{n, on, off, sy, ask, wo, xw, aw, +gk, sa, sv}:
+      Rof{n, on, big.add(off, Bool.pick(Nat, Nat.is_eq(gk, 1n+cyc), 0n, 1n)), sy, False{}, wo, xw, aw, 1n+cyc, sa, sv}
     case _ r0:
       r0
 
@@ -2503,49 +2572,76 @@ def rof.unpaused(r: Rof, +cyc: Nat) -> Rof:
 # goes back)
 def rof.sync.all(r: Rof) -> Rof:
   match r:
-    case Rof{n, on, +off, sy, ask, wo, xw, aw, gk, sa}:
-      Rof{n, on, off, big.max(sy, off), ask, wo, xw, aw, gk, sa}
+    case Rof{n, on, +off, sy, ask, wo, xw, aw, gk, sa, sv}:
+      Rof{n, on, off, big.max(sy, off), ask, wo, xw, aw, gk, sa, sv}
     case RofOf{x}:
       rof.sync.all(x)
 
 def rof.sync.ask(r: Rof) -> Rof:
   match r:
-    case Rof{n, on, +off, sy, ask, wo, xw, aw, gk, sa}:
-      Rof{n, on, off, sy, ask, wo, xw, aw, gk, off}
+    case Rof{n, on, +off, sy, ask, wo, xw, aw, gk, sa, sv}:
+      Rof{n, on, off, sy, ask, wo, xw, aw, gk, off, sv}
     case RofOf{x}:
       rof.sync.ask(x)
 
 def rof.sync.done(r: Rof) -> Rof:
   match r:
-    case Rof{n, on, off, sy, ask, wo, xw, aw, gk, +sa}:
-      Rof{n, on, off, big.max(sy, sa), ask, wo, xw, aw, gk, sa}
+    case Rof{n, on, off, +sy, ask, wo, xw, aw, gk, +sa, +sv}:
+      Rof{n, on, off, Bool.pick(Big, Nat.is_eq(sv, 2n), big.max(sy, sa), sy), ask, wo, xw, aw, gk, sa, sv}
     case RofOf{x}:
       rof.sync.done(x)
+
+# what the syncer does (sv): 0 none was started, 1 it skips its rounds
+# (the file off, or turning on, or a policy other than everysec), 2 it
+# syncs each second; and the offset synced made 0 as the file turns on, as
+# Redis's rewriteAppendOnlyFileBackground sets fsynced_reploff with
+# AOF_WAIT_REWRITE: until the rewrite that turns it on ends, WAITAOF
+# counts no sync
+def rof.sv(+r: Rof) -> Nat:
+  match r:
+    case Rof{n, on, off, sy, ask, wo, xw, aw, gk, sa, +sv}:
+      sv
+    case RofOf{+x}:
+      rof.sv(x)
+
+def rof.sv.set(r: Rof, +v: Nat) -> Rof:
+  match r:
+    case Rof{n, on, off, sy, ask, wo, xw, aw, gk, sa, old}:
+      Rof{n, on, off, sy, ask, wo, xw, aw, gk, sa, v}
+    case RofOf{x}:
+      rof.sv.set(x, v)
+
+def rof.unsynced(r: Rof) -> Rof:
+  match r:
+    case Rof{n, on, off, sy, ask, wo, xw, aw, gk, sa, sv}:
+      Rof{n, on, off, big.zero(), ask, wo, xw, aw, gk, sa, sv}
+    case RofOf{x}:
+      rof.unsynced(x)
 
 # a client's write in the group (with the file on), the client gone, and
 # the offset of an EXEC's client before it (with the file on)
 def rof.mine(r: Rof, +id: Nat) -> Rof:
   match r:
-    case Rof{n, True{}, +off, sy, ask, wo, xw, aw, gk, sa}:
-      Rof{n, True{}, off, sy, ask, KV.set(Big, wo, Nat.show(id), big.add(off, 1n)), xw, aw, gk, sa}
-    case Rof{n, False{}, off, sy, ask, wo, xw, aw, gk, sa}:
-      Rof{n, False{}, off, sy, ask, wo, xw, aw, gk, sa}
+    case Rof{n, True{}, +off, sy, ask, wo, xw, aw, gk, sa, sv}:
+      Rof{n, True{}, off, sy, ask, KV.set(Big, wo, Nat.show(id), big.add(off, 1n)), xw, aw, gk, sa, sv}
+    case Rof{n, False{}, off, sy, ask, wo, xw, aw, gk, sa, sv}:
+      Rof{n, False{}, off, sy, ask, wo, xw, aw, gk, sa, sv}
     case RofOf{x}:
       rof.mine(x, id)
 
 def rof.left(r: Rof, +id: Nat) -> Rof:
   match r:
-    case Rof{n, on, off, sy, ask, wo, xw, aw, gk, sa}:
-      Rof{n, on, off, sy, ask, KV.del(Big, wo, Nat.show(id)), xw, aw, gk, sa}
+    case Rof{n, on, off, sy, ask, wo, xw, aw, gk, sa, sv}:
+      Rof{n, on, off, sy, ask, KV.del(Big, wo, Nat.show(id)), xw, aw, gk, sa, sv}
     case RofOf{x}:
       rof.left(x, id)
 
 def rof.xw.set(r: Rof, +id: Nat) -> Rof:
   match r:
-    case Rof{n, True{}, off, sy, ask, +wo, xw, aw, gk, sa}:
-      Rof{n, True{}, off, sy, ask, wo, rof.woff.of(KV.get(Big, wo, Nat.show(id))), aw, gk, sa}
-    case Rof{n, False{}, off, sy, ask, wo, xw, aw, gk, sa}:
-      Rof{n, False{}, off, sy, ask, wo, xw, aw, gk, sa}
+    case Rof{n, True{}, off, sy, ask, +wo, xw, aw, gk, sa, sv}:
+      Rof{n, True{}, off, sy, ask, wo, rof.woff.of(KV.get(Big, wo, Nat.show(id))), aw, gk, sa, sv}
+    case Rof{n, False{}, off, sy, ask, wo, xw, aw, gk, sa, sv}:
+      Rof{n, False{}, off, sy, ask, wo, xw, aw, gk, sa, sv}
     case RofOf{x}:
       rof.xw.set(x, id)
 
@@ -2553,15 +2649,15 @@ def rof.xw.set(r: Rof, +id: Nat) -> Rof:
 # looked at, whether one is left that a sync may serve
 def rof.aw(r: Rof) -> Rof:
   match r:
-    case Rof{n, on, off, sy, ask, wo, xw, aw, gk, sa}:
-      Rof{n, on, off, sy, ask, wo, xw, True{}, gk, sa}
+    case Rof{n, on, off, sy, ask, wo, xw, aw, gk, sa, sv}:
+      Rof{n, on, off, sy, ask, wo, xw, True{}, gk, sa, sv}
     case RofOf{x}:
       rof.aw(x)
 
 def rof.walked(r: Rof, +left: Bool) -> Rof:
   match r:
-    case Rof{n, on, off, sy, ask, wo, xw, aw, gk, sa}:
-      Rof{n, on, off, sy, ask, wo, xw, left, gk, sa}
+    case Rof{n, on, off, sy, ask, wo, xw, aw, gk, sa, sv}:
+      Rof{n, on, off, sy, ask, wo, xw, left, gk, sa, sv}
     case RofOf{x}:
       rof.walked(x, left)
 
@@ -2761,6 +2857,28 @@ def info.sync.all(i: Info) -> Info:
     case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
       IInfo{b, l, c, inst, pk, c0, a0, rof.sync.all(a), st, ex, rw, tm, rf}
 
+def info.sv(+i: Info) -> Nat:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, +a, st, ex, rw, tm, rf}:
+      rof.sv(a)
+
+def info.sv.set(i: Info, +v: Nat) -> Info:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
+      IInfo{b, l, c, inst, pk, c0, a0, rof.sv.set(a, v), st, ex, rw, tm, rf}
+
+def info.unsynced(i: Info) -> Info:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
+      IInfo{b, l, c, inst, pk, c0, a0, rof.unsynced(a), st, ex, rw, tm, rf}
+
+# appendonly as a run time CONFIG SET finds it changed back (the file that
+# could not be turned on: Redis restores the parameter it refuses)
+def info.aof.off(i: Info) -> Info:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
+      IInfo{b, l, c, inst, pk, c0, a0, rof.on.set(a, False{}), st, ex, rw, tm, rf}
+
 def info.mine(i: Info, +id: Nat) -> Info:
   match i:
     case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
@@ -2800,6 +2918,26 @@ def info.rw.later(i: Info) -> Info:
     case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
       IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rws.later(rw), tm, rf}
 
+def info.rw.again(i: Info) -> Info:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
+      IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rws.again(rw), tm, rf}
+
+def info.rw.waiting(i: Info) -> Info:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
+      IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rws.waiting(rw), tm, rf}
+
+def info.rw.down(i: Info) -> Info:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
+      IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rws.down(rw), tm, rf}
+
+def info.rw.downs.clear(i: Info) -> Info:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
+      IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rws.downs.clear(rw), tm, rf}
+
 def info.rw.done(i: Info, +size: Nat, +ms: Nat) -> Info:
   match i:
     case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
@@ -2809,6 +2947,16 @@ def info.rw.stop(i: Info) -> Info:
   match i:
     case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
       IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rws.stop(rw), tm, rf}
+
+def info.rw.err(i: Info) -> Info:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
+      IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rws.err(rw), tm, rf}
+
+def info.rw.off(i: Info) -> Info:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
+      IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rws.off(rw), tm, rf}
 
 def info.rw.failed(i: Info, +ms: Nat) -> Info:
   match i:
@@ -3279,11 +3427,12 @@ def info.evicted(i: Info, +k: Nat, +over: Bool, +now: Nat) -> Info:
     case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
       IInfo{b, l, c, inst, pk, c0, a0, a, st, exp.evicted(ex, k, over, now), rw, tm, rf}
 
-# the timing's parameters read again (the start, CONFIG SET)
+# the timing's parameters read again (the start, CONFIG SET), and
+# whether the append-only file is on (appendonly: rof.on.set)
 def info.cfg(i: Info, +items: List<&2, C.CItem>) -> Info:
   match i:
     case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
-      IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tim.cfg(tm, items), rdb.cfg(rf, items)}
+      IInfo{b, l, c, inst, pk, c0, a0, rof.on.set(a, String.eq(C.config.get_value(items, "appendonly"), "yes")), st, ex, rw, tim.cfg(tm, items), rdb.cfg(rf, items)}
 
 def info.tim(+i: Info) -> Tim:
   match i:
@@ -3789,7 +3938,7 @@ def rw.cur(on: Bool, +start: Nat, +now: Nat) -> String:
 
 def sec.rewrite(r: Rws, +now: Nat) -> String:
   match r:
-    case IRws{+on, +sched, +start, last, +ok, +n, +fails}:
+    case IRws{+on, +sched, +start, last, +ok, +n, +fails, wt, dn}:
       kv("aof_rewrite_in_progress", flag(on)) ++ kv("aof_rewrite_scheduled", flag(sched)) ++
       kv("aof_last_rewrite_time_sec", rw.last(last)) ++ kv("aof_current_rewrite_time_sec", rw.cur(on, start, now)) ++
       kv("aof_last_bgrewrite_status", Bool.pick(String, ok, "ok", "err")) ++ kv("aof_rewrites", Nat.show(n)) ++
