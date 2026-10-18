@@ -8965,3 +8965,65 @@ told which entries the stream holds by the write that made its words.
 **`make perfcheck`**: GET, SET and INCR unchanged: 3,527, 4,319 and 4,612 instructions
 per request (the build before the groups, 3,526, 4,325 and 4,612); last-level misses
 2.82, 3.15 and 3.33; with 100 clients in BLPOP, +3.0% and +3.8%.
+
+## 88. Streams' waits
+
+FINDINGS 3zzzzu. "Before" is the build of 215260e (streams' groups), on which this change
+is made, and "now" this change.
+
+**Other commands.** A client that waits in XREAD or XREADGROUP costs the commands on other
+keys what a client in BLPOP costs them (section 61): a batch that writes no key a client
+waits on runs the fast way. Instructions a request under callgrind
+(`tools/callgrind_req.sh`, 20 clients at a depth of 16, as `make perfcheck` counts them),
+with 100 idle clients, each waiting on a key of its own (`IDLE`, `tools/idle_clients.py`):
+
+| idle clients | GET | SET |
+|---|---:|---:|
+| none | 3,524 | 4,320 |
+| 100 in BLPOP | 3,645 | 4,475 |
+| 100 in XREAD | 3,654 | 4,494 |
+| 100 in XREADGROUP | 3,655 | 4,500 |
+
+Before, XREAD's and XREADGROUP's BLOCK answered an error, and no client waited. `make
+perfcheck` counts GET 3,530, SET 4,317 and INCR 4,612 (before: 3,527, 4,319 and 4,612),
+and with 100 clients in BLPOP GET 3,640 and SET 4,486 (before: 3,633 and 4,485). While no
+client waits on a stream, a command keeps no databases from before it for the marks, and
+the sweep of expired keys looks at no client.
+
+**The wait.** Instructions of the server a round of `tools/stream_waits.py`, one
+consumer, under callgrind (`tools/stream_waits_cg.sh`): 50 rounds, then 200 counted.
+Each round is an XADD, an INFO clients and a read. The read waits before the XADD, the
+producer sending the XADD once INFO counts the consumer as blocked; with `--noblock` it
+is sent after them and served at once. The round's INFO is taken out: it takes BendKV
+3,148,000 instructions and Redis 16,700.
+
+| round | BendKV | Redis 7.2.16 | BendKV / Redis |
+|---|---:|---:|---:|
+| XADD, then XREAD of the entry | 210,000 | 56,900 | 3.7 |
+| XREAD that waits, served by the XADD | 348,000 | 67,000 | 5.2 |
+| the wait's own part | 138,000 | 10,000 | 14 |
+| XADD, then XREADGROUP of the entry | 579,000 | 69,900 | 8.3 |
+| XREADGROUP that waits, served by the XADD | 913,000 | 80,300 | 11.4 |
+| the wait's own part | 334,000 | 10,400 | 32 |
+
+Both servers decide that a read waits by comparing the stream's last ID with the ID it
+asks for. BendKV's wait costs more for three reasons:
+- **The general way.** The XADD that serves the client runs the general way, as its key
+  is one a client waits on, where without the wait it runs the fast way. It keeps the
+  databases from before it, to mark the clients its effects ready.
+- **The chain.** A client starts waiting, is marked and is served by walks of the chain
+  of clients that wait, and each change of the chain counts INFO's blocked keys anew.
+- **XREADGROUP's acts.** XREADGROUP's consumer is seen as it begins to wait, and that is
+  a group's write: section 87's walks, and the change counted.
+
+**INFO.** INFO clients takes 3.1 million instructions in BendKV, before this change as
+after it. Most of them read the process's numbers from `/proc` (`live.of`: the
+`stat` and `statm` lines split into words and read as numbers), which INFO does whatever
+section it asks for. A loop that waits on INFO, as `tools/stream_waits.py`'s producer
+does, runs at INFO's speed: 1,390 rounds a second on BendKV and 7,800 on Redis for one
+consumer in XREAD.
+
+The next steps: the `/proc` numbers read only for the sections that show them; a write
+that serves a waiting client on the fast way when the client is ready by the write's
+kind alone (XADD to a stream a client in XREAD waits on); and XREADGROUP's acts at the
+wait's start made without a group's walks.

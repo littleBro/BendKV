@@ -1609,56 +1609,64 @@ def boot.start(+b: Boot) -> U32:
 # leaves as they are. CnOf, a count that holds a count, is never built:
 # it makes Cn a node of its own, one word of Info.
 type Cn is Data:
-  Cn{blk: Nat, tmo: Nat, tc: Nat, tk: Nat, ti: Nat, tp: Nat, scn: Nat, scm: Nat, scc: Nat, fnn: Nat, fnl: Nat, fvm: Nat, fmo: Nat, bk: Nat, da: Nat, dc: Nat, dk: Nat, dh: Nat}
+  Cn{blk: Nat, tmo: Nat, tc: Nat, tk: Nat, ti: Nat, tp: Nat, scn: Nat, scm: Nat, scc: Nat, fnn: Nat, fnl: Nat, fvm: Nat, fmo: Nat, bk: Nat, bn: Nat, xw: Nat, da: Nat, dc: Nat, dk: Nat, dh: Nat}
   CnOf{c: Cn}
 
 def cn.zero() -> Cn:
-  Cn{0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n}
+  Cn{0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n}
 
-def cn.waits(c: Cn, +n: Nat, +t: Nat) -> Cn:
+def cn.waits(c: Cn, +n: Nat, +t: Nat, +w: Nat) -> Cn:
   match c:
-    case Cn{b, o, tc, tk, ti, tp, sn, sm, sc, fn, fl, fv, fm, bk, da, dc, dk, dh}:
-      Cn{n, t, tc, tk, ti, tp, sn, sm, sc, fn, fl, fv, fm, bk, da, dc, dk, dh}
+    case Cn{b, o, tc, tk, ti, tp, sn, sm, sc, fn, fl, fv, fm, bk, bn, xw, da, dc, dk, dh}:
+      Cn{n, t, tc, tk, ti, tp, sn, sm, sc, fn, fl, fv, fm, bk, bn, w, da, dc, dk, dh}
     case CnOf{x}:
-      cn.waits(x, n, t)
+      cn.waits(x, n, t, w)
+
+# how many clients wait in XREAD or XREADGROUP (server.bend: Stream waits)
+def cn.xw(+c: Cn) -> Nat:
+  match c:
+    case Cn{b, o, tc, tk, ti, tp, sn, sm, sc, fn, fl, fv, fm, bk, bn, +xw, da, dc, dk, dh}:
+      xw
+    case CnOf{+x}:
+      cn.xw(x)
 
 def cn.trk(c: Cn, +a: Nat, +b: Nat, +d: Nat, +e: Nat) -> Cn:
   match c:
-    case Cn{n, t, tc, tk, ti, tp, sn, sm, sc, fn, fl, fv, fm, bk, da, dc, dk, dh}:
-      Cn{n, t, a, b, d, e, sn, sm, sc, fn, fl, fv, fm, bk, da, dc, dk, dh}
+    case Cn{n, t, tc, tk, ti, tp, sn, sm, sc, fn, fl, fv, fm, bk, bn, xw, da, dc, dk, dh}:
+      Cn{n, t, a, b, d, e, sn, sm, sc, fn, fl, fv, fm, bk, bn, xw, da, dc, dk, dh}
     case CnOf{x}:
       cn.trk(x, a, b, d, e)
 
 def cn.scripts(c: Cn, +k: Nat, +m: Nat, +e: Nat) -> Cn:
   match c:
-    case Cn{n, t, tc, tk, ti, tp, sn, sm, sc, fn, fl, fv, fm, bk, da, dc, dk, dh}:
-      Cn{n, t, tc, tk, ti, tp, k, m, e, fn, fl, fv, fm, bk, da, dc, dk, dh}
+    case Cn{n, t, tc, tk, ti, tp, sn, sm, sc, fn, fl, fv, fm, bk, bn, xw, da, dc, dk, dh}:
+      Cn{n, t, tc, tk, ti, tp, k, m, e, fn, fl, fv, fm, bk, bn, xw, da, dc, dk, dh}
     case CnOf{x}:
       cn.scripts(x, k, m, e)
 
 def cn.funcs(c: Cn, +a: Nat, +b: Nat, +d: Nat, +e: Nat) -> Cn:
   match c:
-    case Cn{n, t, tc, tk, ti, tp, sn, sm, sc, fn, fl, fv, fm, bk, da, dc, dk, dh}:
-      Cn{n, t, tc, tk, ti, tp, sn, sm, sc, a, b, d, e, bk, da, dc, dk, dh}
+    case Cn{n, t, tc, tk, ti, tp, sn, sm, sc, fn, fl, fv, fm, bk, bn, xw, da, dc, dk, dh}:
+      Cn{n, t, tc, tk, ti, tp, sn, sm, sc, a, b, d, e, bk, bn, xw, da, dc, dk, dh}
     case CnOf{x}:
       cn.funcs(x, a, b, d, e)
 
-def cn.bkeys(c: Cn, +k: Nat) -> Cn:
+def cn.bkeys(c: Cn, +k: Nat, +o: Nat) -> Cn:
   match c:
-    case Cn{n, t, tc, tk, ti, tp, sn, sm, sc, fn, fl, fv, fm, bk, da, dc, dk, dh}:
-      Cn{n, t, tc, tk, ti, tp, sn, sm, sc, fn, fl, fv, fm, k, da, dc, dk, dh}
+    case Cn{n, t, tc, tk, ti, tp, sn, sm, sc, fn, fl, fv, fm, bk, bn, xw, da, dc, dk, dh}:
+      Cn{n, t, tc, tk, ti, tp, sn, sm, sc, fn, fl, fv, fm, k, o, xw, da, dc, dk, dh}
     case CnOf{x}:
-      cn.bkeys(x, k)
+      cn.bkeys(x, k, o)
 
 # one more call refused for the reason w of its ACL LOG entry ("auth",
 # "command", "key" or "channel")
 def cn.denied(c: Cn, +w: String) -> Cn:
   match c:
-    case Cn{n, t, tc, tk, ti, tp, sn, sm, sc, fn, fl, fv, fm, bk, +da, +dc, +dk, +dh}:
+    case Cn{n, t, tc, tk, ti, tp, sn, sm, sc, fn, fl, fv, fm, bk, bn, xw, +da, +dc, +dk, +dh}:
       +a = String.eq(w, "auth")
       +b = String.eq(w, "command")
       +k = String.eq(w, "key")
-      Cn{n, t, tc, tk, ti, tp, sn, sm, sc, fn, fl, fv, fm, bk, Bool.pick(Nat, a, 1n+da, da), Bool.pick(Nat, b, 1n+dc, dc), Bool.pick(Nat, k, 1n+dk, dk),
+      Cn{n, t, tc, tk, ti, tp, sn, sm, sc, fn, fl, fv, fm, bk, bn, xw, Bool.pick(Nat, a, 1n+da, da), Bool.pick(Nat, b, 1n+dc, dc), Bool.pick(Nat, k, 1n+dk, dk),
         Bool.pick(Nat, Bool.or(Bool.or(a, b), k), dh, 1n+dh)}
     case CnOf{x}:
       cn.denied(x, w)
@@ -1671,12 +1679,12 @@ def cn.denied(c: Cn, +w: String) -> Cn:
 # ACL refused (an AUTH, a command, a key, a channel)
 def cn.at(+c: Cn, +i: Nat) -> Nat:
   match c:
-    case Cn{+n, +t, +tc, +tk, +ti, +tp, +sn, +sm, +sc, +fn, +fl, +fv, +fm, +bk, +da, +dc, +dk, +dh}:
+    case Cn{+n, +t, +tc, +tk, +ti, +tp, +sn, +sm, +sc, +fn, +fl, +fv, +fm, +bk, +bn, +xw, +da, +dc, +dk, +dh}:
       Bool.pick(Nat, Nat.is_eq(i, 0n), n, Bool.pick(Nat, Nat.is_eq(i, 1n), t, Bool.pick(Nat, Nat.is_eq(i, 2n), tc,
       Bool.pick(Nat, Nat.is_eq(i, 3n), tk, Bool.pick(Nat, Nat.is_eq(i, 4n), ti, Bool.pick(Nat, Nat.is_eq(i, 5n), tp,
       Bool.pick(Nat, Nat.is_eq(i, 6n), sn, Bool.pick(Nat, Nat.is_eq(i, 7n), sm, Bool.pick(Nat, Nat.is_eq(i, 8n), sc,
       Bool.pick(Nat, Nat.is_eq(i, 9n), fn, Bool.pick(Nat, Nat.is_eq(i, 10n), fl, Bool.pick(Nat, Nat.is_eq(i, 11n), fv, Bool.pick(Nat, Nat.is_eq(i, 12n), fm, Bool.pick(Nat, Nat.is_eq(i, 13n), bk,
-      Bool.pick(Nat, Nat.is_eq(i, 14n), da, Bool.pick(Nat, Nat.is_eq(i, 15n), dc, Bool.pick(Nat, Nat.is_eq(i, 16n), dk, dh)))))))))))))))))
+      Bool.pick(Nat, Nat.is_eq(i, 14n), da, Bool.pick(Nat, Nat.is_eq(i, 15n), dc, Bool.pick(Nat, Nat.is_eq(i, 16n), dk, Bool.pick(Nat, Nat.is_eq(i, 17n), dh, bn))))))))))))))))))
     case CnOf{+x}:
       cn.at(x, i)
 
@@ -2958,15 +2966,20 @@ def live.keep(l: Live, old: Live) -> Live:
     case ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, c0} ILive{s1, u1, ut1, st1, mu1, ms1, r1, h1, a1, n1, c1, cn}:
       ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, cn}
 
-def live.waits(l: Live, +n: Nat, +t: Nat) -> Live:
+def live.waits(l: Live, +n: Nat, +t: Nat, +w: Nat) -> Live:
   match l:
     case ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, cn}:
-      ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, cn.waits(cn, n, t)}
+      ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, cn.waits(cn, n, t, w)}
 
-def live.bkeys(l: Live, +k: Nat) -> Live:
+def live.xw(+l: Live) -> Nat:
+  match l:
+    case ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, +cn}:
+      cn.xw(cn)
+
+def live.bkeys(l: Live, +k: Nat, +o: Nat) -> Live:
   match l:
     case ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, cn}:
-      ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, cn.bkeys(cn, k)}
+      ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, cn.bkeys(cn, k, o)}
 
 def live.denied(l: Live, +w: String) -> Live:
   match l:
@@ -3025,17 +3038,24 @@ def info.live.held(i: Info, +l: Live) -> Info:
     case IInfo{b, +old, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
       IInfo{b, live.heap.at(live.keep(l, old), live.heap(old), live.act(old)), c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}
 
-# the clients that wait, n of them, t of them with a timeout
-def info.blocked(i: Info, +n: Nat, +t: Nat) -> Info:
+# the clients that wait, n of them, t of them with a timeout, w of them in
+# XREAD or XREADGROUP
+def info.blocked(i: Info, +n: Nat, +t: Nat, +w: Nat) -> Info:
   match i:
     case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
-      IInfo{b, live.waits(l, n, t), c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}
+      IInfo{b, live.waits(l, n, t, w), c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}
 
-# the keys that clients wait on, k of them
-def info.bkeys(i: Info, +k: Nat) -> Info:
+def info.xwaits(+i: Info) -> Nat:
+  match i:
+    case IInfo{b, +l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
+      live.xw(l)
+
+# the keys that clients wait on, k of them, o of them keys that clients
+# in XREADGROUP wait on (Redis's blocking_keys_unblock_on_nokey)
+def info.bkeys(i: Info, +k: Nat, +o: Nat) -> Info:
   match i:
     case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
-      IInfo{b, live.bkeys(l, k), c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}
+      IInfo{b, live.bkeys(l, k, o), c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}
 
 # a call ACL refused, for the reason w of its ACL LOG entry
 def info.denied(i: Info, +w: String) -> Info:
@@ -3695,7 +3715,7 @@ def sec.clients(+items: List<&2, C.CItem>, +l: Live) -> String:
       kv("maxclients", cfg(items, "maxclients")) ++ kv("client_recent_max_input_buffer", "0") ++
       kv("client_recent_max_output_buffer", "0") ++ kv("blocked_clients", Nat.show(cn.at(cn, 0n))) ++ kv("tracking_clients", Nat.show(cn.at(cn, 2n))) ++
       kv("clients_in_timeout_table", Nat.show(cn.at(cn, 1n))) ++ kv("total_blocking_keys", Nat.show(cn.at(cn, 13n))) ++
-      kv("total_blocking_keys_on_nokey", "0")
+      kv("total_blocking_keys_on_nokey", Nat.show(cn.at(cn, 18n)))
 
 # memory: used_memory is what the heap's live values hold (IO.heap, as
 # zmalloc counts what Redis allocated), from which maxmemory evicts;

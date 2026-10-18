@@ -324,18 +324,54 @@ type XRq is Data:
   XRq{key: String, id: String, c: Nat}
   XRqOf{x: XRq}
 
-# XREAD of several keys, or with BLOCK (SXRead, below): its count,
-# whether BLOCK came, and its keys, then their IDs, as they came. XRmOf
-# is never built.
+# BLOCK's milliseconds, a long long not below 0 as it came (its
+# magnitude hi * 10^9 + lo), or no BLOCK
+type XB is Data:
+  XBNone{}
+  XBMs{hi: Nat, lo: Nat}
+
+# whether BLOCK's milliseconds are past what the time now (ms since 1970)
+# leaves of a long long, LLONG_MAX - now, which Redis 7.2.16's
+# getTimeoutFromObjectOrReply finds out of range (BLOCK 0, which waits
+# for ever, never is); LLONG_MAX is 9223372036 * 10^9 + 854775807
+def xb.past(+hi: Nat, +lo: Nat, +mh: Nat, +ml: Nat) -> Bool:
+  Bool.or(Nat.is_lt(mh, hi), Bool.and(Nat.is_eq(hi, mh), Nat.is_lt(ml, lo)))
+
+def xb.top() -> Nat:
+  Nat.add(Nat.mul(9223n, 1000000n), 372036n)
+
+def xb.room.if(low: Bool, +hi: Nat, +lo: Nat, +nh: Nat, +nl: Nat) -> Bool:
+  match low:
+    case True{}:
+      xb.past(hi, lo, Nat.sub(xb.top(), nh), Nat.sub(854775807n, nl))
+    case False{}:
+      xb.past(hi, lo, Nat.sub(Nat.sub(xb.top(), 1n), nh), Nat.sub(1854775807n, nl))
+
+def xb.room(+hi: Nat, +lo: Nat, +nh: Nat, +nl: Nat) -> Bool:
+  xb.room.if(Nat.is_le(nl, 854775807n), hi, lo, nh, nl)
+
+def xb.far(+b: XB, +now: Nat) -> Bool:
+  match b:
+    case XBMs{+hi, +lo}:
+      xb.room(hi, lo, Nat.div(now, 1000000000n), Nat.mod(now, 1000000000n))
+    case XBNone{}:
+      False{}
+
+def e_xfar() -> Reply:
+  RError{"ERR timeout is out of range"}
+
+# XREAD of several keys, or with BLOCK (SXRead, below): its count, its
+# BLOCK, and its keys, then their IDs, as they came. XRmOf is never
+# built.
 type XRm is Data:
-  XRm{c: Nat, block: Bool, ws: List<&2, String>}
+  XRm{c: Nat, block: XB, ws: List<&2, String>}
   XRmOf{x: XRm}
 
 # XREADGROUP (SXGroup, below): its group and consumer, its count (past
-# any stream's for none), whether BLOCK and NOACK came, and its keys,
+# any stream's for none), its BLOCK, whether NOACK came, and its keys,
 # then their IDs, as they came. XGqOf is never built.
 type XGq is Data:
-  XGq{g: String, c: String, count: Nat, block: Bool, noack: Bool, ws: List<&2, String>}
+  XGq{g: String, c: String, count: Nat, block: XB, noack: Bool, ws: List<&2, String>}
   XGqOf{x: XGq}
 
 # XINFO of a key: STREAM with its options as they came (read once the
@@ -7546,18 +7582,18 @@ def xrange.parse(+rev: Bool, +k: String, +a: String, +e: String, xs: List<&2, St
 # long, 0 and below for none), GROUP and NOACK XREADGROUP's alone, any
 # other word, or an option without its value, a syntax error; STREAMS
 # with words after it, as many keys as IDs. One key without BLOCK is a
-# Peek of it; more, or BLOCK, are SXRead, which the server sees. BendKV
-# blocks on no stream yet: a BLOCK that would wait answers an error
-# (server.bend, sh.plain), but in MULTI, where Redis answers it as a
-# client that may not wait, a null array.
+# Peek of it; more, or BLOCK, are SXRead, which the server sees: a BLOCK
+# that would wait makes its client wait (server.bend, Blocked clients),
+# but in MULTI, where Redis answers it as a client that may not wait, a
+# null array.
 
 # XREAD's options as read so far, a word at a time: COUNT's (0 for none),
-# whether BLOCK came, and what the next word is (want: 0 an option, 1
-# BLOCK's value, 2 COUNT's); or, past STREAMS, the words after it (the
-# last first); or the error that ends them
+# BLOCK's, and what the next word is (want: 0 an option, 1 BLOCK's
+# value, 2 COUNT's); or, past STREAMS, the words after it (the last
+# first); or the error that ends them
 type XRo is Data:
-  XRo{c: Nat, block: Bool, want: Nat}
-  XRoAt{c: Nat, block: Bool, ws: List<&2, String>}
+  XRo{c: Nat, block: XB, want: Nat}
+  XRoAt{c: Nat, block: XB, ws: List<&2, String>}
   XRoBad{r: Reply}
 
 # an option's word: 1 BLOCK, 2 COUNT, 3 STREAMS, 4 GROUP, 5 NOACK, 0 another
@@ -7570,7 +7606,7 @@ def e_xunbalanced() -> Reply:
   RError{"ERR Unbalanced 'xread' list of streams: for each stream key an ID or '$' must be specified."}
 
 # an option of word k, with more words after it
-def xro.opt(+k: Nat, +more: Nat, +c: Nat, +b: Bool) -> XRo:
+def xro.opt(+k: Nat, +more: Nat, +c: Nat, +b: XB) -> XRo:
   match k:
     case 1n:
       Bool.pick(XRo, Nat.is_lt(0n, more), XRo{c, b, 1n}, XRoBad{e_syntax_r()})
@@ -7591,11 +7627,11 @@ def xro.block(l: LL, +c: Nat) -> XRo:
     case LL{True{}, hi, lo}:
       XRoBad{RError{"ERR timeout is negative"}}
     case LL{False{}, hi, lo}:
-      XRo{c, True{}, 0n}
+      XRo{c, XBMs{hi, lo}, 0n}
     case LLBad{}:
       XRoBad{RError{"ERR timeout is not an integer or out of range"}}
 
-def xro.count(m: Maybe<&2, Nat>, +b: Bool) -> XRo:
+def xro.count(m: Maybe<&2, Nat>, +b: XB) -> XRo:
   match m:
     case Some{+c}:
       XRo{c, b, 0n}
@@ -7630,14 +7666,14 @@ def xro.go(xs: List<&2, String>, +n: Nat, o: XRo) -> XRo:
 def xc.read(+c: Nat) -> Nat:
   Bool.pick(Nat, Nat.is_eq(c, 0n), xc.inf(), c)
 
-def xread.keys(+c: Nat, b: Bool, ws: List<&2, String>) -> Cmd:
+def xread.keys(+c: Nat, b: XB, ws: List<&2, String>) -> Cmd:
   match b ws:
-    case False{} Con{+k, Con{+id, Nil{}}}:
+    case XBNone{} Con{+k, Con{+id, Nil{}}}:
       Peek{k, PStream{XRRead{XRq{k, id, xc.read(c)}}}}
-    case False{} other:
-      Own{SXRead{XRm{xc.read(c), False{}, other}}}
-    case True{} other:
-      Own{SXRead{XRm{xc.read(c), True{}, other}}}
+    case XBNone{} other:
+      Own{SXRead{XRm{xc.read(c), XBNone{}, other}}}
+    case XBMs{hi, lo} other:
+      Own{SXRead{XRm{xc.read(c), XBMs{hi, lo}, other}}}
 
 def xread.cmd(o: XRo) -> Cmd:
   match o:
@@ -7649,7 +7685,7 @@ def xread.cmd(o: XRo) -> Cmd:
       Bad{r}
 
 def xread.parse(+args: List<&2, String>) -> Cmd:
-  xread.cmd(xro.go(args, List.length(&2, String, args), XRo{0n, False{}, 0n}))
+  xread.cmd(xro.go(args, List.length(&2, String, args), XRo{0n, XBNone{}, 0n}))
 
 # with 3 words at least (XREAD's arity, -4)
 def xread.of(+args: List<&2, String>) -> Cmd:
@@ -8212,19 +8248,19 @@ def xautoclaim.parse(+k: String, +ws: List<&2, String>) -> Cmd:
 # below).
 
 # XREADGROUP's options as read so far, a word at a time: COUNT's (0 for
-# none), whether BLOCK and NOACK came, GROUP's group and consumer, and
+# none), BLOCK's, whether NOACK came, GROUP's group and consumer, and
 # what the next word is (want: 0 an option, 1 BLOCK's value, 2 COUNT's,
 # 3 GROUP's group, 4 its consumer); or, past STREAMS, the words after it
 # (the last first); or the error that ends them
 type XGr is Data:
-  XGr{c: Nat, block: Bool, noack: Bool, g: Maybe<&2, String>, con: String, want: Nat}
-  XGrAt{c: Nat, block: Bool, noack: Bool, g: Maybe<&2, String>, con: String, ws: List<&2, String>}
+  XGr{c: Nat, block: XB, noack: Bool, g: Maybe<&2, String>, con: String, want: Nat}
+  XGrAt{c: Nat, block: XB, noack: Bool, g: Maybe<&2, String>, con: String, ws: List<&2, String>}
   XGrBad{r: Reply}
 
 def e_xgunbalanced() -> Reply:
   RError{"ERR Unbalanced 'xreadgroup' list of streams: for each stream key an ID or '>' must be specified."}
 
-def xgro.opt(+k: Nat, +more: Nat, +c: Nat, +b: Bool, +na: Bool, g: Maybe<&2, String>, +con: String) -> XGr:
+def xgro.opt(+k: Nat, +more: Nat, +c: Nat, +b: XB, +na: Bool, g: Maybe<&2, String>, +con: String) -> XGr:
   match k:
     case 1n:
       Bool.pick(XGr, Nat.is_lt(0n, more), XGr{c, b, na, g, con, 1n}, XGrBad{e_syntax_r()})
@@ -8244,11 +8280,11 @@ def xgro.block(l: LL, +c: Nat, +na: Bool, g: Maybe<&2, String>, +con: String) ->
     case LL{True{}, hi, lo}:
       XGrBad{RError{"ERR timeout is negative"}}
     case LL{False{}, hi, lo}:
-      XGr{c, True{}, na, g, con, 0n}
+      XGr{c, XBMs{hi, lo}, na, g, con, 0n}
     case LLBad{}:
       XGrBad{RError{"ERR timeout is not an integer or out of range"}}
 
-def xgro.count(m: Maybe<&2, Nat>, +b: Bool, +na: Bool, g: Maybe<&2, String>, +con: String) -> XGr:
+def xgro.count(m: Maybe<&2, Nat>, +b: XB, +na: Bool, g: Maybe<&2, String>, +con: String) -> XGr:
   match m:
     case Some{+c}:
       XGr{c, b, na, g, con, 0n}
@@ -8295,7 +8331,7 @@ def xgro.cmd(o: XGr) -> Cmd:
       Bad{r}
 
 def xreadgroup.parse(+args: List<&2, String>) -> Cmd:
-  xgro.cmd(xgro.go(args, List.length(&2, String, args), XGr{0n, False{}, False{}, None{}, "", 0n}))
+  xgro.cmd(xgro.go(args, List.length(&2, String, args), XGr{0n, XBNone{}, False{}, None{}, "", 0n}))
 
 # with 6 words at least (XREADGROUP's arity, -7)
 def xreadgroup.of(+args: List<&2, String>) -> Cmd:
@@ -19101,8 +19137,8 @@ def xv.serve(r: XRk, +c: Nat) -> Maybe<&2, Reply>:
       None{}
 
 # XREAD's reply: the keys served, or none, a null array (with BLOCK, as
-# Redis answers a client that may not wait; the server answers that
-# BendKV blocks on no stream yet)
+# Redis answers a client that may not wait, or one whose time is up; the
+# server makes a client that may wait wait: server.bend, Stream waits)
 def xv.read.reply(ps: List<&2, Reply>) -> Reply:
   match ps:
     case Nil{}:
@@ -19175,10 +19211,19 @@ def xv.rks.of(+ws: List<&2, String>, +d: Db) -> XRks:
   +n = Nat.div(List.length(&2, String, ws), 2n)
   xv.rks(List.take(&2, String, ws, n), List.drop(&2, String, ws, n), d)
 
+# (a BLOCK out of range its error first, as Redis reads the timeout among
+# the options)
+def xread.many.of(far: Bool, +c: Nat, +ws: List<&2, String>, +d: Db) -> Reply:
+  match far:
+    case True{}:
+      e_xfar()
+    case False{}:
+      xv.read.all(xv.rks.of(ws, d), c)
+
 def xread.many(q: XRm, +d: Db) -> Reply:
   match q:
-    case XRm{+c, b, ws}:
-      xv.read.all(xv.rks.of(ws, d), c)
+    case XRm{+c, +b, +ws}:
+      xread.many.of(xb.far(b, db.now(d)), c, ws, d)
     case XRmOf{y}:
       xread.many(y, d)
 
@@ -19207,16 +19252,56 @@ def xv.waits(r: XRks) -> Bool:
       False{}
 
 # whether XREAD q would wait on the database d: BLOCK came, and it
-# answers no error and serves no key (the server answers it then, as
-# BendKV blocks on no stream yet)
+# answers no error and serves no key (the server makes its client wait
+# then: server.bend, Blocked clients)
 def xread.waits(q: XRm, +d: Db) -> Bool:
   match q:
-    case XRm{c, True{}, ws}:
-      xv.waits(xv.rks.of(ws, d))
-    case XRm{c, False{}, ws}:
+    case XRm{c, XBMs{+hi, +lo}, +ws}:
+      Bool.and(Bool.not(xb.far(XBMs{hi, lo}, db.now(d))), xv.waits(xv.rks.of(ws, d)))
+    case XRm{c, XBNone{}, ws}:
       False{}
     case XRmOf{y}:
       xread.waits(y, d)
+
+# XREAD's words once its client waits: each "$" ID its key's last ID
+# (0-0 for a key not there), as xreadCommand rewrites the word when it
+# blocks, so that the read run again serves the entries added since; a
+# word compared as a C string, up to its first NUL
+def xread.last(m: Maybe<&2, KV.Item<KV.Val>>) -> String:
+  match m:
+    case Some{KV.Item{KV.VColl{KV.CStream{+x}}, e}}:
+      X.xid.show(X.xstream.last(x))
+    case _:
+      "0-0"
+
+def xread.fix.if(dollar: Bool, m: Maybe<&2, KV.Item<KV.Val>>, +s: String) -> String:
+  match dollar:
+    case True{}:
+      xread.last(m)
+    case False{}:
+      s
+
+def xread.fix.id(m: Maybe<&2, KV.Item<KV.Val>>, +s: String) -> String:
+  xread.fix.if(String.eq(cstr(s), "$"), m, s)
+
+def xread.fix.ids(ks: List<&2, String>, ids: List<&2, String>, +d: Db) -> List<&2, String>:
+  match ks ids:
+    case Con{+k, krest} Con{+s, irest}:
+      xread.fix.id(db.ent(d, k), s) <> xread.fix.ids(krest, irest, d)
+    case _ _:
+      Nil{}
+
+def xread.fix.ws(+ws: List<&2, String>, +d: Db) -> List<&2, String>:
+  +n = Nat.div(List.length(&2, String, ws), 2n)
+  +ks = List.take(&2, String, ws, n)
+  List.append(&2, String, ks, xread.fix.ids(ks, List.drop(&2, String, ws, n), d))
+
+def xread.fix(q: XRm, +d: Db) -> XRm:
+  match q:
+    case XRm{+c, b, +ws}:
+      XRm{c, b, xread.fix.ws(ws, d)}
+    case XRmOf{y}:
+      xread.fix(y, d)
 
 # a group's count of entries read: none as a null
 def xv.read.cnt(r: KV.XRd) -> Reply:
@@ -25545,6 +25630,17 @@ def xgr.run(+ws: List<&2, String>, +g: String, +c: String, +count: Nat, +noack: 
 def xgr.err(+ws: List<&2, String>, +g: String, +d: Db) -> Maybe<&2, Reply>:
   xgr.chk(xgr.keys(ws), xgr.ids(ws), None{}, g, d)
 
+# the error before the keys': a BLOCK out of range (xb.far)
+def xgr.err.if(far: Bool, +ws: List<&2, String>, +g: String, +d: Db) -> Maybe<&2, Reply>:
+  match far:
+    case True{}:
+      Some{e_xfar()}
+    case False{}:
+      xgr.err(ws, g, d)
+
+def xgr.err.b(+b: XB, +ws: List<&2, String>, +g: String, +d: Db) -> Maybe<&2, Reply>:
+  xgr.err.if(xb.far(b, db.now(d)), ws, g, d)
+
 def xgr.reply.fin(f: XGf) -> Reply:
   match f:
     case XGf{rs, n, d}:
@@ -25560,8 +25656,8 @@ def xgr.reply.of(m: Maybe<&2, Reply>, +ws: List<&2, String>, +g: String, +c: Str
 # XREADGROUP's reply on the database d (the focus, before its acts)
 def xgr.reply(q: XGq, +d: Db) -> Reply:
   match q:
-    case XGq{+g, +c, +count, b, +noack, +ws}:
-      xgr.reply.of(xgr.err(ws, g, d), ws, g, c, count, noack, d)
+    case XGq{+g, +c, +count, +b, +noack, +ws}:
+      xgr.reply.of(xgr.err.b(b, ws, g, d), ws, g, c, count, noack, d)
     case XGqOf{y}:
       xgr.reply(y, d)
 
@@ -25637,14 +25733,14 @@ def xgr.dirty.of(m: Maybe<&2, Reply>, +ws: List<&2, String>, +g: String, +c: Str
 
 def xgr.dirty(q: XGq, +d: Db) -> Nat:
   match q:
-    case XGq{+g, +c, +count, b, +noack, +ws}:
-      xgr.dirty.of(xgr.err(ws, g, d), ws, g, c, count, noack, d)
+    case XGq{+g, +c, +count, +b, +noack, +ws}:
+      xgr.dirty.of(xgr.err.b(b, ws, g, d), ws, g, c, count, noack, d)
     case XGqOf{y}:
       xgr.dirty(y, d)
 
 # whether it would wait on the database d: BLOCK came, and it answers no
-# error and serves no key (the server answers it then, as BendKV blocks
-# on no stream yet)
+# error and serves no key (the server makes its client wait then:
+# server.bend, Blocked clients)
 def xgr.waits.fin(f: XGf) -> Bool:
   match f:
     case XGf{rs, n, d}:
@@ -25659,9 +25755,9 @@ def xgr.waits.of(m: Maybe<&2, Reply>, +ws: List<&2, String>, +g: String, +c: Str
 
 def xgr.waits(q: XGq, +d: Db) -> Bool:
   match q:
-    case XGq{+g, +c, +count, True{}, +noack, +ws}:
-      xgr.waits.of(xgr.err(ws, g, d), ws, g, c, count, noack, d)
-    case XGq{g, c, count, False{}, noack, ws}:
+    case XGq{+g, +c, +count, XBMs{+hi, +lo}, +noack, +ws}:
+      xgr.waits.of(xgr.err.b(XBMs{hi, lo}, ws, g, d), ws, g, c, count, noack, d)
+    case XGq{g, c, count, XBNone{}, noack, ws}:
       False{}
     case XGqOf{y}:
       xgr.waits(y, d)
@@ -25688,9 +25784,9 @@ def xgr.cmd.of(m: Maybe<&2, Reply>, r: XGk, +k: String) -> Cmd:
 # before it left it: none (an error) for any key's error
 def xgr.cmd(q: XGq, +i: Nat, +d: Db) -> Cmd:
   match q:
-    case XGq{+g, +c, +count, b, +noack, +ws}:
+    case XGq{+g, +c, +count, +b, +noack, +ws}:
       +k = xgr.nth(xgr.keys(ws), i)
-      xgr.cmd.of(xgr.err(ws, g, d), xgr.key(db.ent(d, k), k, g, c, xgr.nth(xgr.ids(ws), i), count, noack, db.now(d)), k)
+      xgr.cmd.of(xgr.err.b(b, ws, g, d), xgr.key(db.ent(d, k), k, g, c, xgr.nth(xgr.ids(ws), i), count, noack, db.now(d)), k)
     case XGqOf{y}:
       xgr.cmd(y, i, d)
 

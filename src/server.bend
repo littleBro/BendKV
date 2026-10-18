@@ -1085,6 +1085,13 @@ def waits.db(+ws: Waits) -> Nat:
     case WaitNone{}:
       0n
 
+def waits.code(+ws: Waits) -> Nat:
+  match ws:
+    case WaitOn{id, back, c0, c1, b, argv, +code, db, until, cmds, codes, av, rest}:
+      code
+    case WaitNone{}:
+      0n
+
 # whether a client waits held back by the pause (BlkPause: The pause)
 def blk.held(+b: S.Blk) -> Bool:
   match b:
@@ -1167,13 +1174,22 @@ def waits.len(ws: Waits, +n: Nat, +t: Nat) -> Nat & Nat:
     case WaitOn{id, back, c0, c1, +b, argv, code, db, +until, cmds, codes, av, rest}:
       waits.len(rest, Nat.add(n, Bool.pick(Nat, blk.script(b), 0n, 1n)), Bool.pick(Nat, Nat.is_lt(0n, until), 1n+t, t))
 
-def waits.put(p: Nat & Nat, srv: S.Srv) -> S.Srv:
+def waits.put(p: Nat & Nat, +w: Nat, srv: S.Srv) -> S.Srv:
   (+n, +t) = p
-  S.srv.blocked(srv, n, t)
+  S.srv.blocked(srv, n, t, w)
 
-# the clients that wait, and those of them with a time, for INFO
+# how many wait in XREAD or XREADGROUP (S.srv.xwaits: Stream waits)
+def waits.xn(+ws: Waits, +n: Nat) -> Nat:
+  match ws:
+    case WaitNone{}:
+      n
+    case WaitOn{id, back, c0, c1, +b, argv, code, db, until, cmds, codes, av, +rest}:
+      waits.xn(rest, Bool.pick(Nat, S.blk.stream(b), 1n+n, n))
+
+# the clients that wait, and those of them with a time, for INFO (and
+# those in XREAD or XREADGROUP)
 def waits.count(+ws: Waits, srv: S.Srv) -> S.Srv:
-  waits.put(waits.len(ws, 0n, 0n), srv)
+  waits.put(waits.len(ws, 0n, 0n), waits.xn(ws, 0n), srv)
 
 # the keys the clients of ws wait on, each with its database once (the
 # database's number and a ':' before the key), for INFO's
@@ -1193,8 +1209,17 @@ def bkeys.waits(+ws: Waits, h: KV.Trie<Nat>) -> KV.Trie<Nat>:
     case WaitOn{id, back, c0, c1, +b, argv, code, +db, until, cmds, codes, av, +rest}:
       bkeys.waits(rest, bkeys.put(Nat.show(db) ++ ":", S.blk.keys(b), h))
 
+# and those clients in XREADGROUP wait on (INFO's
+# total_blocking_keys_on_nokey: Redis's blocking_keys_unblock_on_nokey)
+def bkeys.nokey(+ws: Waits, h: KV.Trie<Nat>) -> KV.Trie<Nat>:
+  match ws:
+    case WaitNone{}:
+      h
+    case WaitOn{id, back, c0, c1, +b, argv, code, +db, until, cmds, codes, av, +rest}:
+      bkeys.nokey(rest, bkeys.put(Nat.show(db) ++ ":", Bool.pick(List<&2, String>, S.blk.xgroup(b), S.blk.keys(b), Nil{}), h))
+
 def waits.bkeys(+ws: Waits, srv: S.Srv) -> S.Srv:
-  S.srv.bkeys(srv, KV.size(Nat, bkeys.waits(ws, KV.empty(Nat))))
+  S.srv.bkeys(srv, KV.size(Nat, bkeys.waits(ws, KV.empty(Nat))), KV.size(Nat, bkeys.nokey(ws, KV.empty(Nat))))
 
 def waits.length(ws: Waits, +n: Nat) -> Nat:
   match ws:
@@ -1302,6 +1327,82 @@ def waits.aof(ws: Waits, hit: Bool, +srv: S.Srv, keep: Waits, up: List<&2, Up>, 
     case WaitOn{id, back, c0, c1, +b, argv, code, db, until, cmds, codes, av, +rest} False{}:
       waits.aof(rest, waits.synced(rest, srv), srv, WaitOn{id, back, c0, c1, b, argv, code, db, until, cmds, codes, av, keep}, up, Bool.or(left, blk.aof.syncs(b)))
 
+# a key of database j in the databases ds (focused or not)
+def ds.entry.at(focus: Bool, +j: Nat, +k: String, +ds: R.Ds) -> Maybe<&2, KV.Item<KV.Val>>:
+  match focus:
+    case True{}:
+      R.ds.entry(ds, k)
+    case False{}:
+      xs = R.ds.list(ds)
+      m = R.dbs.entry(j, k, xs)
+      m
+
+def ds.entry(+j: Nat, +k: String, +ds: R.Ds) -> Maybe<&2, KV.Item<KV.Val>>:
+  ds.entry.at(Nat.is_eq(j, R.ds.index(ds)), j, k, ds)
+
+def ds.here(+j: Nat, +k: String, +ds: R.Ds) -> Bool:
+  Maybe.is_some(&2, KV.Item<KV.Val>, ds.entry(j, k, ds))
+
+# (Stream waits, below)
+# a key's kind for the stream waits: 0 not there, 1 a stream, 2 another
+# kind; there whatever its time (as Redis's keyspace holds a key until it
+# deletes it), or only while its time has not passed (live)
+def sx.kind.of(m: Maybe<&2, KV.Item<KV.Val>>) -> Nat:
+  match m:
+    case Some{KV.Item{KV.VColl{KV.CStream{x}}, e}}:
+      1n
+    case Some{_}:
+      2n
+    case None{}:
+      0n
+
+def sx.kind(+j: Nat, +k: String, +ds: R.Ds) -> Nat:
+  sx.kind.of(ds.entry(j, k, ds))
+
+def sx.live.of(m: Maybe<&2, KV.Item<KV.Val>>, +now: Nat) -> Bool:
+  match m:
+    case Some{KV.Item{KV.VColl{KV.CStream{x}}, +e}}:
+      KV.live(now, e)
+    case _:
+      False{}
+
+def sx.live(+j: Nat, +k: String, +ds: R.Ds) -> Bool:
+  sx.live.of(ds.entry(j, k, ds), R.ds.now(ds))
+
+# a client marked (b, on database db) ready, with the first key that
+# serves it: XREADGROUP's whatever its keys hold, XREAD's when one of the
+# keys signalled is a stream now (a key whose time has passed is none, as
+# Redis's lookup without effects finds it)
+def xready.first(+ks: List<&2, String>) -> Maybe<&2, String>:
+  match ks:
+    case Con{+k, rest}:
+      Some{k}
+    case Nil{}:
+      None{}
+
+def xready.pick(hit: Bool, +k: String, m: Maybe<&2, String>) -> Maybe<&2, String>:
+  match hit:
+    case True{}:
+      Some{k}
+    case False{}:
+      m
+
+def xready.read(+ks: List<&2, String>, +db: Nat, +ds: R.Ds) -> Maybe<&2, String>:
+  match ks:
+    case Con{+k, +rest}:
+      xready.pick(sx.live(db, k, ds), k, xready.read(rest, db, ds))
+    case Nil{}:
+      None{}
+
+def waits.xready(+b: S.Blk, +db: Nat, +ds: R.Ds) -> Maybe<&2, String>:
+  match b:
+    case S.BlkXRead{q, ms, +sig}:
+      xready.read(sig, db, ds)
+    case S.BlkXGroup{q, ms, +sig}:
+      xready.first(sig)
+    case _:
+      None{}
+
 # whether the first of ks holds what a pop waits for (z: a sorted set) in
 # the focus of d, and the first of ks that does (hit: whether the first
 # does)
@@ -1337,13 +1438,15 @@ def blk.pop(+b: S.Blk) -> Bool:
 
 # (the databases focused only for a pop: a client held back by the pause
 # or waiting for the engine waits for no key, and the walk of the chain
-# after a script focused them for each such wait: FINDINGS 3zzzd)
+# after a script focused them for each such wait: FINDINGS 3zzzd; a
+# client in XREAD or XREADGROUP is ready when a key it waits on was
+# signalled: Stream waits)
 def waits.ready.if(pop: Bool, +b: S.Blk, +db: Nat, +ds: R.Ds) -> Maybe<&2, String>:
   match pop:
     case True{}:
       waits.ready.of(R.ds.focus(db, ds), b)
     case False{}:
-      None{}
+      waits.xready(b, db, ds)
 
 def waits.ready(+ds: R.Ds, +ws: Waits) -> Maybe<&2, String>:
   match ws:
@@ -1359,14 +1462,244 @@ type Found is Data:
   Found{w: Waits, k: String, ws: Waits}
   NotFound{ws: Waits}
 
+# (a client in XREAD or XREADGROUP that is not ready has its marks
+# cleared as the walk passes it: Stream waits)
 def waits.find(ws: Waits, m: Maybe<&2, String>, +ds: R.Ds, acc: Waits) -> Found:
   match ws m:
     case WaitOn{id, back, c0, c1, b, argv, code, db, until, cmds, codes, av, rest} Some{k}:
       Found{WaitOn{id, back, c0, c1, b, argv, code, db, until, cmds, codes, av, WaitNone{}}, k, waits.rev(acc, rest)}
     case WaitOn{id, back, c0, c1, b, argv, code, db, until, cmds, codes, av, +rest} None{}:
-      waits.find(rest, waits.ready(ds, rest), ds, WaitOn{id, back, c0, c1, b, argv, code, db, until, cmds, codes, av, acc})
+      waits.find(rest, waits.ready(ds, rest), ds, WaitOn{id, back, c0, c1, S.blk.sig.none(b), argv, code, db, until, cmds, codes, av, acc})
     case WaitNone{} _:
       NotFound{waits.rev(acc, WaitNone{})}
+
+# Stream waits
+# ------------
+# XREAD and XREADGROUP with BLOCK whose read would wait (S.BlkXRead,
+# S.BlkXGroup) wait as Redis 7.2.16's blockForKeys makes them wait:
+# XREAD's "$" IDs made its keys' last IDs (R.xread.fix), XREADGROUP's
+# consumers made and seen first (bg.xwait), its call not counted. Redis
+# runs a client blocked on keys again, its command as it came, when a key
+# it waits on is signalled (signalKeyAsReady: XADD, a key made, XGROUP
+# DESTROY, the keys SWAPDB brings; signalDeletedKeyAsReady: a key
+# deleted, overwritten, or emptied by FLUSHDB, FLUSHALL or SWAPDB), once
+# the command that signalled it (or EXEC, or the script) is done: each
+# client of the key in the order it blocked, XREAD's when the key is a
+# stream then, XREADGROUP's whatever the key holds (unblock_on_nokey),
+# which then answers its error (NOGROUP, WRONGTYPE). The actor marks each
+# such client with the keys a command's effects signal (sig.ents), as
+# touches mark the keys watched: a write that leaves a key, or makes it,
+# a stream, or that takes a stream away or makes it of another kind (its
+# kind before and after differ, one of them a stream), or that replaces
+# it (RESTORE, RENAME's destination, MOVE, COPY), and a stream's own
+# writes as Redis signals them (xw.ready); the sweep of expired keys and
+# eviction mark them too, and serve them where they ran (grp.xserve). A
+# client marked is ready (waits.xready), and is run again (bg.xserve):
+# when its read now answers, entries or an error, it is served, its call
+# counted then (and what XREADGROUP changed); else it waits again at the
+# end of the chain, as the rotation of the key's clients in Redis leaves
+# it, with its time as it was, XREADGROUP's consumers seen again (and
+# made again where one was deleted). A client gone, out of time or
+# unblocked by CLIENT UNBLOCK is as a pop's (Blocked clients). Where
+# BendKV differs: the clients served from several keys go in the order
+# they blocked, as a pop's do; a key whose time has passed signals its
+# clients when the sweep deletes it, not when a command reads it.
+
+# its kind before the command (pre; none: a key a DEL deleted, which was
+# there, and is a stream for what it signals)
+def sx.was(+pre: Maybe<&2, R.Ds>, +j: Nat, +k: String) -> Nat:
+  match pre:
+    case Some{+d}:
+      sx.kind(j, k, d)
+    case None{}:
+      1n
+
+# whether a write signals its key: its kind before (a) and after (b),
+# one of them a stream, differ, or the write replaces the value (r)
+def sx.signals(+a: Nat, +b: Nat, +r: Bool) -> Bool:
+  Bool.and(Bool.or(Nat.is_eq(a, 1n), Nat.is_eq(b, 1n)), Bool.or(r, Bool.not(Nat.is_eq(a, b))))
+
+# whether a stream's write signals its key as Redis's do (its kind
+# before: a): XADD (signalKeyAsReady), XGROUP CREATE where its MKSTREAM
+# made the stream (dbAdd), DESTROY of a group there, to answer its
+# clients NOGROUP (a DESTROY of none has no effect); the others change
+# the stream in place, without a signal
+def xw.ready(op: R.XWrite, +a: Nat) -> Bool:
+  match op:
+    case R.XWAdd{ws}:
+      True{}
+    case R.XWNew{ws}:
+      True{}
+    case R.XWGNew{ws}:
+      True{}
+    case R.XWGroup{2n, ws}:
+      Bool.not(Nat.is_eq(a, 1n))
+    case R.XWGroup{4n, ws}:
+      True{}
+    case _:
+      False{}
+
+# a client (b: what it waits for, on database db) marked with key k of
+# database j when it waits on it (on), or with each of its keys (all)
+def sig.blk(on: Bool, b: S.Blk, +k: String) -> S.Blk:
+  match on:
+    case True{}:
+      S.blk.sig.add(b, k)
+    case False{}:
+      b
+
+def sig.blk.keys(ks: List<&2, String>, b: S.Blk) -> S.Blk:
+  match ks:
+    case Nil{}:
+      b
+    case Con{+k, rest}:
+      sig.blk.keys(rest, S.blk.sig.add(b, k))
+
+def sig.blk.all(on: Bool, b: S.Blk) -> S.Blk:
+  match on:
+    case True{}:
+      +x = b
+      sig.blk.keys(S.blk.keys(x), x)
+    case False{}:
+      b
+
+def blk.x.on(+b: S.Blk, +db: Nat, +j: Nat, +k: String) -> Bool:
+  Bool.and(Nat.is_eq(db, j), Bool.and(S.blk.stream(b), S.blk.sig.has(S.blk.keys(b), k)))
+
+# the clients that wait on key k of database j marked with it
+def sig.key(+j: Nat, +k: String, ws: Waits) -> Waits:
+  match ws:
+    case WaitNone{}:
+      WaitNone{}
+    case WaitOn{id, back, c0, c1, +b, argv, code, +db, until, cmds, codes, av, rest}:
+      WaitOn{id, back, c0, c1, sig.blk(blk.x.on(b, db, j, k), b, k), argv, code, db, until, cmds, codes, av, sig.key(j, k, rest)}
+
+# the clients that wait on database j (all: on any) marked with each of
+# their keys (FLUSHDB, FLUSHALL, SWAPDB)
+def sig.db(+all: Bool, +j: Nat, ws: Waits) -> Waits:
+  match ws:
+    case WaitNone{}:
+      WaitNone{}
+    case WaitOn{id, back, c0, c1, +b, argv, code, +db, until, cmds, codes, av, rest}:
+      WaitOn{id, back, c0, c1, sig.blk.all(Bool.and(S.blk.stream(b), Bool.or(all, Nat.is_eq(db, j))), b), argv, code, db, until, cmds, codes, av, sig.db(all, j, rest)}
+
+def sig.write(on: Bool, +j: Nat, +k: String, ws: Waits) -> Waits:
+  match on:
+    case True{}:
+      sig.key(j, k, ws)
+    case False{}:
+      ws
+
+# a write of key k of database j (r: one that replaces its value), the
+# databases before it (pre) and after it (post)
+def sig.at(+r: Bool, +j: Nat, +k: String, +pre: Maybe<&2, R.Ds>, +post: R.Ds, ws: Waits) -> Waits:
+  sig.write(sx.signals(sx.was(pre, j, k), sx.kind(j, k, post), r), j, k, ws)
+
+def sig.keys(+ks: List<&2, String>, +j: Nat, +pre: Maybe<&2, R.Ds>, +post: R.Ds, ws: Waits) -> Waits:
+  match ks:
+    case Nil{}:
+      ws
+    case Con{+k, +rest}:
+      sig.keys(rest, j, pre, post, sig.at(False{}, j, k, pre, post, ws))
+
+def sig.pairs(+ps: List<&2, R.KVPair>, +j: Nat, +pre: Maybe<&2, R.Ds>, +post: R.Ds, ws: Waits) -> Waits:
+  match ps:
+    case Nil{}:
+      ws
+    case Con{R.KP{+k, v}, +rest}:
+      sig.pairs(rest, j, pre, post, sig.at(False{}, j, k, pre, post, ws))
+
+def sig.stream(op: R.XWrite, +j: Nat, +k: String, +pre: Maybe<&2, R.Ds>, +post: R.Ds, ws: Waits) -> Waits:
+  +a = sx.was(pre, j, k)
+  sig.write(Bool.or(xw.ready(op, a), sx.signals(a, sx.kind(j, k, post), False{})), j, k, ws)
+
+# RENAME of a key to itself does nothing (Redis answers before it looks)
+def sig.rename(same: Bool, +s: String, +d: String, +j: Nat, +pre: Maybe<&2, R.Ds>, +post: R.Ds, ws: Waits) -> Waits:
+  match same:
+    case True{}:
+      ws
+    case False{}:
+      sig.at(True{}, j, d, pre, post, sig.at(False{}, j, s, pre, post, ws))
+
+def sig.cmd(+c: R.Cmd, +j: Nat, +pre: Maybe<&2, R.Ds>, +post: R.Ds, ws: Waits) -> Waits:
+  match c:
+    case R.Set{+k, v}:
+      sig.at(False{}, j, k, pre, post, ws)
+    case R.Upd{+k, R.UStream{op}}:
+      sig.stream(op, j, k, pre, post, ws)
+    case R.Upd{+k, R.URestore{p, t, rep, ac}}:
+      sig.at(True{}, j, k, pre, post, ws)
+    case R.Upd{+k, op}:
+      sig.at(False{}, j, k, pre, post, ws)
+    case R.Del{+ks}:
+      sig.keys(ks, j, pre, post, ws)
+    case R.MSet{+ps}:
+      sig.pairs(ps, j, pre, post, ws)
+    case R.FlushDb{}:
+      sig.db(False{}, j, ws)
+    case R.Rename{+s, +d, nx}:
+      sig.rename(String.eq(s, d), s, d, j, pre, post, ws)
+    case R.LMove{+s, +d, e}:
+      sig.at(False{}, j, d, pre, post, sig.at(False{}, j, s, pre, post, ws))
+    case R.SMv{+s, +d, w}:
+      sig.at(False{}, j, d, pre, post, sig.at(False{}, j, s, pre, post, ws))
+    case _:
+      ws
+
+def sig.swap(same: Bool, +a: Nat, +b: Nat, ws: Waits) -> Waits:
+  match same:
+    case True{}:
+      ws
+    case False{}:
+      sig.db(False{}, b, sig.db(False{}, a, ws))
+
+def sig.eff(+e: A.Eff, +pre: Maybe<&2, R.Ds>, +post: R.Ds, ws: Waits) -> Waits:
+  match e:
+    case A.EDb{+j, +c}:
+      sig.cmd(c, j, pre, post, ws)
+    case A.ESwap{+a, +b}:
+      sig.swap(Nat.is_eq(a, b), a, b, ws)
+    case A.EMove{+k, +s, +d}:
+      sig.at(True{}, d, k, pre, post, sig.at(False{}, s, k, pre, post, ws))
+    case A.ECopy{s, +d, from, +to}:
+      sig.at(True{}, to, d, pre, post, ws)
+    case A.EWipe{}:
+      sig.db(True{}, 0n, ws)
+
+def sig.effs(+es: List<&2, A.Eff>, +pre: Maybe<&2, R.Ds>, +post: R.Ds, ws: Waits) -> Waits:
+  match es:
+    case Nil{}:
+      ws
+    case Con{+e, +rest}:
+      sig.effs(rest, pre, post, sig.eff(e, pre, post, ws))
+
+def sig.ent(+x: A.Ent, +pre: Maybe<&2, R.Ds>, +post: R.Ds, ws: Waits) -> Waits:
+  match x:
+    case A.EOne{+e}:
+      sig.eff(e, pre, post, ws)
+    case A.ETx{+es}:
+      sig.effs(es, pre, post, ws)
+
+def sig.ents.go(+xs: List<&2, A.Ent>, +pre: Maybe<&2, R.Ds>, +post: R.Ds, ws: Waits) -> Waits:
+  match xs:
+    case Nil{}:
+      ws
+    case Con{+x, +rest}:
+      sig.ents.go(rest, pre, post, sig.ent(x, pre, post, ws))
+
+def sig.ents.if(on: Bool, +xs: List<&2, A.Ent>, +pre: Maybe<&2, R.Ds>, +post: R.Ds, ws: Waits) -> Waits:
+  match on:
+    case True{}:
+      sig.ents.go(xs, pre, post, ws)
+    case False{}:
+      ws
+
+# the clients marked with the keys a command's effects (xs, its entries)
+# signal, while some client waits in XREAD or XREADGROUP (S.srv.xwaits),
+# with the databases before it (pre; none: each key a DEL deleted was
+# there) and after it (post)
+def sig.ents(+srv: S.Srv, +xs: List<&2, A.Ent>, +pre: Maybe<&2, R.Ds>, +post: R.Ds, ws: Waits) -> Waits:
+  sig.ents.if(S.srv.xwaits(srv), xs, pre, post, ws)
 
 # Transactions
 # ------------
@@ -1590,21 +1923,6 @@ def tx.unwatch(+n: Nat, t: Tx) -> Tx:
 # k's entry in database j of ds (there at now or not). The list of the
 # databases is held while R.dbs.entry reads it, so that the reads of the
 # keyspace borrow it.
-def ds.entry.at(focus: Bool, +j: Nat, +k: String, +ds: R.Ds) -> Maybe<&2, KV.Item<KV.Val>>:
-  match focus:
-    case True{}:
-      R.ds.entry(ds, k)
-    case False{}:
-      xs = R.ds.list(ds)
-      m = R.dbs.entry(j, k, xs)
-      m
-
-def ds.entry(+j: Nat, +k: String, +ds: R.Ds) -> Maybe<&2, KV.Item<KV.Val>>:
-  ds.entry.at(Nat.is_eq(j, R.ds.index(ds)), j, k, ds)
-
-def ds.here(+j: Nat, +k: String, +ds: R.Ds) -> Bool:
-  Maybe.is_some(&2, KV.Item<KV.Val>, ds.entry(j, k, ds))
-
 # whether ks has key k of database j
 def wk.hit(+j: Nat, +k: String, +w: Wk) -> Bool:
   match w:
@@ -3228,11 +3546,16 @@ def ps.soon.set(+s: Nat, pb: Ps) -> Ps:
     case PsOf{p}:
       ps.soon.set(s, p)
 
-# how many clients heed keys: those that wait on keys (a pop; not one
-# the pause holds back, nor WAIT's) and those that watch some
+# how many clients heed keys: those that wait on keys (a pop, XREAD's,
+# XREADGROUP's; not one the pause holds back, nor WAIT's) and those that
+# watch some
 def blk.pops(+b: S.Blk) -> Bool:
   match b:
     case S.BlkPop{c, form, ms}:
+      True{}
+    case S.BlkXRead{q, ms, sig}:
+      True{}
+    case S.BlkXGroup{q, ms, sig}:
       True{}
     case _:
       False{}
@@ -6309,12 +6632,15 @@ def bg.run.go(held: Bool, +ok: Bool, +k: S.Role, +c: R.Cmd, +code: Nat, rs: List
 # the databases before it and after; those to the client whose command
 # runs (a script's call's: its caller's, trk.cur) wait for after its call
 # (Own pushes)
+# (and the clients that wait in XREAD or XREADGROUP marked with the keys
+# its effects signal: Stream waits)
 def bg.touched(+pre: Maybe<&2, R.Ds>, +c: R.Cmd, es: List<&2, A.Ent>, g: LRun) -> LRun:
   match g:
     case LRun{rs, +e1, +conn, srv, +ds, ws, up, tx, pb}:
       +p = pb
       +cur = trk.cur(S.conn.id(conn), p)
-      LRun{rs, List.append(&2, A.Ent, e1, es), conn, srv, ds, ws, up, touch.by(c, tx, e1, pre, ds), ps.cmd(c, e1, pre, ds, cur, ps.trk.cmd(c, e1, pre, ds, cur, p))}
+      +sv = srv
+      LRun{rs, List.append(&2, A.Ent, e1, es), conn, sv, ds, sig.ents(sv, e1, pre, ds, ws), up, touch.by(c, tx, e1, pre, ds), ps.cmd(c, e1, pre, ds, cur, ps.trk.cmd(c, e1, pre, ds, cur, p))}
     case LHeld{h}:
       LHeld{h}
 
@@ -6329,7 +6655,7 @@ def bg.run.tx(on: Bool, held: Bool, +ok: Bool, +k: S.Role, +c: R.Cmd, +code: Nat
 def bg.run(held: Bool, +ok: Bool, +k: S.Role, +c: R.Cmd, +code: Nat, rs: List<&2, R.Reply>, es: List<&2, A.Ent>, +conn: S.Conn, +srv: S.Srv, ds: R.Ds, ws: Waits, up: List<&2, Up>, tx: Tx, pb: Ps) -> LRun:
   +t = tx
   +p = pb
-  bg.run.tx(Bool.or(tx.on(t), ps.looks(p)), held, ok, k, c, code, rs, es, conn, srv, ds, ws, up, t, p)
+  bg.run.tx(Bool.or(tx.on(t), Bool.or(ps.looks(p), S.srv.xwaits(srv))), held, ok, k, c, code, rs, es, conn, srv, ds, ws, up, t, p)
 
 # OBJECT FREQ and IDLETIME answered from the key's word (Access): the
 # session, which is proved, answers them as a key's that no command used
@@ -6486,28 +6812,142 @@ def bg.popped.up(d: Pd, +back: Chan(Ans), +c0: S.Conn, c1: S.Conn, +y: R.Reply, 
     case Pd{pend, pb}:
       bg.popped.put(e, ds, rs, es, conn, srv, ws, Up{back, c1, List.append(&2, R.Reply, pend, S.put(S.say(S.conn.mode(c0), y), Nil{})), cmds, codes, av} <> up, tx, pb, pc, pre)
 
-def bg.popped(w: Waits, r: R.Reply & (List<&2, A.Eff> & R.Ds), rs: List<&2, R.Reply>, es: List<&2, A.Ent>, +conn: S.Conn, srv: S.Srv, ws: Waits, up: List<&2, Up>, tx: Tx, pb: Ps, +pc: R.Cmd, +pre: R.Ds) -> LRun:
+# (n: the changes it counts besides its rule's: XREADGROUP's, Stream
+# waits)
+def bg.popped(w: Waits, r: R.Reply & (List<&2, A.Eff> & R.Ds), rs: List<&2, R.Reply>, es: List<&2, A.Ent>, +conn: S.Conn, srv: S.Srv, ws: Waits, up: List<&2, Up>, tx: Tx, pb: Ps, +pc: R.Cmd, +pre: R.Ds, +n: Nat) -> LRun:
   match w:
     case WaitOn{+id, back, +c0, c1, +b, argv, +code, db, until, cmds, codes, av, rest}:
       (x, q) = r
       (+e, ds) = q
       +y = S.blk.shape(S.blk.form(b), x)
       +left = ws
-      bg.popped.up(ps.trk.served(pc, Bool.not(R.r_is_err(y)), id, S.conn.id(conn), pb), back, c0, c1, y, cmds, codes, av, e, ds, rs, es, conn, waits.count(left, srv.wrote.id(e, id, S.srv.served(S.srv.dirtied(bg.errs(srv, code, y), dirty.served(code, y)), id))), left, up, tx, pc, pre)
+      bg.popped.up(ps.trk.served(pc, Bool.not(R.r_is_err(y)), id, S.conn.id(conn), pb), back, c0, c1, y, cmds, codes, av, e, ds, rs, es, conn, waits.count(left, srv.wrote.id(e, id, S.srv.served(S.srv.dirtied(bg.errs(srv, code, y), Nat.add(dirty.served(code, y), n)), id))), left, up, tx, pc, pre)
     case WaitNone{}:
       (x, q) = r
       (e, ds) = q
       LRun{rs, es, conn, srv, ds, ws, up, tx, pb}
 
-def bg.pop(w: Waits, +k: String, g: LRun) -> LRun:
+def bg.pop.go(w: Waits, +k: String, g: LRun) -> LRun:
   match g:
     case LRun{rs, es, conn, srv, ds, ws, up, tx, pb}:
       +x = w
       +pc = S.blk.at(waits.blk(x), k)
       +d0 = R.ds.focus(waits.db(x), ds)
-      bg.popped(x, A.act(R.ARun{pc}, d0), rs, es, conn, srv, ws, up, tx, pb, pc, d0)
+      bg.popped(x, A.act(R.ARun{pc}, d0), rs, es, conn, srv, ws, up, tx, pb, pc, d0, 0n)
     case LHeld{h}:
       LHeld{h}
+
+# XREADGROUP's acts on the databases d0 (its client's database in
+# focus): their effects, in order, and the databases after them
+def bg.xacts.of(p: List<&2, A.Eff> & R.Ds) -> List<&2, A.Eff> & R.Ds:
+  (e, d1) = p
+  (List.reverse(&2, A.Eff, e), d1)
+
+def bg.xacts(+q: R.XGq, d0: R.Ds) -> List<&2, A.Eff> & R.Ds:
+  bg.xacts.of(A.acts(S.xgroup.acts(S.xgroup.n(q), q, 0n), (Nil{}, d0)))
+
+# those effects put with the group's: the changes they count (n), the
+# write of the client of id noted (WAITAOF), their touches and events
+# (pc: its command; pre: the databases before them), as a pop's are
+# (bg.popped.put)
+def bg.xacted(p: List<&2, A.Eff> & R.Ds, +id: Nat, +n: Nat, +pc: R.Cmd, +pre: R.Ds, rs: List<&2, R.Reply>, es: List<&2, A.Ent>, conn: S.Conn, srv: S.Srv, ws: Waits, up: List<&2, Up>, tx: Tx, pb: Ps) -> LRun:
+  (+e, +ds) = p
+  +p0 = pb
+  LRun{rs, A.ents.onto(e, es), conn, srv.wrote.id(e, id, S.srv.dirtied(srv, n)), ds, ws, up, touch.effs(tx, e, None{}, ds), ps.cmd(pc, A.ents.of(e), Some{pre}, ds, trk.cur(id, p0), p0)}
+
+# XREADGROUP that waits: its acts first, as Redis's first run of it makes
+# the consumers it names and sees them before it blocks (their changes
+# counted, their events sent, their effects logged), without its reply
+# and without its call
+def bg.xwait.of(b: S.Blk, +id: Nat, g: LRun) -> LRun:
+  match b g:
+    case S.BlkXGroup{+q, ms, sig} LRun{rs, es, conn, srv, +ds, ws, up, tx, pb}:
+      bg.xacted(bg.xacts(q, ds), id, R.xgr.dirty(q, R.ds.focused(ds)), R.Own{R.SXGroup{q}}, ds, rs, es, conn, srv, ws, up, tx, pb)
+    case _ g0:
+      g0
+
+def bg.xwait(+id: Nat, +b: S.Blk, g: LRun) -> LRun:
+  bg.xwait.of(b, id, g)
+
+# a client run again that would wait still: at the end of the chain, its
+# marks gone, its time as it was
+def bg.xagain(w: Waits, ws: Waits) -> Waits:
+  match w:
+    case WaitOn{id, back, c0, c1, b, argv, code, db, until, cmds, codes, av, rest}:
+      waits.add(ws, WaitOn{id, back, c0, c1, S.blk.sig.none(b), argv, code, db, until, cmds, codes, av, WaitNone{}})
+    case WaitNone{}:
+      ws
+
+# a client served in XREAD that tracks its keys: they go to the table, as
+# Redis's call() of the command run again remembers them
+def bg.xtrk.if(on: Bool, +id: Nat, +ks: List<&2, String>, g: LRun) -> LRun:
+  match on g:
+    case True{} LRun{rs, es, conn, srv, ds, ws, up, tx, pb}:
+      LRun{rs, es, conn, srv, ds, ws, up, tx, ps.trk.read(id, ks, pb)}
+    case _ g0:
+      g0
+
+def bg.xtrk(+id: Nat, +code: Nat, +ks: List<&2, String>, g: LRun) -> LRun:
+  match g:
+    case LRun{rs, es, conn, srv, ds, ws, up, tx, +pb}:
+      bg.xtrk.if(Bool.and(ps.trk.hot(pb), Bool.and(tk.reads(ps.tk(id, pb)), R.stat.ro(R.code.key(code)))), id, ks, LRun{rs, es, conn, srv, ds, ws, up, tx, pb})
+    case LHeld{h}:
+      LHeld{h}
+
+# XREAD run again on its database (d0): served when it answers (entries,
+# or an error), else waiting again
+def bg.xread.at(none: Bool, +y: R.Reply, w: Waits, rs: List<&2, R.Reply>, es: List<&2, A.Ent>, +conn: S.Conn, srv: S.Srv, ws: Waits, up: List<&2, Up>, tx: Tx, pb: Ps, +pc: R.Cmd, +d0: R.Ds) -> LRun:
+  match none:
+    case True{}:
+      LRun{rs, es, conn, srv, d0, bg.xagain(w, ws), up, tx, pb}
+    case False{}:
+      bg.popped(w, (y, (Nil{}, d0)), rs, es, conn, srv, ws, up, tx, pb, pc, d0, 0n)
+
+# XREADGROUP run again: when it would wait still, its acts alone (its
+# consumers seen again, one deleted made again), then it waits again;
+# else served, its reply made before its acts, as a call of it is
+def bg.xgroup.at(waits: Bool, +q: R.XGq, w: Waits, rs: List<&2, R.Reply>, es: List<&2, A.Ent>, +conn: S.Conn, srv: S.Srv, ws: Waits, up: List<&2, Up>, tx: Tx, pb: Ps, +id: Nat, +d0: R.Ds) -> LRun:
+  match waits:
+    case True{}:
+      bg.xacted(bg.xacts(q, d0), id, R.xgr.dirty(q, R.ds.focused(d0)), R.Own{R.SXGroup{q}}, d0, rs, es, conn, srv, bg.xagain(w, ws), up, tx, pb)
+    case False{}:
+      +d = R.ds.focused(d0)
+      +y = R.xgr.reply(q, d)
+      bg.popped(w, (y, bg.xacts(q, d0)), rs, es, conn, srv, ws, up, tx, pb, R.Own{R.SXGroup{q}}, d0, R.xgr.dirty(q, d))
+
+def bg.xserve.of(+b: S.Blk, w: Waits, +id: Nat, +code: Nat, +db: Nat, rs: List<&2, R.Reply>, es: List<&2, A.Ent>, +conn: S.Conn, srv: S.Srv, ds: R.Ds, ws: Waits, up: List<&2, Up>, tx: Tx, pb: Ps) -> LRun:
+  match b:
+    case S.BlkXRead{+q, ms, sig}:
+      +d0 = R.ds.focus(db, ds)
+      +y = R.xread.many(q, R.ds.focused(d0))
+      bg.xtrk(id, code, S.blk.xrm.keys(q), bg.xread.at(S.blk.none(y), y, w, rs, es, conn, srv, ws, up, tx, pb, R.Own{R.SXRead{q}}, d0))
+    case S.BlkXGroup{+q, ms, sig}:
+      +d0 = R.ds.focus(db, ds)
+      bg.xgroup.at(R.xgr.waits(q, R.ds.focused(d0)), q, w, rs, es, conn, srv, ws, up, tx, pb, id, d0)
+    case _:
+      LRun{rs, es, conn, srv, ds, waits.add(ws, w), up, tx, pb}
+
+# a client in XREAD or XREADGROUP run again (Stream waits)
+def bg.xserve(w: Waits, g: LRun) -> LRun:
+  match g:
+    case LRun{rs, es, conn, srv, ds, ws, up, tx, pb}:
+      +x = w
+      bg.xserve.of(waits.blk(x), x, waits.id(x), waits.code(x), waits.db(x), rs, es, conn, srv, ds, ws, up, tx, pb)
+    case LHeld{h}:
+      LHeld{h}
+
+def bg.pop.if(xs: Bool, w: Waits, +k: String, g: LRun) -> LRun:
+  match xs:
+    case True{}:
+      bg.xserve(w, g)
+    case False{}:
+      bg.pop.go(w, k, g)
+
+# a client served from key k: its pop made on k alone, or, in XREAD or
+# XREADGROUP, its read run again (Stream waits)
+def bg.pop(w: Waits, +k: String, g: LRun) -> LRun:
+  +x = w
+  bg.pop.if(S.blk.stream(waits.blk(x)), x, k, g)
 
 # the clients served while one is ready: the first that is, each round
 # (fuel: a client served each round, so one round for each, and one more)
@@ -6608,15 +7048,21 @@ def blk.ask(+b: S.Blk, srv: S.Srv, +held: Bool) -> S.Srv:
 # a blocking command that finds nothing: its client waits, the call
 # counted now, its channel marked with the blocking command (CLIENT LIST's
 # cmd while it waits, as Redis's last command)
-def bg.wait(+id: Nat, +back: Chan(Ans), b: S.Blk, +c: R.Cmd, +code: Nat, rest: List<&2, R.Cmd>, more: List<&2, Nat>, av: Av, g: LRun) -> LRun:
+# (argv: the size of its arguments, wait.argv.of; XREADGROUP's acts run
+# first: bg.xwait)
+def bg.wait.go(+id: Nat, +back: Chan(Ans), b: S.Blk, +c: R.Cmd, +code: Nat, +argv: Nat, rest: List<&2, R.Cmd>, more: List<&2, Nat>, av: Av, g: LRun) -> LRun:
   match g:
     case LRun{rs, es, +conn, +srv, +ds, ws, up, tx, +pb}:
       +x = b
       +u = S.blk.until(R.ds.now(ds), S.blk.ms(x))
-      +ws2 = waits.add(ws, WaitOn{id, Chan.mark(Ans, back, U32.from_nat(code), R.ds.now(ds)), conn, S.next_conn(False{}, c, conn, srv), x, wait.argv(c), code, S.conn.db(conn), u, rest, more, av, WaitNone{}})
+      +ws2 = waits.add(ws, WaitOn{id, Chan.mark(Ans, back, U32.from_nat(code), R.ds.now(ds)), conn, S.next_conn(False{}, c, conn, srv), x, argv, code, S.conn.db(conn), u, rest, more, av, WaitNone{}})
       LHeld{LRun{rs, es, conn, waits.count(ws2, gen.count.blk(blk.ask(x, srv, pz.held(ps.pz(pb), R.ds.now(ds))), code)), ds, ws2, up, tx, ps.heed.add(S.blk.keys(x), u, pb)}}
     case LHeld{h}:
       LHeld{h}
+
+def bg.wait(+id: Nat, +back: Chan(Ans), b: S.Blk, +c: R.Cmd, +code: Nat, +argv: Nat, rest: List<&2, R.Cmd>, more: List<&2, Nat>, av: Av, g: LRun) -> LRun:
+  +x = b
+  bg.wait.go(id, back, x, c, code, argv, rest, more, av, bg.xwait(id, x, g))
 
 # CLIENT UNBLOCK: the client of the id, if it waits, unblocked with a
 # null array (0 for WAIT: S.blk.late), its call counted as one whose time
@@ -6687,10 +7133,11 @@ def bg.unblock(+n: Nat, +err: Bool, +code: Nat, g: LRun) -> LRun:
 # rewrite ends (BGSAVE: Background saves); or refuse a command its
 # client's user may not run (in MULTI, flagging the transaction), log its
 # client in (AUTH, HELLO), or run a subcommand of ACL that reaches the
-# clients (ACL); or answer an XREAD with BLOCK that would wait, as BendKV
-# blocks on no stream yet (in MULTI it does not wait: the session answers
-# it a null array, as Redis does); a command that does not run (after a
-# QUIT, or before the client authenticates) runs as the session runs it.
+# clients (ACL); a command that does not run (after a QUIT, or before the
+# client authenticates) runs as the session runs it. XREAD and XREADGROUP
+# with BLOCK that would wait make their client wait (Stream waits); in
+# MULTI they do not wait: the session answers them a null array, as
+# Redis does.
 # A script command makes its client wait for the engine (Scripts), SCRIPT
 # KILL asks a script's end, and while a script runs past lua-time-limit a
 # command is refused BUSY (in MULTI, flagging the transaction; a SHUTDOWN
@@ -6737,7 +7184,6 @@ type Sh is Data:
   ShAuth{}
   ShHello{}
   ShAcl{k: Nat}
-  ShNoBlock{}
 
 def sh.blk.of(+x: S.Blk, +ds: R.Ds) -> Sh:
   Bool.pick(Sh, S.blk.waits(x, R.ds.focused(ds)), ShWait{x}, ShRun{})
@@ -6825,6 +7271,22 @@ def sh.script(+k: Nat) -> Sh:
 def sh.acl(+k: Nat) -> Sh:
   Bool.pick(Sh, Bool.or(Nat.is_eq(k, 2n), Bool.or(Nat.is_eq(k, 11n), Nat.is_eq(k, 13n))), ShAcl{k}, ShRun{})
 
+# XREAD and XREADGROUP with BLOCK that would wait: their client waits
+# (Stream waits), XREAD's "$" IDs its keys' last IDs
+def sh.xread(w: Bool, +q: R.XRm, +ds: R.Ds) -> Sh:
+  match w:
+    case True{}:
+      ShWait{S.BlkXRead{R.xread.fix(q, R.ds.focused(ds)), S.blk.xrm.ms(q), Nil{}}}
+    case False{}:
+      ShRun{}
+
+def sh.xgroup(w: Bool, +q: R.XGq) -> Sh:
+  match w:
+    case True{}:
+      ShWait{S.BlkXGroup{q, S.blk.xgq.ms(q), Nil{}}}
+    case False{}:
+      ShRun{}
+
 # a command of a client with no open transaction, that may run
 def sh.plain(+c: R.Cmd, +code: Nat, +ds: R.Ds) -> Sh:
   match c:
@@ -6867,9 +7329,9 @@ def sh.plain(+c: R.Cmd, +code: Nat, +ds: R.Ds) -> Sh:
     case R.Own{R.SAcl{+k, a}}:
       sh.acl(k)
     case R.Own{R.SXRead{q}}:
-      Bool.pick(Sh, R.xread.waits(q, R.ds.focused(ds)), ShNoBlock{}, ShRun{})
+      sh.xread(R.xread.waits(q, R.ds.focused(ds)), q, ds)
     case R.Own{R.SXGroup{q}}:
-      Bool.pick(Sh, R.xgr.waits(q, R.ds.focused(ds)), ShNoBlock{}, ShRun{})
+      sh.xgroup(R.xgr.waits(q, R.ds.focused(ds)), q)
     case R.Own{R.SBad{R.RError{+m}}}:
       sh.abort.if(Nat.is_eq(R.code.key(code), R.stat.top(162n)), m)
     case _:
@@ -8646,8 +9108,8 @@ def bg.pause(+hi: Nat, +lo: Nat, +all: Bool, +code: Nat, g: LRun) -> LRun:
 # the pause ended: the clients it held back go on at the end of the
 # group, and the sweep of expired keys it held back runs (its DELs logged
 # and touching the keys watched, its events sent, as a tick's)
-def bg.swept.put(+e1: List<&2, A.Ent>, +ds: R.Ds, rs: List<&2, R.Reply>, es: List<&2, A.Ent>, conn: S.Conn, srv: S.Srv, ws: Waits, up: List<&2, Up>, tx: Tx, pb: Ps) -> LRun:
-  LRun{rs, List.append(&2, A.Ent, e1, es), conn, srv, ds, ws, up, touch.ents(tx, e1, None{}, ds), ps.trk.gone(e1, ds, ps.swept(e1, pb))}
+def bg.swept.put(+e1: List<&2, A.Ent>, +ds: R.Ds, rs: List<&2, R.Reply>, es: List<&2, A.Ent>, conn: S.Conn, +srv: S.Srv, ws: Waits, up: List<&2, Up>, tx: Tx, pb: Ps) -> LRun:
+  LRun{rs, List.append(&2, A.Ent, e1, es), conn, srv, ds, sig.ents(srv, e1, None{}, ds, ws), up, touch.ents(tx, e1, None{}, ds), ps.trk.gone(e1, ds, ps.swept(e1, pb))}
 
 def bg.swept(r: S.Srv & (List<&2, A.Ent> & R.Ds), rs: List<&2, R.Reply>, es: List<&2, A.Ent>, conn: S.Conn, ws: Waits, up: List<&2, Up>, tx: Tx, pb: Ps) -> LRun:
   (srv, q) = r
@@ -8808,6 +9270,8 @@ def sh.ran(+s: Sh, +q: Bool, +may: Bool, +code: Nat) -> Bool:
   match s:
     case ShRun{}:
       Bool.and(Bool.and(Bool.not(q), may), Bool.not(Nat.is_eq(R.code.class(code), 1n)))
+    case ShWait{S.BlkXRead{x, ms, sig}}:
+      Bool.and(Bool.and(Bool.not(q), may), Bool.not(Nat.is_eq(R.code.class(code), 1n)))
     case _:
       False{}
 
@@ -8861,7 +9325,7 @@ def bg.trk.after.go(g: LRun, +rk: Bool, +id: Nat, +code: Nat, +kt: Tk, +a: Av) -
       +clear = Bool.and(Bool.or(tk.caching(kt), Nat.is_eq(key, R.stat.top(162n))), Bool.and(Bool.not(trk.client.key(key)), Bool.not(tx.multi(id, tx))))
       bg.trk.max(trk.max.key(R.code.key(code)), bg.trk.pend(ps.pend.take(bg.trk.cache.if(clear, id, bg.trk.read.if(rk, id, code, a, pb))), rs, es, conn, srv, ds, ws, up, tx))
     case LHeld{h}:
-      LHeld{bg.trk.after.go(h, False{}, id, code, trk.kt.held(code, kt), a)}
+      LHeld{bg.trk.after.go(h, rk, id, code, trk.kt.held(code, kt), a)}
 
 # whether the tracking has work after a command (Ps's bit 22)
 def bg.trk.hot(+g: LRun) -> Bool:
@@ -10653,10 +11117,10 @@ def bg.exec.wait(+id: Nat, +back: Chan(Ans), +c: R.Cmd, +code: Nat, rest: List<&
 # a blocking command of the script client never waits: it runs as the
 # session runs one, as Redis's script client may not block
 # (CLIENT_DENY_BLOCKING)
-def bg.wait.or(lua: Bool, +id: Nat, +back: Chan(Ans), b: S.Blk, +c: R.Cmd, +code: Nat, rest: List<&2, R.Cmd>, more: List<&2, Nat>, av: Av, g: LRun) -> LRun:
+def bg.wait.or(lua: Bool, +id: Nat, +back: Chan(Ans), b: S.Blk, +c: R.Cmd, +code: Nat, +argv: Nat, rest: List<&2, R.Cmd>, more: List<&2, Nat>, av: Av, g: LRun) -> LRun:
   match lua:
     case False{}:
-      bg.wait(id, back, b, c, code, rest, more, av, g)
+      bg.wait(id, back, b, c, code, argv, rest, more, av, g)
     case True{}:
       +l = g
       bg.one.serve(bg.stir(c, l), c, code, l)
@@ -10744,7 +11208,7 @@ def blk.aof.at(b: S.Blk, +w: I.Big) -> S.Blk:
 def bg.aof.go(waits: Bool, +id: Nat, +back: Chan(Ans), b: S.Blk, +w: I.Big, +c: R.Cmd, +code: Nat, rest: List<&2, R.Cmd>, more: List<&2, Nat>, av: Av, g: LRun) -> LRun:
   match waits:
     case True{}:
-      bg.wait.or(Nat.is_eq(id, 0n), id, back, blk.aof.at(b, w), c, code, rest, more, av, g)
+      bg.wait.or(Nat.is_eq(id, 0n), id, back, blk.aof.at(b, w), c, code, wait.argv(c), rest, more, av, g)
     case False{}:
       +l = g
       bg.one.serve(bg.stir(c, l), c, code, l)
@@ -10758,13 +11222,34 @@ def bg.aof(+id: Nat, +back: Chan(Ans), b: S.Blk, +c: R.Cmd, +code: Nat, rest: Li
     case LHeld{h}:
       LHeld{h}
 
+# the size of the arguments of a client that waits in XREAD or
+# XREADGROUP (CLIENT LIST's argv-mem): their request's words (a: from it on), but
+# for XREAD's "$" IDs, which Redis rewrites to IDs as it blocks
+# (rewriteClientCommandArgument keeps argv-mem with the words)
+def wait.xids(+c: R.Cmd) -> List<&2, String>:
+  match c:
+    case R.Own{R.SXRead{R.XRm{n, b, +ws}}}:
+      R.xgr.ids(ws)
+    case _:
+      Nil{}
+
+def wait.argv.of(+c: R.Cmd, +b: S.Blk, +a: Av) -> Nat:
+  match b:
+    case S.BlkXRead{R.XRm{n, x, +ws}, ms, sig}:
+      Nat.sub(Nat.add(got.argv(av.get(a)), S.cl.argv(R.xgr.ids(ws), 0n)), S.cl.argv(wait.xids(c), 0n))
+    case S.BlkXGroup{q, ms, sig}:
+      got.argv(av.get(a))
+    case _:
+      wait.argv(c)
+
 def bg.cmd(+id: Nat, +back: Chan(Ans), +inb: Nat, sh: Sh, +c: R.Cmd, +code: Nat, rest: List<&2, R.Cmd>, more: List<&2, Nat>, +a: Av, +ar: Av, g: LRun) -> LRun:
   match sh:
     case ShRun{}:
       +l = g
       bg.one.serve(bg.stir(c, l), c, code, l)
     case ShWait{b}:
-      bg.wait.or(Nat.is_eq(id, 0n), id, back, b, c, code, rest, more, ar, g)
+      +x = b
+      bg.wait.or(Nat.is_eq(id, 0n), id, back, x, c, code, wait.argv.of(c, x, a), rest, more, ar, g)
     case ShAof{b}:
       bg.aof(id, back, b, c, code, rest, more, ar, g)
     case ShUnblock{+n, +e}:
@@ -10845,8 +11330,6 @@ def bg.cmd(+id: Nat, +back: Chan(Ans), +inb: Nat, sh: Sh, +c: R.Cmd, +code: Nat,
       bg.hello(id, c, code, inb, a, None{}, g)
     case ShAcl{+k}:
       bg.acl.op(id, k, c, code, g)
-    case ShNoBlock{}:
-      bg.say(R.RError{"ERR BendKV does not block on streams yet"}, code, g)
 
 # the word a request of hash h leaves in its key's word w under an LFU
 # policy, at the minute min, r its random number
@@ -11058,6 +11541,51 @@ def grp.end.due(due: Bool, +now: Nat, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ 
     case False{} Con{u, more}:
       bg.ups(ups.fuel(), Grp{outs, es, srv, ds, ws, u <> more, tx, pb})
 
+# whether a client in XREAD or XREADGROUP is marked: the sweep of
+# expired keys or eviction signalled a key it waits on (Stream waits)
+def waits.xmarked(+ws: Waits) -> Bool:
+  match ws:
+    case WaitNone{}:
+      False{}
+    case WaitOn{id, back, c0, c1, +b, argv, code, db, until, cmds, codes, av, +rest}:
+      Bool.or(Bool.not(List.is_empty(&2, String, S.blk.sig(b))), waits.xmarked(rest))
+
+# the clients the sweep of expired keys or eviction marked served there,
+# as Redis serves the keys they signalled before it sleeps (as after a
+# script: grp.serve); a walk of the chain at a tick's sweep, not at each
+# group's end
+def grp.xserve.of(outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, l: LRun) -> Grp:
+  match l:
+    case LRun{rs, es, conn, srv, ds, ws, up, tx, pb}:
+      Grp{outs, es, srv, ds, ws, up, tx, pb}
+    case LHeld{h}:
+      grp.xserve.of(outs, h)
+
+def grp.xserve.if(on: Bool, g: Grp) -> Grp:
+  match on g:
+    case True{} Grp{outs, es, srv, ds, ws, up, tx, pb}:
+      grp.xserve.of(outs, bg.serve(LRun{Nil{}, es, S.Conn{0n, True{}, "", S.MOn{}, False{}, 0n, False{}}, srv, ds, ws, up, tx, pb}))
+    case _ g0:
+      g0
+
+def grp.xserve.at(on: Bool, +ws: Waits) -> Bool:
+  match on:
+    case True{}:
+      waits.xmarked(ws)
+    case False{}:
+      False{}
+
+def grp.xserve(g: Grp) -> Grp:
+  match g:
+    case Grp{outs, es, +srv, ds, +ws, up, tx, pb}:
+      grp.xserve.if(grp.xserve.at(S.srv.xwaits(srv), ws), Grp{outs, es, srv, ds, ws, up, tx, pb})
+
+def grp.end.at(g: Grp) -> Grp:
+  match g:
+    case Grp{outs, es, srv, +ds, ws, up, tx, +pb}:
+      +now = R.ds.now(ds)
+      grp.end.due(waits.due(now, ps.soon(pb)), now, outs, es, srv, ds, ws, up, tx, pb)
+
 # the end of a group: the clients whose time is up unblocked, then the
 # unblocked clients' batches go on; nothing after a SHUTDOWN that stops
 # the server
@@ -11067,9 +11595,8 @@ def grp.end.go(g: Grp) -> Grp:
       Grp{outs, es, srv, ds, WaitNone{}, Nil{}, tx, pb}
     case Grp{outs, es, srv, ds, WaitNone{}, Con{u, more}, tx, pb}:
       bg.ups(ups.fuel(), Grp{outs, es, srv, ds, WaitNone{}, u <> more, tx, pb})
-    case Grp{outs, es, srv, +ds, ws, up, tx, +pb}:
-      +now = R.ds.now(ds)
-      grp.end.due(waits.due(now, ps.soon(pb)), now, outs, es, srv, ds, ws, up, tx, pb)
+    case g0:
+      grp.end.at(g0)
 
 def grp.down(+g: Grp) -> Nat:
   match g:
@@ -11728,7 +12255,8 @@ def mem.grp(p: Ps & List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A
 def mem.done(d: Evd, ws: Waits, tx: Tx, pb: Ps) -> Grp:
   match d:
     case Evd{+res, Evs{srv, +ds, +es, +n}}:
-      mem.grp(ps.flush(ps.evicted(es, ps.trk.gone(es, ds, ps.mem(pb, res))), Nil{}), es, S.srv.evicted(srv, n, Nat.is_lt(0n, res), R.ds.now(ds)), ds, ws, touch.ents(tx, es, None{}, ds))
+      +sv = srv
+      grp.xserve(mem.grp(ps.flush(ps.evicted(es, ps.trk.gone(es, ds, ps.mem(pb, res))), Nil{}), es, S.srv.evicted(sv, n, Nat.is_lt(0n, res), R.ds.now(ds)), ds, sig.ents(sv, es, None{}, ds, ws), touch.ents(tx, es, None{}, ds)))
 
 # Redis's warning for a CONFIG SET that set maxmemory below the memory in
 # use (updateMaxmemory)
@@ -12226,8 +12754,8 @@ def group.swept.out(p: Ps & List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: Li
   (pb, outs) = p
   Grp{outs, es, srv, ds, ws, up, tx, pb}
 
-def group.swept.put(outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, srv: S.Srv, +e1: List<&2, A.Ent>, +ds: R.Ds, ws: Waits, up: List<&2, Up>, tx: Tx, pb: Ps) -> Grp:
-  group.swept.out(ps.flush(ps.trk.gone(e1, ds, ps.swept(e1, pb)), outs), List.append(&2, A.Ent, e1, es), srv, ds, ws, up, touch.ents(tx, e1, None{}, ds))
+def group.swept.put(outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, +srv: S.Srv, +e1: List<&2, A.Ent>, +ds: R.Ds, ws: Waits, up: List<&2, Up>, tx: Tx, pb: Ps) -> Grp:
+  grp.xserve(group.swept.out(ps.flush(ps.trk.gone(e1, ds, ps.swept(e1, pb)), outs), List.append(&2, A.Ent, e1, es), srv, ds, sig.ents(srv, e1, None{}, ds, ws), up, touch.ents(tx, e1, None{}, ds)))
 
 def group.swept.tx(outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, r: S.Srv & (List<&2, A.Ent> & R.Ds), ws: Waits, up: List<&2, Up>, tx: Tx, pb: Ps) -> Grp:
   (srv, q) = r
@@ -12246,13 +12774,15 @@ def group.sweep(on: Bool, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es
 # of the group, and the sweep runs (The pause)
 def group.resumed(p: Waits & List<&2, Up>, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, srv: S.Srv, ds: R.Ds, +tx: Tx, +pb: Ps) -> Grp:
   (+ws, up) = p
-  group.sweep(Bool.or(tx.on(tx), ps.looks(pb)), outs, es, waits.count(ws, srv), ds, ws, up, tx, pb)
+  +sv = waits.count(ws, srv)
+  group.sweep(Bool.or(tx.on(tx), Bool.or(ps.looks(pb), S.srv.xwaits(sv))), outs, es, sv, ds, ws, up, tx, pb)
 
 def group.tick(on: Bool, over: Bool, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, srv: S.Srv, ds: R.Ds, ws: Waits, up: List<&2, Up>, +tx: Tx, pb: Ps) -> Grp:
   match on over:
     case False{} _:
       +p = pb
-      group.sweep(Bool.or(tx.on(tx), ps.looks(p)), outs, es, srv, ds, ws, up, tx, p)
+      +sv = srv
+      group.sweep(Bool.or(tx.on(tx), Bool.or(ps.looks(p), S.srv.xwaits(sv))), outs, es, sv, ds, ws, up, tx, p)
     case True{} False{}:
       Grp{outs, es, srv, ds, ws, up, tx, pb}
     case True{} True{}:

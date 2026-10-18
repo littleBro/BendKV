@@ -9418,10 +9418,10 @@ BLOCK, is a session command (`SXRead`) that reads the client's database.
   last ID, 0-0 for a key not there; `>` an error), the first error before any key is
   served. A key is served when its last live entry is past the ID, from the ID after
   it. BendKV blocks on no stream yet: a BLOCK that serves no key answers "ERR BendKV
-  does not block on streams yet", from the shell (`sh.plain`, `ShNoBlock`). In MULTI,
-  the session answers it a null array, as Redis answers a client that may not wait.
-  A script's XREAD with BLOCK gets no further than its options: Redis refuses a script
-  the option (3zzzd).
+  does not block on streams yet", from the shell (`sh.plain`, `ShNoBlock`); it waits as
+  Redis's does since section 3zzzzu. In MULTI, the session answers it a null array, as
+  Redis answers a client that may not wait. A script's XREAD with BLOCK gets no further
+  than its options: Redis refuses a script the option (3zzzd).
   That is why XREAD with BLOCK is `SXRead` even for one key: the shell sees it, and
   EXEC runs it as the session does.
 - **XINFO STREAM** answers the stream's length, its count of nodes
@@ -10775,9 +10775,10 @@ The first version of this change took 2.2 million instructions for XREADGROUP of
 entry, which takes 593,000 now (Redis 56,000).
 
 **Where BendKV differs.**
-- XREADGROUP with BLOCK, as XREAD's, answers an error where Redis would make its client
+- XREADGROUP with BLOCK, as XREAD's, answered an error where Redis would make its client
   wait (in MULTI a null array, and in a script the error Redis gives, as Redis answers),
-  and such a call makes no consumer, where Redis makes it before its client waits.
+  and such a call made no consumer, where Redis makes it before its client waits. Both
+  wait as Redis's do since section 3zzzzu.
 - XGROUP CREATE's and SETID's syntax error for words past their options, which Redis
   finds once it has read the key and the group, names the subcommand in capitals, as the
   write keeps no word of it; Redis names it as it came.
@@ -10800,7 +10801,8 @@ entry, which takes 593,000 now (Redis 56,000).
   compared, then each stream's XINFO STREAM FULL, XINFO GROUPS, XPENDING and XINFO
   CONSUMERS, and the changes the command counted. Times may differ by up to 2 s. Then come
   the errors in Redis's order, the keyspace events, WATCH and MULTI, and BLOCK on BendKV
-  alone: 32,236 checks in its default run, all alike.
+  alone (a BLOCK that waits is section 3zzzzu's, against Redis): 32,236 checks in its
+  default run, all alike.
 - `tests/stream_group_aof_test.py` (in `make test`): the groups' writes in both servers'
   files. BendKV started from its own file holds its streams byte for byte. Redis started
   from BendKV's file holds them too, but for the consumers' times. BendKV started from
@@ -10815,6 +10817,132 @@ unknown command). Redis's own suite passes 43 tests more, 1,719 of the 1,812 tha
 that stopped at XGROUP or on what a test stopped at it left. The client libraries' suites
 pass 45 tests more in redis-py, in each protocol (2,768 of the 2,772 Redis passes), and 12
 in go-redis (462 of 463), each of the others failing on what BendKV does not have.
+
+## 3zzzzu. Streams' waits, as Redis 7.2.16 has them wait
+
+**What there is.** XREAD and XREADGROUP with BLOCK whose read has nothing to serve make
+their client wait, as 7.2.16's `xreadCommand` and `blockForKeys` have it wait, where
+BendKV answered an error (section 3zzzzt):
+- BLOCK's milliseconds are read as `getTimeoutFromObjectOrReply` reads them (0 waits for
+  ever), and one that the time now takes past LLONG_MAX is "timeout is out of range";
+- XREAD's `$` is read as its key's last ID as the client begins to wait (0-0 for a key
+  not there), and written into its command, as Redis rewrites its argv: CLIENT LIST's
+  `argv-mem` counts the ID;
+- XREADGROUP's consumers are made and seen then, as its first run makes them in Redis:
+  the change counted, `xgroup-createconsumer` sent;
+- the call is counted when its client is served, when its time is up (a null array) or
+  when CLIENT UNBLOCK ends the wait (a null array for TIMEOUT, the UNBLOCKED error for
+  ERROR), as section 3zzzzb counts a call that blocks;
+- INFO's `blocked_clients` and `total_blocking_keys` count them, and
+  `total_blocking_keys_on_nokey` counts the keys XREADGROUP's clients wait on, which Redis
+  readies when they are deleted too;
+- in MULTI and in a script nothing waits, as before.
+
+**When a client is run again.** Redis readies a key that clients wait on
+(`signalKeyAsReady`) when XADD adds to it, when a stream is made there (`dbAdd`:
+RESTORE, the destination of RENAME, MOVE or COPY, XGROUP CREATE's MKSTREAM), when XGROUP
+DESTROY destroys one of its groups, and for the keys SWAPDB brings
+(`scanDatabaseForReadyKeys`); and for XREADGROUP's clients alone, when the key is deleted,
+overwritten, or emptied by FLUSHDB, FLUSHALL or SWAPDB (`signalDeletedKeyAsReady`). Once
+the command is done (or EXEC, or the script), `handleClientsBlockedOnKeys` runs each
+client of a ready key again, in the order they blocked: XREAD's when the key is a stream
+then, XREADGROUP's whatever the key holds, which then answers NOGROUP or WRONGTYPE. A
+client is run again with its command as it came (`$` rewritten), and one whose read would
+wait again waits again, at the end of the key's clients, with its time as it was
+(`CLIENT_REPROCESSING_COMMAND`). XDEL, XTRIM, XSETID, XGROUP SETID and the groups' other
+writes change a stream in place and ready no one, and neither does EXPIRE.
+
+**How it is built.** A client waits in the actor's chain of clients that wait, as a pop's
+does, with what it waits for (`S.BlkXRead`: XREAD's read, its `$` read; `S.BlkXGroup`:
+XREADGROUP's) and the keys readied for it since it last ran (`sig`). After each command
+of the general way, the actor marks those clients with the keys the command's effects
+ready, from the databases before the command and after it, as the touches of WATCH are
+made (`sig.ents`):
+- a write that makes a stream of a key or takes a stream away (the key's kind before and
+  after differ, one of them a stream);
+- one that replaces a value (RESTORE, RENAME's destination, MOVE, COPY), whatever the
+  kinds;
+- FLUSHDB, FLUSHALL and SWAPDB, on their databases;
+- a stream's own writes as Redis readies their keys (`xw.ready`): XADD, XGROUP CREATE's
+  MKSTREAM and DESTROY.
+
+The sweep of expired keys and eviction mark them too, and serve them there
+(`grp.xserve`), as Redis serves them before it sleeps. A client marked is ready
+(`waits.xready`), XREADGROUP's always and XREAD's when a key marked is a stream, and is
+run again (`bg.xserve`). When its read answers, entries or an error, it is served, and
+its call is counted then, with the changes XREADGROUP made. When its read would wait
+still, it waits again at the end of the chain, its marks cleared and its time as it was;
+XREADGROUP's consumers are seen again then (and made again where one was deleted while
+it waited), and those changes are counted and logged.
+
+While no client waits in XREAD or XREADGROUP (a count kept with the server's clients),
+none of this runs: no command keeps the databases from before it for the marks, and the
+sweep looks at no client. While one waits, a batch on keys no client waits on still runs
+the fast way, as with a client in BLPOP (section 61 of PERFORMANCE.md).
+
+The append-only file logs what an XREADGROUP that waits changes, as it begins to wait and
+each time it is run again and changes a group, as XWSet's script (section 3zzzzt): its
+consumers made and seen. Redis logs none of it but a consumer made with NOACK, as an
+XGROUP CREATECONSUMER.
+
+**What it costs** (PERFORMANCE.md, section 88). Nothing to the commands on other keys:
+with 100 clients waiting in XREAD on keys of their own, GET takes 3,654 instructions a
+request and SET 4,494, as with 100 in BLPOP (3,645 and 4,475; with none, 3,524 and
+4,320), and `make perfcheck` counts GET 3,530, SET 4,317 and INCR 4,612 (3,527, 4,319
+and 4,612 before). A wait served by an XADD takes 138,000 instructions more than the XADD
+and the read without it (Redis 10,000), and 334,000 with XREADGROUP (Redis 10,400): the
+XADD runs the general way, as its key is one a client waits on, and XREADGROUP's consumer
+is seen as it begins to wait, which is a group's write.
+
+**Where BendKV differs.**
+- The clients served after a command that readied several keys go in the order they
+  blocked, as a pop's do; Redis takes the keys in the order they were readied, and each
+  key's clients in the order they blocked.
+- A stream whose time has passed readies its clients when the sweep of expired keys
+  deletes it; Redis's are readied also when a command finds the key expired and deletes
+  it. An XREADGROUP whose stream expires answers NOGROUP at the sweep that deletes it.
+- A BLOCK that the time now takes past LLONG_MAX is refused after the errors of the
+  words that follow it, which the parser finds first (unbalanced streams, a syntax
+  error); Redis refuses it as soon as it reads it.
+- A client run again is not checked again against its user's ACL rules, which Redis's
+  `processCommand` checks for a command run again as for any other.
+- A client that tracks with OPTIN and sent CLIENT CACHING YES before an XREAD that waits
+  has the read's keys remembered as it begins to wait, and not again when it is served.
+  Redis keeps the client's CACHING flag while it waits, so its read run again remembers
+  them again, after the write that served it sent their invalidation.
+- The append-only file holds a script for each XREADGROUP that waits, and for each of its
+  runs again that changes a group. Redis's holds an XGROUP CREATECONSUMER for one with
+  NOACK alone, so that Redis started from its own file lacks a consumer that an
+  XREADGROUP without NOACK made and that never got an entry.
+
+**Tests.**
+- `tests/stream_block_test.py` (in `make test`, in each of its servers' modes): 41
+  scenarios on BendKV and on Redis 7.2.16, with clients of their own, their transcripts
+  compared line by line (the times XINFO shows left out): 91 lines, all alike. They are
+  XREAD's (served by an XADD or at once, a timeout, an empty stream and one that ran dry,
+  `$`, the same key three times, COUNT, the writes of a transaction, keys of other kinds,
+  XDEL, XTRIM and XSETID, RESTORE, RENAME, COPY, MOVE and SWAPDB, FLUSHALL, a pipeline
+  behind the read, MULTI, another database, the tracking of its keys) and XREADGROUP's
+  (its pending entries, a timeout, DESTROY, DEL, SET, FLUSHALL, FLUSHDB, SWAPDB, RENAME,
+  two consumers, a consumer deleted while its client waits, SETID, NOACK, an ID other than
+  `>`, a key a list's client waits on, a client run again that waits again, a stream that
+  expires, CLIENT KILL), and of both: CLIENT UNBLOCK, INFO's counts, CLIENT LIST's line,
+  the calls and errors counted, the changes counted, the keyspace events and RESP3.
+- `tests/stream_group_aof_test.py`: two XREADGROUPs that wait until their time is up, one
+  with NOACK, in both servers' files.
+- `tests/stream_read_test.py` and `tests/stream_group_test.py` no longer check the error
+  BendKV answered.
+- `tools/idle_clients.py` holds clients in XREAD and XREADGROUP for
+  `tools/callgrind_req.sh` and `tools/waiters_bench.sh` (modes `xread` and `xreadgroup`),
+  and `tools/stream_waits.py` and `tools/stream_waits_cg.sh` time and count a wait served
+  by an XADD (PERFORMANCE.md, section 88).
+
+On the build before this change, 84 of stream_block_test's 91 lines differ. Redis's own
+suite passes 22 tests more, 1,741 of the 1,812 that Redis 7.2.16 passes
+(COMPATIBILITY.md): each test of unit/type/stream (8) and unit/type/stream-cgroups (14)
+that waited in XREAD or XREADGROUP. The client libraries' suites: go-redis passes its
+test of XRead, which waits, and so all 463 of the tests Redis passes; redis-py 2,768 of
+2,772 in each protocol, as before.
 
 ## 4. Where a request's time goes, and hiding the memory waits
 

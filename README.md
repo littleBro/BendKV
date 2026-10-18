@@ -20,7 +20,7 @@ throughput of Redis 7.0.15 on the same machine, with half its memory for small v
 > append-only file and its rewrite, maxmemory and its eviction, Lua scripts and
 > functions, RESP3). The goal now is a drop-in replacement for a single Redis node,
 > measured by Redis's own test suite: of the 1,812 tests Redis 7.2.16 passes against a
-> server it did not start, BendKV passes 1,719, and 1,644 of the 1,688 in what it implements
+> server it did not start, BendKV passes 1,741, and 1,644 of the 1,688 in what it implements
 > ([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)). Do not use it for data you cannot
 > lose.
 
@@ -332,8 +332,8 @@ translation stays in the trusted base.
   and MEMORY USAGE take it, and the other kinds' commands answer WRONGTYPE. The
   commands that read a stream answer as Redis's: XLEN; XRANGE and XREVRANGE, their IDs
   read as Redis reads them (`-`, `+`, an ID without its sequence, `(` for an end left
-  out), with COUNT; XREAD of one key or several, with COUNT and `$`, and with BLOCK when
-  an entry is there to serve; XINFO STREAM (FULL, with COUNT), GROUPS, CONSUMERS and
+  out), with COUNT; XREAD of one key or several, with COUNT, `$` and BLOCK (clients that
+  wait, below); XINFO STREAM (FULL, with COUNT), GROUPS, CONSUMERS and
   HELP, their lag, entries read and count of the radix tree's nodes as Redis counts
   them; XPENDING, its summary and its entries (IDLE, a consumer). XADD, XTRIM, XDEL and
   XSETID write one as Redis does, node for node and byte for byte: XADD with an ID,
@@ -343,17 +343,14 @@ translation stays in the trusted base.
   added, a trim by `~` as the exact trim it made), which Redis loads too. The commands
   of groups answer and write as Redis's: XGROUP CREATE (with MKSTREAM and ENTRIESREAD),
   SETID, DESTROY, CREATECONSUMER, DELCONSUMER and HELP; XREADGROUP of one key or
-  several, at `>` or in a consumer's history, with COUNT and NOACK; XACK; XCLAIM with
-  IDLE, TIME, RETRYCOUNT, FORCE, JUSTID and LASTID; XAUTOCLAIM with COUNT and JUSTID;
+  several, at `>` or in a consumer's history, with COUNT, NOACK and BLOCK; XACK; XCLAIM
+  with IDLE, TIME, RETRYCOUNT, FORCE, JUSTID and LASTID; XAUTOCLAIM with COUNT and JUSTID;
   their errors in Redis's order, their keyspace events and the changes INFO counts. The
   append-only file logs XGROUP CREATE, DESTROY and XACK as they came, and a write that
   reads the clock as BendKV's script of what it did (a group's last ID and entries read,
   a consumer's times, the pending entries it got or lost with their times and counts),
   which Redis loads too (section 3zzzzt of [docs/FINDINGS.md](docs/FINDINGS.md)). Where
-  BendKV differs: XREAD and XREADGROUP with BLOCK answer an error where Redis would make
-  their client wait (in MULTI, where Redis does not wait, they answer a null array, as
-  Redis does), and such an XREADGROUP makes no consumer, where Redis makes it before its
-  client waits; XGROUP CREATE's and SETID's syntax error for words past their last
+  BendKV differs: XGROUP CREATE's and SETID's syntax error for words past their last
   option, which Redis finds once it has read the key and the group, names the subcommand
   in capitals, where Redis names it as it came; XAUTOCLAIM with a COUNT whose room Redis
   cannot allocate (16 bytes a count) runs, where Redis answers that it lacks the memory;
@@ -390,17 +387,37 @@ translation stays in the trusted base.
   (TIMEOUT) or an UNBLOCKED error (ERROR); a client that closes its connection while it
   waits is forgotten. INFO's `blocked_clients` and `clients_in_timeout_table` count them,
   and the failed calls and errors are counted as Redis counts them. A command run while
-  replies are off (CLIENT REPLY OFF or SKIP) pops as it does with them on. Where BendKV
-  differs: Redis serves the clients of the keys a command added (`signalKeyAsReady`, from
-  `dbAdd`), key by key in the order they became ready, where BendKV looks at every client,
-  in the order they came, after every command that may make one ready (one that may write
-  a key a client waits on, or a command of the connection or of the server). A client that
-  waits costs nothing to the commands on other keys (PERFORMANCE.md, section 61). XREAD
-  is not there, WAIT's wait ends only by its time or CLIENT UNBLOCK, and WAITAOF's by
-  those or the append-only file's sync (The server, below); a timeout that the time now
-  takes past 2^63 - 1 ms, one of more than 292 million years, waits, where Redis 7.2.16
-  refuses it as out of range (BendKV refuses WAITAOF's, as Redis does). In a transaction
-  a blocking command does not wait, as in Redis (below).
+  replies are off (CLIENT REPLY OFF or SKIP) pops as it does with them on. XREAD and
+  XREADGROUP with BLOCK (milliseconds; 0 waits for ever) wait as Redis 7.2.16 has them
+  wait (section 3zzzzu of [docs/FINDINGS.md](docs/FINDINGS.md)): a read with nothing to
+  serve makes its client wait, XREAD's `$` read then as its key's last ID (CLIENT LIST's
+  `argv-mem` counts the ID) and XREADGROUP's consumers made and seen then. The client is
+  run again, its command as it came, once the command (or EXEC, or the script) is done
+  that added to a key it waits on, made the key or deleted it, made it of another kind or
+  replaced it (XADD, XGROUP CREATE's MKSTREAM, SET, DEL, RESTORE, RENAME, MOVE, COPY,
+  SWAPDB, FLUSHDB, FLUSHALL, an expiry or an eviction), or destroyed a group of it:
+  XREAD's client when the key is a stream then, XREADGROUP's whatever the key holds, which
+  then answers its error (NOGROUP, WRONGTYPE). A client whose read would wait again waits
+  at the end of the line, its time as it was, and INFO's `total_blocking_keys_on_nokey`
+  counts the keys XREADGROUP's clients wait on. Where BendKV differs: Redis serves the
+  clients of the keys a command added (`signalKeyAsReady`, from `dbAdd`), key by key in
+  the order they became ready, where BendKV looks at every client, in the order they came,
+  after every command that may make one ready (one that may write a key a client waits
+  on, or a command of the connection or of the server); a stream's key whose time has
+  passed readies its clients when the sweep of expired keys deletes it, where Redis's also
+  do when a command finds it expired; a stream's client run again is not checked again
+  against its user's ACL rules, as Redis's `processCommand` checks it; a BLOCK out of
+  range is refused after the errors of the words after it; a client with OPTIN tracking
+  and CLIENT CACHING YES has its read's keys remembered as it begins to wait, not again
+  when it is served; the append-only file logs an XREADGROUP that waits as the script of
+  its consumers, as it begins to wait and each time it is run again and changes a group,
+  where Redis logs a consumer made with NOACK alone. A client that waits costs nothing to
+  the commands on other keys (PERFORMANCE.md, sections 61 and 88). WAIT's wait ends only
+  by its time or CLIENT UNBLOCK, and WAITAOF's by those or the append-only file's sync
+  (The server, below); a pop's timeout that the time now takes past 2^63 - 1 ms, one of
+  more than 292 million years, waits, where Redis 7.2.16 refuses it as out of range
+  (BendKV refuses WAITAOF's, and XREAD's and XREADGROUP's BLOCK, as Redis does). In a
+  transaction a blocking command does not wait, as in Redis (below).
 - **Transactions:** MULTI, EXEC, DISCARD, WATCH and UNWATCH, as Redis 7.2.16 runs them.
   After MULTI a command is queued (QUEUED), but for EXEC, DISCARD, MULTI (an error:
   transactions do not nest), WATCH (an error inside MULTI), QUIT and RESET, which run; a
@@ -879,7 +896,7 @@ translation stays in the trusted base.
   and so does the start from a large file (PERFORMANCE.md, sections 72 and 78;
   FINDINGS.md, sections 3zzzk and 3zzzt).
 
-Not yet: XREAD's and XREADGROUP's wait, CONFIG REWRITE (it answers as Redis does without a configuration file).
+Not yet: CONFIG REWRITE (it answers as Redis does without a configuration file).
 Times in ms are limited to 14 digits.
 
 ## Performance
@@ -1009,7 +1026,9 @@ robustness and concurrency checks, a client that stops reading while the others 
 served (`tests/writer_test.py`), clients that wait (`tests/blocking_test.py`: 18 scenarios
 of the blocking commands on BendKV and on Redis, their transcripts compared line by line,
 then 300 clients served at once, 100 timeouts at once, clients that leave while they wait,
-and 50 consumers moving 1,000 items while some leave), transactions (`tests/multi_test.py`:
+and 50 consumers moving 1,000 items while some leave; `tests/stream_block_test.py`: 41
+scenarios of XREAD and XREADGROUP with BLOCK on BendKV and on Redis, their transcripts
+compared line by line), transactions (`tests/multi_test.py`:
 13 scenarios of MULTI, EXEC, DISCARD, WATCH and UNWATCH on BendKV and on Redis, their
 transcripts compared line by line, then a counter raised by 20 clients with WATCH, each
 lost race retried, a reader that never sees half of a transaction, and 100 clients that
@@ -1150,7 +1169,7 @@ away.
 | `src/redis.bend` | 21,000 | 6,800 | yes |
 | `src/batch.bend` | 84 |  | yes |
 | `src/aof.bend` | 1,300 |  | yes |
-| `src/session.bend` | 3,000 |  | yes |
+| `src/session.bend` | 3,400 |  | yes |
 | `src/config.bend` | 1,400 | 190 | yes |
 | `src/acl.bend` | 2,300 | 760 | no |
 | `src/aofdir.bend` | 360 |  | no |

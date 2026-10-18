@@ -13,7 +13,8 @@
 # and runs against each the robustness checks, a client that stops
 # reading (its replies must hold up no one else's, nor the loop), clients
 # that wait in blocking commands (scenarios against Redis, and checks
-# under load), transactions (scenarios against Redis, and checks under
+# under load) and in XREAD and XREADGROUP (scenarios against Redis),
+# transactions (scenarios against Redis, and checks under
 # load), Pub/Sub and keyspace notifications (scenarios against Redis, and
 # checks under load), CLIENT LIST, INFO and KILL (scenarios against Redis,
 # and checks under load), CLIENT TRACKING (scenarios against Redis),
@@ -184,6 +185,7 @@ for n in "" post send "post build/test.aof everysec"; do
   python3 tests/robust_test.py --port "$PORT"
   python3 tests/writer_test.py --port "$PORT"
   python3 tests/blocking_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
+  python3 tests/stream_block_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
   python3 tests/multi_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
   python3 tests/pubsub_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
   python3 tests/client_test.py --bendkv "$PORT" --redis "$REDIS_PORT"

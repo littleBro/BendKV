@@ -28,12 +28,11 @@ XINFO CONSUMERS' idle and inactive). The idle times the commands give
 past an hour, so that both servers pick the same entries.
 
 XREADGROUP with BLOCK is served when it has entries to serve, or reads
-a consumer's history; BendKV blocks on no stream yet, so where Redis
-would wait it answers an error, which the test checks on BendKV alone.
-In MULTI both answer a null array. A syntax error XGROUP finds once
-its key and group are read (CREATE or SETID with too many words)
-names the subcommand as BendKV knows it (CREATE, SETID), so the test
-sends those in upper case.
+a consumer's history; where it would wait, tests/stream_block_test.py
+has its clients wait. In MULTI both answer a null array. A syntax
+error XGROUP finds once its key and group are read (CREATE or SETID
+with too many words) names the subcommand as BendKV knows it (CREATE,
+SETID), so the test sends those in upper case.
 
     python3 tests/stream_group_test.py --bendkv 6380 --redis 6390 [--seed 1] [--rounds 3000]
 """
@@ -597,26 +596,6 @@ def watch(port_b, port_r):
                 break
 
 
-# where Redis would wait, BendKV answers an error (and changes nothing)
-def block(port_b):
-    global n
-    a = Conn(port_b, False)
-    for x in (cmd("DEL", "w4"), cmd("XGROUP", "CREATE", "w4", "g", "$", "MKSTREAM"),
-              cmd("XADD", "w4", "%d-1" % BASE, "f", "v"),
-              cmd("XREADGROUP", "GROUP", "g", "c", "STREAMS", "w4", ">")):
-        run(a, x)
-    for x in (cmd("XREADGROUP", "BLOCK", "0", "GROUP", "g", "c", "STREAMS", "w4", ">"),
-              cmd("XREADGROUP", "BLOCK", "10", "GROUP", "g", "c2", "STREAMS", "w4", ">")):
-        n += 1
-        y = run(a, x)
-        if y != (b"-", b"ERR BendKV does not block on streams yet"):
-            fail(b" ".join(x).decode(), y, "an error")
-    n += 1
-    y = run(a, cmd("XINFO", "CONSUMERS", "w4", "g"))
-    if y[0] != b"*" or len(y[1]) != 1:
-        fail("the consumers after a BLOCK that would wait", y, "c alone")
-
-
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--bendkv", type=int, default=6380)
@@ -635,7 +614,6 @@ def main():
         errors(b, r, dirty)
     events(a.bendkv, a.redis)
     watch(a.bendkv, a.redis)
-    block(a.bendkv)
     print("stream groups: %d checks, %d differ" % (n, bad))
     sys.exit(1 if bad else 0)
 

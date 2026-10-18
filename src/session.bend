@@ -1000,16 +1000,24 @@ def srv.failed(s: Srv, +k: Nat) -> Srv:
     case Srv{pass, cfg, info, mm}:
       Srv{pass, cfg, I.info.failed(info, k), mm}
 
-def srv.blocked(s: Srv, +n: Nat, +t: Nat) -> Srv:
+def srv.blocked(s: Srv, +n: Nat, +t: Nat, +w: Nat) -> Srv:
   match s:
     case Srv{pass, cfg, info, mm}:
-      Srv{pass, cfg, I.info.blocked(info, n, t), mm}
+      Srv{pass, cfg, I.info.blocked(info, n, t, w), mm}
 
-# the keys that clients wait on, k of them (server.bend: waits.bkeys)
-def srv.bkeys(s: Srv, +k: Nat) -> Srv:
+# whether some client waits in XREAD or XREADGROUP (server.bend: Stream
+# waits)
+def srv.xwaits(+s: Srv) -> Bool:
+  match s:
+    case Srv{pass, cfg, +info, mm}:
+      Nat.is_lt(0n, I.info.xwaits(info))
+
+# the keys that clients wait on, k of them, o of them those that clients
+# in XREADGROUP wait on (server.bend: waits.bkeys)
+def srv.bkeys(s: Srv, +k: Nat, +o: Nat) -> Srv:
   match s:
     case Srv{pass, cfg, info, mm}:
-      Srv{pass, cfg, I.info.bkeys(info, k), mm}
+      Srv{pass, cfg, I.info.bkeys(info, k, o), mm}
 
 # the engine's facts of scripts (server.bend, Scripts): n scripts cached,
 # the Lua state's bytes (m), the cache's (c)
@@ -1570,7 +1578,13 @@ def auth.login(+args: List<&2, String>, +s: Srv) -> Login:
 # 1), and its client's offset after its last write once it waits (w):
 # the server answers it once the append-only file is synced to w
 # (server.bend, WAITAOF), or when its time is up, from its offsets
-# (blk.aof.reply); in MULTI it answers at once from them.
+# (blk.aof.reply); in MULTI it answers at once from them. XREAD and
+# XREADGROUP with BLOCK, which would wait (R.xread.waits, R.xgr.waits),
+# wait as BlkXRead and BlkXGroup: the read (XREAD's "$" IDs its keys'
+# last IDs: R.xread.fix), its timeout as WAIT's, and the keys a write
+# signalled since the server last looked at the client (sig: server.bend,
+# Stream waits), which run the read again, as Redis 7.2.16 runs a client
+# blocked on keys again once one is ready.
 type Blk is Data:
   BlkPop{c: R.Cmd, form: Nat, ms: List<&2, Nat>}
   BlkBad{r: R.Reply}
@@ -1578,6 +1592,8 @@ type Blk is Data:
   BlkWait{ms: List<&2, Nat>}
   BlkScript{rs: List<&2, R.Reply>}
   BlkAof{ms: List<&2, Nat>, k: Nat, w: I.Big}
+  BlkXRead{q: R.XRm, ms: List<&2, Nat>, sig: List<&2, String>}
+  BlkXGroup{q: R.XGq, ms: List<&2, Nat>, sig: List<&2, String>}
 
 # The timeout, as getTimeoutFromObjectOrReply reads one in seconds: a
 # long double as string2ld reads it, times 1000 (rounded as x87 rounds);
@@ -1707,6 +1723,43 @@ def blk.wait(l: R.LL) -> Blk:
       BlkWait{F.big.add(F.big.mul_small(F.big.mul_small(F.big.of(hi), 1000n, 0n), 1000000n, 0n), F.big.of(lo))}
     case R.LLBad{}:
       BlkBad{R.RError{"ERR timeout is not an integer or out of range"}}
+
+# BLOCK's milliseconds (R.XB, the parser's) as a big integer, 0 for none
+def blk.xb(b: R.XB) -> List<&2, Nat>:
+  match b:
+    case R.XBMs{+hi, +lo}:
+      F.big.add(F.big.mul_small(F.big.mul_small(F.big.of(hi), 1000n, 0n), 1000000n, 0n), F.big.of(lo))
+    case R.XBNone{}:
+      Nil{}
+
+def blk.xrm.ms(q: R.XRm) -> List<&2, Nat>:
+  match q:
+    case R.XRm{c, b, ws}:
+      blk.xb(b)
+    case R.XRmOf{y}:
+      blk.xrm.ms(y)
+
+def blk.xgq.ms(q: R.XGq) -> List<&2, Nat>:
+  match q:
+    case R.XGq{g, c, n, b, na, ws}:
+      blk.xb(b)
+    case R.XGqOf{y}:
+      blk.xgq.ms(y)
+
+# XREAD's and XREADGROUP's keys, the words before their IDs
+def blk.xrm.keys(q: R.XRm) -> List<&2, String>:
+  match q:
+    case R.XRm{c, b, +ws}:
+      R.xgr.keys(ws)
+    case R.XRmOf{y}:
+      blk.xrm.keys(y)
+
+def blk.xgq.keys(q: R.XGq) -> List<&2, String>:
+  match q:
+    case R.XGq{g, c, n, b, na, +ws}:
+      R.xgr.keys(ws)
+    case R.XGqOf{y}:
+      blk.xgq.keys(y)
 
 # WAITAOF's: numlocal 1 or not (k's bit 0), numreplicas above 0 or not
 # (bit 1), and its timeout as WAIT's (the parser read them, numlocal 0 or
@@ -1890,6 +1943,10 @@ def blk.reply(b: Blk, db: R.Db) -> R.Reply:
       R.RNullA{}
     case BlkAof{ms, k, w}:
       blk.aof.acks(False{})
+    case BlkXRead{q, ms, sig}:
+      R.xread.many(q, db)
+    case BlkXGroup{q, ms, sig}:
+      R.xgr.reply(q, db)
 
 # the reply of a client whose time is up, or that CLIENT UNBLOCK unblocks
 # without an error, as Redis's replyToBlockedClientTimedOut: a null array
@@ -1952,11 +2009,15 @@ def blk.waits(b: Blk, db: R.Db) -> Bool:
       True{}
     case BlkAof{ms, k, w}:
       True{}
+    case BlkXRead{q, ms, sig}:
+      R.xread.waits(q, db)
+    case BlkXGroup{q, ms, sig}:
+      R.xgr.waits(q, db)
     case _:
       False{}
 
 # the keys a blocking command waits on: LMPOP's and ZMPOP's, LMOVE's
-# source
+# source, XREAD's and XREADGROUP's
 def blk.keys(b: Blk) -> List<&2, String>:
   match b:
     case BlkPop{R.LMPop{ks, left, n}, form, ms}:
@@ -1965,8 +2026,71 @@ def blk.keys(b: Blk) -> List<&2, String>:
       ks
     case BlkPop{R.LMove{s, d, e}, form, ms}:
       [s]
+    case BlkXRead{q, ms, sig}:
+      blk.xrm.keys(q)
+    case BlkXGroup{q, ms, sig}:
+      blk.xgq.keys(q)
     case _:
       Nil{}
+
+# whether a client waits in XREAD or XREADGROUP (Stream waits), and in
+# XREADGROUP, which a key deleted or of another kind serves too (Redis's
+# unblock_on_nokey)
+def blk.stream(+b: Blk) -> Bool:
+  match b:
+    case BlkXRead{q, ms, sig}:
+      True{}
+    case BlkXGroup{q, ms, sig}:
+      True{}
+    case _:
+      False{}
+
+def blk.xgroup(+b: Blk) -> Bool:
+  match b:
+    case BlkXGroup{q, ms, sig}:
+      True{}
+    case _:
+      False{}
+
+# the keys signalled since the server last looked at the client, k one
+# more (each once), and none again
+def blk.sig(+b: Blk) -> List<&2, String>:
+  match b:
+    case BlkXRead{q, ms, +sig}:
+      sig
+    case BlkXGroup{q, ms, +sig}:
+      sig
+    case _:
+      Nil{}
+
+def blk.sig.has(+ks: List<&2, String>, +k: String) -> Bool:
+  match ks:
+    case Con{+x, rest}:
+      Bool.or(String.eq(x, k), blk.sig.has(rest, k))
+    case Nil{}:
+      False{}
+
+def blk.sig.put(+k: String, ks: List<&2, String>) -> List<&2, String>:
+  +xs = ks
+  Bool.pick(List<&2, String>, blk.sig.has(xs, k), xs, k <> xs)
+
+def blk.sig.add(b: Blk, +k: String) -> Blk:
+  match b:
+    case BlkXRead{q, ms, sig}:
+      BlkXRead{q, ms, blk.sig.put(k, sig)}
+    case BlkXGroup{q, ms, sig}:
+      BlkXGroup{q, ms, blk.sig.put(k, sig)}
+    case other:
+      other
+
+def blk.sig.none(b: Blk) -> Blk:
+  match b:
+    case BlkXRead{q, ms, sig}:
+      BlkXRead{q, ms, Nil{}}
+    case BlkXGroup{q, ms, sig}:
+      BlkXGroup{q, ms, Nil{}}
+    case other:
+      other
 
 # a big integer below 2^48 (two limbs at most) as a Nat
 def blk.nat.hi(xs: List<&2, Nat>) -> Nat:
@@ -2006,6 +2130,10 @@ def blk.ms(b: Blk) -> List<&2, Nat>:
     case BlkWait{ms}:
       ms
     case BlkAof{ms, k, w}:
+      ms
+    case BlkXRead{q, ms, sig}:
+      ms
+    case BlkXGroup{q, ms, sig}:
       ms
     case _:
       Nil{}
@@ -2056,6 +2184,10 @@ def blk.at(b: Blk, +k: String) -> R.Cmd:
     case BlkScript{rs}:
       R.Bad{R.RNullA{}}
     case BlkAof{ms, k, w}:
+      R.Bad{R.RNullA{}}
+    case BlkXRead{q, ms, sig}:
+      R.Bad{R.RNullA{}}
+    case BlkXGroup{q, ms, sig}:
       R.Bad{R.RNullA{}}
 
 # Databases

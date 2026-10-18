@@ -39,13 +39,13 @@ make suite REDIS_SRC=../redis      # both runs and the table, in build/suite/
 ## The result
 
 Redis 7.2.16, October 2026. Of the 1,812 tests Redis passes in this mode, BendKV passes
-**1,719 (94.9%)**; of the 1,688 in the units of what BendKV has, 1,644 (97.4%), and 75
+**1,741 (96.1%)**; of the 1,688 in the units of what BendKV has, 1,644 (97.4%), and 97
 of the 122 of streams'.
 
 7.2.16's suite runs 148 tests more in this mode than 7.0.15's, and Redis passes 135 more.
 At the move BendKV passed 120 more, 1,676 where it passed 1,556 of the 1,677 that 7.0.15
-passed (92.8%), and streams' groups brought 43 since (below). The suite found six things
-to fix (section 3zzzzk of
+passed (92.8%), and streams' groups brought 43 since and their waits 22 (below). The suite
+found six things to fix (section 3zzzzk of
 [FINDINGS.md](FINDINGS.md)), and BendKV passed 1,657 before them:
 - unit/hyperloglog, 27 tests where 7.0.15's had 20, sets a sparse HyperLogLog of 32 MB of
   opcodes whose runs pass the last register, the test of the fix of CVE-2025-32023.
@@ -97,6 +97,22 @@ Streams' groups (section 3zzzzt of [FINDINGS.md](FINDINGS.md)) brought 43:
 - unit/introspection-2 passes 45 of its 46: COMMAND GETKEYS of XGROUP.
 - unit/scripting passes 115 of its 119: XREADGROUP with BLOCK is refused in a script, as
   XREAD with BLOCK is.
+
+Streams' waits (section 3zzzzu of [FINDINGS.md](FINDINGS.md)) brought 22, all the tests of
+the streams' units that waited in XREAD or XREADGROUP:
+- unit/type/stream passes 48 of the 66 tests Redis passes, where it passed 40: a blocking
+  XREAD served by new data, on a stream that ran dry (issue #5299), with the same stream
+  three times, at the edge of an ID's sequence, by XADDs in a transaction, and not woken
+  by an XADD and a DEL (and an LPUSH) in one, nor answered an empty array. Of its other
+  18, 16 never run, as the unit stops at `CONFIG SET appendonly yes`, and 2 set
+  `stream-node-max-entries`.
+- unit/type/stream-cgroups passes 49 of its 56, where it passed 35: a blocking XREADGROUP
+  answered NOGROUP or WRONGTYPE when its key is deleted, set, of another kind after a
+  transaction, flushed or renamed over, or when its group is destroyed; served by RENAME
+  with data; on a stream that ran dry, never with an empty array; with clients blocked on
+  a list or on the stream before it, run again without an endless loop; and an XREAD
+  that goes on waiting while its key is deleted or set, served by the XADD after it. Its
+  other 7 never run, as the unit stops at the same command.
 
 ### Against Redis 7.0.15
 
@@ -334,7 +350,7 @@ source): 9 of the 17. The other 7 need MULTI and WATCH, Lua or lists (then).
 | area | units | Redis passes | BendKV passes |
 |---|---|---:|---:|
 | what BendKV has: the protocol, connections and clients and their pause, the keyspace and its databases, strings and their ranges, bits and fields, counters and floats, hashes, lists, sets, sorted sets and the commands that wait on them, SORT, HyperLogLogs, GEO, DUMP and RESTORE, times to live, lazy freeing, transactions, pub/sub and keyspace notifications, introspection, the slow log and the latency monitor, client-side caching, ACL users, Lua scripts and functions | protocol, quit, keyspace, type/string, type/incr, type/hash, type/list, list-2, list-3, type/set, type/zset, sort, hyperloglog, geo, dump, scan, bitops, bitfield, expire, lazyfree, violations, multi, pubsub, pause, introspection, introspection-2, other, info-command, latency-monitor, slowlog, tracking, scripting, functions | 1688 | **1644** |
-| streams: their values, reads, writes and groups; XREAD's and XREADGROUP's wait not yet | type/stream, type/stream-cgroups | 122 | **75** |
+| streams: their values, reads, writes, groups and waits | type/stream, type/stream-cgroups | 122 | **97** |
 | the query buffer, not yet | querybuf | 2 | 0 |
 
 Of the first row's, unit/lazyfree's first two pass on BendKV's account of its heap, and
@@ -380,14 +396,14 @@ wait):
 | unit/type/list-2 | 2 | 2 | 2 |
 | unit/type/list-3 | 11 | 11 | 11 |
 | unit/type/set | 118 | 114 | 113 |
-| unit/type/stream | 75 | 66 | 40 |
-| unit/type/stream-cgroups | 59 | 56 | 35 |
+| unit/type/stream | 75 | 66 | 48 |
+| unit/type/stream-cgroups | 59 | 56 | 49 |
 | unit/type/string | 82 | 82 | 79 |
 | unit/type/zset | 303 | 300 | 298 |
 | unit/violations | 1 | 1 | 1 |
-| **all** | **1905** | **1812** | **1719 (94.9%)** |
+| **all** | **1905** | **1812** | **1741 (96.1%)** |
 
-## Why the other 93 fail
+## Why the other 71 fail
 
 Against Redis 7.2.16:
 
@@ -399,9 +415,8 @@ Against Redis 7.2.16:
   - 23 are type/stream's and type/stream-cgroups', on a command outside any test:
     `CONFIG SET appendonly yes`. BendKV turns its append-only file on only at its start.
   - One test runs only on a server that names jemalloc as its allocator.
-- **39 fail with another error.**
-  - 25 are streams': XREAD and XREADGROUP with BLOCK, which BendKV answers with an error
-    (22), and the three tests that set `stream-node-max-entries`, one of them
+- **17 fail with another error.**
+  - 3 are streams': the tests that set `stream-node-max-entries`, one of them
     unit/lazyfree's.
   - 7 fail on a client that a test before them left in MULTI: REPLICAOF's, in
     unit/multi.
@@ -422,10 +437,9 @@ INFO's statistics per command, which `info-command` looked for, made 3 more test
 SCAN and RANDOMKEY pass all their tests on keys: SCAN's basic iteration, COUNT, MATCH,
 TYPE, and its guarantee under a load of writes, and RANDOMKEY's three.
 
-So what the suite counts next is XREAD's and XREADGROUP's wait (22 tests of the streams'
-units) and `CONFIG SET appendonly yes`, which 23 tests after it wait for, then
-replication, whose SYNC stops 26 tests, then the query buffer of the third row (2
-tests).
+So what the suite counts next is `CONFIG SET appendonly yes`, which 23 tests after it
+wait for, then replication, whose SYNC stops 26 tests, then the query buffer of the
+third row (2 tests).
 
 ## What it found
 
@@ -554,7 +568,7 @@ make clients                       # the three suites, against Redis and build/b
 |---|---:|---:|
 | redis-py 8.1.0, RESP2 | 2,772 | **2,768 (99.9%)** |
 | redis-py 8.1.0, RESP3 | 2,772 | **2,768 (99.9%)** |
-| go-redis v9.23.0, RESP3 | 463 | **462 (99.8%)** |
+| go-redis v9.23.0, RESP3 | 463 | **463 (100%)** |
 
 Against Redis 7.0.15 BendKV passed 2,708 of the 2,753 tests it passes in redis-py, and
 447 of 460 in go-redis. 7.2.16 passes each of those, and 19 more in redis-py and 3 in
@@ -602,12 +616,11 @@ Every test BendKV fails of those Redis passes fails on what BendKV does not have
   since CLIENT TRACKING (section 3zzzb), and redis-py's 34 tests of ACL, of AUTH with a
   user and of CLIENT KILL USER, and go-redis's of ACL CAT, since ACL users (section
   3zzzh).
-- **Another error, on the same ground:** XREAD with BLOCK (go-redis's test of XRead
-  waits, which BendKV answers with an error), and redis-py's parser of commands, which
-  asks COMMAND for MIGRATE's keys.
+- **Another error, on the same ground:** redis-py's parser of commands, which asks
+  COMMAND for MIGRATE's keys. go-redis's test of XRead, which waits, passes since
+  streams' waits (section 3zzzzu of [FINDINGS.md](FINDINGS.md)).
 
-So no test of these suites finds a command BendKV has answering otherwise than Redis, but
-XREAD's BLOCK, which it does not have yet.
+So no test of these suites finds a command BendKV has answering otherwise than Redis.
 
 ## Other measures
 
