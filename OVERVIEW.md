@@ -715,8 +715,10 @@ manifest, read and written as Redis 7.2.16 does, a base (an RDB file or commands
 the incremental files since, loaded in turn; the last incremental file is appended to,
 and a rewrite starts a new one, then renames its temporary file into the directory as
 the next base and makes the files before it history, which it removes (section 3zzzq
-of docs/FINDINGS.md, with where BendKV differs: without the directory, which the
-runtime cannot make, BendKV keeps Redis 6's single file; its bases are commands).
+of docs/FINDINGS.md); a start with `appendonly yes` makes the directory where it is not
+there, as Redis 7 does (section 3zzzzzf), and moves an old single file into it. Where
+BendKV differs: a server started with `appendonly no` and no directory turns the file on
+and rewrites it as Redis 6's single file; its bases are commands.
 
 **The store** is a 16-child trie over 5 hex digits of the FNV-1a hash (2^20 buckets).
 A bucket is a chain of entries right in the trie, for collisions; an entry holds the
@@ -1219,9 +1221,9 @@ The translation the kernel reads can be dumped with
 - **Redis 7's directory of files** (`tests/aofdir_test.py`): BendKV and Redis each start
   on a copy of the same `appendonlydir`, and their databases, manifests, files and the
   lines they log are compared: Redis's directory, with an RDB base and with one of
-  commands; an empty directory, then writes and rewrites on both; an old single file
-  moved in, with an empty directory and with an upgrade stopped half way; manifests
-  Redis refuses; files cut short, last or not, and a file not there; history files,
+  commands; no directory and an empty one, then writes and rewrites on both; an old
+  single file moved in, with no directory, an empty one and an upgrade stopped half way;
+  manifests Redis refuses, and a file at the directory's name; files cut short, last or not, and a file not there; history files,
   removed or kept (`aof-disable-auto-gc`); a rewrite with `appendonly no`.
 - **maxmemory and eviction** (`tests/maxmemory_test.py`): the transcripts of BendKV and
   Redis are compared line by line — the OOM refusals past `maxmemory` under noeviction,

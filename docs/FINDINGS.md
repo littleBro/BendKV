@@ -159,8 +159,9 @@ the thirty-third adds C's doubles, `F64`, run as C runs them, strtod and libm wi
 (section 3zzm); the thirty-fourth lets AddressSanitizer check the heap, in a build
 with ASan only (section 3zzp); the thirty-fifth reads the monotonic clock without
 an effect, `Clock.us` (section 3zzz); the thirty-sixth listens on IPv6 addresses
-and unix sockets and sends systemd its notifications (section 3zzze); and the
-thirty-seventh takes SIGTERM and SIGINT as Redis's handler takes them (section 3zzzf).
+and unix sockets and sends systemd its notifications (section 3zzze); the
+thirty-seventh takes SIGTERM and SIGINT as Redis's handler takes them (section 3zzzf);
+and the thirty-eighth makes and removes a directory (section 3zzzzzf).
 The sections before 3l
 number the patches as they were then: patch 16 was effect pairs, taken out in 3l with
 `TCP.post_list` of patch 11, and their patches 17–20 are today's 16–19. None changes the
@@ -8673,10 +8674,10 @@ The rewrite of the append-only file, The append-only directory, Serving).
 
 **Where BendKV differs.**
 
-- The runtime has no effect that makes a directory. Without `appenddirname` there,
-  BendKV keeps Redis 6's single file, as before (Redis 7 makes the directory, and moves
-  such a file into it when it starts); with it there, the layout is Redis 7's. A
-  directory made for it once (`mkdir appendonlydir`) is enough.
+- The runtime had no effect that makes a directory. Without `appenddirname` there,
+  BendKV kept Redis 6's single file (Redis 7 makes the directory, and moves such a file
+  into it when it starts); with it there, the layout was Redis 7's. Since section
+  3zzzzzf a start with `appendonly yes` makes the directory, as Redis does.
 - BendKV writes its bases as commands, `<appendfilename>.<n>.base.aof`, whatever
   `aof-use-rdb-preamble` says (Redis writes an RDB file, `.base.rdb`, by default). It
   reads both.
@@ -11482,6 +11483,88 @@ and INCR take 3,572, 4,365 and 4,661 instructions a request, where main's take 3
 4,364 and 4,659. The fast way walks a batch's keys a second time only when the marks of
 its requests, or-ed together, may hold a delete's (`use.maybe.gone`); the actor compares
 two counts at each group's end (`rw.capped`); and the refusals take the general way.
+
+## 3zzzzzf. The append-only directory made at the start, as Redis 7 makes it
+
+**What there is.** A start with `appendonly yes`, in the configuration's form, makes
+`appenddirname` in `dir` where it is not there, as Redis 7.2.16's `dirCreateIfMissing`
+makes it (`mkdir`, mode 0755 less the umask), and goes on as a start in the directory
+(section 3zzzq). With no file at all, the directory gets an empty base, an incremental
+file and the manifest, as `aofOpenIfNeededOnServerStart` writes them; with an old single
+file, `appendfilename` in `dir`, the file is moved into the directory as its base, as
+`aofUpgradePrepare` moves it, and loaded. A name there that is not a directory stops the
+start with code 1 and Redis's line (`Can't open or create append-only dir appendonlydir:
+Not a directory`, as `dirCreateIfMissing` refuses it with ENOTDIR: a file, or a link to
+nothing), and so does a directory that cannot be made, with the system's reason. Before,
+the runtime could make no directory, so BendKV kept Redis 6's single file where the
+directory was not there: a server started on an empty `dir` wrote a file Redis 7 never
+writes, and a directory made by hand (`mkdir appendonlydir`) was the way to Redis 7's
+layout.
+
+**How it was found.** By a first run of Redis's suite in its own mode (section 3zzzzz):
+integration/aof-multi-part's "Multi Part AOF can create BASE (AOF format) when redis
+starts from empty", and the exception that stopped integration/aof and
+integration/aof-multi-part at the first test that reads the directory's manifest after a
+start on an empty `dir` (`couldn't open ".../appendonlydir/appendonly.aof.manifest"`).
+Run again on this change, integration/aof passes 22 tests where it passed 17, and stops
+at a file with timestamp annotations (`aof-timestamp-enabled`), which BendKV does not
+read; integration/aof-multi-part's start from empty with a base of commands finds the
+directory, its files and its manifest, then stops at DEBUG DIGEST, which BendKV does not
+have.
+
+**How it is built.**
+- **Patch 38** (`bend-patches/file-mkdir.patch`) adds the effects `File.mkdir(path,
+  mode)` and `File.rmdir(path)`, run on a helper thread as `File.rename` and
+  `File.unlink` are, their failures the system's (EEXIST, ENOENT, ENOTEMPTY, ...).
+- **The start** (`src/server.bend`, The append-only directory: `serve.on`). In the
+  configuration's form with `appendonly yes`, the start opens `appenddirname/.`: a
+  directory there goes on as before. Else the directory is made (`File.mkdir`, 0755), as
+  `dirCreateIfMissing` makes it: made, the start goes on in it; there already (EEXIST),
+  it goes on when the name is a directory (`appenddirname/.` opened, or refused for a
+  reason other than ENOENT and ENOTDIR: one that cannot be read, which Redis's `dirExists`
+  finds all the same) and stops with ENOTDIR's line when it is not; any other failure
+  stops it with its reason. The start in the directory is the one of section 3zzzq: the
+  manifest read (none: the directory is new), an old single file moved in
+  (`dir.upgrade`), the files loaded, a base and an incremental file made when there are
+  none. The short form (`bendkv <port> send <file> <policy>`) keeps its single file.
+- **The lines of a file of the directory** that stops the start or is cut name it as Redis
+  names it, by its name (`appendonly.aof`, not `appendonlydir/appendonly.aof`): the file
+  that ends cut short with `aof-load-truncated no` (Redis 7.2.16's line, which points to
+  `redis-check-aof --fix <filename.manifest>`), a transaction left open (`Revert
+  incomplete MULTI/EXEC transaction in AOF file ...`, said with `aof-load-truncated no`
+  too, before the line of the end, as Redis says it), and BendKV's lines of an entry that
+  does not replay and of bytes that are no entry. The start passes the name with the
+  path (`dir.cmds`, `restore_fx`); the single file's lines name its path, as before.
+
+**Where BendKV differs.**
+- A server started with `appendonly no` and no directory still turns the file on (CONFIG
+  SET appendonly yes) and rewrites it (BGREWRITEAOF) as Redis 6's single file; Redis
+  7.2.16 makes the directory for them too (`rewriteAppendOnlyFileBackground`). The next
+  start with `appendonly yes` moves that file into the directory, as Redis moves an old
+  one.
+
+**Tests.** `tests/aofdir_test.py` against Redis 7.2.16, each server on a copy of the
+same `dir`: a start with no directory (the lines logged, the manifest, the files and the
+directory's mode the same; then writes, a rewrite and more writes, the same manifests
+and entries; each server then started on the other's directory, the same databases); an
+old single file with no directory, moved in with the same manifest, files, lines and
+databases; a file at `appendonlydir`'s name, with no old single file and with one, and a
+link to nothing there, both servers stopping with code 1 and the same line, the name
+left as it was. `tests/start_test.py`'s files cut short with `aof-load-truncated no` (in
+an entry, and in a transaction left open), which only BendKV's line checked, are now
+started on both servers, the same exit code and the same last line;
+`tests/aof_window_test.py`'s unknown command names the file `appendonly.aof` again, now
+that it is the directory's. `tests/crash_test.py`, whose checks read the single file,
+starts its servers in the short form, and `tools/restore_mem.sh` counts the directory's
+files. Main's build fails the new scenarios. The runtime's own test,
+`tests/io/file_mkdir.bend` (on C and on JS): a directory made, a file made in it read
+back, EEXIST for a directory made again and for one at a file's name, ENOENT for one
+whose parent is not there, ENOTEMPTY, the file and the directory removed, and ENOENT for
+a directory removed again.
+
+The proofs are as before. No law changed.
+
+**What it costs.** Nothing on a request's path: the start makes the directory once.
 
 ## 4. Where a request's time goes, and hiding the memory waits
 

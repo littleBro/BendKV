@@ -23,7 +23,7 @@ numbers are in [tools/](../tools/README.md).
    holding up the `TCP.post` writer (section 40), the twenty-sixth fixes the fifth
    (section 41), the thirty-first has a walker that reads a tree borrow it from a caller
    that owns it (section 51), and the thirty-second keeps the string of a value that is a
-   string or else something else as the string itself, with no node (section 56). Ten
+   string or else something else as the string itself, with no node (section 56). Twelve
    more only add or widen effects or natives: the twentieth, the
    process and the clock for starting as `redis-server` does; the twenty-fourth, cutting a
    file of any size and syncing a directory (`File.sync_dir`); the twenty-fifth, waiting
@@ -34,8 +34,9 @@ numbers are in [tools/](../tools/README.md).
    section 48); the thirty-third, C's doubles (`F64`, section 60); the thirty-fifth, the
    monotonic clock without an effect (`Clock.us`, section 64); the thirty-sixth, listeners
    on IPv6 and on unix sockets and systemd's notification (FINDINGS.md, section 3zzze);
-   the thirty-seventh, SIGTERM and SIGINT (`IO.signal`, FINDINGS.md, section 3zzzf).
-   The thirty-fourth
+   the thirty-seventh, SIGTERM and SIGINT (`IO.signal`, FINDINGS.md, section 3zzzf);
+   the thirty-eighth, a directory made and removed (`File.mkdir`, `File.rmdir`,
+   FINDINGS.md, section 3zzzzzf). The thirty-fourth
    changes only a build with AddressSanitizer, whose heap it lets ASan check
    (FINDINGS.md, section 3zzp). Before section 14
    there were twenty patches: the sixteenth (effect pairs) was taken out in section 14,

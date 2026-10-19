@@ -1,0 +1,243 @@
+diff --git a/bend2/base.bend b/bend2/base.bend
+index 1803f92..df60b5d 100644
+--- a/bend2/base.bend
++++ b/bend2/base.bend
+@@ -450,6 +450,22 @@ def File.unlink(path: String) ->
+   import "./effs/file_rename.c"
+   import "./effs/file_rename.js"
+ 
++# a directory made at path (mkdir), its mode mode less the process's
++# umask: a name that is there already, a directory or not, fails
++# (EEXIST), and so does a path whose parent is not there (ENOENT), as
++# Redis makes the append-only file's directory (dirCreateIfMissing)
++def File.mkdir(path: String, mode: U32) ->
++  IO(Result<&1, &1, U32 & String, Unit>):
++  import "./effs/file_mkdir.c"
++  import "./effs/file_mkdir.js"
++
++# the directory at path removed (rmdir): one that holds a name fails
++# (ENOTEMPTY), and so does a path that is not a directory (ENOTDIR)
++def File.rmdir(path: String) ->
++  IO(Result<&1, &1, U32 & String, Unit>):
++  import "./effs/file_mkdir.c"
++  import "./effs/file_mkdir.js"
++
+ def File.close(file: File) -> IO(Unit):
+   import "./effs/file_close.c"
+   import "./effs/file_close.js"
+diff --git a/bend2/effs/file_mkdir.c b/bend2/effs/file_mkdir.c
+new file mode 100644
+index 0000000..dbbcba0
+--- /dev/null
++++ b/bend2/effs/file_mkdir.c
+@@ -0,0 +1,62 @@
++// File
++// ====
++
++#include <sys/stat.h>
++
++#ifdef CID(File.mkdir)
++
++// a directory made at path (mkdir), on a helper thread, its mode less the
++// process's umask: a name that is there already fails (EEXIST), as does a
++// path whose parent is not (ENOENT)
++static void file_mkdir_call(IoWork* w) {
++  io_sys_end(w, mkdir(w->data, (mode_t)w->word));
++}
++
++static Term file_mkdir_pack(Env e, IoWork* w) {
++  free(w->data);
++  return io_res(e, w, term_pak(CID(Unit), 0));
++}
++
++Term file_mkdir_run(Env e, Term* f, IoWork* w) {
++  w->data = io_cstr(e, f[0], &w->size);
++  w->word = (u32)f[1];
++  if (io_nul(w->data, w->size)) {
++    w->code = EILSEQ;
++    return file_mkdir_pack(e, w);
++  }
++  return io_work(w, file_mkdir_call, file_mkdir_pack);
++}
++
++static void __attribute__((constructor)) file_mkdir_use(void) {
++  io_eff(CID(File.mkdir), file_mkdir_run);
++}
++
++#endif
++
++#ifdef CID(File.rmdir)
++
++// the directory at path removed (rmdir), on a helper thread: one that holds
++// a name fails (ENOTEMPTY)
++static void file_rmdir_call(IoWork* w) {
++  io_sys_end(w, rmdir(w->data));
++}
++
++static Term file_rmdir_pack(Env e, IoWork* w) {
++  free(w->data);
++  return io_res(e, w, term_pak(CID(Unit), 0));
++}
++
++Term file_rmdir_run(Env e, Term* f, IoWork* w) {
++  w->data = io_cstr(e, f[0], &w->size);
++  if (io_nul(w->data, w->size)) {
++    w->code = EILSEQ;
++    return file_rmdir_pack(e, w);
++  }
++  return io_work(w, file_rmdir_call, file_rmdir_pack);
++}
++
++static void __attribute__((constructor)) file_rmdir_use(void) {
++  io_eff(CID(File.rmdir), file_rmdir_run);
++}
++
++#endif
+diff --git a/bend2/effs/file_mkdir.js b/bend2/effs/file_mkdir.js
+new file mode 100644
+index 0000000..b6010d3
+--- /dev/null
++++ b/bend2/effs/file_mkdir.js
+@@ -0,0 +1,34 @@
++// a directory made at path, its mode less the process's umask: a name that
++// is there already fails (EEXIST), as does a path whose parent is not
++// (ENOENT). The path's bytes go to the host as they are (a Buffer).
++function file_mkdir(path, mode) {
++  const fs = require("fs");
++  const a = io_bytes(path);
++  if (a.includes(0)) {
++    return io_fail(process.platform === "darwin" ? 92 : 84);
++  }
++  try {
++    fs.mkdirSync(Buffer.from(a), { mode: Number(mode) >>> 0 });
++    return io_done({ $: CID(Unit) });
++  } catch (e) {
++    return io_fail(Math.abs(e.errno ?? 5));
++  }
++}
++
++// the directory at path removed: one that holds a name fails (ENOTEMPTY)
++function file_rmdir(path) {
++  const fs = require("fs");
++  const a = io_bytes(path);
++  if (a.includes(0)) {
++    return io_fail(process.platform === "darwin" ? 92 : 84);
++  }
++  try {
++    fs.rmdirSync(Buffer.from(a));
++    return io_done({ $: CID(Unit) });
++  } catch (e) {
++    return io_fail(Math.abs(e.errno ?? 5));
++  }
++}
++
++io_eff(CID(File.mkdir), file_mkdir);
++io_eff(CID(File.rmdir), file_rmdir);
+diff --git a/tests/io/file_mkdir.bend b/tests/io/file_mkdir.bend
+new file mode 100644
+index 0000000..dcbb0b1
+--- /dev/null
++++ b/tests/io/file_mkdir.bend
+@@ -0,0 +1,102 @@
++# io (io_file_mkdir): File.mkdir makes a directory: a file opened by a path
++# inside it is made there and reads back its bytes; a directory made again
++# fails with EEXIST, and so does a directory at a file's name; a path whose
++# parent is not there fails with ENOENT. File.rmdir removes a directory: one
++# that holds a file fails with ENOTEMPTY, an empty one goes, and then it
++# fails with ENOENT. The directory is named by the process's id, so that a
++# run finds none from an earlier one.
++import Base
++
++def check(name: String, ok: Bool) -> IO(Unit):
++  match ok:
++    case True{}:
++      IO.print(name)
++    case False{}:
++      IO.die(Unit, 1, "FAIL " ++ name)
++
++def ok(r: Result<&1, &1, U32 & String, Unit>, name: String) -> IO(Unit):
++  match r:
++    case Done{u}:
++      IO.print(name)
++    case Fail{e}:
++      (code, msg) = e
++      IO.die(Unit, 1, "FAIL " ++ name ++ ": " ++ msg)
++
++def failed(r: Result<&1, &1, U32 & String, Unit>, want: U32, name: String) -> IO(Unit):
++  match r:
++    case Done{u}:
++      IO.die(Unit, 1, "FAIL " ++ name)
++    case Fail{e}:
++      (code, msg) = e
++      check(name, U32.is_eq(code, want))
++
++# ENOTEMPTY is 39 on Linux and 66 on macOS
++def not_empty(r: Result<&1, &1, U32 & String, Unit>, name: String) -> IO(Unit):
++  match r:
++    case Done{u}:
++      IO.die(Unit, 1, "FAIL " ++ name)
++    case Fail{e}:
++      (+code, msg) = e
++      check(name, Bool.or(U32.is_eq(code, 39), U32.is_eq(code, 66)))
++
++def done(pair: File & Result<&1, &1, U32 & String, Unit>) -> IO(File):
++  (file, result) = pair
++  do IO<File>:
++    IO.pass(Unit, result)
++    return file
++
++def write(path: String, bytes: String) -> IO(Unit):
++  do IO<Unit>:
++    f : File <- IO.try(File, File.open(path, "w"))
++    p : File & Result<&1, &1, U32 & String, Unit> <- File.write_raw(f, bytes)
++    f : File <- done(p)
++    File.close(f)
++
++def got(pair: File & Result<&1, &1, U32 & String, String>, +want: String, name: String) -> IO(Unit):
++  (file, result) = pair
++  do IO<Unit>:
++    s : String <- IO.pass(String, result)
++    Unit <- File.close(file)
++    check(name, String.eq(s, want))
++
++def reads(path: String, +want: String, name: String) -> IO(Unit):
++  do IO<Unit>:
++    f : File <- IO.try(File, File.open(path, "r"))
++    p : File & Result<&1, &1, U32 & String, String> <- File.read_raw(f, 100)
++    got(p, want, name)
++
++def run(+d: String) -> IO(Unit):
++  do IO<Unit>:
++    r : Result<&1, &1, U32 & String, Unit> <- File.mkdir(d, 493)
++    Unit <- ok(r, "a directory made")
++    Unit <- write(d ++ "/f", "inside")
++    Unit <- reads(d ++ "/f", "inside", "a file made inside it reads back its bytes")
++    r : Result<&1, &1, U32 & String, Unit> <- File.mkdir(d, 493)
++    Unit <- failed(r, 17, "a directory made again fails with EEXIST")
++    r : Result<&1, &1, U32 & String, Unit> <- File.mkdir(d ++ "/f", 493)
++    Unit <- failed(r, 17, "a directory at a file's name fails with EEXIST")
++    r : Result<&1, &1, U32 & String, Unit> <- File.mkdir(d ++ "/no/sub", 493)
++    Unit <- failed(r, 2, "a path whose parent is not there fails with ENOENT")
++    r : Result<&1, &1, U32 & String, Unit> <- File.rmdir(d)
++    Unit <- not_empty(r, "a directory that holds a file is not removed: ENOTEMPTY")
++    r : Result<&1, &1, U32 & String, Unit> <- File.unlink(d ++ "/f")
++    Unit <- ok(r, "the file removed")
++    r : Result<&1, &1, U32 & String, Unit> <- File.rmdir(d)
++    Unit <- ok(r, "the empty directory removed")
++    r : Result<&1, &1, U32 & String, Unit> <- File.rmdir(d)
++    failed(r, 2, "a directory not there is not removed: ENOENT")
++
++def main() -> IO(Unit):
++  do IO<Unit>:
++    pid : U32 <- IO.pid()
++    run("/tmp/bend_io_file_mkdir_" ++ Nat.show(U32.to_nat(pid)))
++
++#|a directory made
++#|a file made inside it reads back its bytes
++#|a directory made again fails with EEXIST
++#|a directory at a file's name fails with EEXIST
++#|a path whose parent is not there fails with ENOENT
++#|a directory that holds a file is not removed: ENOTEMPTY
++#|the file removed
++#|the empty directory removed
++#|a directory not there is not removed: ENOENT

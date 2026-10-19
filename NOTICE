@@ -276,6 +276,12 @@ parts of it are written from 7.2.16's sources:
   it was (blocked.c's unblockClientOnKey and blockForKeys under
   CLIENT_REPROCESSING_COMMAND), in src/redis.bend, src/session.bend,
   src/info.bend and src/server.bend.
+- The append-only directory made at a start where it is not there, a
+  name there that is not a directory refused (util.c's
+  dirCreateIfMissing, aof.c's aofUpgradePrepare and
+  aofOpenIfNeededOnServerStart), and the lines of a file of the
+  directory that ends cut short or in a transaction left open (aof.c's
+  loadSingleAppendOnlyFile), in src/server.bend.
 
 Bend (bend-patches/): patches to the Bend compiler and its runtime
 (github.com/bendlang/bend at 1cce499, Bend 2.0.35), Copyright 2026
