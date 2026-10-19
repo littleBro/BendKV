@@ -9245,7 +9245,9 @@ counted by `tools/perf_guard.sh` on the same machine in the same hour.
 
 The last-level misses (2.83, 3.10 and 3.32, where main's were 2.84, 3.16 and 3.32) and
 the prefetches (3.68, 3.90 and 3.91, where main's were 3.66, 3.98 and 3.92) are within
-the guard's bounds. What grew is what each batch carries from its connection to the
+the guard's bounds. A second count of this build gave 3,571, 4,372 and 4,658
+instructions, 2.84, 3.16 and 3.35 misses and 3.67, 3.99 and 3.92 prefetches: here SET's
+count moves by 0.4% from one run to the next, and its prefetches by 2%. What grew is what each batch carries from its connection to the
 actor: the connection looks at the tail its parse leaves for a big argument (`pend.pin`:
 none, when the batch ends with its last request, as almost every batch does), each batch
 takes one field more to the actor (Req's `qf`), and the actor tells the batches that

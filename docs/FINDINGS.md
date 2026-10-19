@@ -11280,10 +11280,11 @@ last read inside the argument left it, where Redis shows the new one, empty.
 
 The proofs are as before. No law changed.
 
-**What it costs** (PERFORMANCE.md, section 92). GET, SET and INCR take at most 0.3% more
-instructions a request (3,575, 4,355 and 4,654, where main's took 3,563, 4,354 and
-4,643): each batch carries one field more to the actor, and its connection looks at the
-tail its parse leaves for a big argument, which almost every batch ends without.
+**What it costs** (PERFORMANCE.md, section 92). GET, SET and INCR take 0.0 to 0.4% more
+instructions a request (over two counts, 3,571 to 3,575, 4,355 to 4,372 and 4,654 to
+4,658, where main's took 3,563, 4,354 and 4,643): each batch carries one field more to the
+actor, and its connection looks at the tail its parse leaves for a big argument, which
+almost every batch ends without.
 
 **Tests.** `tests/querybuf_test.py` runs its scenarios on BendKV and on Redis 7.2.16,
 side by side, and compares the 31 lines of their transcripts, a client's qbuf and
