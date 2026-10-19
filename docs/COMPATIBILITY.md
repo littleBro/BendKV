@@ -537,9 +537,11 @@ and Redis each on a directory of its own, the file turned on, off and on again (
 directory and as the single file), with WAITAOF, writes while it turns on, the
 rewrites it stops and schedules, the ones that fail, and SHUTDOWN and SIGTERM refused
 while it turns on, with the same replies, INFO fields, files, manifests, lines logged and
-databases after a restart (FINDINGS 3zzzzx). Where BendKV differs: without the directory,
-which the runtime cannot make, BendKV keeps Redis 6's single file; it writes its bases as
-commands whatever `aof-use-rdb-preamble` says; an RDB base followed by commands stops
+databases after a restart (FINDINGS 3zzzzx); a start with `appendonly yes` makes the
+directory where it is not there, and stops where a file has its name, as Redis does
+(FINDINGS 3zzzzzf). Where BendKV differs: a server started with `appendonly no` and no
+directory turns the file on and rewrites it as Redis 6's single file, where Redis makes
+the directory; BendKV writes its bases as commands whatever `aof-use-rdb-preamble` says; an RDB base followed by commands stops
 its start, where Redis loads both; a base or history line whose sequence number is
 below 1, or 10^13 or more, is refused; only a base is read as an RDB file, and one that
 does not load stops the start, the file left as it was, where Redis may cut it to

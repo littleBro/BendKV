@@ -20471,14 +20471,22 @@ def cut_file(+lg: Log, +path: String, keep: Nat, +cut: Nat, +what: String) -> IO
     p : File & Result<&1, &1, U32 & String, Unit> <- File.truncate(f, keep)
     cut_done(lg, p, path, cut, what)
 
-def uxeof(+path: String) -> String:
-  "Unexpected end of file reading the append only file " ++ path ++ ". You can: 1) Make a backup of your AOF file, then use ./redis-check-aof --fix <filename>. 2) Alternatively you can set the 'aof-load-truncated' configuration option to yes and restart the server."
+# what the start's lines call a file, as Redis's do: a file of the
+# directory its name (name), the single file its path (name empty)
+def aof.shown(+path: String, +name: String) -> String:
+  Bool.pick(String, String.is_empty(name), path, name)
+
+# Redis 7.2.16's line (loadSingleAppendOnlyFile) for a file that ends cut
+# short with aof-load-truncated no; the single file's names its path and
+# no manifest
+def uxeof(+path: String, +name: String) -> String:
+  "Unexpected end of file reading the append only file " ++ aof.shown(path, name) ++ ". You can: 1) Make a backup of your AOF file, then use ./redis-check-aof --fix " ++ Bool.pick(String, String.is_empty(name), "<filename>", "<filename.manifest>") ++ ". 2) Alternatively you can set the 'aof-load-truncated' configuration option to yes and restart the server."
 
 # a file that ends in an entry cut short is cut back to its last whole
 # entry, unless aof-load-truncated is no: then it stops the start, as in
 # Redis. What a start gives is the databases and the file's size.
 @unsafe
-def restore_cut(trunc: Bool, +lg: Log, +path: String, +size: Nat, +n: Nat, +ds: R.Ds, +rest: String) -> IO(R.Ds & Nat):
+def restore_cut(trunc: Bool, +lg: Log, +path: String, +name: String, +size: Nat, +n: Nat, +ds: R.Ds, +rest: String) -> IO(R.Ds & Nat):
   match trunc:
     case True{}:
       do IO<R.Ds & Nat>:
@@ -20486,21 +20494,21 @@ def restore_cut(trunc: Bool, +lg: Log, +path: String, +size: Nat, +n: Nat, +ds: 
         Unit <- log(lg, 2, restored(n, ds, path))
         return (ds, Nat.sub(size, String.length(rest)))
     case False{}:
-      log.die(R.Ds & Nat, lg, uxeof(path))
+      log.die(R.Ds & Nat, lg, uxeof(path, name))
 
 # the databases of the entries, once the file is fit to append to: whole,
 # or cut back to its last whole entry
 @unsafe
-def restore_fix(+lg: Log, +trunc: Bool, +path: String, +size: Nat, +n: Nat, +ds: R.Ds, +rest: String, whole: Bool, cut: Bool) -> IO(R.Ds & Nat):
+def restore_fix(+lg: Log, +trunc: Bool, +path: String, +name: String, +size: Nat, +n: Nat, +ds: R.Ds, +rest: String, whole: Bool, cut: Bool) -> IO(R.Ds & Nat):
   match whole cut:
     case True{} _:
       do IO<R.Ds & Nat>:
         Unit <- log(lg, 2, restored(n, ds, path))
         return (ds, size)
     case False{} True{}:
-      restore_cut(trunc, lg, path, size, n, ds, rest)
+      restore_cut(trunc, lg, path, name, size, n, ds, rest)
     case False{} False{}:
-      log.die(R.Ds & Nat, lg, "Bad file format reading the append only file " ++ path ++ ": no entry at byte " ++ Nat.show(Nat.sub(size, String.length(rest))))
+      log.die(R.Ds & Nat, lg, "Bad file format reading the append only file " ++ aof.shown(path, name) ++ ": no entry at byte " ++ Nat.show(Nat.sub(size, String.length(rest))))
 
 # The byte entry i of a file starts at, the file read again a window at
 # a time as the start reads it: the entry's offset in the window that
@@ -20547,29 +20555,29 @@ def offset_at(f: File, here: Bool, +i: Nat, +c: Nat, +w: String, +before: Nat, +
 # the start, with the entry's number and the byte it starts at (the file
 # read again, as the windows read first are let go)
 @unsafe
-def restore_refused_at(+lg: Log, +path: String, +i: Nat, +why: String, p: File & Nat) -> IO(R.Ds & Nat):
+def restore_refused_at(+lg: Log, +path: String, +name: String, +i: Nat, +why: String, p: File & Nat) -> IO(R.Ds & Nat):
   (f, +at) = p
   do IO<R.Ds & Nat>:
     Unit <- File.close(f)
-    log.die(R.Ds & Nat, lg, "Bad command reading the append only file " ++ path ++ ": entry " ++ Nat.show(1n+i) ++ ", at byte " ++ Nat.show(at) ++ ": " ++ why)
+    log.die(R.Ds & Nat, lg, "Bad command reading the append only file " ++ aof.shown(path, name) ++ ": entry " ++ Nat.show(1n+i) ++ ", at byte " ++ Nat.show(at) ++ ": " ++ why)
 
 @unsafe
-def restore_refused(+lg: Log, +path: String, +i: Nat, +why: String) -> IO(R.Ds & Nat):
+def restore_refused(+lg: Log, +path: String, +name: String, +i: Nat, +why: String) -> IO(R.Ds & Nat):
   do IO<R.Ds & Nat>:
     f : File <- IO.try(File, File.open(path, "r"))
     p : File & Nat <- offset_win(f, i, "", 0n)
-    restore_refused_at(lg, path, i, why, p)
+    restore_refused_at(lg, path, name, i, why, p)
 
 # the databases of the entries, when each replays as the file means it
 # (aof.bend: checked); else the start stops at the first that does not,
 # before the file is cut or opened to append: it is left as it was
 @unsafe
-def restore_checked(+lg: Log, +trunc: Bool, +path: String, +size: Nat, +n: Nat, r: A.Replay, +rest: String) -> IO(R.Ds & Nat):
+def restore_checked(+lg: Log, +trunc: Bool, +path: String, +name: String, +size: Nat, +n: Nat, r: A.Replay, +rest: String) -> IO(R.Ds & Nat):
   match r:
     case A.Replayed{+ds}:
-      restore_fix(lg, trunc, path, size, n, ds, rest, String.is_empty(rest), cut_short(rest))
+      restore_fix(lg, trunc, path, name, size, n, ds, rest, String.is_empty(rest), cut_short(rest))
     case A.Refused{+i, +why}:
-      restore_refused(lg, path, i, why)
+      restore_refused(lg, path, name, i, why)
 
 # a file that ends inside a transaction (A.untx): the transaction is
 # reverted and the file cut back to before its MULTI (keep: the byte the
@@ -20578,7 +20586,7 @@ def restore_checked(+lg: Log, +trunc: Bool, +path: String, +size: Nat, +n: Nat, 
 # in an entry cut short does; what follows the last whole entry must be
 # an entry cut short, or nothing
 @unsafe
-def restore_reverted(+lg: Log, +path: String, +size: Nat, +keep: Nat, +n: Nat, r: A.Replay) -> IO(R.Ds & Nat):
+def restore_reverted(+lg: Log, +path: String, +name: String, +size: Nat, +keep: Nat, +n: Nat, r: A.Replay) -> IO(R.Ds & Nat):
   match r:
     case A.Replayed{+ds}:
       do IO<R.Ds & Nat>:
@@ -20586,50 +20594,57 @@ def restore_reverted(+lg: Log, +path: String, +size: Nat, +keep: Nat, +n: Nat, r
         Unit <- log(lg, 2, restored(n, ds, path))
         return (ds, keep)
     case A.Refused{+i, +why}:
-      restore_refused(lg, path, i, why)
+      restore_refused(lg, path, name, i, why)
 
 @unsafe
-def restore_revert_at(+lg: Log, +path: String, +size: Nat, +k: Nat, r: A.Replay, p: File & Nat) -> IO(R.Ds & Nat):
+def restore_revert_at(+lg: Log, +path: String, +name: String, +size: Nat, +k: Nat, r: A.Replay, p: File & Nat) -> IO(R.Ds & Nat):
   (f, +at) = p
   do IO<R.Ds & Nat>:
     Unit <- File.close(f)
-    restore_reverted(lg, path, size, at, k, r)
+    restore_reverted(lg, path, name, size, at, k, r)
+
+@unsafe
+def restore_revert.at(trunc: Bool, +lg: Log, +path: String, +name: String, +size: Nat, +k: Nat, r: A.Replay) -> IO(R.Ds & Nat):
+  match trunc:
+    case True{}:
+      do IO<R.Ds & Nat>:
+        f : File <- IO.try(File, File.open(path, "r"))
+        p : File & Nat <- offset_win(f, k, "", 0n)
+        restore_revert_at(lg, path, name, size, k, r, p)
+    case False{}:
+      log.die(R.Ds & Nat, lg, uxeof(path, name))
 
 # the file cut back to the byte its transaction's MULTI starts at (entry k,
 # the first the start left out), as Redis's valid_before_multi: found by
 # reading the file again a window at a time (offset_win), which counts
-# the bytes as they are in the file, however its entries are written
+# the bytes as they are in the file, however its entries are written.
+# Redis says it reverts the transaction with aof-load-truncated no too,
+# then that the file ends cut short
 @unsafe
-def restore_revert(trunc: Bool, +lg: Log, +path: String, +size: Nat, +k: Nat, r: A.Replay) -> IO(R.Ds & Nat):
-  match trunc:
-    case True{}:
-      do IO<R.Ds & Nat>:
-        Unit <- log(lg, 3, "Revert incomplete MULTI/EXEC transaction in AOF file " ++ path)
-        f : File <- IO.try(File, File.open(path, "r"))
-        p : File & Nat <- offset_win(f, k, "", 0n)
-        restore_revert_at(lg, path, size, k, r, p)
-    case False{}:
-      log.die(R.Ds & Nat, lg, uxeof(path))
+def restore_revert(trunc: Bool, +lg: Log, +path: String, +name: String, +size: Nat, +k: Nat, r: A.Replay) -> IO(R.Ds & Nat):
+  do IO<R.Ds & Nat>:
+    Unit <- log(lg, 3, "Revert incomplete MULTI/EXEC transaction in AOF file " ++ aof.shown(path, name))
+    restore_revert.at(trunc, lg, path, name, size, k, r)
 
 @unsafe
-def restore_tx(open: Bool, ok: Bool, +lg: Log, +trunc: Bool, +path: String, +size: Nat, +k: Nat, r: A.Replay, +rest: String) -> IO(R.Ds & Nat):
+def restore_tx(open: Bool, ok: Bool, +lg: Log, +trunc: Bool, +path: String, +name: String, +size: Nat, +k: Nat, r: A.Replay, +rest: String) -> IO(R.Ds & Nat):
   match open ok:
     case False{} _:
-      restore_checked(lg, trunc, path, size, k, r, rest)
+      restore_checked(lg, trunc, path, name, size, k, r, rest)
     case True{} True{}:
-      restore_revert(trunc, lg, path, size, k, r)
+      restore_revert(trunc, lg, path, name, size, k, r)
     case True{} False{}:
-      log.die(R.Ds & Nat, lg, "Bad file format reading the append only file " ++ path ++ ": no entry at byte " ++ Nat.show(Nat.sub(size, String.length(rest))))
+      log.die(R.Ds & Nat, lg, "Bad file format reading the append only file " ++ aof.shown(path, name) ++ ": no entry at byte " ++ Nat.show(Nat.sub(size, String.length(rest))))
 
 # what the start made of the file (aof.bend: A.Start): the check's
 # verdict on the entries it keeps, their number, the entries of a
 # transaction the file ends inside, and what follows the last whole
 # entry
 @unsafe
-def restore_start(+lg: Log, +trunc: Bool, +path: String, +size: Nat, st: A.Start) -> IO(R.Ds & Nat):
+def restore_start(+lg: Log, +trunc: Bool, +path: String, +name: String, +size: Nat, st: A.Start) -> IO(R.Ds & Nat):
   match st:
     case A.Start{r, +k, +cut, +rest}:
-      restore_tx(Bool.not(List.is_empty(&2, List<&2, String>, cut)), Bool.or(String.is_empty(rest), cut_short(rest)), lg, trunc, path, size, k, r, rest)
+      restore_tx(Bool.not(List.is_empty(&2, List<&2, String>, cut)), Bool.or(String.is_empty(rest), cut_short(rest)), lg, trunc, path, name, size, k, r, rest)
 
 # once the file is read: the FUNCTION commands before the entries the
 # start leaves out (a transaction the file ends inside) run in the
@@ -20637,18 +20652,18 @@ def restore_start(+lg: Log, +trunc: Bool, +path: String, +size: Nat, st: A.Start
 # start goes on with what it made of the others, a refused entry and the
 # entries kept numbered among all the file's
 @unsafe
-def restore_fx(+lg: Log, +trunc: Bool, +path: String, +size: Nat, st: A.Start, xf: Fx) -> IO(R.Ds & Nat):
+def restore_fx(+lg: Log, +trunc: Bool, +path: String, +name: String, +size: Nat, st: A.Start, xf: Fx) -> IO(R.Ds & Nat):
   match st xf:
     case A.Start{r, +k, cut, rest} Fx{n, +fs}:
       do IO<R.Ds & Nat>:
         Unit <- fn.start.aof(lg, fx.kept(fs, k, Nil{}))
-        restore_start(lg, trunc, path, size, A.Start{fx.replay(r, fs), fx.at(k, fs), cut, rest})
+        restore_start(lg, trunc, path, name, size, A.Start{fx.replay(r, fs), fx.at(k, fs), cut, rest})
 
 @unsafe
 def restore_got(+lg: Log, +trunc: Bool, +path: String, q: (A.Start & Fx) & Nat) -> IO(R.Ds & Nat):
   (p, +size) = q
   (st, xf) = p
-  restore_fx(lg, trunc, path, size, st, xf)
+  restore_fx(lg, trunc, path, "", size, st, xf)
 
 @unsafe
 def restore_read(+lg: Log, +trunc: Bool, +path: String, p: File & ((A.Start & Fx) & Nat)) -> IO(R.Ds & Nat):
@@ -21731,13 +21746,15 @@ def step.bkill(+x: Rx, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx):
 
 # The append-only directory
 # -------------------------
-# Redis 7's multi-part append-only file (aofdir.bend: its manifest), when
-# appenddirname is there in dir. The runtime has no effect that makes a
-# directory, so without one BendKV keeps the single file of Redis 6,
-# appendfilename (The append-only file), which Redis 7 moves into a
-# directory of its own when it starts on it. With the directory, the
-# start goes as Redis's main goes (in the configuration's form; the short
-# form keeps its one file): the manifest read (aofLoadManifestFromDisk:
+# Redis 7's multi-part append-only file (aofdir.bend: its manifest), in
+# appenddirname in dir. A start with appendonly yes makes the directory
+# where it is not there, as Redis 7.2.16 makes it (serve.on), and an old
+# single file of Redis 6, appendfilename (The append-only file), is moved
+# into it; a start with appendonly no makes none, and then CONFIG SET
+# appendonly yes and BGREWRITEAOF write the single file, where Redis 7
+# makes the directory for them too. With the directory, the start goes as
+# Redis's main goes (in the configuration's form; the short form keeps
+# its one file): the manifest read (aofLoadManifestFromDisk:
 # one that Redis refuses stops the start, with Redis's lines, whatever
 # appendonly says); with appendonly yes, an old single file moved into
 # the directory as its base (aofUpgradePrepare), each file there checked
@@ -22023,29 +22040,29 @@ def dir.cmds.got(r: R.Ds & Nat, +read: Nat) -> IO(DLd):
   IO.pure(DLd, DLd{ds, size, read, 0n, 0n})
 
 @unsafe
-def dir.cmds.at(+lg: Log, +trunc: Bool, +path: String, q: (A.Start & Fx) & Nat) -> IO(DLd):
+def dir.cmds.at(+lg: Log, +trunc: Bool, +path: String, +name: String, q: (A.Start & Fx) & Nat) -> IO(DLd):
   (p, +read) = q
   (st, xf) = p
   do IO<DLd>:
-    r : R.Ds & Nat <- restore_fx(lg, trunc, path, read, st, xf)
+    r : R.Ds & Nat <- restore_fx(lg, trunc, path, name, read, st, xf)
     dir.cmds.got(r, read)
 
 @unsafe
-def dir.cmds.read(p: File & ((A.Start & Fx) & Nat), +lg: Log, +trunc: Bool, +path: String) -> IO(DLd):
+def dir.cmds.read(p: File & ((A.Start & Fx) & Nat), +lg: Log, +trunc: Bool, +path: String, +name: String) -> IO(DLd):
   (f, q) = p
   do IO<DLd>:
     Unit <- File.close(f)
-    dir.cmds.at(lg, trunc, path, q)
+    dir.cmds.at(lg, trunc, path, name, q)
 
 # a file of commands (an incremental file, or a base of commands), its
 # first bytes, head, read already, on the databases ds; its FUNCTION
 # commands run in the engine once it is read, as the single file's do
 # (restore_fx), after those of the files before it
 @unsafe
-def dir.cmds(f: File, +head: String, +lg: Log, +trunc: Bool, +path: String, ds: R.Ds, +more: Nat) -> IO(DLd):
+def dir.cmds(f: File, +head: String, +lg: Log, +trunc: Bool, +path: String, +name: String, ds: R.Ds, +more: Nat) -> IO(DLd):
   do IO<DLd>:
     p : File & ((A.Start & Fx) & Nat) <- restore_win.next(f, False{}, head, wins.on(ds), fx.new(), more, 0n)
-    dir.cmds.read(p, lg, trunc, path)
+    dir.cmds.read(p, lg, trunc, path, name)
 
 @unsafe
 def dir.rdb.tail(tail: Bool, +name: String, +lg: Log, ds: R.Ds, +len: Nat, +ld: Nat, +ex: Nat) -> IO(DLd):
@@ -22127,7 +22144,7 @@ def dir.head.at(w: Nat, f: File, +x: String, +lg: Log, +trunc: Bool, +items: Lis
     case 1n:
       dir.rdb(f, x, lg, items, name, more)
     case _:
-      dir.cmds(f, x, lg, trunc, path, ds, more)
+      dir.cmds(f, x, lg, trunc, path, name, ds, more)
 
 @unsafe
 def dir.head(h: File & Result<&1, &1, U32 & String, String>, base: Bool, +lg: Log, +trunc: Bool, +items: List<&2, C.CItem>, +path: String, +name: String, ds: R.Ds, +more: Nat) -> IO(DLd):
@@ -22491,19 +22508,85 @@ def serve.single(+path: String, ls: Bool & List<&1, Listener>, +sup: Bool, +post
     p : R.Ds & Nat <- restore(lg, trunc, path, dbs.more(items))
     serve.aof(p, path, sync, items, info, ls, sup, post, lg, tl, pid)
 
-# with appendonly yes: the single file, or the directory when it is there
-# (The append-only directory), whose files are named path
+# with appendonly yes in the configuration's form: the start in the
+# directory (The append-only directory), whose files are named path
 @unsafe
-def serve.at(dir: Bool, +path: String, ls: Bool & List<&1, Listener>, +sup: Bool, +post: Bool, +sync: Sync, +trunc: Bool, +items: List<&2, C.CItem>, info: I.Info, +lg: Log, +tl: Chan(Tally), +pid: U32) -> IO(Unit):
-  match dir:
-    case False{}:
-      serve.single(path, ls, sup, post, sync, trunc, items, info, lg, tl, pid)
-    case True{}:
-      +dn = T.cfg(items, "appenddirname")
-      do IO<Unit>:
-        mf : AD.Mf <- mf.load(lg, dn, path)
-        dir.start(lg, trunc, dn, path, mf, sync, items, info, ls, sup, post, tl, pid, dbs.more(items))
+def serve.at(+path: String, ls: Bool & List<&1, Listener>, +sup: Bool, +post: Bool, +sync: Sync, +trunc: Bool, +items: List<&2, C.CItem>, info: I.Info, +lg: Log, +tl: Chan(Tally), +pid: U32) -> IO(Unit):
+  +dn = T.cfg(items, "appenddirname")
+  do IO<Unit>:
+    mf : AD.Mf <- mf.load(lg, dn, path)
+    dir.start(lg, trunc, dn, path, mf, sync, items, info, ls, sup, post, tl, pid, dbs.more(items))
 
+# The directory made where it is not there, as Redis's dirCreateIfMissing
+# makes it (mode 0755 less the umask) when aofUpgradePrepare moves an old
+# single file in and when aofOpenIfNeededOnServerStart starts on none: a
+# name there already (EEXIST) that is not a directory (ENOTDIR), or a
+# directory that cannot be made, stops the start with Redis's line; one
+# there that cannot be read is a directory there, as dirExists finds it
+def enotdir() -> U32:
+  20
+
+def eexist() -> U32:
+  17
+
+def dir.cant(+dn: String, +msg: String) -> String:
+  "Can't open or create append-only dir " ++ dn ++ ": " ++ msg
+
+@unsafe
+def dir.made.at(ok: Bool, +msg: String, +path: String, ls: Bool & List<&1, Listener>, +sup: Bool, +post: Bool, +sync: Sync, +trunc: Bool, +items: List<&2, C.CItem>, info: I.Info, +lg: Log, +tl: Chan(Tally), +pid: U32) -> IO(Unit):
+  match ok:
+    case True{}:
+      serve.at(path, ls, sup, post, sync, trunc, items, info, lg, tl, pid)
+    case False{}:
+      log.die(Unit, lg, dir.cant(T.cfg(items, "appenddirname"), msg))
+
+# the name there already a directory: dn/. opened, or not opened for a
+# reason other than ENOENT and ENOTDIR (one that cannot be read)
+@unsafe
+def dir.is(m: Result<&1, &1, U32 & String, File>, +path: String, ls: Bool & List<&1, Listener>, +sup: Bool, +post: Bool, +sync: Sync, +trunc: Bool, +items: List<&2, C.CItem>, info: I.Info, +lg: Log, +tl: Chan(Tally), +pid: U32) -> IO(Unit):
+  match m:
+    case Done{f}:
+      do IO<Unit>:
+        Unit <- File.close(f)
+        serve.at(path, ls, sup, post, sync, trunc, items, info, lg, tl, pid)
+    case Fail{e}:
+      (+code, msg) = e
+      dir.made.at(Bool.not(Bool.or(U32.is_eq(code, enoent()), U32.is_eq(code, enotdir()))), "Not a directory", path, ls, sup, post, sync, trunc, items, info, lg, tl, pid)
+
+@unsafe
+def dir.there(there: Bool, +msg: String, +path: String, ls: Bool & List<&1, Listener>, +sup: Bool, +post: Bool, +sync: Sync, +trunc: Bool, +items: List<&2, C.CItem>, info: I.Info, +lg: Log, +tl: Chan(Tally), +pid: U32) -> IO(Unit):
+  match there:
+    case True{}:
+      do IO<Unit>:
+        m : Result<&1, &1, U32 & String, File> <- File.open(T.cfg(items, "appenddirname") ++ "/.", "r")
+        dir.is(m, path, ls, sup, post, sync, trunc, items, info, lg, tl, pid)
+    case False{}:
+      log.die(Unit, lg, dir.cant(T.cfg(items, "appenddirname"), msg))
+
+@unsafe
+def dir.made(r: Result<&1, &1, U32 & String, Unit>, +path: String, ls: Bool & List<&1, Listener>, +sup: Bool, +post: Bool, +sync: Sync, +trunc: Bool, +items: List<&2, C.CItem>, info: I.Info, +lg: Log, +tl: Chan(Tally), +pid: U32) -> IO(Unit):
+  match r:
+    case Done{u}:
+      serve.at(path, ls, sup, post, sync, trunc, items, info, lg, tl, pid)
+    case Fail{e}:
+      (+code, msg) = e
+      dir.there(U32.is_eq(code, eexist()), msg, path, ls, sup, post, sync, trunc, items, info, lg, tl, pid)
+
+# the directory there (dn/. opened), or made
+@unsafe
+def dir.opened(m: Result<&1, &1, U32 & String, File>, +path: String, ls: Bool & List<&1, Listener>, +sup: Bool, +post: Bool, +sync: Sync, +trunc: Bool, +items: List<&2, C.CItem>, info: I.Info, +lg: Log, +tl: Chan(Tally), +pid: U32) -> IO(Unit):
+  match m:
+    case Done{f}:
+      do IO<Unit>:
+        Unit <- File.close(f)
+        serve.at(path, ls, sup, post, sync, trunc, items, info, lg, tl, pid)
+    case Fail{e}:
+      do IO<Unit>:
+        r : Result<&1, &1, U32 & String, Unit> <- File.mkdir(T.cfg(items, "appenddirname"), 493)
+        dir.made(r, path, ls, sup, post, sync, trunc, items, info, lg, tl, pid)
+
+# with appendonly yes: the single file in the short form, the directory in
+# the configuration's form, made where it is not there
 @unsafe
 def serve.on(conf: Bool, +path: String, ls: Bool & List<&1, Listener>, +sup: Bool, +post: Bool, +sync: Sync, +trunc: Bool, +items: List<&2, C.CItem>, info: I.Info, +lg: Log, +tl: Chan(Tally), +pid: U32) -> IO(Unit):
   match conf:
@@ -22511,8 +22594,8 @@ def serve.on(conf: Bool, +path: String, ls: Bool & List<&1, Listener>, +sup: Boo
       serve.single(path, ls, sup, post, sync, trunc, items, info, lg, tl, pid)
     case True{}:
       do IO<Unit>:
-        d : Bool <- there(T.cfg(items, "appenddirname") ++ "/.")
-        serve.at(d, path, ls, sup, post, sync, trunc, items, info, lg, tl, pid)
+        m : Result<&1, &1, U32 & String, File> <- File.open(T.cfg(items, "appenddirname") ++ "/.", "r")
+        dir.opened(m, path, ls, sup, post, sync, trunc, items, info, lg, tl, pid)
 
 # without an append-only file, the RDB file loaded (not in the short
 # form), with the directory's manifest read before it when the directory

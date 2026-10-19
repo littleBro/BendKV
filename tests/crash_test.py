@@ -65,7 +65,7 @@ one acknowledged unit's effect (self_check).
 
 A round: 1 connection (a quarter of the rounds) or 2, 4, 8 or 16, each
 pipelining up to 1 to 128 units, against a server started with a policy
-and a way to send replies (its writer thread, or its loop: io-threads 1)
+and a way to send replies (its writer thread, or its loop: send)
 drawn for the round; in some rounds a BGREWRITEAOF sent as the load runs,
 or the cron's rewrites made frequent (auto-aof-rewrite-percentage), so
 that kills land while a rewrite runs; the kill after a random time; the
@@ -1024,19 +1024,21 @@ class Client:
 
 class Server:
     """A BendKV process on the file; every one started is in ALL, so that
-    none outlives the test."""
+    none outlives the test. It starts in BendKV's short form, which keeps
+    the single file (one started with appendonly yes in the
+    configuration's form makes Redis 7's directory): its port, its
+    replies posted to its writer thread or sent from its loop, the file
+    and the policy, in --run, its working directory and so its dir (on
+    127.0.0.1, with no save points)."""
     ALL = []
 
     def __init__(self, a, policy, send, log):
         Server.ALL.append(self)
         self.log = log
-        argv = [os.path.abspath(a.bin), "--port", str(a.port), "--bind", "127.0.0.1", "--dir", os.path.abspath(a.run),
-                "--appendonly", "yes", "--appendfilename", AOF, "--appendfsync", policy, "--save", ""]
-        if send:
-            argv += ["--io-threads", "1"]
+        argv = [os.path.abspath(a.bin), str(a.port), "send" if send else "post", AOF, policy]
         self.t0 = time.monotonic()
         with open(log, "wb") as f:
-            self.p = subprocess.Popen(argv, stdout=f, stderr=subprocess.STDOUT)
+            self.p = subprocess.Popen(argv, stdout=f, stderr=subprocess.STDOUT, cwd=os.path.abspath(a.run))
 
     def ready(self, port, timeout=300):
         """The seconds to the first PONG; None if the process ended first.
@@ -1312,7 +1314,7 @@ class Plan:
 
     def describe(self):
         return "%s, %s, %d connection%s at depth %d%s" % (
-            self.policy, "io-threads 1" if self.send else "writer thread", self.conns,
+            self.policy, "its loop" if self.send else "writer thread", self.conns,
             "" if self.conns == 1 else "s", self.depth, ", large values" if self.big else "")
 
 

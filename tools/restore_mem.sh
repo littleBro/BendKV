@@ -2,8 +2,9 @@
 # restore_mem.sh [SERVER]: resident memory before and after a restart from
 # the append-only file. SERVER (build/bendkv) takes KEYS (1000000) SETs of
 # 100-byte values on random keys (redis-benchmark -r), with the automatic
-# rewrite off, and is started again from its file. Prints VmHWM and VmRSS
-# after the load and after the restart, used_memory, the file's size and the
+# rewrite off, and is started again from its files (appendonlydir, which
+# the first start makes). Prints VmHWM and VmRSS after the load and after
+# the restart, used_memory, the files' size and the
 # time to the first PONG; fails when RSS after the restart is more than
 # RATIO (1.3) times RSS before it. PCT=100 (Redis's default for
 # auto-aof-rewrite-percentage) keeps the automatic rewrite on, so that the
@@ -52,7 +53,7 @@ sleep 1.5
 r0=$(rss $pid load) || exit 1
 n0=$(keys)
 [ "${n0:-0}" -gt 0 ] || fail "no keys after the load"
-echo "after the load:    VmRSS $r0 kB, VmHWM $(hwm $pid) kB, used_memory $(used), $n0 keys, file $(wc -c < "$D/b.aof") bytes"
+echo "after the load:    VmRSS $r0 kB, VmHWM $(hwm $pid) kB, used_memory $(used), $n0 keys, files $(cat "$D"/appendonlydir/b.aof.*.aof | wc -c) bytes"
 kill $pid; wait $pid 2> /dev/null
 pid=
 t0=$(date +%s%N)

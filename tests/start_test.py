@@ -13,8 +13,8 @@ in a fresh directory of its own that holds the case's files:
 
 Then what BendKV refuses although Redis starts (what it cannot do: modules,
 ACL users from the configuration or a file, renamed commands, the
-background, a cluster, a replica, TLS,
-data it cannot read, a supervisor it cannot signal), each with its line;
+background, a cluster, a replica, TLS, a supervisor it cannot signal),
+each with its line;
 a unix socket and systemd's supervision, IPv6's addresses, and a script's
 sandbox under lua-enable-deprecated-api, the default user as the
 server starts (ACL LIST, ACL GETUSER), maxclients (the connections past
@@ -240,6 +240,10 @@ REFUSED = [
     ("an octal value with an 8", ["--port", "{port}", "--unixsocketperm", "8"], {}, None),
     ("a unix socket that cannot open", ["--port", "{port}", "--unixsocket", "nodir/s.sock"], {}, None),
     ("a unix socket's path too long", ["--port", "{port}", "--unixsocket", "s" * 120], {}, None),
+    # an old single file, moved into the directory the start makes, that
+    # ends cut short (in an entry, and in a transaction left open)
+    ("a cut file, with aof-load-truncated no", ["--port", "{port}", "--appendonly", "yes", "--aof-load-truncated", "no"], {"appendonly.aof": "*3\r\n$3\r\nSET\r\n$1\r\na\r\n$1"}, None),
+    ("a transaction left open, with aof-load-truncated no", ["--port", "{port}", "--appendonly", "yes", "--aof-load-truncated", "no"], {"appendonly.aof": "*1\r\n$5\r\nMULTI\r\n*3\r\n$3\r\nSET\r\n$1\r\na\r\n$1\r\n1\r\n"}, None),
 ]
 
 # Cases both start: name, arguments, files, standard input, the
@@ -302,8 +306,6 @@ BENDKV_REFUSES = [
     # without that jemalloc does
     ("activedefrag", ["--port", "{port}", "--activedefrag", "yes"], {}, {}, "Active defragmentation cannot be enabled: it requires a Redis server compiled with a modified Jemalloc like the one shipped by default with the Redis source distribution"),
     ("upstart", ["--port", "{port}", "--supervised", "auto"], {}, {"UPSTART_JOB": "x"}, "supervised by upstart, which BendKV cannot signal (it cannot stop itself): run it unsupervised"),
-    ("a cut file, with aof-load-truncated no", ["--port", "{port}", "--appendonly", "yes", "--aof-load-truncated", "no"], {"appendonly.aof": "*3\r\n$3\r\nSET\r\n$1\r\na\r\n$1"}, {}, "Unexpected end of file reading the append only file appendonly.aof. You can: 1) Make a backup of your AOF file, then use ./redis-check-aof --fix <filename>. 2) Alternatively you can set the 'aof-load-truncated' configuration option to yes and restart the server."),
-    ("a transaction left open, with aof-load-truncated no", ["--port", "{port}", "--appendonly", "yes", "--aof-load-truncated", "no"], {"appendonly.aof": "*1\r\n$5\r\nMULTI\r\n*3\r\n$3\r\nSET\r\n$1\r\na\r\n$1\r\n1\r\n"}, {}, "Unexpected end of file reading the append only file appendonly.aof. You can: 1) Make a backup of your AOF file, then use ./redis-check-aof --fix <filename>. 2) Alternatively you can set the 'aof-load-truncated' configuration option to yes and restart the server."),
 ]
 
 

@@ -8,19 +8,23 @@ compared. Each scenario has fresh directories of its own.
    aof-use-rdb-preamble yes (its base an RDB file) and no (its base
    commands); both start on its directory: the same databases, the same
    lines for the base and each incremental file.
-2. Both start on an empty appendonlydir (BendKV makes no directory: the
-   runtime cannot): each makes an empty base, an incremental file and the
+2. Both start with no appendonlydir, and on an empty one: each makes
+   the directory where it is not there (mode 0755 less the umask, the
+   same on both), then an empty base, an incremental file and the
    manifest, the same ones (preamble no; BendKV writes its bases as
    commands, which Redis writes with preamble no). Both write, rewrite
    and write more: the same manifests, and the same entries in each
    incremental file. Redis then starts on BendKV's directory, and BendKV
    on Redis's: the same databases.
-3. An old single file in dir, with an empty appendonlydir, and with a
-   manifest of that base alone that the directory does not hold (an
-   upgrade stopped half way): both move it in, with the same manifest
-   and lines, and the same databases.
+3. An old single file in dir, with no appendonlydir, with an empty one,
+   and with a manifest of that base alone that the directory does not
+   hold (an upgrade stopped half way): both move it in (making the
+   directory where it is not there), with the same manifest and lines,
+   and the same databases.
 4. Manifests Redis refuses: both refuse them, with the same lines, and
-   end with code 1.
+   end with code 1. A file at appenddirname's name, with no old single
+   file and with one, and a link to nothing there: both stop with code 1
+   and Redis's line, the name left as it was.
 5. Files that end cut short: the last incremental file (both cut it back
    and start, with the same databases); one before the last (both cut
    it, then stop with Redis's line).
@@ -81,7 +85,8 @@ KEEP = ("DB loaded from", "Reading RDB", "Done loading RDB", "Opening AOF", "Cre
         "Invalid AOF manifest", "Found ", "File can't be a path", "Unknown AOF file type",
         "The AOF manifest file contains", "Background AOF rewrite terminated with success",
         "Successfully renamed the temporary AOF base file", "Background AOF rewrite finished",
-        "Error trying to", "Can't open the append-only file", "Read AOF manifest failed")
+        "Error trying to", "Can't open the append-only file", "Read AOF manifest failed",
+        "Can't open or create append-only dir")
 PREFIX = re.compile(r"^\d+:[MCXS] \d+ \w+ \d+ [\d:.]+ [.\-*#] ?")
 
 
@@ -112,6 +117,12 @@ def manifest(d):
 def files(d):
     p = os.path.join(d, "appendonlydir")
     return sorted(os.listdir(p)) if os.path.isdir(p) else None
+
+
+# the directory's permission bits, None where it is not there
+def mode(d):
+    p = os.path.join(d, "appendonlydir")
+    return oct(os.stat(p).st_mode & 0o7777) if os.path.isdir(p) else None
 
 
 def incr(d, n):
@@ -258,18 +269,21 @@ def from_redis(a, root, preamble):
     same("the files after the start", files(p.b), files(p.r))
 
 
-# 2. A fresh start on an empty directory, then writes and a rewrite on
-# both; each starts on the other's directory
-def fresh(a, root):
-    print("== an empty appendonlydir: both make their files, write and rewrite")
-    p = Pair(a, root, "fresh")
-    for d in (p.b, p.r):
-        os.makedirs(os.path.join(d, "appendonlydir"))
+# 2. A fresh start with no directory, or on an empty one, then writes and
+# a rewrite on both; each starts on the other's directory
+def fresh(a, root, made):
+    print("== %s: both make their files, write and rewrite" % ("an empty appendonlydir" if made else "no appendonlydir"))
+    name = "fresh" if made else "fresh-none"
+    p = Pair(a, root, name)
+    if made:
+        for d in (p.b, p.r):
+            os.makedirs(os.path.join(d, "appendonlydir"))
     more = ("--appendonly", "yes", "--aof-use-rdb-preamble", "no")
     (pb, cb, lb), (pr, cr, lr) = p.start(*more)
     same("the lines of the start", logged(lb), logged(lr))
     same("the manifests of the start", manifest(p.b), manifest(p.r))
     same("the files of the start", files(p.b), files(p.r))
+    same("the directory's mode", mode(p.b), mode(p.r))
     for c in (cb, cr):
         fill(c, "a")
     # the entries appended, a SELECT first (Redis's aof_selected_db
@@ -290,7 +304,7 @@ def fresh(a, root):
     down(pb, cb)
     down(pr, cr)
     # each on the other's directory
-    swap = os.path.join(root, "fresh", "swap")
+    swap = os.path.join(root, name, "swap")
     copy(p.b, swap)
     copy(p.r, p.b)
     copy(swap, p.r)
@@ -308,11 +322,13 @@ OLD = (b"*2\r\n$6\r\nSELECT\r\n$1\r\n0\r\n*3\r\n$3\r\nSET\r\n$1\r\nk\r\n$1\r\nv\
 
 
 def upgrade(a, root):
-    for case, mf in (("an empty directory", None), ("a manifest of the base alone", "file appendonly.aof seq 1 type b\n")):
+    for case, tag, mf in (("no directory", "none", None), ("an empty directory", "empty", None),
+                          ("a manifest of the base alone", "half", "file appendonly.aof seq 1 type b\n")):
         print("== an old single file, and %s" % case)
-        p = Pair(a, root, "upgrade-" + ("empty" if mf is None else "half"))
+        p = Pair(a, root, "upgrade-" + tag)
         for d in (p.b, p.r):
-            os.makedirs(os.path.join(d, "appendonlydir"))
+            if tag != "none":
+                os.makedirs(os.path.join(d, "appendonlydir"))
             with open(os.path.join(d, "appendonly.aof"), "wb") as f:
                 f.write(OLD)
             if mf is not None:
@@ -325,6 +341,7 @@ def upgrade(a, root):
         down(pr, cr)
         same("the manifests", manifest(p.b), manifest(p.r))
         same("the files", files(p.b), files(p.r))
+        same("the directory's mode", mode(p.b), mode(p.r))
         same("the old file gone from dir", os.path.exists(os.path.join(p.b, "appendonly.aof")),
              os.path.exists(os.path.join(p.r, "appendonly.aof")))
 
@@ -376,6 +393,29 @@ def refusals(a, root):
     (cb, lb), (cr, lr) = p.refused("--appendonly", "no")
     same("appendonly no, an unknown type: the end", cb, cr)
     same("appendonly no, an unknown type: the lines", lb, lr)
+    # a file at the directory's name, or a link to nothing: the directory
+    # cannot be made (dirCreateIfMissing's ENOTDIR), before a start on no
+    # file and as an old single file is moved in
+    for case, link, old in (("a file at the directory's name, no old single file", False, False),
+                            ("a file at the directory's name, an old single file", False, True),
+                            ("a link to nothing at the directory's name", True, False)):
+        p = Pair(a, root, "bad")
+        for d in (p.b, p.r):
+            if link:
+                os.symlink("nowhere", os.path.join(d, "appendonlydir"))
+            else:
+                with open(os.path.join(d, "appendonlydir"), "w") as f:
+                    f.write("x")
+            if old:
+                with open(os.path.join(d, "appendonly.aof"), "wb") as f:
+                    f.write(OLD)
+        (cb, lb), (cr, lr) = p.refused("--appendonly", "yes")
+        same("%s: the end" % case, cb, cr)
+        same("%s: the lines" % case, lb, lr)
+        left = lambda d: os.readlink(os.path.join(d, "appendonlydir")) if link else open(os.path.join(d, "appendonlydir")).read()
+        same("%s: the name left as it was" % case, left(p.b), left(p.r))
+        same("%s: the old file left" % case,
+             os.path.exists(os.path.join(p.b, "appendonly.aof")), os.path.exists(os.path.join(p.r, "appendonly.aof")))
 
 
 # a directory of Redis's: a base, then incremental files of commands
@@ -572,7 +612,8 @@ def main():
     os.makedirs(root)
     from_redis(a, root, "yes")
     from_redis(a, root, "no")
-    fresh(a, root)
+    fresh(a, root, False)
+    fresh(a, root, True)
     upgrade(a, root)
     refusals(a, root)
     cut(a, root)

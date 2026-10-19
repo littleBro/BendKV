@@ -542,6 +542,22 @@ They apply in order, each on top of the one before:
    tests give the same results on C and JS with it as without it. BendKV shuts down
    on SIGTERM and SIGINT as Redis does, with `shutdown-on-sigterm` and
    `shutdown-on-sigint` (FINDINGS.md, section 3zzzf).
+38. **`file-mkdir.patch`** — a directory made and removed, as effects.
+   `File.mkdir(path, mode)` makes the directory at `path` (`mkdir`, its mode `mode`
+   less the process's umask), as Redis's `dirCreateIfMissing` makes the append-only
+   file's directory: a name that is there already, a directory or not, fails
+   (EEXIST), and so does a path whose parent is not there (ENOENT).
+   `File.rmdir(path)` removes the directory at `path` (`rmdir`): one that holds a name
+   fails (ENOTEMPTY). Both run on a helper thread, as `File.rename` and `File.unlink`
+   (patch 28) do, and a path with a NUL fails (EILSEQ). On C and on JS:
+   `bend2/base.bend` (+16), `bend2/effs/file_mkdir.c` and `.js` (new), and the test
+   `tests/io/file_mkdir.bend` (a directory made, a file made inside it read back, a
+   directory made again and one at a file's name refused with EEXIST, one whose parent
+   is not there with ENOENT, a directory that holds a file not removed, then the file
+   and the empty directory removed, and the directory removed again refused with
+   ENOENT; on both lanes). A program that calls neither compiles to the C it compiled
+   to before. BendKV makes `appenddirname` at a start with `appendonly yes` where it is
+   not there, as Redis 7 does (FINDINGS.md, section 3zzzzzf).
 
 What the patches do and what they give is worked through in
 [../PERFORMANCE.md](../docs/PERFORMANCE.md), sections 3–6, 7.7–7.17, 7.23–7.25, 16, 39,
@@ -560,7 +576,7 @@ From the `bendkv/` directory:
 
 ```bash
 git clone https://github.com/bendlang/bend ../bend-patched
-sh bend-patches/apply.sh ../bend-patched   # the bendkv-patches branch from 1cce499 with thirty-seven patches
+sh bend-patches/apply.sh ../bend-patched   # the bendkv-patches branch from 1cce499 with thirty-eight patches
 bun ../bend-patched/bend2/main.ts server.bend -o build/bendkv
 ```
 
@@ -590,7 +606,8 @@ itself, in a program without GPU calls, the thirty-third only adds natives (`F64
 the thirty-fourth changes only a build with AddressSanitizer, the thirty-fifth
 only adds a native (`Clock.us`), and the thirty-sixth changes `TCP.listen` (IPv6) and
 `TCP.name` (unix sockets) and adds the effects `TCP.listen_unix` and `IO.notify`, and
-the thirty-seventh only adds the effect `IO.signal`. The theory does not change:
+the thirty-seventh only adds the effect `IO.signal`, and the thirty-eighth only adds
+the effects `File.mkdir` and `File.rmdir`. The theory does not change:
 `String` in the proofs is still a list, and `IO` a function of `R` and `k`.
 
 ## How to reproduce the measurements

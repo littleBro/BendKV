@@ -1,5 +1,5 @@
 #!/bin/sh
-# apply.sh <bend checkout>: puts the thirty-seven patches on bendlang/bend at
+# apply.sh <bend checkout>: puts the thirty-eight patches on bendlang/bend at
 # 1cce499 (Bend 2.0.35), in order, on a branch of their own.
 set -e
 here=$(cd "$(dirname "$0")" && pwd)
@@ -41,4 +41,5 @@ git -C "$1" apply "$here/heap-asan.patch"
 git -C "$1" apply "$here/clock-us.patch"
 git -C "$1" apply "$here/unix-v6.patch"
 git -C "$1" apply "$here/signal.patch"
+git -C "$1" apply "$here/file-mkdir.patch"
 echo "patched: bun $1/bend2/main.ts <file>.bend -o <binary>"

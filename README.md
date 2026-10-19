@@ -858,9 +858,12 @@ translation stays in the trusted base.
   with their libraries of functions; the last incremental file appended to; a rewrite
   that starts a new incremental file and ends with a new base, the old base and
   incremental files made history and removed (section 3zzzq of
-  [docs/FINDINGS.md](docs/FINDINGS.md)). Where BendKV differs: the runtime cannot make a
-  directory, so without one BendKV keeps Redis 6's single file, where Redis 7 makes the
-  directory (`mkdir appendonlydir` once is enough); BendKV writes its bases as commands
+  [docs/FINDINGS.md](docs/FINDINGS.md)); a start with `appendonly yes` makes the
+  directory where it is not there (mode 0755), as Redis 7.2.16 does, and stops with
+  Redis's line where it cannot (section 3zzzzzf). Where BendKV differs: a server started
+  with `appendonly no` and no directory turns the file on (CONFIG SET appendonly yes) and
+  rewrites it as Redis 6's single file, where Redis makes the directory, and the next
+  start with `appendonly yes` moves that file in; BendKV writes its bases as commands
   (`.base.aof`) whatever `aof-use-rdb-preamble` says, and reads both kinds; an RDB base
   followed by commands stops its start, where Redis loads both; a base or history line
   whose sequence number is below 1, or 10^13 or more, is refused; only a base is read as
@@ -1129,9 +1132,9 @@ BGREWRITEAOF's replies and INFO's account against Redis's, the rewritten file ag
 Redis's base command for command, writes during a rewrite and a kill during one, the
 cron's rewrites, rewrites that fail, BendKV and Redis started from the new file),
 Redis 7's directory of files (`tests/aofdir_test.py`: BendKV and Redis each started on
-a copy of the same directory, Redis's with an RDB base and with one of commands, an
-empty one, an old single file to move in, manifests Redis refuses, files cut short or
-not there, history files, and rewrites in it, with the same databases, manifests and
+a copy of the same directory, Redis's with an RDB base and with one of commands, none
+and an empty one, an old single file to move in, manifests Redis refuses and a file at
+the directory's name, files cut short or not there, history files, and rewrites in it, with the same databases, manifests and
 lines logged),
 maxmemory (`tests/maxmemory_test.py`: the refusals past it, OBJECT IDLETIME and FREQ
 and the `evicted` event against Redis's, Redis's own tests of the policies on both, an
@@ -1204,7 +1207,7 @@ away.
 | what | how many | counted in |
 |---|---:|---|
 | laws | 68 | `proof/LAWS.bend` (by group: [What is proved](#what-is-proved)) |
-| patches to the Bend compiler | 37 | `bend-patches/apply.sh` |
+| patches to the Bend compiler | 38 | `bend-patches/apply.sh` |
 | constructors of `Cmd`, a parsed command | 30 | `src/redis.bend` |
 | Redis 7.2.16's parameters, all of which CONFIG serves | 184 | `tools/data/redis-configs.json` |
 
