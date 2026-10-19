@@ -1820,15 +1820,17 @@ def setinfo.of(args: List<&2, String>) -> ClOp:
 # it (catClientInfoString): its id, its peer's address and its own, its
 # socket's fd, name, age and idle time (s), flags, database, the counts of
 # its channels, patterns and shard channels, the commands queued in its
-# MULTI (none: -1), the bytes of the batch it runs (qbuf) and of the
-# command's arguments (argv-mem), its last command (cmd), its user (ACL),
-# the client its invalidations go to (redir: -1 when it does not track, 0 itself), and
-# whether it speaks RESP3 (resp), then the library CLIENT SETINFO names
-# (lib-name, lib-ver). BendKV keeps no buffer of a client's own, so
-# qbuf-free, multi-mem, the reply buffer's size and peak, the output
-# lists and the memory are 0.
+# MULTI (none: -1), the bytes its query buffer holds and the room left in
+# it, as Redis's buffer would have them (qbuf and qbuf-free: server.bend,
+# Query buffers), the bytes of the command's arguments (argv-mem), its
+# last command (cmd), its user (ACL), the client its invalidations go to
+# (redir: -1 when it does not track, 0 itself), and whether it speaks
+# RESP3 (resp), then the library CLIENT SETINFO names (lib-name,
+# lib-ver). BendKV keeps no reply buffer of a client's own, so
+# multi-mem, the reply buffer's size and peak, the output lists and the
+# memory are 0.
 type ClLine is Data:
-  ClLine{id: Nat, addr: String, laddr: String, fd: Nat, name: String, age: Nat, idle: Nat, flags: String, db: Nat, sub: Nat, psub: Nat, ssub: Nat, multi: Maybe<&2, Nat>, qbuf: Nat, argv: Nat, cmd: String, user: String, redir: String, r3: Bool, lname: String, lver: String}
+  ClLine{id: Nat, addr: String, laddr: String, fd: Nat, name: String, age: Nat, idle: Nat, flags: String, db: Nat, sub: Nat, psub: Nat, ssub: Nat, multi: Maybe<&2, Nat>, qbuf: Nat, qfree: Nat, argv: Nat, cmd: String, user: String, redir: String, r3: Bool, lname: String, lver: String}
 
 def line.multi(m: Maybe<&2, Nat>) -> String:
   match m:
@@ -1839,11 +1841,11 @@ def line.multi(m: Maybe<&2, Nat>) -> String:
 
 def client.line(l: ClLine) -> String:
   match l:
-    case ClLine{id, addr, laddr, fd, name, age, idle, flags, db, sub, psub, ssub, multi, qbuf, argv, cmd, user, redir, r3, lname, lver}:
+    case ClLine{id, addr, laddr, fd, name, age, idle, flags, db, sub, psub, ssub, multi, qbuf, qfree, argv, cmd, user, redir, r3, lname, lver}:
       a = "id=" ++ Nat.show(id) ++ " addr=" ++ addr ++ " laddr=" ++ laddr ++ " fd=" ++ Nat.show(fd) ++ " name=" ++ name
       b = " age=" ++ Nat.show(age) ++ " idle=" ++ Nat.show(idle) ++ " flags=" ++ flags ++ " db=" ++ Nat.show(db)
       c = " sub=" ++ Nat.show(sub) ++ " psub=" ++ Nat.show(psub) ++ " ssub=" ++ Nat.show(ssub) ++ " multi=" ++ line.multi(multi)
-      d = " qbuf=" ++ Nat.show(qbuf) ++ " qbuf-free=0 argv-mem=" ++ Nat.show(argv) ++ " multi-mem=0 rbs=0 rbp=0 obl=0 oll=0 omem=0 tot-mem=0"
+      d = " qbuf=" ++ Nat.show(qbuf) ++ " qbuf-free=" ++ Nat.show(qfree) ++ " argv-mem=" ++ Nat.show(argv) ++ " multi-mem=0 rbs=0 rbp=0 obl=0 oll=0 omem=0 tot-mem=0"
       a ++ b ++ c ++ d ++ " events=r cmd=" ++ cmd ++ " user=" ++ user ++ " redir=" ++ redir ++ " resp=" ++ Bool.pick(String, r3, "3", "2") ++ " lib-name=" ++ lname ++ " lib-ver=" ++ lver
 
 def parse_client(id: Nat, sub: String, args: List<&2, String>) -> SessOp:

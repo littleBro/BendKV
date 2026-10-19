@@ -3814,7 +3814,7 @@ def cl.argv(args: List<&2, String>, +n: Nat) -> Nat:
       cl.argv(rest, Nat.add(n, String.length(a)))
 
 def cl.alone.line(+c: Conn, +info: Bool, +argv: Nat) -> String:
-  R.client.line(R.ClLine{conn.id(c), "?:0", "?:0", 0n, conn.name(c), 0n, 0n, "N", conn.db(c), 0n, 0n, 0n, None{}, 0n, argv, cl.cmd(info), "default", "-1", conn.r3(c), "", ""}) ++ "\n"
+  R.client.line(R.ClLine{conn.id(c), "?:0", "?:0", 0n, conn.name(c), 0n, 0n, "N", conn.db(c), 0n, 0n, 0n, None{}, 0n, 0n, argv, cl.cmd(info), "default", "-1", conn.r3(c), "", ""}) ++ "\n"
 
 def cl.ids(ids: List<&2, Nat>, +c: Conn, +argv: Nat, acc: String) -> String:
   match ids:

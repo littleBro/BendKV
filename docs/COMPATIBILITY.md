@@ -39,12 +39,13 @@ make suite REDIS_SRC=../redis      # both runs and the table, in build/suite/
 ## The result
 
 Redis 7.2.16, October 2026. Of the 1,812 tests Redis passes in this mode, BendKV passes
-**1,764 (97.4%)**; of the 1,688 in the units of what BendKV has, 1,644 (97.4%), and 120
+**1,766 (97.5%)**; of the 1,690 in the units of what BendKV has, 1,646 (97.4%), and 120
 of the 122 of streams'.
 
 7.2.16's suite runs 148 tests more in this mode than 7.0.15's, and Redis passes 135 more.
 At the move BendKV passed 120 more, 1,676 where it passed 1,556 of the 1,677 that 7.0.15
-passed (92.8%), and streams' groups brought 43 since and their waits 22 (below). The suite
+passed (92.8%), and since, streams' groups brought 43, their waits 22, the append-only
+file turned on at run time 23 and a client's query buffer 2 (below). The suite
 found six things to fix (section 3zzzzk of
 [FINDINGS.md](FINDINGS.md)), and BendKV passed 1,657 before them:
 - unit/hyperloglog, 27 tests where 7.0.15's had 20, sets a sparse HyperLogLog of 32 MB of
@@ -121,6 +122,12 @@ brought 23, the tests of the streams' units that never ran, as each unit stopped
 with a partial ID at the maximal sequence, found a bug: XADD of `<ms>-*` past the last
 sequence of ms answered "Elements are too large to be stored", where Redis answers that
 the ID is not past the stream's last; it does now.
+
+A client's query buffer (section 3zzzzy of [FINDINGS.md](FINDINGS.md)) brought 2, the two
+tests of unit/querybuf that Redis passes in this mode: a new client's buffer after CLIENT
+SETNAME, of 16 KB to 32 KB, freed once the client is idle 3 s; and the buffer of an
+argument of 1,000,000 bytes sized to it from its length's line on, then taken back once
+its client is idle 3 s.
 
 ### Against Redis 7.0.15
 
@@ -261,7 +268,8 @@ monitor's state (15 of its 19). CLIENT LIST, INFO and KILL (section 3zs of
 with names and without, CLIENT INFO, KILL's errors, KILL SKIPME yes and no of all
 clients, and a client named by SETNAME that closes its connection and leaves the list.
 unit/querybuf's two tests now run past CLIENT LIST, to a check of the size of the
-client's query buffer, which BendKV does not keep (its qbuf is 0). Since each unit runs
+client's query buffer, which BendKV did not keep then (its qbuf was 0; it does since
+section 3zzzzy of [FINDINGS.md](FINDINGS.md)). Since each unit runs
 on an instance started for it, 4 more tests of unit/type/stream-cgroups run on Redis, and
 pass there (1,677 of 1,757; the test of INCR's shared integers in unit/type/incr passes
 on BendKV again, as it did before an instance left with `allkeys-lru` ran it). Pub/Sub
@@ -357,9 +365,8 @@ source): 9 of the 17. The other 7 need MULTI and WATCH, Lua or lists (then).
 
 | area | units | Redis passes | BendKV passes |
 |---|---|---:|---:|
-| what BendKV has: the protocol, connections and clients and their pause, the keyspace and its databases, strings and their ranges, bits and fields, counters and floats, hashes, lists, sets, sorted sets and the commands that wait on them, SORT, HyperLogLogs, GEO, DUMP and RESTORE, times to live, lazy freeing, transactions, pub/sub and keyspace notifications, introspection, the slow log and the latency monitor, client-side caching, ACL users, Lua scripts and functions | protocol, quit, keyspace, type/string, type/incr, type/hash, type/list, list-2, list-3, type/set, type/zset, sort, hyperloglog, geo, dump, scan, bitops, bitfield, expire, lazyfree, violations, multi, pubsub, pause, introspection, introspection-2, other, info-command, latency-monitor, slowlog, tracking, scripting, functions | 1688 | **1644** |
+| what BendKV has: the protocol, connections and clients and their pause, the keyspace and its databases, strings and their ranges, bits and fields, counters and floats, hashes, lists, sets, sorted sets and the commands that wait on them, SORT, HyperLogLogs, GEO, DUMP and RESTORE, times to live, lazy freeing, transactions, pub/sub and keyspace notifications, introspection and the query buffer, the slow log and the latency monitor, client-side caching, ACL users, Lua scripts and functions | protocol, quit, keyspace, type/string, type/incr, type/hash, type/list, list-2, list-3, type/set, type/zset, sort, hyperloglog, geo, dump, scan, bitops, bitfield, expire, lazyfree, violations, multi, pubsub, pause, introspection, introspection-2, querybuf, other, info-command, latency-monitor, slowlog, tracking, scripting, functions | 1690 | **1646** |
 | streams: their values, reads, writes, groups and waits | type/stream, type/stream-cgroups | 122 | **120** |
-| the query buffer, not yet | querybuf | 2 | 0 |
 
 Of the first row's, unit/lazyfree's first two pass on BendKV's account of its heap, and
 its third frees a stream whose group was destroyed (the fourth sets
@@ -390,7 +397,7 @@ wait):
 | unit/pause | 17 | 17 | 17 |
 | unit/protocol | 25 | 17 | 17 |
 | unit/pubsub | 46 | 46 | 46 |
-| unit/querybuf | 3 | 2 | 0 |
+| unit/querybuf | 3 | 2 | 2 |
 | unit/quit | 3 | 3 | 3 |
 | unit/replybufsize | 1 | 0 | 0 |
 | unit/scan | 21 | 18 | 18 |
@@ -409,9 +416,9 @@ wait):
 | unit/type/string | 82 | 82 | 79 |
 | unit/type/zset | 303 | 300 | 298 |
 | unit/violations | 1 | 1 | 1 |
-| **all** | **1905** | **1812** | **1764 (97.4%)** |
+| **all** | **1905** | **1812** | **1766 (97.5%)** |
 
-## Why the other 48 fail
+## Why the other 46 fail
 
 Against Redis 7.2.16:
 
@@ -420,7 +427,7 @@ Against Redis 7.2.16:
     transaction propagates and 3 unit/scripting's of what a script propagates;
   - MIGRATE 2, REPLICAOF 1 and MODULE 1.
 - **One never ran**: it runs only on a server that names jemalloc as its allocator.
-- **17 fail with another error.**
+- **15 fail with another error.**
   - 3 are streams': the tests that set `stream-node-max-entries`, one of them
     unit/lazyfree's.
   - 7 fail on a client that a test before them left in MULTI: REPLICAOF's, in
@@ -429,8 +436,7 @@ Against Redis 7.2.16:
     - COMMAND's entry of a command it does not have: MIGRATE marked movablekeys;
     - the order of a hash Redis keeps in a listpack past the parameters' defaults
       (2, above);
-    - replication: EXEC's NOREPLICAS, and a script's when it counts good replicas;
-    - the size of a client's query buffer (CLIENT LIST's qbuf, 0; 2).
+    - replication: EXEC's NOREPLICAS, and a script's when it counts good replicas.
 
 Against 7.0.15, 121 failed: 64 on a command BendKV does not have, 19 that never ran, and
 38 with another error, CLUSTER's among them (its subcommands in COMMAND LIST, and called

@@ -20,7 +20,7 @@ throughput of Redis 7.0.15 on the same machine, with half its memory for small v
 > append-only file and its rewrite, maxmemory and its eviction, Lua scripts and
 > functions, RESP3). The goal now is a drop-in replacement for a single Redis node,
 > measured by Redis's own test suite: of the 1,812 tests Redis 7.2.16 passes against a
-> server it did not start, BendKV passes 1,764, and 1,644 of the 1,688 in what it implements
+> server it did not start, BendKV passes 1,766, and 1,646 of the 1,690 in what it implements
 > ([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)). Do not use it for data you cannot
 > lose.
 
@@ -503,17 +503,23 @@ translation stays in the trusted base.
   7.2.16 runs them, with its errors. A client's line has Redis's fields in Redis's order:
   its id, address and local address, its socket's fd, its name, age and idle time, its
   flags (P subscribed, x in MULTI, b waiting, d a watched key touched, e NO-EVICT on, T
-  NO-TOUCH on, t tracking keys, R its redirect gone, B in BCAST mode, N none), database, counts of subscriptions, its queued commands, the bytes of the batch
-  and of the arguments of the command that runs (of the blocking command, for a client
-  that waits), the full name of its last command (the blocking one while it waits;
+  NO-TOUCH on, t tracking keys, R its redirect gone, B in BCAST mode, N none), database, counts of subscriptions, its queued commands, its query buffer
+  (the bytes it holds, the batch's for the client that asks, and the room left in it, as
+  Redis 7.2.16 keeps them: docs/FINDINGS.md, section 3zzzzy), the bytes of the arguments
+  of the command that runs (of the blocking command, for a client that waits), the full name of its last command (the blocking one while it waits;
   EXEC, with the client in MULTI, while EXEC runs), and the library CLIENT SETINFO names
   (which RESET keeps). A client killed is cut off at once,
   wherever it waits (its socket shut down), its transaction, wait and subscriptions
   dropped, what it waited for left as it was; the old form, and SKIPME no, kill the client
   itself after its reply, and in a transaction after the rest of it. Where BendKV
-  differs: it keeps no buffers per client, so their sizes are 0 (qbuf-free, multi-mem,
-  rbs, rbp, obl, oll, omem, tot-mem) and so is qbuf of another client (Redis's query buffer
-  holds the commands after a blocking one; BendKV holds them as commands); idle counts
+  differs: it keeps no other buffers per client, so their sizes are 0 (multi-mem, rbs,
+  rbp, obl, oll, omem, tot-mem), and it reckons the query buffer from what the
+  connections tell of big arguments (of 32 KB or more): a buffer that Redis's reads grow
+  past 20,474 bytes for a smaller argument stays at 20,474, another client's holds no
+  bytes but a big argument's (Redis's holds the rest of a request read in part, and the
+  commands after a blocking one, which BendKV holds as commands), a big argument's buffer
+  is not kept past its client's next request, and the client that asks has 20,474 bytes
+  of room less its batch's; idle counts
   from the client's last batch, where Redis also counts a reply written (to a subscriber
   that gets messages, to a client that waited); user is the client's (ACL), redir the
   client its invalidations go to (0 itself, -1 when it does not track), resp 2 or 3.
@@ -1058,7 +1064,10 @@ each get the 2,000 messages of 4 publishers in order, and 50 subscribers that le
 messages are published), CLIENT LIST, INFO and KILL (`tests/client_test.py`: scenarios on
 BendKV and on Redis, their lines compared field by field with what differs by nature put
 aside, then 100 clients listed and half of them killed by id, and 200 killed by address
-while other clients connect and close, none killed but those named), MONITOR
+while other clients connect and close, none killed but those named), a client's query
+buffer (`tests/querybuf_test.py`: scenarios on BendKV and on Redis, the bytes held and the
+room left as another client sees them compared, after commands, big arguments and the
+cron's looks), MONITOR
 (`tests/monitor_test.py`: scenarios on BendKV and on Redis, a monitor's lines compared
 with their time and address put aside, then 4 monitors that each get every line of 20
 clients that pipeline 200 SETs each, each client's lines in order), CLIENT PAUSE and
