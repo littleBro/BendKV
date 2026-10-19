@@ -1606,55 +1606,58 @@ def boot.start(+b: Boot) -> U32:
 # the calls ACL refused since the start, as Redis 7.2 counts them by the
 # reason of their ACL LOG entry (acl_access_denied_*: an AUTH that failed,
 # da; a command, dc; a key, dk; a channel, dh), which CONFIG RESETSTAT
-# leaves as they are. CnOf, a count that holds a count, is never built:
-# it makes Cn a node of its own, one word of Info.
+# leaves as they are; and the connections the listeners refused since the
+# start or the last CONFIG RESETSTAT (rc: rejected_connections, which
+# Redis's resetServerStats starts again; server.bend, Accepting). CnOf, a
+# count that holds a count, is never built: it makes Cn a node of its
+# own, one word of Info.
 type Cn is Data:
-  Cn{blk: Nat, tmo: Nat, tc: Nat, tk: Nat, ti: Nat, tp: Nat, scn: Nat, scm: Nat, scc: Nat, fnn: Nat, fnl: Nat, fvm: Nat, fmo: Nat, bk: Nat, bn: Nat, xw: Nat, da: Nat, dc: Nat, dk: Nat, dh: Nat}
+  Cn{blk: Nat, tmo: Nat, tc: Nat, tk: Nat, ti: Nat, tp: Nat, scn: Nat, scm: Nat, scc: Nat, fnn: Nat, fnl: Nat, fvm: Nat, fmo: Nat, bk: Nat, bn: Nat, xw: Nat, da: Nat, dc: Nat, dk: Nat, dh: Nat, rc: Nat}
   CnOf{c: Cn}
 
 def cn.zero() -> Cn:
-  Cn{0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n}
+  Cn{0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n}
 
 def cn.waits(c: Cn, +n: Nat, +t: Nat, +w: Nat) -> Cn:
   match c:
-    case Cn{b, o, tc, tk, ti, tp, sn, sm, sc, fn, fl, fv, fm, bk, bn, xw, da, dc, dk, dh}:
-      Cn{n, t, tc, tk, ti, tp, sn, sm, sc, fn, fl, fv, fm, bk, bn, w, da, dc, dk, dh}
+    case Cn{b, o, tc, tk, ti, tp, sn, sm, sc, fn, fl, fv, fm, bk, bn, xw, da, dc, dk, dh, rc}:
+      Cn{n, t, tc, tk, ti, tp, sn, sm, sc, fn, fl, fv, fm, bk, bn, w, da, dc, dk, dh, rc}
     case CnOf{x}:
       cn.waits(x, n, t, w)
 
 # how many clients wait in XREAD or XREADGROUP (server.bend: Stream waits)
 def cn.xw(+c: Cn) -> Nat:
   match c:
-    case Cn{b, o, tc, tk, ti, tp, sn, sm, sc, fn, fl, fv, fm, bk, bn, +xw, da, dc, dk, dh}:
+    case Cn{b, o, tc, tk, ti, tp, sn, sm, sc, fn, fl, fv, fm, bk, bn, +xw, da, dc, dk, dh, rc}:
       xw
     case CnOf{+x}:
       cn.xw(x)
 
 def cn.trk(c: Cn, +a: Nat, +b: Nat, +d: Nat, +e: Nat) -> Cn:
   match c:
-    case Cn{n, t, tc, tk, ti, tp, sn, sm, sc, fn, fl, fv, fm, bk, bn, xw, da, dc, dk, dh}:
-      Cn{n, t, a, b, d, e, sn, sm, sc, fn, fl, fv, fm, bk, bn, xw, da, dc, dk, dh}
+    case Cn{n, t, tc, tk, ti, tp, sn, sm, sc, fn, fl, fv, fm, bk, bn, xw, da, dc, dk, dh, rc}:
+      Cn{n, t, a, b, d, e, sn, sm, sc, fn, fl, fv, fm, bk, bn, xw, da, dc, dk, dh, rc}
     case CnOf{x}:
       cn.trk(x, a, b, d, e)
 
 def cn.scripts(c: Cn, +k: Nat, +m: Nat, +e: Nat) -> Cn:
   match c:
-    case Cn{n, t, tc, tk, ti, tp, sn, sm, sc, fn, fl, fv, fm, bk, bn, xw, da, dc, dk, dh}:
-      Cn{n, t, tc, tk, ti, tp, k, m, e, fn, fl, fv, fm, bk, bn, xw, da, dc, dk, dh}
+    case Cn{n, t, tc, tk, ti, tp, sn, sm, sc, fn, fl, fv, fm, bk, bn, xw, da, dc, dk, dh, rc}:
+      Cn{n, t, tc, tk, ti, tp, k, m, e, fn, fl, fv, fm, bk, bn, xw, da, dc, dk, dh, rc}
     case CnOf{x}:
       cn.scripts(x, k, m, e)
 
 def cn.funcs(c: Cn, +a: Nat, +b: Nat, +d: Nat, +e: Nat) -> Cn:
   match c:
-    case Cn{n, t, tc, tk, ti, tp, sn, sm, sc, fn, fl, fv, fm, bk, bn, xw, da, dc, dk, dh}:
-      Cn{n, t, tc, tk, ti, tp, sn, sm, sc, a, b, d, e, bk, bn, xw, da, dc, dk, dh}
+    case Cn{n, t, tc, tk, ti, tp, sn, sm, sc, fn, fl, fv, fm, bk, bn, xw, da, dc, dk, dh, rc}:
+      Cn{n, t, tc, tk, ti, tp, sn, sm, sc, a, b, d, e, bk, bn, xw, da, dc, dk, dh, rc}
     case CnOf{x}:
       cn.funcs(x, a, b, d, e)
 
 def cn.bkeys(c: Cn, +k: Nat, +o: Nat) -> Cn:
   match c:
-    case Cn{n, t, tc, tk, ti, tp, sn, sm, sc, fn, fl, fv, fm, bk, bn, xw, da, dc, dk, dh}:
-      Cn{n, t, tc, tk, ti, tp, sn, sm, sc, fn, fl, fv, fm, k, o, xw, da, dc, dk, dh}
+    case Cn{n, t, tc, tk, ti, tp, sn, sm, sc, fn, fl, fv, fm, bk, bn, xw, da, dc, dk, dh, rc}:
+      Cn{n, t, tc, tk, ti, tp, sn, sm, sc, fn, fl, fv, fm, k, o, xw, da, dc, dk, dh, rc}
     case CnOf{x}:
       cn.bkeys(x, k, o)
 
@@ -1662,29 +1665,45 @@ def cn.bkeys(c: Cn, +k: Nat, +o: Nat) -> Cn:
 # "command", "key" or "channel")
 def cn.denied(c: Cn, +w: String) -> Cn:
   match c:
-    case Cn{n, t, tc, tk, ti, tp, sn, sm, sc, fn, fl, fv, fm, bk, bn, xw, +da, +dc, +dk, +dh}:
+    case Cn{n, t, tc, tk, ti, tp, sn, sm, sc, fn, fl, fv, fm, bk, bn, xw, +da, +dc, +dk, +dh, rc}:
       +a = String.eq(w, "auth")
       +b = String.eq(w, "command")
       +k = String.eq(w, "key")
       Cn{n, t, tc, tk, ti, tp, sn, sm, sc, fn, fl, fv, fm, bk, bn, xw, Bool.pick(Nat, a, 1n+da, da), Bool.pick(Nat, b, 1n+dc, dc), Bool.pick(Nat, k, 1n+dk, dk),
-        Bool.pick(Nat, Bool.or(Bool.or(a, b), k), dh, 1n+dh)}
+        Bool.pick(Nat, Bool.or(Bool.or(a, b), k), dh, 1n+dh), rc}
     case CnOf{x}:
       cn.denied(x, w)
+
+# one more connection refused (rc), or none since a CONFIG RESETSTAT
+def cn.refused(c: Cn) -> Cn:
+  match c:
+    case Cn{n, t, tc, tk, ti, tp, sn, sm, sc, fn, fl, fv, fm, bk, bn, xw, da, dc, dk, dh, +rc}:
+      Cn{n, t, tc, tk, ti, tp, sn, sm, sc, fn, fl, fv, fm, bk, bn, xw, da, dc, dk, dh, 1n+rc}
+    case CnOf{x}:
+      cn.refused(x)
+
+def cn.refused.reset(c: Cn) -> Cn:
+  match c:
+    case Cn{n, t, tc, tk, ti, tp, sn, sm, sc, fn, fl, fv, fm, bk, bn, xw, da, dc, dk, dh, rc}:
+      Cn{n, t, tc, tk, ti, tp, sn, sm, sc, fn, fl, fv, fm, bk, bn, xw, da, dc, dk, dh, 0n}
+    case CnOf{x}:
+      cn.refused.reset(x)
 
 # a count of c: 0 the clients that wait, 1 those with a time, 2 those
 # that track, 3 the table's keys, 4 its ids, 5 the prefixes, 6 the
 # scripts cached, 7 the Lua state's bytes, 8 the cache's, 9 the
 # functions, 10 the libraries, 11 the functions' Lua state's bytes, 12
 # their records', 13 the keys that clients wait on, 14 to 17 the calls
-# ACL refused (an AUTH, a command, a key, a channel)
+# ACL refused (an AUTH, a command, a key, a channel), 18 the keys that
+# clients wait on to be made (nokey), 19 the connections refused
 def cn.at(+c: Cn, +i: Nat) -> Nat:
   match c:
-    case Cn{+n, +t, +tc, +tk, +ti, +tp, +sn, +sm, +sc, +fn, +fl, +fv, +fm, +bk, +bn, +xw, +da, +dc, +dk, +dh}:
+    case Cn{+n, +t, +tc, +tk, +ti, +tp, +sn, +sm, +sc, +fn, +fl, +fv, +fm, +bk, +bn, +xw, +da, +dc, +dk, +dh, +rc}:
       Bool.pick(Nat, Nat.is_eq(i, 0n), n, Bool.pick(Nat, Nat.is_eq(i, 1n), t, Bool.pick(Nat, Nat.is_eq(i, 2n), tc,
       Bool.pick(Nat, Nat.is_eq(i, 3n), tk, Bool.pick(Nat, Nat.is_eq(i, 4n), ti, Bool.pick(Nat, Nat.is_eq(i, 5n), tp,
       Bool.pick(Nat, Nat.is_eq(i, 6n), sn, Bool.pick(Nat, Nat.is_eq(i, 7n), sm, Bool.pick(Nat, Nat.is_eq(i, 8n), sc,
       Bool.pick(Nat, Nat.is_eq(i, 9n), fn, Bool.pick(Nat, Nat.is_eq(i, 10n), fl, Bool.pick(Nat, Nat.is_eq(i, 11n), fv, Bool.pick(Nat, Nat.is_eq(i, 12n), fm, Bool.pick(Nat, Nat.is_eq(i, 13n), bk,
-      Bool.pick(Nat, Nat.is_eq(i, 14n), da, Bool.pick(Nat, Nat.is_eq(i, 15n), dc, Bool.pick(Nat, Nat.is_eq(i, 16n), dk, Bool.pick(Nat, Nat.is_eq(i, 17n), dh, bn))))))))))))))))))
+      Bool.pick(Nat, Nat.is_eq(i, 14n), da, Bool.pick(Nat, Nat.is_eq(i, 15n), dc, Bool.pick(Nat, Nat.is_eq(i, 16n), dk, Bool.pick(Nat, Nat.is_eq(i, 17n), dh, Bool.pick(Nat, Nat.is_eq(i, 19n), rc, bn)))))))))))))))))))
     case CnOf{+x}:
       cn.at(x, i)
 
@@ -3139,6 +3158,16 @@ def live.trk(l: Live, +a: Nat, +b: Nat, +d: Nat, +e: Nat) -> Live:
     case ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, cn}:
       ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, cn.trk(cn, a, b, d, e)}
 
+def live.refused(l: Live) -> Live:
+  match l:
+    case ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, cn}:
+      ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, cn.refused(cn)}
+
+def live.refused.reset(l: Live) -> Live:
+  match l:
+    case ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, cn}:
+      ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, cn.refused.reset(cn)}
+
 def live.cn(+l: Live, +i: Nat) -> Nat:
   match l:
     case ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, +cn}:
@@ -3210,6 +3239,12 @@ def info.denied(i: Info, +w: String) -> Info:
   match i:
     case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
       IInfo{b, live.denied(l, w), c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}
+
+# a connection the listeners refused (maxclients: server.bend, Accepting)
+def info.refused(i: Info) -> Info:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
+      IInfo{b, live.refused(l), c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}
 
 # the tracking's counts (CLIENT TRACKING): the clients that track, the
 # table's keys and its clients' ids, the BCAST prefixes
@@ -3380,7 +3415,7 @@ def info.ncmds(+i: Info) -> Nat:
 def info.reset(i: Info) -> Info:
   match i:
     case IInfo{b, +l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
-      IInfo{b, l, count.zero(), IInst{live.ms(l), count.zero(), samples.zero(), samples.zero(), samples.zero()}, pk, live.conns(l), a0, a, stats.reset(st), exp.reset(ex), rws.reset(rw), tm, rdb.reset(rf)}
+      IInfo{b, live.refused.reset(l), count.zero(), IInst{live.ms(l), count.zero(), samples.zero(), samples.zero(), samples.zero()}, pk, live.conns(l), a0, a, stats.reset(st), exp.reset(ex), rws.reset(rw), tm, rdb.reset(rf)}
 
 # the j-th of a list of numbers (0 past its end), and the list with v in
 # its place
@@ -4003,7 +4038,7 @@ def sec.stats.go(c: Count, inst: Inst, +conns: Nat, +errs: String, +expired: Nat
       kv("total_net_output_bytes", big.show(outb)) ++ kv("total_net_repl_input_bytes", "0") ++
       kv("total_net_repl_output_bytes", "0") ++ kv("instantaneous_input_kbps", fix2(Nat.show(mean(si)), 1024n)) ++
       kv("instantaneous_output_kbps", fix2(Nat.show(mean(so)), 1024n)) ++ kv("instantaneous_input_repl_kbps", "0.00") ++
-      kv("instantaneous_output_repl_kbps", "0.00") ++ kv("rejected_connections", "0") ++ kv("sync_full", "0") ++
+      kv("instantaneous_output_repl_kbps", "0.00") ++ kv("rejected_connections", Nat.show(live.cn(l, 19n))) ++ kv("sync_full", "0") ++
       kv("sync_partial_ok", "0") ++ kv("sync_partial_err", "0") ++ kv("expired_keys", Nat.show(expired)) ++ kv("expired_stale_perc", "0.00") ++
       kv("expired_time_cap_reached_count", "0") ++ kv("expire_cycle_cpu_milliseconds", "0") ++ kv("evicted_keys", Nat.show(exp.ev(ex))) ++
       kv("evicted_clients", "0") ++ kv("total_eviction_exceeded_time", Nat.show(exp.total(ex, now))) ++ kv("current_eviction_exceeded_time", Nat.show(exp.cur(ex, now))) ++

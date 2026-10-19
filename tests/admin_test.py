@@ -22,8 +22,10 @@ two rows of squares, which must be the same bytes), the others' shapes
 the verbatim reply of RESP3; SHUTDOWN's errors and its refusal in MULTI;
 CLUSTER as Redis answers it with cluster support disabled (each of its
 subcommands, MYSHARDID and HELP too, once its arity passes; an unknown
-one and a wrong number of arguments refused, in MULTI too); with their
-statistics. No scenario stops a server: they run against the
+one and a wrong number of arguments refused, in MULTI too); MODULE as a
+server that loads no module answers it (HELP, LIST, and LOAD, LOADEX
+and UNLOAD refused with enable-module-command no, in MULTI and from a
+script too); with their statistics. No scenario stops a server: they run against the
 shared ones.
 
 The checks of BendKV alone: MEMORY MALLOC-STATS answers as Redis built
@@ -67,7 +69,7 @@ from blocking_test import Client, enc, info_lines, wait_blocked
 from client_test import Named
 
 STATS = ("cmdstat_wait:", "cmdstat_waitaof:", "cmdstat_shutdown:", "cmdstat_exec:", "cmdstat_lastsave:",
-         "cmdstat_role:", "cmdstat_lolwut:", "cmdstat_memory|", "cmdstat_cluster|")
+         "cmdstat_role:", "cmdstat_lolwut:", "cmdstat_memory|", "cmdstat_cluster|", "cmdstat_module")
 
 
 def stats(r):
@@ -295,6 +297,22 @@ def scenarios(port, log, plain):
         log("7b cluster", args, r.cmd("CLUSTER", *args))
     log("7b multi", r.cmd("MULTI"), r.cmd("CLUSTER", "INFO"), r.cmd("CLUSTER", "MYSHARDID"), r.cmd("EXEC"))
     log("7b multi refused", r.cmd("MULTI"), r.cmd("CLUSTER", "NOSUCH"), r.cmd("EXEC"))
+    # 7c. MODULE of a server that loads no module: HELP and LIST; LOAD,
+    # LOADEX and UNLOAD, with enable-module-command at its default (no),
+    # refused once their arity passes, before the other checks, in MULTI
+    # flagging the transaction; a script may call HELP alone (the others'
+    # noscript)
+    for args in ([], ["HELP"], ["help"], ["HELP", "x"], ["LIST"], ["list"], ["LIST", "x"], ["LOAD"],
+                 ["LOAD", "/nonexistent/m.so"], ["load", "/nonexistent/m.so", "a", "b"], ["LOADEX"],
+                 ["LOADEX", "/nonexistent/m.so"], ["LOADEX", "/nonexistent/m.so", "CONFIG", "a", "b", "ARGS", "c"],
+                 ["UNLOAD"], ["UNLOAD", "m"], ["UNLOAD", "a", "b"], ["NOSUCH"], ["nosuch", "x"], ["a" * 200]):
+        log("7c module", args, r.cmd("MODULE", *args))
+    log("7c multi", r.cmd("MULTI"), r.cmd("MODULE", "LIST"), r.cmd("MODULE", "HELP"), r.cmd("EXEC"))
+    log("7c multi refused", r.cmd("MULTI"), r.cmd("MODULE", "LIST"), r.cmd("MODULE", "UNLOAD", "m"), r.cmd("EXEC"))
+    log("7c scripts", r.cmd("EVAL", "return #redis.call('module','help')", "0"),
+        r.cmd("EVAL", "return redis.call('module','list')", "0"),
+        r.cmd("EVAL", "return redis.pcall('module','load','/nonexistent/m.so')", "0"))
+    log("7c getkeys", r.cmd("COMMAND", "GETKEYS", "MODULE", "LIST"), r.cmd("COMMAND", "GETKEYS", "MODULE", "LOAD", "x"))
     # 8. the statistics
     log("8 stats", stats(r))
     log("8 errorstats", errorstats(r))

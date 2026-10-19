@@ -24394,6 +24394,445 @@
     }
    ]
   },
+  "module": {
+   "docs": {
+    "%": [
+     "summary",
+     "A container for module commands.",
+     "since",
+     "4.0.0",
+     "group",
+     "server",
+     "complexity",
+     "Depends on subcommand.",
+     "subcommands",
+     {
+      "%": [
+       "module|help",
+       {
+        "%": [
+         "summary",
+         "Returns helpful text about the different subcommands.",
+         "since",
+         "5.0.0",
+         "group",
+         "server",
+         "complexity",
+         "O(1)"
+        ]
+       },
+       "module|list",
+       {
+        "%": [
+         "summary",
+         "Returns all loaded modules.",
+         "since",
+         "4.0.0",
+         "group",
+         "server",
+         "complexity",
+         "O(N) where N is the number of loaded modules."
+        ]
+       },
+       "module|load",
+       {
+        "%": [
+         "summary",
+         "Loads a module.",
+         "since",
+         "4.0.0",
+         "group",
+         "server",
+         "complexity",
+         "O(1)",
+         "arguments",
+         [
+          {
+           "%": [
+            "name",
+            "path",
+            "type",
+            "string",
+            "display_text",
+            "path"
+           ]
+          },
+          {
+           "%": [
+            "name",
+            "arg",
+            "type",
+            "string",
+            "display_text",
+            "arg",
+            "flags",
+            {
+             "~": [
+              {
+               "+": "optional"
+              },
+              {
+               "+": "multiple"
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        ]
+       },
+       "module|loadex",
+       {
+        "%": [
+         "summary",
+         "Loads a module using extended parameters.",
+         "since",
+         "7.0.0",
+         "group",
+         "server",
+         "complexity",
+         "O(1)",
+         "arguments",
+         [
+          {
+           "%": [
+            "name",
+            "path",
+            "type",
+            "string",
+            "display_text",
+            "path"
+           ]
+          },
+          {
+           "%": [
+            "name",
+            "configs",
+            "type",
+            "block",
+            "token",
+            "CONFIG",
+            "flags",
+            {
+             "~": [
+              {
+               "+": "optional"
+              },
+              {
+               "+": "multiple"
+              },
+              {
+               "+": "multiple_token"
+              }
+             ]
+            },
+            "arguments",
+            [
+             {
+              "%": [
+               "name",
+               "name",
+               "type",
+               "string",
+               "display_text",
+               "name"
+              ]
+             },
+             {
+              "%": [
+               "name",
+               "value",
+               "type",
+               "string",
+               "display_text",
+               "value"
+              ]
+             }
+            ]
+           ]
+          },
+          {
+           "%": [
+            "name",
+            "args",
+            "type",
+            "string",
+            "display_text",
+            "args",
+            "token",
+            "ARGS",
+            "flags",
+            {
+             "~": [
+              {
+               "+": "optional"
+              },
+              {
+               "+": "multiple"
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        ]
+       },
+       "module|unload",
+       {
+        "%": [
+         "summary",
+         "Unloads a module.",
+         "since",
+         "4.0.0",
+         "group",
+         "server",
+         "complexity",
+         "O(1)",
+         "arguments",
+         [
+          {
+           "%": [
+            "name",
+            "name",
+            "type",
+            "string",
+            "display_text",
+            "name"
+           ]
+          }
+         ]
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   "info": [
+    "module",
+    -2,
+    {
+     "~": []
+    },
+    0,
+    0,
+    0,
+    {
+     "~": [
+      {
+       "+": "@slow"
+      }
+     ]
+    },
+    {
+     "~": []
+    },
+    {
+     "~": []
+    },
+    [
+     [
+      "module|help",
+      2,
+      {
+       "~": [
+        {
+         "+": "loading"
+        },
+        {
+         "+": "stale"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@slow"
+        }
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "module|list",
+      2,
+      {
+       "~": [
+        {
+         "+": "admin"
+        },
+        {
+         "+": "noscript"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@admin"
+        },
+        {
+         "+": "@slow"
+        },
+        {
+         "+": "@dangerous"
+        }
+       ]
+      },
+      {
+       "~": [
+        "nondeterministic_output_order"
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "module|load",
+      -3,
+      {
+       "~": [
+        {
+         "+": "admin"
+        },
+        {
+         "+": "noscript"
+        },
+        {
+         "+": "no_async_loading"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@admin"
+        },
+        {
+         "+": "@slow"
+        },
+        {
+         "+": "@dangerous"
+        }
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "module|loadex",
+      -3,
+      {
+       "~": [
+        {
+         "+": "admin"
+        },
+        {
+         "+": "noscript"
+        },
+        {
+         "+": "no_async_loading"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@admin"
+        },
+        {
+         "+": "@slow"
+        },
+        {
+         "+": "@dangerous"
+        }
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "module|unload",
+      3,
+      {
+       "~": [
+        {
+         "+": "admin"
+        },
+        {
+         "+": "noscript"
+        },
+        {
+         "+": "no_async_loading"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@admin"
+        },
+        {
+         "+": "@slow"
+        },
+        {
+         "+": "@dangerous"
+        }
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ]
+    ]
+   ]
+  },
   "monitor": {
    "docs": {
     "%": [

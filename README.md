@@ -20,7 +20,7 @@ throughput of Redis 7.0.15 on the same machine, with half its memory for small v
 > append-only file and its rewrite, maxmemory and its eviction, Lua scripts and
 > functions, RESP3). The goal now is a drop-in replacement for a single Redis node,
 > measured by Redis's own test suite: of the 1,812 tests Redis 7.2.16 passes against a
-> server it did not start, BendKV passes 1,766, and 1,646 of the 1,690 in what it implements
+> server it did not start, BendKV passes 1,769, and 1,649 of the 1,690 in what it implements
 > ([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)). Do not use it for data you cannot
 > lose.
 
@@ -497,7 +497,12 @@ translation stays in the trusted base.
   protocol error as soon as its line has come, and the connection closes (an inline
   request has none). Where BendKV differs: a RESET followed in the same read by a whole
   request past a limit has that request answered NOAUTH, where Redis refuses it with the
-  protocol error (docs/FINDINGS.md, section 3zzzzn).
+  protocol error (docs/FINDINGS.md, section 3zzzzn). A connection taken while
+  `maxclients` clients are connected is refused as Redis 7.2.16 refuses it: written
+  `-ERR max number of clients reached` and closed, with no client id, and counted in
+  INFO's `rejected_connections`; a CONFIG SET of `maxclients` holds for the next
+  connection (section 3zzzzzd). Where BendKV differs: it takes the value as given, where
+  Redis lowers it at its start to what the limit of open files allows.
 - **Clients:** CLIENT LIST (all, of a TYPE, of IDs), CLIENT INFO and CLIENT KILL (the old
   form of an address, and the filters ID, TYPE, ADDR, LADDR, USER and SKIPME), as Redis
   7.2.16 runs them, with its errors. A client's line has Redis's fields in Redis's order:
@@ -681,7 +686,13 @@ translation stays in the trusted base.
   `shutdown-on-sigint` (the signal's line logged at once, a second SIGINT ending the
   process). CLUSTER answers as Redis 7.2.16 answers it with cluster support disabled:
   each of its subcommands, HELP and MYSHARDID among them, once its number of arguments is
-  Redis's. Where BendKV differs: MEMORY MALLOC-STATS has no allocator's statistics;
+  Redis's. MODULE answers as a Redis 7.2.16 that loads no module: HELP, LIST with none,
+  LOAD, LOADEX and UNLOAD as a load or an unload that fails, and, while
+  `enable-module-command` is `no` (its default), refused before every other check
+  (`local` counts as `yes`). With `min-replicas-to-write` and `min-replicas-max-lag`
+  above 0, every write is refused with NOREPLICAS, in MULTI, at EXEC and in scripts, as
+  Redis refuses it with no replica connected (FINDINGS.md, sections 3zzzzza and
+  3zzzzzb). Where BendKV differs: MEMORY MALLOC-STATS has no allocator's statistics;
   LOLWUT's large drawings take up to a hundred times Redis's time (FINDINGS.md, sections
   3zzl, 3zzzc and 3zzzf); the offset counts a group's commands once the group is written
   to the file, so that an INFO or a ROLE in the group of writes before it (theirs in its
@@ -771,10 +782,16 @@ translation stays in the trusted base.
   its child's snapshot keeps; BendKV's snapshot holds the values the writes replace, and
   INFO's `used_memory` with it (FINDINGS.md, section 3zzzk); the uses are kept in a
   table of 2^20 words by the key's hash, which keys whose hashes share their low 20 bits
-  share, and a key deleted and made again by a command but RESTORE finds its word as the
-  old key left it (under an LFU policy its counter goes on from the old key's, where
-  Redis's new key starts again at 5); a request marks its first key alone, before it
-  runs, as a script's call does as it runs (MGET's others are not marked); evicting many
+  share, and a key deleted otherwise than as the first key of a DEL, an UNLINK or a
+  GETDEL (by FLUSHALL, an expiry, a pop that empties it, ...) and made again by a command
+  but RESTORE finds its word as the old key left it (under an LFU policy its counter goes
+  on from the old key's, where Redis's new key starts again at 5: FINDINGS.md, section
+  3zzzzzc), and a key read between its delete and the write that makes it again has
+  the read's word (under an LFU policy, a counter of 6 where Redis's is 5); a key whose
+  value is a small integer (0 to 9999) has a word of its own, where Redis with
+  `maxmemory` 0 gives all the keys that hold one such value one object, and its word; a
+  request marks its first key alone, before it runs, as a script's call does as it runs
+  (MGET's others are not marked); evicting many
   keys at once is about ten times slower than in Redis; and BendKV has no
   defragmentation: `activedefrag yes` fails as in a Redis built without its own
   jemalloc, where Redis built from its tarball turns it on.

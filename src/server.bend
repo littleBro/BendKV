@@ -72,7 +72,8 @@ import ./hll.bend as H
 # the file holds before its sync, answered on its channel, and its sync
 # of that (The append-only file); or a read inside a big argument, of a
 # client whose requests are not whole yet: its id, the bytes of the
-# argument read so far and its length with its CRLF (Query buffers). A
+# argument read so far and its length with its CRLF (Query buffers); or a
+# connection the listeners refused (maxclients: Accepting). A
 # batch also tells of the big argument it ended or ends inside (qf), and
 # one from a client with a subscription is a SubReq, which runs a command
 # at a time.
@@ -90,6 +91,7 @@ type Req is Data:
   SyncAsk{back: Chan(Ans)}
   Synced{}
   QbIn{id: Nat, have: Nat, pin: Nat}
+  Refused{}
 
 # what a batch tells of its client's query buffer (Query buffers, below):
 # nothing, as most batches; that it ended a big argument, of pin bytes
@@ -4424,12 +4426,20 @@ def mem.bits(+t: U32, +ev: U32) -> U32:
 def srv.misconf(+srv: S.Srv) -> Bool:
   S.srv.misconf(srv)
 
-# bit 19: the same, kept in Ps's ev once a batch has run (ps.tune, by
-# S.srv.tune) and by the actor after each step and each save, only to
-# keep the fast way off (ps.calm) while the writes are refused; no
-# keyspace event has it (ps.loud)
+# whether the writes are refused for want of replicas (NOREPLICAS:
+# min-replicas-to-write and min-replicas-max-lag both set, session.bend's
+# mm.norepl.of), as the server's state has it now, which each command of
+# the general way reads too: a CONFIG SET that sets them counts for the
+# commands after it in its batch. Read in place (S.srv.norepl)
+def srv.norepl(+srv: S.Srv) -> Bool:
+  S.srv.norepl(srv)
+
+# bit 19: the writes refused (MISCONF or NOREPLICAS), kept in Ps's ev
+# once a batch has run (ps.tune, by S.srv.tune) and by the actor after
+# each step and each save, only to keep the fast way off (ps.calm) while
+# the writes are refused; no keyspace event has it (ps.loud)
 def misconf.bit(+srv: S.Srv) -> U32:
-  Bool.pick(U32, srv.misconf(srv), 524288, 0)
+  Bool.pick(U32, Bool.or(srv.misconf(srv), srv.norepl(srv)), 524288, 0)
 
 # whether the server has restricted clients (ACL), for Ps's bit 20, set
 # at once when a client's user changes (bg.user), and after each batch of
@@ -7160,7 +7170,10 @@ def bg.unblock(+n: Nat, +err: Bool, +code: Nat, g: LRun) -> LRun:
 # append-only file (BGREWRITEAOF: The rewrite of the append-only file); or
 # refuse a command past maxmemory (Memory: in MULTI, flagging the
 # transaction), or one that writes while a background save that failed
-# stops the writes (MISCONF: Background saves, the same way); or hold a
+# stops the writes (MISCONF: Background saves, the same way), or one that
+# writes with too few replicas (NOREPLICAS, the same way), or a protected
+# command (MODULE LOAD while enable-module-command is no: sh.prot, before
+# every other check); or hold a
 # command back while clients are paused (The pause); stop the server
 # (SHUTDOWN, after a save or not), or refuse SHUTDOWN and SAVE in MULTI
 # (SHUTDOWN); save (SAVE), or save once the group has run (FLUSHALL with
@@ -7203,6 +7216,8 @@ type Sh is Data:
   ShRewrite{}
   ShOom{inm: Bool}
   ShMisconf{inm: Bool}
+  ShNoRepl{inm: Bool}
+  ShProt{inm: Bool}
   ShPause{}
   ShDown{save: Bool, nosave: Bool, force: Bool}
   ShNoMulti{}
@@ -7243,6 +7258,22 @@ def oom.msg() -> String:
 # (Redis's shared.bgsaveerr: Background saves)
 def misconf.msg() -> String:
   "MISCONF Redis is configured to save RDB snapshots, but it's currently unable to persist to disk. Commands that may modify the data set are disabled, because this instance is configured to report errors during writes if RDB snapshotting fails (stop-writes-on-bgsave-error option). Please check the Redis logs for details about the RDB error."
+
+# the error while too few replicas refuse the writes (Redis's
+# shared.noreplicaserr)
+def norepl.msg() -> String:
+  "NOREPLICAS Not enough good replicas to write."
+
+# why the server refuses the writes, for a command of the general way
+# (sh.of): 1 a background save that failed (MISCONF), 2 too few replicas
+# (NOREPLICAS), MISCONF first, as processCommand checks it first; 0
+# neither, or the command is a script's, whose calls sc.call.why checks
+def wstop.of(+lua: Bool, +srv: S.Srv) -> Nat:
+  match lua:
+    case True{}:
+      0n
+    case False{}:
+      Bool.pick(Nat, srv.misconf(srv), 1n, Bool.pick(Nat, srv.norepl(srv), 2n, 0n))
 
 def sh.refused(+c: R.Cmd, +code: Nat) -> Sh:
   match c:
@@ -7606,21 +7637,36 @@ def sh.misconfy(+code: Nat, +sf: U32) -> Bool:
   +key = R.code.key(code)
   Bool.and(Bool.not(Nat.is_eq(R.code.class(code), 1n)), Bool.or(Bool.or(R.stat.write(key), sc.writes(sf)), Nat.is_eq(key, R.stat.top(1n))))
 
-def sh.mis(mc: Bool, +code: Nat, +sf: U32) -> Bool:
-  match mc:
-    case True{}:
-      sh.misconfy(code, sf)
-    case False{}:
-      False{}
+# While too few replicas refuse the writes (srv.norepl: NOREPLICAS),
+# Redis refuses, right after MISCONF's refusal, a command that writes
+# (checkGoodReplicasStatus in processCommand), but not PING, as MISCONF
+# does; never one the parser refused; in MULTI the transaction is
+# flagged, and EXEC is refused when its transaction queued one that
+# writes (bg.exec)
+def sh.norepy(+code: Nat, +sf: U32) -> Bool:
+  Bool.and(Bool.not(Nat.is_eq(R.code.class(code), 1n)), Bool.or(R.stat.write(R.code.key(code)), sc.writes(sf)))
 
-def sh.of.run(rej: Bool, mis: Bool, may: Bool, subd: Bool, inm: Bool, mon: Bool, held: Bool, busy: Bool, +c: R.Cmd, +code: Nat, +ds: R.Ds) -> Sh:
-  match rej mis:
+# the writes refused for the command (mc: why the server refuses them,
+# wstop.of): 1 MISCONF, 2 NOREPLICAS, 0 neither
+def sh.mis(+mc: Nat, +code: Nat, +sf: U32) -> Nat:
+  Bool.pick(Nat, Nat.is_eq(mc, 1n), Bool.pick(Nat, sh.misconfy(code, sf), 1n, 0n),
+    Bool.pick(Nat, Bool.and(Nat.is_eq(mc, 2n), sh.norepy(code, sf)), 2n, 0n))
+
+def sh.of.wst(mc: Bool, nr: Bool, may: Bool, subd: Bool, inm: Bool, mon: Bool, held: Bool, busy: Bool, +c: R.Cmd, +code: Nat, +ds: R.Ds) -> Sh:
+  match mc nr:
     case True{} _:
-      ShOom{inm}
-    case False{} True{}:
       ShMisconf{inm}
+    case False{} True{}:
+      ShNoRepl{inm}
     case False{} False{}:
       sh.of.may(may, subd, inm, mon, held, busy, c, code, ds)
+
+def sh.of.run(rej: Bool, +mis: Nat, may: Bool, subd: Bool, inm: Bool, mon: Bool, held: Bool, busy: Bool, +c: R.Cmd, +code: Nat, +ds: R.Ds) -> Sh:
+  match rej:
+    case True{}:
+      ShOom{inm}
+    case False{}:
+      sh.of.wst(Nat.is_eq(mis, 1n), Nat.is_eq(mis, 2n), may, subd, inm, mon, held, busy, c, code, ds)
 
 # SHUTDOWN and SAVE in MULTI are refused (NO_MULTI) once the client may
 # run them, before the rest, as processCommand refuses them right after
@@ -7633,21 +7679,44 @@ def sh.nomulti(+code: Nat) -> Bool:
 # once the client may run commands and SHUTDOWN and SAVE in MULTI were
 # refused, before the rest, as processCommand checks ACL right after
 # NO_MULTI (and before a busy script's BUSY: busy)
-def sh.of.acl(v: U.Verdict, rej: Bool, mis: Bool, may: Bool, subd: Bool, inm: Bool, mon: Bool, held: Bool, busy: Bool, +c: R.Cmd, +code: Nat, +ds: R.Ds) -> Sh:
+def sh.of.acl(v: U.Verdict, rej: Bool, +mis: Nat, may: Bool, subd: Bool, inm: Bool, mon: Bool, held: Bool, busy: Bool, +c: R.Cmd, +code: Nat, +ds: R.Ds) -> Sh:
   match v:
     case U.VOk{}:
       sh.of.run(rej, mis, may, subd, inm, mon, held, busy, c, code, ds)
     case U.VNo{w, at, o}:
       ShNoPerm{U.VNo{w, at, o}, inm}
 
-def sh.of.nm(nm: Bool, +m: Bool, subd: Bool, +i: Bool, mon: Bool, oom: Bool, mc: Bool, held: Bool, +busy: Bool, +sf: U32, v: U.Verdict, +c: R.Cmd, +code: Nat, +ds: R.Ds) -> Sh:
+def sh.of.nm(nm: Bool, +m: Bool, subd: Bool, +i: Bool, mon: Bool, oom: Bool, +mc: Nat, held: Bool, +busy: Bool, +sf: U32, v: U.Verdict, +c: R.Cmd, +code: Nat, +ds: R.Ds) -> Sh:
   match nm:
     case True{}:
       ShNoMulti{}
     case False{}:
-      sh.of.acl(v, Bool.and(m, Bool.and(oom, Bool.and(Bool.not(busy), sh.oomy(i, c, code, sf)))), Bool.and(m, sh.mis(mc, code, sf)), m, subd, i, mon, held, busy, c, code, ds)
+      sh.of.acl(v, Bool.and(m, Bool.and(oom, Bool.and(Bool.not(busy), sh.oomy(i, c, code, sf)))), Bool.pick(Nat, m, sh.mis(mc, code, sf), 0n), m, subd, i, mon, held, busy, c, code, ds)
 
-def sh.of(quit: Bool, may: Bool, inm: Bool, subd: Bool, mon: Bool, oom: Bool, mc: Bool, held: Bool, busy: Bool, +sf: U32, v: U.Verdict, +c: R.Cmd, +code: Nat, +ds: R.Ds) -> Sh:
+# MODULE's LOAD, LOADEX and UNLOAD are protected commands: while
+# enable-module-command is no (S.srv.module.off), Redis 7.2.16's
+# processCommand refuses them once their name and their number of
+# arguments pass, before every other check (the client's authentication
+# among them): a rejected call, flagging the transaction in MULTI. Only a
+# QUIT before drops one first, as it drops any command.
+def prot.msg() -> String:
+  "ERR MODULE command not allowed. If the enable-module-command option is set to \"local\", you can run it from a local connection, otherwise you need to set this option in the configuration file, and then restart the server."
+
+def sh.prot.cmd(+c: R.Cmd, +srv: S.Srv) -> Bool:
+  match c:
+    case R.Own{R.SAdmin{18n, a}}:
+      S.srv.module.off(srv)
+    case _:
+      False{}
+
+def sh.prot(pr: Bool, +inm: Bool, s: Sh) -> Sh:
+  match pr:
+    case True{}:
+      ShProt{inm}
+    case False{}:
+      s
+
+def sh.of(quit: Bool, may: Bool, inm: Bool, subd: Bool, mon: Bool, oom: Bool, +mc: Nat, held: Bool, busy: Bool, +sf: U32, v: U.Verdict, +c: R.Cmd, +code: Nat, +ds: R.Ds) -> Sh:
   match quit:
     case True{}:
       ShRun{}
@@ -7952,6 +8021,10 @@ def mon.seen.sh(+may: Bool, +sh: Sh, +code: Nat) -> Bool:
     case ShOom{i}:
       False{}
     case ShMisconf{i}:
+      False{}
+    case ShNoRepl{i}:
+      False{}
+    case ShProt{i}:
       False{}
     case ShPause{}:
       False{}
@@ -10455,13 +10528,15 @@ def bg.exec.go(mine: Tx, others: Tx, +code: Nat, rs: List<&2, R.Reply>, es: List
     case TxNone{}:
       XgDone{bg.say(R.RError{"ERR EXEC without MULTI"}, code, LRun{rs, es, conn, srv, ds, ws, up, others, pb})}
 
-def bg.exec.oom(oom: Bool, mis: Bool, mine: Tx, others: Tx, +code: Nat, rs: List<&2, R.Reply>, es: List<&2, A.Ent>, conn: S.Conn, srv: S.Srv, +ds: R.Ds, ws: Waits, up: List<&2, Up>, pb: Ps) -> Xg:
-  match oom mis:
-    case True{} _:
+def bg.exec.oom(oom: Bool, mis: Bool, nr: Bool, mine: Tx, others: Tx, +code: Nat, rs: List<&2, R.Reply>, es: List<&2, A.Ent>, conn: S.Conn, srv: S.Srv, +ds: R.Ds, ws: Waits, up: List<&2, Up>, pb: Ps) -> Xg:
+  match oom mis nr:
+    case True{} _ _:
       XgDone{bg.one(R.Own{R.SBad{R.RError{"EXECABORT Transaction discarded because of: " ++ abort.why(oom.msg())}}}, R.code.refused(code), LRun{rs, es, conn, srv, ds, ws, up, others, pb})}
-    case False{} True{}:
+    case False{} True{} _:
       XgDone{bg.one(R.Own{R.SBad{R.RError{"EXECABORT Transaction discarded because of: " ++ abort.why(misconf.msg())}}}, R.code.refused(code), LRun{rs, es, conn, srv, ds, ws, up, others, pb})}
-    case False{} False{}:
+    case False{} False{} True{}:
+      XgDone{bg.one(R.Own{R.SBad{R.RError{"EXECABORT Transaction discarded because of: " ++ norepl.msg()}}}, R.code.refused(code), LRun{rs, es, conn, srv, ds, ws, up, others, pb})}
+    case False{} False{} False{}:
       bg.exec.go(mine, others, code, rs, es, conn, srv, ds, ws, up, pb)
 
 # (qf: the flags of the scripts the transaction queued, tx.sc.flags in
@@ -10470,7 +10545,9 @@ def bg.exec.of(p: Tx & Tx, +code: Nat, +qf: U32, rs: List<&2, R.Reply>, es: List
   (+mine, others) = p
   +sv = srv
   +mis = srv.misconf(sv)
-  bg.exec.oom(Bool.and(ps.oom.is(pb), Bool.or(tx.denyoom(mine), U32.is_ne(U32.and(qf, 1), 0))), Bool.or(tx.writes.if(mis, mine), Bool.and(mis, U32.is_ne(U32.and(qf, 2), 0))), mine, others, code, rs, es, conn, sv, ds, ws, up, pb)
+  +nr = Bool.and(Bool.not(mis), srv.norepl(sv))
+  +wr = Bool.or(tx.writes.if(Bool.or(mis, nr), mine), U32.is_ne(U32.and(qf, 2), 0))
+  bg.exec.oom(Bool.and(ps.oom.is(pb), Bool.or(tx.denyoom(mine), U32.is_ne(U32.and(qf, 1), 0))), Bool.and(mis, wr), Bool.and(nr, wr), mine, others, code, rs, es, conn, sv, ds, ws, up, pb)
 
 def bg.exec.check(+id: Nat, +code: Nat, +qf: U32, g: LRun) -> Xg:
   match g:
@@ -11643,6 +11720,10 @@ def bg.cmd(+id: Nat, +back: Chan(Ans), +inb: Nat, sh: Sh, +c: R.Cmd, +code: Nat,
       bg.one(R.Own{R.SBad{R.RError{oom.msg()}}}, R.code.refused(code), bg.oom.tx(inm, g))
     case ShMisconf{inm}:
       bg.one(R.Own{R.SBad{R.RError{misconf.msg()}}}, R.code.refused(code), bg.oom.tx(inm, g))
+    case ShNoRepl{inm}:
+      bg.one(R.Own{R.SBad{R.RError{norepl.msg()}}}, R.code.refused(code), bg.oom.tx(inm, g))
+    case ShProt{inm}:
+      bg.one(R.Own{R.SBad{R.RError{prot.msg()}}}, R.code.refused(code), bg.oom.tx(inm, g))
     case ShMonDeny{inm}:
       bg.one(R.Own{R.SBad{R.RError{"ERR Replica can't interact with the keyspace"}}}, R.code.refused(code), bg.mon.bad(inm, g))
     case ShPause{}:
@@ -11679,10 +11760,23 @@ def bg.cmd(+id: Nat, +back: Chan(Ans), +inb: Nat, sh: Sh, +c: R.Cmd, +code: Nat,
     case ShAcl{+k}:
       bg.acl.op(id, k, c, code, g)
 
+# whether a request of hint h deletes its key (DEL, UNLINK and GETDEL, by
+# the mark in its hash's high twelve bits): its mark leaves the key's word
+# as one never set (0), so that a key made again under the name finds a
+# new value's word, as Redis gives a value it makes
+def use.gone(+h: U32) -> Bool:
+  +m = U32.and(h, 4293918720)
+  Bool.or(U32.is_eq(m, R.stat.mark.del()), Bool.or(U32.is_eq(m, R.stat.mark.unlink()), U32.is_eq(m, R.stat.mark.getdel())))
+
 # the word a request of hash h leaves in its key's word w under an LFU
 # policy, at the minute min, r its random number
 def use.lfu.word(+h: U32, +w: U32, +min: U32, +r: U32, +lf: Nat, +dt: Nat) -> U32:
-  Bool.pick(U32, U32.is_eq(U32.and(h, 4293918720), R.stat.mark.restore()), S.lfu.word(min, 5), S.lfu.use(w, min, r, lf, dt))
+  Bool.pick(U32, U32.is_eq(U32.and(h, 4293918720), R.stat.mark.restore()), S.lfu.word(min, 5), Bool.pick(U32, use.gone(h), 0, S.lfu.use(w, min, r, lf, dt)))
+
+# the word a request of hint h leaves under any policy but LFU: w, the
+# second of the use, or 0 for a request that deletes its key (use.gone)
+def use.lru.word(+h: U32, +w: U32) -> U32:
+  Bool.pick(U32, use.gone(h), 0, w)
 
 # whether a batch's keys are marked as its calls run, each once its
 # check lets it through, rather than before the batch runs (bg.used):
@@ -11717,7 +11811,7 @@ def bg.mark.word(lfu: Bool, +h: U32, +now: Nat, +srv: S.Srv) -> U32:
       +w = Mem.cell(h)
       use.lfu.word(h, w, S.acc.min(now), KV.mix(U32.xor(U32.xor(h, w), U32.from_nat(now))), S.mm.lfl(mm), S.mm.lfd(mm))
     case False{} _:
-      S.acc.lru(now)
+      use.lru.word(h, S.acc.lru(now))
 
 # the channel of a batch marked again as it was, its key's word of hash
 # h set to v on the way (Mem.touch gives back the mark's word)
@@ -11767,7 +11861,7 @@ def bg.go(+um: Bool, +id: Nat, +back: Chan(Ans), +inb: Nat, cmds: List<&2, R.Cmd
       +c1 = bg.acl.sort(ck, id, srv, pb, k, av1, c)
       +v = bg.acl.check(ck, id, srv, pb, k, av1)
       +bk = bg.mark.call(Bool.and(um, Bool.and(may, U.verdict.ok(v))), id, back, k, av1, srv, ds, pb)
-      +sh = sh.lua(sh.of(q, may, tx.multi(id, tx), Bool.and(ps.has(id, pb), Bool.not(S.conn.r3(conn))), mo, Bool.and(ps.oom.is(pb), Bool.not(lua)), Bool.and(srv.misconf(srv), Bool.not(lua)), Bool.or(pause.holds(ps.pz(pb), mo, c, k, id, tx, sf, pb), Bool.and(down.holds(srv, pb, mo, k), Bool.not(lua))), Bool.and(ps.busy(pb), Bool.not(lua)), sf, v, c1, k, ds), id, tx)
+      +sh = sh.lua(sh.prot(Bool.and(Bool.not(q), sh.prot.cmd(c, srv)), tx.multi(id, tx), sh.of(q, may, tx.multi(id, tx), Bool.and(ps.has(id, pb), Bool.not(S.conn.r3(conn))), mo, Bool.and(ps.oom.is(pb), Bool.not(lua)), wstop.of(lua, srv), Bool.or(pause.holds(ps.pz(pb), mo, c, k, id, tx, sf, pb), Bool.and(down.holds(srv, pb, mo, k), Bool.not(lua))), Bool.and(ps.busy(pb), Bool.not(lua)), sf, v, c1, k, ds)), id, tx)
       +pre = bg.trk.pre(id, k, sh, q, may, pb)
       +a = trk.pre.av(pre, av1)
       +ar = av.rest(a)
@@ -12916,7 +13010,10 @@ def mark.hs(+back: Chan(Ans), +hs: List<&2, U32>, +now: Nat, k: U32) -> Chan(Ans
 # policy its mark gives the key's word a counter of 5 at the minute
 # (use.lfu.word), whatever word another key that shares it left, where
 # any other request steps the word as a use (S.lfu.use); RESTORE's FREQ
-# then sets it once the key is restored (bg.restored).
+# then sets it once the key is restored (bg.restored). A DEL, UNLINK or
+# GETDEL leaves its key's word as one never set (use.gone), so that the
+# next request that makes the key steps a new value's word: a counter of
+# 5, or the second of that request, as Redis gives a value it makes.
 
 def use.lru(+hs: List<&2, U32>, +w: U32, k: U32) -> U32:
   match hs:
@@ -12924,6 +13021,42 @@ def use.lru(+hs: List<&2, U32>, +w: U32, k: U32) -> U32:
       k
     case Con{+h, +rest}:
       use.lru(rest, w, Mem.touch(k, h, w))
+
+# the same walk for a batch that may hold a request that deletes its key,
+# DEL, UNLINK or GETDEL: such a request leaves its key's word as one never
+# set (use.lru.word), and every other key's word is set to w again, in the
+# batch's order, so that a key deleted and made again in the batch has its
+# last request's word. Each hash is read twice here, and a second read of
+# a field of the list, which the walk borrows, keeps a reference to it
+# (slot_keep): the fast way walks its batch so only when its words may
+# hold a delete's (use.maybe.gone)
+def use.lru.gone(+hs: List<&2, U32>, +w: U32, k: U32) -> U32:
+  match hs:
+    case Nil{}:
+      k
+    case Con{+h, +rest}:
+      use.lru.gone(rest, w, Mem.touch(k, h, use.lru.word(h, w)))
+
+# whether the words of a batch, or-ed together (R.tl.add: tl's low twelve
+# bits), hold every bit of DEL's, UNLINK's or GETDEL's: always so for a
+# batch that holds one of them, and for a few that do not, which walk
+# their keys once more for nothing (use.lru.gone)
+def use.has(+o: U32, +m: U32) -> Bool:
+  +w = U32.shrn(m, 20n)
+  U32.is_eq(U32.and(o, w), w)
+
+def use.maybe.gone(+tl: U32) -> Bool:
+  +o = U32.and(tl, 4095)
+  Bool.or(use.has(o, R.stat.mark.del()), Bool.or(use.has(o, R.stat.mark.unlink()), use.has(o, R.stat.mark.getdel())))
+
+# the fast way's words of a batch: set to w (use.lru), then walked again
+# when the batch may hold a delete (gone)
+def use.lru.then(gone: Bool, +hs: List<&2, U32>, +w: U32, k: U32) -> U32:
+  match gone:
+    case True{}:
+      use.lru.gone(hs, w, k)
+    case False{}:
+      k
 
 def use.lfu(+hs: List<&2, U32>, +now: Nat, +min: U32, +lf: Nat, +dt: Nat, +i: U32, k: U32) -> U32:
   match hs:
@@ -12940,7 +13073,7 @@ def use.lru.if(um: Bool, +hs: List<&2, U32>, +w: U32) -> U32:
     case True{}:
       0
     case False{}:
-      use.lru(hs, w, 0)
+      use.lru.gone(hs, w, 0)
 
 def use.lfu.if(um: Bool, +hs: List<&2, U32>, +now: Nat, +min: U32, +lf: Nat, +dt: Nat) -> U32:
   match um:
@@ -13016,7 +13149,8 @@ def fast.at(lfu: Bool, +log: Bool, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => 
   match lfu srv:
     case False{} s:
       +now = R.ds.now(ds)
-      +t = R.tally(use.lru(hs, S.acc.lru(now), tl), inb, hs)
+      +w = S.acc.lru(now)
+      +t = R.tally(use.lru.then(use.maybe.gone(tl), hs, w, use.lru(hs, w, tl)), inb, hs)
       fast.run(log, outs, es, mark(back, tally.last(t), now), t, inb, cn, s, cmds, hs, ds, up, pb)
     case True{} S.Srv{pass, cfg, info, +mm}:
       +now = R.ds.now(ds)
@@ -13360,6 +13494,8 @@ def group_req(+log: Bool, q: Req, g: Grp) -> Grp:
       grp.aof(Grp{outs, es, S.srv.sync.done(srv), ds, ws, up, tx, pb})
     case QbIn{+id, +have, +pin} Grp{outs, es, +srv, +ds, ws, up, tx, pb}:
       Grp{outs, es, srv, ds, ws, up, tx, ps.qb.in(id, have, pin, R.ds.now(ds), qb.per(srv), pb)}
+    case Refused{} Grp{outs, es, srv, ds, ws, up, tx, pb}:
+      Grp{outs, es, S.srv.refused(srv), ds, ws, up, tx, pb}
 
 # the clock (IO.clock: s and us since 1970) in ms
 def clock.ms(t: U32 & U32) -> Nat:
@@ -13667,14 +13803,16 @@ type BgRun is Data:
 # rewrite that runs, the background save that runs (Background saves),
 # and when the next slice of either may go (ms, and us past it: with
 # rdb-key-save-delay, its delay for each key of the slices before, as
-# Redis's child sleeps that long after each key it writes). RwOf, a state
+# Redis's child sleeps that long after each key it writes); and the
+# channel of the count of connections the listeners share (Accepting), with
+# the maxclients the actor gave it last (cap). RwOf, a state
 # that holds a state, is never built: it makes Rw a type that holds
 # itself, which the compiler makes a node of its own, so that it travels
 # as one word, as Pub/Sub's state does; flat, it would be twenty-one words
 # in every frame of the actor's loop, and the widest frame sets the
 # registers of every function.
 type Rw is Data:
-  Rw{path: String, aof: Nat, pid: U32, cron: Nat, delay: Nat, until: Nat, last: Nat, run: Maybe<&2, RwRun>, bg: Maybe<&2, BgRun>, next: Nat, carry: Nat, dir: RDir}
+  Rw{path: String, aof: Nat, pid: U32, cron: Nat, delay: Nat, until: Nat, last: Nat, run: Maybe<&2, RwRun>, bg: Maybe<&2, BgRun>, next: Nat, carry: Nat, dir: RDir, lis: Chan(Tally), cap: Nat}
   RwOf{r: Rw}
 
 # what a step of a rewrite reads and changes: the server's state (INFO's
@@ -13683,8 +13821,33 @@ type Rw is Data:
 type Rx is Data:
   Rx{srv: S.Srv, ds: R.Ds, sel: Nat, rw: Rw}
 
-def rw.new(+path: String, +aof: Nat, +pid: U32, dir: RDir) -> Rw:
-  Rw{path, aof, pid, 0n, 0n, 0n, 0n, None{}, None{}, 0n, 0n, dir}
+def rw.new(+path: String, +aof: Nat, +pid: U32, dir: RDir, +lis: Chan(Tally), +cap: Nat) -> Rw:
+  Rw{path, aof, pid, 0n, 0n, 0n, 0n, None{}, None{}, 0n, 0n, dir, lis, cap}
+
+# the channel of the count of connections, and the actor's state with the
+# maxclients it gave it
+def rw.lis(+rw: Rw) -> Chan(Tally):
+  match rw:
+    case Rw{path, aof, pid, cron, delay, until, last, run, bg, next, carry, dir, +lis, cap}:
+      lis
+    case RwOf{+r}:
+      rw.lis(r)
+
+def rw.cap.set(rw: Rw, +c: Nat) -> Rw:
+  match rw:
+    case Rw{path, aof, pid, cron, delay, until, last, run, bg, next, carry, dir, lis, old}:
+      Rw{path, aof, pid, cron, delay, until, last, run, bg, next, carry, dir, lis, c}
+    case RwOf{r}:
+      rw.cap.set(r, c)
+
+# whether the listeners hold the maxclients the server has (a CONFIG SET
+# changes the server's: Accepting)
+def rw.capped(+rw: Rw, +srv: S.Srv) -> Bool:
+  match rw:
+    case Rw{path, aof, pid, cron, delay, until, last, run, bg, next, carry, dir, lis, +cap}:
+      Nat.is_eq(cap, S.srv.maxclients(srv))
+    case RwOf{+r}:
+      rw.capped(r, srv)
 
 # the file's state (Rw's aof): 0 off, 1 on, 2 turning on (a CONFIG SET
 # appendonly yes: the rewrite that turns it on runs or waits, Redis's
@@ -13692,15 +13855,15 @@ def rw.new(+path: String, +aof: Nat, +pid: U32, dir: RDir) -> Rw:
 # ended (the actor goes on with the file on: aof_resume)
 def rw.state(+rw: Rw) -> Nat:
   match rw:
-    case Rw{path, +aof, pid, cron, delay, until, last, run, bg, next, carry, dir}:
+    case Rw{path, +aof, pid, cron, delay, until, last, run, bg, next, carry, dir, lis, cap}:
       aof
     case RwOf{+r}:
       rw.state(r)
 
 def rw.state.set(rw: Rw, +k: Nat) -> Rw:
   match rw:
-    case Rw{path, old, pid, cron, delay, until, last, run, bg, next, carry, dir}:
-      Rw{path, k, pid, cron, delay, until, last, run, bg, next, carry, dir}
+    case Rw{path, old, pid, cron, delay, until, last, run, bg, next, carry, dir, lis, cap}:
+      Rw{path, k, pid, cron, delay, until, last, run, bg, next, carry, dir, lis, cap}
     case RwOf{r}:
       rw.state.set(r, k)
 
@@ -13723,21 +13886,21 @@ def bgr.is(+m: Maybe<&2, BgRun>) -> Bool:
 # the snapshot holds of a key it frees: Eviction)
 def rw.runs(+rw: Rw) -> Bool:
   match rw:
-    case Rw{path, aof, pid, cron, delay, until, last, +run, bg, next, carry, dir}:
+    case Rw{path, aof, pid, cron, delay, until, last, +run, bg, next, carry, dir, lis, cap}:
       run.is(run)
     case RwOf{+r}:
       rw.runs(r)
 
 def rw.saving(+rw: Rw) -> Bool:
   match rw:
-    case Rw{path, aof, pid, cron, delay, until, last, run, +bg, next, carry, dir}:
+    case Rw{path, aof, pid, cron, delay, until, last, run, +bg, next, carry, dir, lis, cap}:
       bgr.is(bg)
     case RwOf{+r}:
       rw.saving(r)
 
 def rw.busy(+rw: Rw) -> Bool:
   match rw:
-    case Rw{path, aof, pid, cron, delay, until, last, +run, +bg, next, carry, dir}:
+    case Rw{path, aof, pid, cron, delay, until, last, +run, +bg, next, carry, dir, lis, cap}:
       Bool.or(run.is(run), bgr.is(bg))
     case RwOf{+r}:
       rw.busy(r)
@@ -13745,7 +13908,7 @@ def rw.busy(+rw: Rw) -> Bool:
 # whether the next slice may go at now (ms)
 def rw.due(+rw: Rw, +now: Nat) -> Bool:
   match rw:
-    case Rw{path, aof, pid, cron, delay, until, last, run, bg, +next, carry, dir}:
+    case Rw{path, aof, pid, cron, delay, until, last, run, bg, +next, carry, dir, lis, cap}:
       Nat.is_le(next, now)
     case RwOf{+r}:
       rw.due(r, now)
@@ -13814,7 +13977,7 @@ def rw.what.sw(+sw: Nat, +ask: Nat, runs: Bool, saving: Bool, +srv: S.Srv, +cron
 
 def rw.what(+rw: Rw, +srv: S.Srv, +now: Nat) -> Nat:
   match rw:
-    case Rw{path, +aof, pid, +cron, delay, until, +last, +run, +bg, +next, carry, dir}:
+    case Rw{path, +aof, pid, +cron, delay, until, +last, +run, +bg, +next, carry, dir, lis, cap}:
       rw.what.sw(Bool.pick(Nat, Nat.is_eq(S.srv.rw.downs(srv), 0n), rw.switch(S.srv.aof.on(srv), aof), 11n), bg.ask(srv), run.is(run), bgr.is(bg), srv, cron, last, next, now)
     case RwOf{+r}:
       rw.what(r, srv, now)
@@ -13838,8 +14001,8 @@ def run.keep.in(d: RDir, m: Maybe<&2, RwRun>, +bytes: String) -> Maybe<&2, RwRun
 
 def rw.keep(rw: Rw, +bytes: String) -> Rw:
   match rw:
-    case Rw{path, aof, pid, cron, delay, until, last, run, bg, next, carry, +dir}:
-      Rw{path, aof, pid, cron, delay, until, last, run.keep.in(dir, run, bytes), bg, next, carry, dir}
+    case Rw{path, aof, pid, cron, delay, until, last, run, bg, next, carry, +dir, lis, cap}:
+      Rw{path, aof, pid, cron, delay, until, last, run.keep.in(dir, run, bytes), bg, next, carry, dir, lis, cap}
     case RwOf{r}:
       rw.keep(r, bytes)
 
@@ -14181,22 +14344,36 @@ def kill_all(ks: List<&2, U32>) -> IO(Unit):
         b : Bool <- TCP.kill(fd)
         kill_all(rest)
 
+# the group's answers; a maxclients the group set goes to the listeners
+# first (Accepting: same says it did not), so that a client that read a
+# CONFIG SET's answer connects under it
 @unsafe
-def db_send(p: List<&2, U32> & Ps, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, srv: S.Srv, ds: R.Ds, ws: Waits, tx: Tx, rw: Rw, +reqs: Chan(Req)) -> IO(Unit):
-  (ks, pb) = p
-  do IO<Unit>:
-    Unit <- kill_all(ks)
-    Unit <- Chan.send_all(Ans, List.reverse(&2, Sigma<&2, &2, Chan(Ans), _ => Ans>, outs))
-    db_next(srv, ds, ws, tx, pb, rw, reqs)
-
-# while no client was killed (calm), no socket is to be shut down
-@unsafe
-def db_kill(calm: Bool, pb: Ps, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, srv: S.Srv, ds: R.Ds, ws: Waits, tx: Tx, rw: Rw, +reqs: Chan(Req)) -> IO(Unit):
-  match calm:
+def db_answer(same: Bool, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, +srv: S.Srv, ds: R.Ds, ws: Waits, tx: Tx, pb: Ps, +rw: Rw, +reqs: Chan(Req)) -> IO(Unit):
+  match same:
     case True{}:
       do IO<Unit>:
         Unit <- Chan.send_all(Ans, List.reverse(&2, Sigma<&2, &2, Chan(Ans), _ => Ans>, outs))
         db_next(srv, ds, ws, tx, pb, rw, reqs)
+    case False{}:
+      +mc = S.srv.maxclients(srv)
+      do IO<Unit>:
+        Unit <- tally.cap(rw.lis(rw), mc)
+        Unit <- Chan.send_all(Ans, List.reverse(&2, Sigma<&2, &2, Chan(Ans), _ => Ans>, outs))
+        db_next(srv, ds, ws, tx, pb, rw.cap.set(rw, mc), reqs)
+
+@unsafe
+def db_send(p: List<&2, U32> & Ps, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, +srv: S.Srv, ds: R.Ds, ws: Waits, tx: Tx, +rw: Rw, +reqs: Chan(Req)) -> IO(Unit):
+  (ks, pb) = p
+  do IO<Unit>:
+    Unit <- kill_all(ks)
+    db_answer(rw.capped(rw, srv), outs, srv, ds, ws, tx, pb, rw, reqs)
+
+# while no client was killed (calm), no socket is to be shut down
+@unsafe
+def db_kill(calm: Bool, pb: Ps, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, +srv: S.Srv, ds: R.Ds, ws: Waits, tx: Tx, +rw: Rw, +reqs: Chan(Req)) -> IO(Unit):
+  match calm:
+    case True{}:
+      db_answer(rw.capped(rw, srv), outs, srv, ds, ws, tx, pb, rw, reqs)
     case False{}:
       db_send(ps.kills(pb), outs, srv, ds, ws, tx, rw, reqs)
 
@@ -14204,10 +14381,11 @@ def db_kill(calm: Bool, pb: Ps, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans
 # -----------
 
 # the connections: how many were taken since the start (the last client
-# id given, from 1, as Redis's CLIENT ID) and how many are open. The count
-# waits in a channel the listeners and the connections share.
+# id given, from 1, as Redis's CLIENT ID), how many are open, and how many
+# may be (maxclients, as the actor last gave it: Accepting). The count
+# waits in a channel the listeners, the connections and the actor share.
 type Tally is Data:
-  Tally{taken: Nat, open: Nat}
+  Tally{taken: Nat, open: Nat, max: Nat}
 
 # a connection's way to the actor: the actor's channel, the channel its
 # answers come back on, whether replies are posted, the channel of the
@@ -15235,7 +15413,12 @@ def conn_sub.unwatched(p: Socket & Bool, +ln: Link, out: Maybe<&2, String>, cn: 
 # ---------
 # Each connection gets the next id, from 1, as in Redis (CLIENT ID): the
 # count of connections taken (Tally) waits in a channel the listeners and
-# the connections share.
+# the connections share. It holds maxclients too: a connection taken while
+# that many are open is refused (accept.refused). The actor, which holds
+# the channel as well (Rw's lis), gives it a new maxclients before it sends
+# the answers of the group that changed it (a CONFIG SET: db_answer), as
+# Redis reads server.maxclients at each accept: a client that read the
+# CONFIG SET's answer connects under the new one.
 
 # the connection's state as the actor answered its Join: authenticated
 # when the server had no password then (S.conn_join)
@@ -15258,16 +15441,27 @@ def conn_start(s: Socket, db: Chan(Req), +back: Chan(Ans), post: Bool, tl: Chan(
     conn_start.of(m, s, Link{db, back, post, tl, id}, id)
 
 @unsafe
+def tally.took.if(ok: Bool, +t: Nat, +o: Nat, +mx: Nat, +tl: Chan(Tally)) -> IO(Nat):
+  match ok:
+    case True{}:
+      do IO<Nat>:
+        sent : Bool <- Chan.send(Tally, tl, Tally{1n+t, 1n+o, mx})
+        return 1n+t
+    case False{}:
+      do IO<Nat>:
+        sent : Bool <- Chan.send(Tally, tl, Tally{t, o, mx})
+        return 0n
+
+@unsafe
 def tally.took(m: Maybe<&1, Tally>, +tl: Chan(Tally)) -> IO(Nat):
   match m:
-    case Some{Tally{+t, o}}:
-      do IO<Nat>:
-        ok : Bool <- Chan.send(Tally, tl, Tally{1n+t, 1n+o})
-        return 1n+t
+    case Some{Tally{+t, +o, +mx}}:
+      tally.took.if(Nat.is_lt(o, mx), t, o, mx, tl)
     case None{}:
       IO.pure(Nat, 0n)
 
-# a connection taken: one more open, and its id
+# a connection taken: one more open, and its id; or 0 when maxclients are
+# open already, and it is refused (Accepting)
 @unsafe
 def tally.take(+tl: Chan(Tally)) -> IO(Nat):
   do IO<Nat>:
@@ -15277,9 +15471,9 @@ def tally.take(+tl: Chan(Tally)) -> IO(Nat):
 @unsafe
 def tally.closed(m: Maybe<&1, Tally>, +tl: Chan(Tally)) -> IO(Unit):
   match m:
-    case Some{Tally{t, o}}:
+    case Some{Tally{t, o, mx}}:
       do IO<Unit>:
-        ok : Bool <- Chan.send(Tally, tl, Tally{t, Nat.sub(o, 1n)})
+        ok : Bool <- Chan.send(Tally, tl, Tally{t, Nat.sub(o, 1n), mx})
         return Unit{}
     case None{}:
       IO.pure(Unit, Unit{})
@@ -15299,7 +15493,7 @@ def tally.back(m: Maybe<&1, Tally>, +tl: Chan(Tally)) -> IO(Tally):
         ok : Bool <- Chan.send(Tally, tl, c)
         return c
     case None{}:
-      IO.pure(Tally, Tally{0n, 0n})
+      IO.pure(Tally, Tally{0n, 0n, 0n})
 
 # the count, left as it is
 @unsafe
@@ -15307,6 +15501,24 @@ def tally.peek(+tl: Chan(Tally)) -> IO(Tally):
   do IO<Tally>:
     m : Maybe<&1, Tally> <- Chan.recv(Tally, tl)
     tally.back(m, tl)
+
+@unsafe
+def tally.capped(m: Maybe<&1, Tally>, +tl: Chan(Tally), +mx: Nat) -> IO(Unit):
+  match m:
+    case Some{Tally{t, o, old}}:
+      do IO<Unit>:
+        ok : Bool <- Chan.send(Tally, tl, Tally{t, o, mx})
+        return Unit{}
+    case None{}:
+      IO.pure(Unit, Unit{})
+
+# maxclients as the actor gives it (Accepting): the connections open stay
+# open, as in Redis
+@unsafe
+def tally.cap(+tl: Chan(Tally), +mx: Nat) -> IO(Unit):
+  do IO<Unit>:
+    m : Maybe<&1, Tally> <- Chan.recv(Tally, tl)
+    tally.capped(m, tl, mx)
 
 # a connection, counted open until it ends
 @unsafe
@@ -15331,6 +15543,36 @@ def conn_join.at(n: Socket & (U32 & (String & String)), +db: Chan(Req), +back: C
     sent : Bool <- Chan.send(Req, db, Join{id, back, fd, addr, laddr})
     IO.spawn(Unit, conn_life(s, db, back, post, tl, id))
 
+# a connection refused, as Redis 7.2.16's acceptCommonHandler refuses one
+# once maxclients clients are connected: before any client is made for it
+# (no id is taken, and it is not one of total_connections_received), its
+# socket told why (best effort: a failed send is not looked at) and
+# closed, and the actor told, for INFO's rejected_connections
+@unsafe
+def accept.refused.end(m: Socket & Result<&1, &1, U32 & String, Unit>, +db: Chan(Req)) -> IO(Unit):
+  (s, r) = m
+  do IO<Unit>:
+    Unit <- Socket.close(s)
+    sent : Bool <- Chan.send(Req, db, Refused{})
+    IO.pure(Unit, Unit{})
+
+@unsafe
+def accept.refused(s: Socket, +db: Chan(Req)) -> IO(Unit):
+  do IO<Unit>:
+    m : Socket & Result<&1, &1, U32 & String, Unit> <- TCP.send_raw(s, "-ERR max number of clients reached\r\n")
+    accept.refused.end(m, db)
+
+@unsafe
+def accept.take(+id: Nat, s: Socket, +db: Chan(Req), +post: Bool, +tl: Chan(Tally)) -> IO(Unit):
+  match id:
+    case 0n:
+      accept.refused(s, db)
+    case _:
+      do IO<Unit>:
+        back : Chan(Ans) <- Chan.new(Ans, 1)
+        n : Socket & (U32 & (String & String)) <- TCP.name(s)
+        conn_join.at(n, db, back, post, tl, id)
+
 @unsafe
 def accept_next(m: Listener & Result<&1, &1, U32 & String, Socket>, +db: Chan(Req), +post: Bool, +tl: Chan(Tally)) -> IO(Listener):
   (l, r) = m
@@ -15338,9 +15580,7 @@ def accept_next(m: Listener & Result<&1, &1, U32 & String, Socket>, +db: Chan(Re
     case Done{s}:
       do IO<Listener>:
         id : Nat <- tally.take(tl)
-        back : Chan(Ans) <- Chan.new(Ans, 1)
-        n : Socket & (U32 & (String & String)) <- TCP.name(s)
-        Unit <- conn_join.at(n, db, back, post, tl, id)
+        Unit <- accept.take(id, s, db, post, tl)
         return l
     case Fail{e}:
       IO.pure(Listener, l)
@@ -15416,7 +15656,7 @@ def live.of(t: U32 & U32, +ps: String, +ts: String, +sm: String, h: Nat & Nat, c
   (secs, us) = t
   (heap, act) = h
   match c:
-    case Tally{taken, open}:
+    case Tally{taken, open, mx}:
       I.ILive{secs, us, stat.field(ps, 11n), stat.field(ps, 12n), stat.field(ts, 11n), stat.field(ts, 12n), Nat.mul(nat.of(nth(1n, words.of(sm))), 4096n), heap, act, taken, open, I.cn.zero()}
 
 def hex8.go(n: Nat, +x: U32, acc: String) -> String:
@@ -15896,6 +16136,12 @@ def grp.misconf(+g: Grp) -> Bool:
     case Grp{outs, es, +srv, ds, ws, up, tx, pb}:
       srv.misconf(srv)
 
+# whether too few replicas refuse the writes (NOREPLICAS), now
+def grp.norepl(+g: Grp) -> Bool:
+  match g:
+    case Grp{outs, es, +srv, ds, ws, up, tx, pb}:
+      srv.norepl(srv)
+
 def grp.sc.find(+sha: String, +g: Grp) -> Maybe<&2, Nat>:
   match g:
     case Grp{outs, es, srv, ds, ws, up, tx, +pb}:
@@ -16169,29 +16415,34 @@ def waits.some(+ws: Waits) -> Bool:
 # why a script may not run (scriptPrepareForRun): "" when it may; a
 # script without a shebang (16) runs whatever its command. One that may
 # write is refused while a background save that failed stops the writes
-# (mis), or by a read-only command; one that may take memory, past
-# maxmemory (oom). The dispatch refuses such a script before it gets here
-# (sh.misconfy, sh.oomy), but in a transaction that queued it before
-def sc.refused(+f: U32, +ro: Bool, +mis: Bool, +oom: Bool) -> String:
+# (mis), by a read-only command, and while too few replicas refuse the
+# writes (nr: NOREPLICAS); one that may take memory, past maxmemory
+# (oom). The dispatch refuses such a script before it gets here
+# (sh.misconfy, sh.norepy, sh.oomy), but in a transaction that queued it
+# before
+def sc.refused(+f: U32, +ro: Bool, +mis: Bool, +nr: Bool, +oom: Bool) -> String:
   Bool.pick(String, U32.is_ne(U32.and(f, 16), 0), "",
     Bool.pick(String, Bool.and(mis, U32.is_eq(U32.and(f, 1), 0)), "MISCONF Redis is configured to save RDB snapshots, but it's currently unable to persist to disk. Writable scripts are blocked. Use 'no-writes' flag for read only scripts.",
       Bool.pick(String, Bool.and(ro, U32.is_eq(U32.and(f, 1), 0)), "ERR Can not execute a script with write flag using *_ro command.",
-        Bool.pick(String, Bool.and(oom, U32.is_eq(U32.and(f, 3), 0)), "OOM allow-oom flag is not set on the script, can not run it when used memory > 'maxmemory'", ""))))
+        Bool.pick(String, Bool.and(nr, U32.is_eq(U32.and(f, 1), 0)), norepl.msg(),
+          Bool.pick(String, Bool.and(oom, U32.is_eq(U32.and(f, 3), 0)), "OOM allow-oom flag is not set on the script, can not run it when used memory > 'maxmemory'", "")))))
 
 # why a call may not run (scriptCall): an unknown command, its arity, a
 # command not allowed from a script, a command its caller's user may not
 # run (acl: sc.acl.why), a write from a read-only script, a write while a
-# background save that failed stops the writes (mis) and a command that
-# may take memory past maxmemory (oom), both before the script wrote; ""
-# when it may
-def sc.call.why(unknown: Bool, arity: Bool, noscript: Bool, +acl: String, rowrite: Bool, mis: Bool, oom: Bool) -> String:
+# background save that failed stops the writes (mis) or while too few
+# replicas refuse them (nr: NOREPLICAS), and a command that may take
+# memory past maxmemory (oom), each before the script wrote; "" when it
+# may
+def sc.call.why(unknown: Bool, arity: Bool, noscript: Bool, +acl: String, rowrite: Bool, mis: Bool, nr: Bool, oom: Bool) -> String:
   Bool.pick(String, unknown, "ERR Unknown Redis command called from script",
     Bool.pick(String, arity, "ERR Wrong number of args calling Redis command from script",
       Bool.pick(String, noscript, "ERR This Redis command is not allowed from script",
         Bool.pick(String, Bool.not(String.is_empty(acl)), acl,
           Bool.pick(String, rowrite, "ERR Write commands are not allowed from read-only scripts.",
             Bool.pick(String, mis, misconf.msg(),
-              Bool.pick(String, oom, oom.msg(), "")))))))
+              Bool.pick(String, nr, norepl.msg(),
+                Bool.pick(String, oom, oom.msg(), ""))))))))
 
 # A script's calls and ACL. The script client runs as its caller's user
 # (scriptCall sets its user), so that a call of a script is checked with
@@ -16822,7 +17073,7 @@ def sc.call.run(+c: R.Cmd, +code: Nat, +r3: Bool, +raw: String, +sc: Sc, +aof: B
   +clean = U32.is_eq(U32.and(grp.sc.st(x), 2), 0)
   +xg = Nat.is_eq(key, R.stat.top(232n))
   +xb = sc.xblock.is(Bool.or(Nat.is_eq(key, R.stat.top(214n)), xg), xg, raw)
-  sc.call.at(sc.call.why(unknown, arity, noscript, sc.acl.why(v, x), Bool.and(sc.ro(sc), R.stat.pausable(key)), Bool.and(grp.misconf(x), Bool.and(clean, R.stat.write(key))), Bool.and(Bool.not(sc.aoom(sc)), Bool.and(grp.oom(x), Bool.and(clean, R.stat.denyoom(key))))), sc.xblock.cmd(xb, raw, c), Bool.pick(Nat, xb, R.stat.code(key, 2n), code), r3, raw, sc, aof, pid, sc.acl.log(v, sc, x), reqs)
+  sc.call.at(sc.call.why(unknown, arity, noscript, sc.acl.why(v, x), Bool.and(sc.ro(sc), R.stat.pausable(key)), Bool.and(grp.misconf(x), Bool.and(clean, R.stat.write(key))), Bool.and(grp.norepl(x), Bool.and(clean, R.stat.write(key))), Bool.and(Bool.not(sc.aoom(sc)), Bool.and(grp.oom(x), Bool.and(clean, R.stat.denyoom(key))))), sc.xblock.cmd(xb, raw, c), Bool.pick(Nat, xb, R.stat.code(key, 2n), code), r3, raw, sc, aof, pid, sc.acl.log(v, sc, x), reqs)
 
 @unsafe
 def sc.call.of(b: P.Batch, +r3: Bool, +raw: String, sc: Sc, +aof: Bool, +pid: U32, g: Grp, +reqs: Chan(Req)) -> IO(Grp):
@@ -16916,7 +17167,7 @@ def sc.start.at(ok: Bool, +why: String, +fn: Bool, +sha: String, +f: U32, +ro: B
 @unsafe
 def sc.start(+fn: Bool, +sha: String, +f: U32, +ro: Bool, +aof: Bool, +pid: U32, ks: List<&2, String>, xs: List<&2, String>, ex: Exm, +r3: Bool, +db: Nat, w: Waits, g: Grp, +reqs: Chan(Req)) -> IO(Grp):
   +x = g
-  +why = sc.refused(f, ro, grp.misconf(x), grp.oom(x))
+  +why = sc.refused(f, ro, grp.misconf(x), grp.norepl(x), grp.oom(x))
   sc.start.at(String.is_empty(why), why, fn, sha, f, ro, aof, pid, ks, xs, ex, r3, db, w, x, reqs)
 
 # EVAL's body loaded: an error of the engine's ("ERR Error compiling
@@ -17901,6 +18152,11 @@ def st.kills(st: St) -> List<&2, U32> & St:
     case St{srv, ds, +sel, ws, tx, pb, rw}:
       st.kills.of(ps.kills(pb), srv, ds, sel, ws, tx, rw)
 
+def st.capped(+st: St) -> Bool:
+  match st:
+    case St{+srv, ds, sel, ws, tx, pb, +rw}:
+      rw.capped(rw, srv)
+
 # what the actor does about a rewrite once the group is answered
 # (rw.what)
 def st.what(+st: St) -> Nat:
@@ -17917,8 +18173,33 @@ def aof_answer(p: List<&2, U32> & St, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ 
   +x = st
   do IO<Unit>:
     Unit <- kill_all(ks)
+    aof_answer.go(st.capped(x), outs, x, f, sync, reqs)
+
+# the group's answers, a maxclients it set given to the listeners first,
+# as db_answer gives it
+@unsafe
+def aof_answer.go(same: Bool, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, +st: St, f: File, +sync: Sync, +reqs: Chan(Req)) -> IO(Unit):
+  match same:
+    case True{}:
+      do IO<Unit>:
+        Unit <- Chan.send_all(Ans, outs)
+        aof_after(st.what(st), st, f, sync, reqs)
+    case False{}:
+      aof_cap(st, outs, f, sync, reqs)
+
+@unsafe
+def aof_cap.go(+lis: Chan(Tally), +mc: Nat, +st: St, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, f: File, +sync: Sync, +reqs: Chan(Req)) -> IO(Unit):
+  do IO<Unit>:
+    Unit <- tally.cap(lis, mc)
     Unit <- Chan.send_all(Ans, outs)
-    aof_after(st.what(x), x, f, sync, reqs)
+    aof_after(st.what(st), st, f, sync, reqs)
+
+@unsafe
+def aof_cap(st: St, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, f: File, +sync: Sync, +reqs: Chan(Req)) -> IO(Unit):
+  match st:
+    case St{+srv, ds, sel, ws, tx, pb, +rw}:
+      +mc = S.srv.maxclients(srv)
+      aof_cap.go(rw.lis(rw), mc, St{srv, ds, sel, ws, tx, pb, rw.cap.set(rw, mc)}, outs, f, sync, reqs)
 
 @unsafe
 def aof_after(w: Nat, st: St, f: File, +sync: Sync, +reqs: Chan(Req)) -> IO(Unit):
@@ -18539,56 +18820,56 @@ def run.flushed(m: Maybe<&2, RwRun>, +n: Nat) -> Maybe<&2, RwRun>:
 
 def rw.path(+rw: Rw) -> String:
   match rw:
-    case Rw{+path, aof, pid, cron, delay, until, last, run, bg, next, carry, dir}:
+    case Rw{+path, aof, pid, cron, delay, until, last, run, bg, next, carry, dir, lis, cap}:
       path
     case RwOf{+r}:
       rw.path(r)
 
 def rw.pid(+rw: Rw) -> U32:
   match rw:
-    case Rw{path, aof, +pid, cron, delay, until, last, run, bg, next, carry, dir}:
+    case Rw{path, aof, +pid, cron, delay, until, last, run, bg, next, carry, dir, lis, cap}:
       pid
     case RwOf{+r}:
       rw.pid(r)
 
 def rw.tmp(+rw: Rw) -> String:
   match rw:
-    case Rw{path, aof, pid, cron, delay, until, last, +run, bg, next, carry, dir}:
+    case Rw{path, aof, pid, cron, delay, until, last, +run, bg, next, carry, dir, lis, cap}:
       run.tmp(run)
     case RwOf{+r}:
       rw.tmp(r)
 
 def rw.pending(+rw: Rw) -> String:
   match rw:
-    case Rw{path, aof, pid, cron, delay, until, last, +run, bg, next, carry, dir}:
+    case Rw{path, aof, pid, cron, delay, until, last, +run, bg, next, carry, dir, lis, cap}:
       run.pending(run)
     case RwOf{+r}:
       rw.pending(r)
 
 def rw.rest(+rw: Rw) -> String:
   match rw:
-    case Rw{path, aof, pid, cron, delay, until, last, +run, bg, next, carry, dir}:
+    case Rw{path, aof, pid, cron, delay, until, last, +run, bg, next, carry, dir, lis, cap}:
       run.rest(run)
     case RwOf{+r}:
       rw.rest(r)
 
 def rw.next(+rw: Rw) -> Nat:
   match rw:
-    case Rw{path, aof, pid, cron, delay, until, last, +run, bg, next, carry, dir}:
+    case Rw{path, aof, pid, cron, delay, until, last, +run, bg, next, carry, dir, lis, cap}:
       run.next(run)
     case RwOf{+r}:
       rw.next(r)
 
 def rw.size(+rw: Rw) -> Nat:
   match rw:
-    case Rw{path, aof, pid, cron, delay, until, last, +run, bg, next, carry, dir}:
+    case Rw{path, aof, pid, cron, delay, until, last, +run, bg, next, carry, dir, lis, cap}:
       run.size(run)
     case RwOf{+r}:
       rw.size(r)
 
 def rw.dir(+rw: Rw) -> RDir:
   match rw:
-    case Rw{path, aof, pid, cron, delay, until, last, run, bg, next, carry, +dir}:
+    case Rw{path, aof, pid, cron, delay, until, last, run, bg, next, carry, +dir, lis, cap}:
       dir
     case RwOf{+r}:
       rw.dir(r)
@@ -18597,15 +18878,15 @@ def rw.dir(+rw: Rw) -> RDir:
 # turning on: rw.state)
 def rw.on(+rw: Rw) -> Bool:
   match rw:
-    case Rw{path, +aof, pid, cron, delay, until, last, run, bg, next, carry, dir}:
+    case Rw{path, +aof, pid, cron, delay, until, last, run, bg, next, carry, dir, lis, cap}:
       Nat.is_ne(aof, 0n)
     case RwOf{+r}:
       rw.on(r)
 
 def rw.dir.set(rw: Rw, d: RDir) -> Rw:
   match rw:
-    case Rw{path, aof, pid, cron, delay, until, last, run, bg, next, carry, old}:
-      Rw{path, aof, pid, cron, delay, until, last, run, bg, next, carry, d}
+    case Rw{path, aof, pid, cron, delay, until, last, run, bg, next, carry, old, lis, cap}:
+      Rw{path, aof, pid, cron, delay, until, last, run, bg, next, carry, d, lis, cap}
     case RwOf{r}:
       rw.dir.set(r, d)
 
@@ -18793,16 +19074,16 @@ def down.cant(+lg: Log) -> IO(Unit):
 # snapshot taken; with n more bytes in its temporary file
 def rw.with(rw: Rw, run: Maybe<&2, RwRun>) -> Rw:
   match rw:
-    case Rw{path, aof, pid, cron, delay, until, last, old, bg, next, carry, dir}:
-      Rw{path, aof, pid, cron, delay, until, last, run, bg, next, carry, dir}
+    case Rw{path, aof, pid, cron, delay, until, last, old, bg, next, carry, dir, lis, cap}:
+      Rw{path, aof, pid, cron, delay, until, last, run, bg, next, carry, dir, lis, cap}
     case RwOf{r}:
       rw.with(r, run)
 
 # the same with run as a rewrite that starts, its pace from now
 def rw.begun(rw: Rw, run: Maybe<&2, RwRun>) -> Rw:
   match rw:
-    case Rw{path, aof, pid, cron, delay, until, last, old, bg, next, carry, dir}:
-      Rw{path, aof, pid, cron, delay, until, last, run, bg, 0n, 0n, dir}
+    case Rw{path, aof, pid, cron, delay, until, last, old, bg, next, carry, dir, lis, cap}:
+      Rw{path, aof, pid, cron, delay, until, last, run, bg, 0n, 0n, dir, lis, cap}
     case RwOf{r}:
       rw.begun(r, run)
 
@@ -18810,15 +19091,15 @@ def rw.begun(rw: Rw, run: Maybe<&2, RwRun>) -> Rw:
 # SHUTDOWN whose save failed); with run as the background save that runs
 def rw.stopped(rw: Rw) -> Rw:
   match rw:
-    case Rw{path, aof, pid, cron, delay, until, last, run, bg, next, carry, dir}:
-      Rw{path, aof, pid, cron, delay, until, last, None{}, None{}, 0n, 0n, dir}
+    case Rw{path, aof, pid, cron, delay, until, last, run, bg, next, carry, dir, lis, cap}:
+      Rw{path, aof, pid, cron, delay, until, last, None{}, None{}, 0n, 0n, dir, lis, cap}
     case RwOf{r}:
       rw.stopped(r)
 
 def rw.bg.with(rw: Rw, m: Maybe<&2, BgRun>) -> Rw:
   match rw:
-    case Rw{path, aof, pid, cron, delay, until, last, run, old, next, carry, dir}:
-      Rw{path, aof, pid, cron, delay, until, last, run, m, next, carry, dir}
+    case Rw{path, aof, pid, cron, delay, until, last, run, old, next, carry, dir, lis, cap}:
+      Rw{path, aof, pid, cron, delay, until, last, run, m, next, carry, dir, lis, cap}
     case RwOf{r}:
       rw.bg.with(r, m)
 
@@ -18832,25 +19113,25 @@ def pace.owed(+next: Nat, +ms: Nat, +owed: Nat) -> Nat & Nat:
 def pace.next(+next: Nat, +carry: Nat, +ms: Nat, +k: Nat, +dl: Nat) -> Nat & Nat:
   pace.owed(next, ms, Nat.add(Nat.mul(k, dl), carry))
 
-def rw.paced(q: Nat & Nat, path: String, aof: Nat, pid: U32, cron: Nat, delay: Nat, until: Nat, +now: Nat, run: Maybe<&2, RwRun>, bg: Maybe<&2, BgRun>, dir: RDir) -> Rw:
+def rw.paced(q: Nat & Nat, path: String, aof: Nat, pid: U32, cron: Nat, delay: Nat, until: Nat, +now: Nat, run: Maybe<&2, RwRun>, bg: Maybe<&2, BgRun>, dir: RDir, lis: Chan(Tally), cap: Nat) -> Rw:
   (nx, cy) = q
-  Rw{path, aof, pid, cron, delay, until, now, run, bg, nx, cy, dir}
+  Rw{path, aof, pid, cron, delay, until, now, run, bg, nx, cy, dir, lis, cap}
 
-def rw.sliced.of(p: Maybe<&2, RwRun> & Nat, path: String, aof: Nat, pid: U32, cron: Nat, delay: Nat, until: Nat, +now: Nat, bg: Maybe<&2, BgRun>, +next: Nat, +carry: Nat, +ms: Nat, +dl: Nat, dir: RDir) -> Rw:
+def rw.sliced.of(p: Maybe<&2, RwRun> & Nat, path: String, aof: Nat, pid: U32, cron: Nat, delay: Nat, until: Nat, +now: Nat, bg: Maybe<&2, BgRun>, +next: Nat, +carry: Nat, +ms: Nat, +dl: Nat, dir: RDir, lis: Chan(Tally), cap: Nat) -> Rw:
   (run, +k) = p
-  rw.paced(pace.next(next, carry, ms, k, dl), path, aof, pid, cron, delay, until, now, run, bg, dir)
+  rw.paced(pace.next(next, carry, ms, k, dl), path, aof, pid, cron, delay, until, now, run, bg, dir, lis, cap)
 
 def rw.sliced(rw: Rw, +now: Nat, +want: Nat, +ms: Nat, +dl: Nat) -> Rw:
   match rw:
-    case Rw{path, aof, pid, cron, delay, until, last, run, bg, +next, +carry, dir}:
-      rw.sliced.of(run.slice(run, want), path, aof, pid, cron, delay, until, now, bg, next, carry, ms, dl, dir)
+    case Rw{path, aof, pid, cron, delay, until, last, run, bg, +next, +carry, dir, lis, cap}:
+      rw.sliced.of(run.slice(run, want), path, aof, pid, cron, delay, until, now, bg, next, carry, ms, dl, dir, lis, cap)
     case RwOf{r}:
       rw.sliced(r, now, want, ms, dl)
 
 def rw.flushed(rw: Rw, +n: Nat) -> Rw:
   match rw:
-    case Rw{path, aof, pid, cron, delay, until, last, run, bg, next, carry, dir}:
-      Rw{path, aof, pid, cron, delay, until, last, run.flushed(run, n), bg, next, carry, dir}
+    case Rw{path, aof, pid, cron, delay, until, last, run, bg, next, carry, dir, lis, cap}:
+      Rw{path, aof, pid, cron, delay, until, last, run.flushed(run, n), bg, next, carry, dir, lis, cap}
     case RwOf{r}:
       rw.flushed(r, n)
 
@@ -19216,21 +19497,21 @@ def look.go(held: Bool, sched: Bool, auto: Bool) -> Nat:
     case False{} False{} False{}:
       0n
 
-def look.of(+sched: Bool, +auto: Bool, l: RwLim, +grow: Nat, pt: Maybe<&2, I.Pt>, +bsched: Bool, srv: S.Srv, ds: R.Ds, +sel: Nat, path: String, +aof: Nat, +pid: U32, +now: Nat, +last: Nat, run: Maybe<&2, RwRun>, bg: Maybe<&2, BgRun>, +next: Nat, +carry: Nat, dir: RDir) -> RwLook:
+def look.of(+sched: Bool, +auto: Bool, l: RwLim, +grow: Nat, pt: Maybe<&2, I.Pt>, +bsched: Bool, srv: S.Srv, ds: R.Ds, +sel: Nat, path: String, +aof: Nat, +pid: U32, +now: Nat, +last: Nat, run: Maybe<&2, RwRun>, bg: Maybe<&2, BgRun>, +next: Nat, +carry: Nat, dir: RDir, lis: Chan(Tally), cap: Nat) -> RwLook:
   match l:
     case RwLim{held, +delay, +until, +note}:
       +p = pt
-      RwLook{Rx{srv, ds, sel, Rw{path, aof, pid, Nat.add(now, 100n), delay, until, last, run, bg, next, carry, dir}}, look.all(look.go(held, sched, auto), point.is(p), bsched), grow, note, p}
+      RwLook{Rx{srv, ds, sel, Rw{path, aof, pid, Nat.add(now, 100n), delay, until, last, run, bg, next, carry, dir, lis, cap}}, look.all(look.go(held, sched, auto), point.is(p), bsched), grow, note, p}
 
 def rw.look(rw: Rw, +srv: S.Srv, +ds: R.Ds, +sel: Nat) -> RwLook:
   match rw:
-    case Rw{path, +aof, +pid, cron, +delay, +until, +last, run, bg, +next, +carry, dir}:
+    case Rw{path, +aof, +pid, cron, +delay, +until, +last, run, bg, +next, +carry, dir, lis, cap}:
       +now = R.ds.now(ds)
       +sched = S.srv.rw.sched(srv)
       +grow = rw.growth(S.srv.aof.size(srv), S.srv.aof.base(srv))
       +auto = rw.auto(aof, srv)
       +r = S.srv.rdb(srv)
-      look.of(sched, auto, lim.ask(Bool.or(sched, auto), S.srv.rw.fails(srv), Nat.div(now, 1000n), delay, until), grow, I.rdb.point(r, Nat.div(now, 1000n)), I.rdb.sched.go(r, Nat.div(now, 1000n)), srv, ds, sel, path, aof, pid, now, last, run, bg, next, carry, dir)
+      look.of(sched, auto, lim.ask(Bool.or(sched, auto), S.srv.rw.fails(srv), Nat.div(now, 1000n), delay, until), grow, I.rdb.point(r, Nat.div(now, 1000n)), I.rdb.sched.go(r, Nat.div(now, 1000n)), srv, ds, sel, path, aof, pid, now, last, run, bg, next, carry, dir, lis, cap)
     case RwOf{r}:
       rw.look(r, srv, ds, sel)
 
@@ -20462,14 +20743,14 @@ def dir_synced(r: Result<&1, &1, U32 & String, Unit>, +path: String, +lg: Log) -
       log.die(Unit, lg, "Can't sync the directory of the append-only file " ++ path ++ ": " ++ msg)
 
 @unsafe
-def open_aof(+path: String, +sync: Sync, srv: S.Srv, ds: R.Ds, +lg: Log, +pid: U32) -> IO(Chan(Req)):
+def open_aof(+path: String, +sync: Sync, srv: S.Srv, ds: R.Ds, +lg: Log, +pid: U32, +tl: Chan(Tally), +mc: Nat) -> IO(Chan(Req)):
   do IO<Chan(Req)>:
     f : File <- IO.try(File, File.open(path, "a"))
     r : Result<&1, &1, U32 & String, Unit> <- File.sync_dir(path)
     Unit <- dir_synced(r, path, lg)
     +reqs : Chan(Req) <- Chan.new(Req, 1024)
     Unit <- syncer(sync, path, reqs)
-    st : St <- st.fn(st.new(S.srv.sv.set(srv, sync.sv(sync)), ds, rw.new(path, 1n, pid, RDirNone{})))
+    st : St <- st.fn(st.new(S.srv.sv.set(srv, sync.sv(sync)), ds, rw.new(path, 1n, pid, RDirNone{}, tl, mc)))
     Unit <- IO.spawn(Unit, aof_loop(st, f, sync, reqs))
     return reqs
 
@@ -21015,26 +21296,26 @@ def bgr.flushed(m: Maybe<&2, BgRun>, +n: Nat) -> Maybe<&2, BgRun>:
 
 def rw.bg(+rw: Rw) -> Maybe<&2, BgRun>:
   match rw:
-    case Rw{path, aof, pid, cron, delay, until, last, run, +bg, next, carry, dir}:
+    case Rw{path, aof, pid, cron, delay, until, last, run, +bg, next, carry, dir, lis, cap}:
       bg
     case RwOf{+r}:
       rw.bg(r)
 
-def rw.bsliced.of(p: Maybe<&2, BgRun> & Nat, path: String, aof: Nat, pid: U32, cron: Nat, delay: Nat, until: Nat, +now: Nat, run: Maybe<&2, RwRun>, +next: Nat, +carry: Nat, +ms: Nat, +dl: Nat, dir: RDir) -> Rw & Nat:
+def rw.bsliced.of(p: Maybe<&2, BgRun> & Nat, path: String, aof: Nat, pid: U32, cron: Nat, delay: Nat, until: Nat, +now: Nat, run: Maybe<&2, RwRun>, +next: Nat, +carry: Nat, +ms: Nat, +dl: Nat, dir: RDir, lis: Chan(Tally), cap: Nat) -> Rw & Nat:
   (bg, +k) = p
-  (rw.paced(pace.next(next, carry, ms, k, dl), path, aof, pid, cron, delay, until, now, run, bg, dir), k)
+  (rw.paced(pace.next(next, carry, ms, k, dl), path, aof, pid, cron, delay, until, now, run, bg, dir, lis, cap), k)
 
 def rw.bsliced(rw: Rw, +now: Nat, +want: Nat, +ms: Nat, +dl: Nat) -> Rw & Nat:
   match rw:
-    case Rw{path, aof, pid, cron, delay, until, last, run, bg, +next, +carry, dir}:
-      rw.bsliced.of(bgr.slice(bg, want), path, aof, pid, cron, delay, until, now, run, next, carry, ms, dl, dir)
+    case Rw{path, aof, pid, cron, delay, until, last, run, bg, +next, +carry, dir, lis, cap}:
+      rw.bsliced.of(bgr.slice(bg, want), path, aof, pid, cron, delay, until, now, run, next, carry, ms, dl, dir, lis, cap)
     case RwOf{r}:
       rw.bsliced(r, now, want, ms, dl)
 
 def rw.bflushed(rw: Rw, +n: Nat) -> Rw:
   match rw:
-    case Rw{path, aof, pid, cron, delay, until, last, run, bg, next, carry, dir}:
-      Rw{path, aof, pid, cron, delay, until, last, run, bgr.flushed(bg, n), next, carry, dir}
+    case Rw{path, aof, pid, cron, delay, until, last, run, bg, next, carry, dir, lis, cap}:
+      Rw{path, aof, pid, cron, delay, until, last, run, bgr.flushed(bg, n), next, carry, dir, lis, cap}
     case RwOf{r}:
       rw.bflushed(r, n)
 
@@ -21141,8 +21422,8 @@ def rx.bgo(x: Rx, +unsched: Bool) -> Rx:
 # writer's channels kept, its pace from now
 def rx.bbegin(x: Rx, dbs: List<&2, R.Db>, +head: String, +sum: Bool, cf: I.BgCf, ch: BgCh) -> Rx:
   match x:
-    case Rx{srv, ds, sel, Rw{path, aof, pid, cron, delay, until, last, run, bg, next, carry, dir}}:
-      Rx{srv, ds, sel, Rw{path, aof, pid, cron, delay, until, last, run, Some{BgRun{Some{D.FW{rdb.fdbs(dbs), 0n, None{}}}, rdb.crc(sum, head, D.C{0, 0}), sum, 0n, [head], String.length(head), cf, ch}}, 0n, 0n, dir}}
+    case Rx{srv, ds, sel, Rw{path, aof, pid, cron, delay, until, last, run, bg, next, carry, dir, lis, cap}}:
+      Rx{srv, ds, sel, Rw{path, aof, pid, cron, delay, until, last, run, Some{BgRun{Some{D.FW{rdb.fdbs(dbs), 0n, None{}}}, rdb.crc(sum, head, D.C{0, 0}), sum, 0n, [head], String.length(head), cf, ch}}, 0n, 0n, dir, lis, cap}}
     case Rx{srv, ds, sel, RwOf{r}}:
       rx.bbegin(Rx{srv, ds, sel, r}, dbs, head, sum, cf, ch)
 
@@ -22016,7 +22297,7 @@ def dir.incr.at(m: Maybe<&2, String>, +lg: Log, +dn: String, +n: String, +mf: AD
 # synced, everysec's syncer on it; the file has selected no database yet
 # (st.new.d)
 @unsafe
-def open_aof.d(m: Result<&1, &1, U32 & String, File>, +path: String, +inc: String, +sync: Sync, srv: S.Srv, ds: R.Ds, +lg: Log, +pid: U32, d: RDir, +pc: Chan(String)) -> IO(Chan(Req)):
+def open_aof.d(m: Result<&1, &1, U32 & String, File>, +path: String, +inc: String, +sync: Sync, srv: S.Srv, ds: R.Ds, +lg: Log, +pid: U32, d: RDir, +pc: Chan(String), +tl: Chan(Tally), +mc: Nat) -> IO(Chan(Req)):
   match m:
     case Fail{e}:
       log.die(Chan(Req), lg, "Can't open the append-only file " ++ inc ++ ": " ++ err.msg(e))
@@ -22026,7 +22307,7 @@ def open_aof.d(m: Result<&1, &1, U32 & String, File>, +path: String, +inc: Strin
         Unit <- dir_synced(r, path, lg)
         +reqs : Chan(Req) <- Chan.new(Req, 1024)
         Unit <- syncer.d(sync, path, pc, reqs)
-        st : St <- st.fn(st.new.d(S.srv.sv.set(srv, sync.sv(sync)), ds, rw.new(path, 1n, pid, d)))
+        st : St <- st.fn(st.new.d(S.srv.sv.set(srv, sync.sv(sync)), ds, rw.new(path, 1n, pid, d, tl, mc)))
         Unit <- IO.spawn(Unit, aof_loop(st, f, sync, reqs))
         return reqs
 
@@ -22041,7 +22322,7 @@ def dir.serve(o: DOpen, a: DAll, +dn: String, +n: String, +sync: Sync, +items: L
         m2 : AD.Mf <- dir.gc(lg, items, dn, n, mf)
         +pc : Chan(String) <- Chan.new(String, 64)
         m : Result<&1, &1, U32 & String, File> <- File.open(path, "a")
-        +reqs : Chan(Req) <- open_aof.d(m, path, inc, sync, S.srv_of(items, I.info.rdb.loaded(I.info.aof(I.info.restored(info, base), Nat.sub(size, base)), ld, ex)), ds, lg, pid, RDir{dn, n, m2, 0n, pc}, pc)
+        +reqs : Chan(Req) <- open_aof.d(m, path, inc, sync, S.srv_of(items, I.info.rdb.loaded(I.info.aof(I.info.restored(info, base), Nat.sub(size, base)), ld, ex)), ds, lg, pid, RDir{dn, n, m2, 0n, pc}, pc, tl, S.mm.get(items, "maxclients"))
         accept_all(ls, sup, reqs, post, lg, tl, items)
 
 @unsafe
@@ -22172,7 +22453,7 @@ def accept_all(p: Bool & List<&1, Listener>, +sup: Bool, +reqs: Chan(Req), +post
 def serve.aof(p: R.Ds & Nat, +path: String, +sync: Sync, +items: List<&2, C.CItem>, info: I.Info, ls: Bool & List<&1, Listener>, +sup: Bool, +post: Bool, +lg: Log, +tl: Chan(Tally), +pid: U32) -> IO(Unit):
   (ds, +size) = p
   do IO<Unit>:
-    +reqs : Chan(Req) <- open_aof(path, sync, S.srv_of(items, I.info.restored(info, size)), ds, lg, pid)
+    +reqs : Chan(Req) <- open_aof(path, sync, S.srv_of(items, I.info.restored(info, size)), ds, lg, pid, tl, S.mm.get(items, "maxclients"))
     accept_all(ls, sup, reqs, post, lg, tl, items)
 
 # the actor without a file, its Pub/Sub's state told of maxmemory, with
@@ -22199,7 +22480,7 @@ def serve.db(p: R.Ds & I.Info, d: RDir, ls: Bool & List<&1, Listener>, +sup: Boo
   (ds, info) = p
   do IO<Unit>:
     +reqs : Chan(Req) <- Chan.new(Req, 1024)
-    Unit <- IO.spawn(Unit, db_start(S.srv_of(items, info), ds, rw.new(T.cfg(items, "appendfilename"), 0n, pid, d), reqs))
+    Unit <- IO.spawn(Unit, db_start(S.srv_of(items, info), ds, rw.new(T.cfg(items, "appendfilename"), 0n, pid, d, tl, S.mm.get(items, "maxclients")), reqs))
     accept_all(ls, sup, reqs, post, lg, tl, items)
 
 # rdb: whether the RDB file is loaded when there is no append-only file
@@ -22571,7 +22852,7 @@ def run(+items: List<&2, C.CItem>, +post: Bool, +aof: Maybe<&2, String>, +sync: 
     Unit <- L.Engine.deprecated(Bool.pick(U32, String.eq(T.cfg(items, "lua-enable-deprecated-api"), "yes"), 1, 0))
     Unit <- modules(Bool.not(String.is_empty(mod)), mcfg, mod, lm)
     +tl : Chan(Tally) <- Chan.new(Tally, 1)
-    ok : Bool <- Chan.send(Tally, tl, Tally{0n, 0n})
+    ok : Bool <- Chan.send(Tally, tl, Tally{0n, 0n, S.mm.get(items, "maxclients")})
     info : I.Info <- info.read(pid, exe, conf, tl)
     serve(aof, ls, sup, post, sync, String.eq(T.cfg(items, "aof-load-truncated"), "yes"), items, info, lm, tl, pid, checks)
 

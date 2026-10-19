@@ -71,7 +71,8 @@ COMMANDS = {
     "hgetall": [], "hincrby": [], "hscan": [], "hrandfield": [], "eval": [],
     "evalsha": [], "eval_ro": [], "evalsha_ro": [], "script": ["exists", "flush", "help", "kill", "load"],
     "fcall": [], "fcall_ro": [],
-    "memory": ["doctor", "help", "malloc-stats", "purge", "stats", "usage"], "lpush": [], "rpush": [], "lpushx": [], "rpushx": [],
+    "memory": ["doctor", "help", "malloc-stats", "purge", "stats", "usage"],
+    "module": ["help", "list", "load", "loadex", "unload"], "lpush": [], "rpush": [], "lpushx": [], "rpushx": [],
     "lpop": [], "rpop": [], "llen": [], "lindex": [], "lrange": [], "lset": [],
     "linsert": [], "lrem": [], "ltrim": [], "lpos": [], "lmove": [], "rpoplpush": [],
     "lmpop": [], "sadd": [], "srem": [], "scard": [], "sismember": [], "smismember": [],
@@ -593,7 +594,7 @@ CONTAINERS = {"client": "client_id", "function": "function_id", "config": "confi
               "command": "command_id", "object": "object_id", "memory": "memory_id",
               "pubsub": "pubsub_id", "slowlog": "slowlog_id", "latency": "latency_id",
               "script": "script_id", "acl": "acl_id", "xinfo": "xinfo_id", "xgroup": "xgroup_id",
-              "cluster": "cluster_id"}
+              "cluster": "cluster_id", "module": "module_id"}
 
 # the names a numbering def of redis.bend gives its numbers
 def numbering(src, fn):
@@ -843,9 +844,9 @@ def stats_block(src, facts):
     out += ["    case _:", "      0n", ""]
     out += ["# a word's key (0 for one no key has)", "def stat.key.cw(+w: Nat) -> Nat:",
             "  stat.key.hl(Nat.div(w, 64n), Nat.mod(w, 64n))", ""]
-    out += ["# the high twelve bits of the hash of a call of GET, SET, INCR and",
-            "# RESTORE that runs, as the parser writes them"]
-    for name in ("get", "set", "incr", "restore"):
+    out += ["# the high twelve bits of the hash of a call of GET, SET, INCR,",
+            "# RESTORE, DEL, UNLINK and GETDEL that runs, as the parser writes them"]
+    for name in ("get", "set", "incr", "restore", "del", "unlink", "getdel"):
         k = [x[0] for x in keys].index(name) + 1
         out += ["def stat.mark.%s() -> U32:" % name, "  %d" % (WORDS[k] << 20), ""]
     return "\n".join(out[:-1]) + "\n"

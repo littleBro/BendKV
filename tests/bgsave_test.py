@@ -29,6 +29,10 @@ what both must agree on, as the part's comment says.
   stop-writes-on-bgsave-error no, lifts it, for the commands after it in
   the same pipeline too (a CONFIG SET alone or in MULTI). The cron tries
   again 5 seconds after the failure, not before.
+- The writes' other refusal, min-replicas-to-write with no replica
+  (NOREPLICAS): the same cases as MISCONF's, where PING runs; a CONFIG
+  SET of min-replicas-max-lag or min-replicas-to-write that lifts it or
+  sets it again, in its pipeline; and MISCONF first while both hold.
 - A background save of libraries of functions, and the start from its
   file.
 - The parameters a save keeps from its start, as Redis's child keeps
@@ -711,6 +715,86 @@ def misconf(a, root):
     both(a, root, "misconf", misconf_on)
 
 
+def norepl_on(exe, d, log):
+    """min-replicas-to-write with no replica: the writes refused"""
+    s = Srv(exe, d, "--save", "")
+    c, held, sub, mon = s.conn(), s.conn(), s.conn(), s.conn()
+    lua = s.conn()
+    run(c, "SET", "a", "1")
+    log("1 queued before", run(held, "MULTI"), run(held, "SET", "q", "1"), run(held, "GET", "a"))
+    log("1 script queued before", run(lua, "MULTI"), run(lua, "EVAL", "#!lua\nreturn 1", "0"))
+    log("1 library", run(c, "FUNCTION", "LOAD", LIB))
+    # Redis 7.2.16 refuses a write while fewer good replicas than
+    # min-replicas-to-write are connected and min-replicas-max-lag is
+    # above 0 (checkGoodReplicasStatus): with none, at once. Each
+    # parameter is asked by its name: Redis answers a pattern in the order
+    # of a table hashed with a seed of its run
+    log("1 set", run(c, "CONFIG", "SET", "min-replicas-to-write", "1"), run(c, "CONFIG", "GET", "min-replicas-to-write"),
+        run(c, "CONFIG", "GET", "min-replicas-max-lag"))
+    log("2 writes", run(c, "SET", "b", "2"), run(c, "INCR", "n"), run(c, "DEL", "a"), run(c, "FLUSHALL"),
+        run(c, "EXPIRE", "a", "100"), run(c, "SET", "a", "2", "GET"))
+    # PING, which MISCONF refuses, is no write
+    log("2 reads", run(c, "PING"), run(c, "PING", "hi"), run(c, "GET", "a"), run(c, "EXISTS", "a"),
+        run(c, "PUBLISH", "c", "m"), run(c, "ECHO", "e"), run(c, "DBSIZE"))
+    log("2 refused first", run(c, "NOSUCH"), run(c, "SET", "x"), run(c, "MULTI"), run(c, "SET", "y", "1"),
+        run(c, "GET", "a"), run(c, "EXEC"))
+    log("2 exec", run(held, "EXEC"), run(c, "MULTI"), run(c, "GET", "a"), run(c, "EXEC"))
+    log("2 subscriber", run(sub, "SUBSCRIBE", "ch"), run(sub, "PING"), run(sub, "SET", "x", "1"), run(sub, "GET", "x"))
+    log("2 monitor", run(mon, "MONITOR"), run(mon, "SET", "x", "1"), run(mon, "GET", "x"))
+    log("2 stats", info(c, "errorstats", "errorstat_NOREPLICAS"),
+        re.sub(r"usec=\d+,usec_per_call=[0-9.]+,", "", info(c, "commandstats", "cmdstat_set") or ""),
+        re.sub(r"usec=\d+,usec_per_call=[0-9.]+,", "", info(c, "commandstats", "cmdstat_exec") or ""))
+    # scripts: a write a script without a shebang calls is refused in it,
+    # before it has written (scriptVerifyWriteCommandAllow); one whose
+    # shebang lets it write is refused before it runs (scriptPrepareForRun),
+    # in MULTI flagging the transaction, and EXEC of one queued before is
+    # aborted
+    log("2 scripts", run(c, "EVAL", "return redis.call('set','k','v')", "0"),
+        run(c, "EVAL", "return redis.call('get','a')", "0"),
+        run(c, "EVAL", "return redis.pcall('set','k','v')", "0"),
+        run(c, "EVAL", "local r = redis.pcall('incr','n') return type(r)", "0"),
+        run(c, "EVAL", "return redis.call('ping')", "0"),
+        run(c, "EVAL", "#!lua\nreturn 1", "0"),
+        run(c, "EVAL", "#!lua flags=no-writes\nreturn redis.call('get','a')", "0"),
+        run(c, "EVAL_RO", "return redis.call('set','k','v')", "0"))
+    log("2 scripts in MULTI", run(c, "MULTI"), run(c, "EVAL", "return redis.call('set','k','v')", "0"),
+        run(c, "EXEC"), run(c, "MULTI"), run(c, "EVAL", "#!lua\nreturn 1", "0"), run(c, "EXEC"),
+        run(lua, "EXEC"), run(c, "EXISTS", "k"))
+    log("2 functions", run(c, "FCALL", "wr", "1", "k", "v"), run(c, "FCALL_RO", "wr", "1", "k", "v"),
+        run(c, "FCALL", "rd", "0"), run(c, "FCALL_RO", "rd", "0"), run(c, "FUNCTION", "LOAD", "REPLACE", LIB),
+        run(c, "FUNCTION", "DELETE", "bglib"), run(c, "FUNCTION", "FLUSH"), flist(c))
+    log("2 scripts stats", info(c, "errorstats", "errorstat_NOREPLICAS"),
+        re.sub(r"usec=\d+,usec_per_call=[0-9.]+,", "", info(c, "commandstats", "cmdstat_eval") or ""),
+        re.sub(r"usec=\d+,usec_per_call=[0-9.]+,", "", info(c, "commandstats", "cmdstat_fcall") or ""))
+    # a CONFIG SET that lifts it or sets it again counts for the commands
+    # after it in its own pipeline, alone or in MULTI
+    log("2 pipelines", pipe(c, [["MULTI"], ["CONFIG", "SET", "min-replicas-max-lag", "0"], ["EXEC"], ["SET", "a", "2"]]),
+        pipe(c, [["MULTI"], ["CONFIG", "SET", "min-replicas-max-lag", "10"], ["EXEC"], ["SET", "a", "3"]]),
+        pipe(c, [["CONFIG", "SET", "min-replicas-to-write", "0"], ["SET", "a", "4"],
+                 ["CONFIG", "SET", "min-replicas-to-write", "2"], ["SET", "a", "5"], ["PING"]]),
+        run(c, "GET", "a"))
+    # with a save that failed too, MISCONF comes first (processCommand)
+    run(c, "CONFIG", "SET", "save", "3600 1")
+    os.makedirs(os.path.join(d, "dump.rdb", "x"))
+    log("3 both", run(c, "BGSAVE"), until(lambda: not running(c)), run(c, "SET", "b", "6"), run(c, "PING"),
+        run(c, "CONFIG", "SET", "stop-writes-on-bgsave-error", "no"), run(c, "SET", "b", "7"))
+    log("3 lifted", run(c, "CONFIG", "SET", "min-replicas-max-lag", "0"), run(c, "SET", "b", "8"),
+        run(c, "CONFIG", "SET", "min-replicas-max-lag", "10"), run(c, "SET", "b", "9"),
+        run(c, "CONFIG", "SET", "min-replicas-to-write", "0"), run(c, "SET", "b", "10"), run(c, "GET", "b"))
+    log("3 stats", info(c, "errorstats", "errorstat_"))
+    shutil.rmtree(os.path.join(d, "dump.rdb"))
+    for x in (c, held, sub, mon, lua):
+        x.sock.close()
+    talk(s.port, [["SHUTDOWN", "NOSAVE"]])
+    log("3 exit", s.exit())
+
+
+def norepl(a, root):
+    """min-replicas-to-write with no replica: NOREPLICAS for writes, not
+    for PING, until min-replicas-max-lag or min-replicas-to-write is 0"""
+    both(a, root, "norepl", norepl_on)
+
+
 SAVING = "1 changes in 1 seconds. Saving..."
 
 
@@ -899,7 +983,7 @@ def main():
     root = os.path.abspath(a.dir)
     shutil.rmtree(root, ignore_errors=True)
     os.makedirs(root)
-    parts = [counts, bgsave, rewrite, points, misconf, functions, retry, kept, gone, kills, defaults]
+    parts = [counts, bgsave, rewrite, points, misconf, norepl, functions, retry, kept, gone, kills, defaults]
     try:
         for part in parts:
             if a.only and part.__name__ not in a.only.split(","):

@@ -8,8 +8,10 @@ of reads let run, DISCARD let run), with INFO's counts of the refused
 calls and of the error; OBJECT IDLETIME as keys are read, written,
 touched (TOUCH) and looked at without being touched (TTL, TYPE, EXISTS),
 and OBJECT FREQ under an LFU policy (5 for a key made, 6 after a read,
-the counter's steps with lfu-log-factor 0; a key last used under an LRU
-policy, whose bits Redis reads as LFU's, 0, then 1 after a read), each
+the counter's steps with lfu-log-factor 0; a key deleted by DEL, UNLINK
+or GETDEL and made again, 5 again; a key last used under an LRU
+policy, whose bits Redis reads as LFU's (0 but in some hours of every
+59 days), before and after a read), each
 refused under the other kind of policy, and OBJECT REFCOUNT of a small
 integer with an LRU policy, with maxmemory (1) and without (shared);
 INFO's maxmemory and maxmemory_human up to the largest maxmemory; and
@@ -79,24 +81,27 @@ def ok(msg):
 
 
 # a transcript of steps on each server, compared line by line; a step is
-# (client, args) or ("sleep", s). With phase, each server's transcript
-# starts that far into a second: times of use are whole seconds (Redis's
-# LRU clock, which its cron also caches for 100 ms), so that a key made
-# late in a second and read 2.2 s later is 3 s idle, early in one 2
+# (client, args) or ("sleep", s). The servers take each step together, so
+# that both read the clock at the same second: a key last used under an
+# LRU policy is read under an LFU one from its second's bits, a counter
+# that decays to 0 at once but for about six hours in every 59 days, and
+# then grows with the second. With phase,
+# the transcript starts that far into a second: times of use are whole
+# seconds (Redis's LRU clock, which its cron also caches for 100 ms), so
+# that a key made late in a second and read 2.2 s later is 3 s idle,
+# early in one 2
 def compare(what, servers, steps, phase=None):
-    outs = []
-    for port in servers:
-        cs = [Conn(port), Conn(port)]
-        out = []
-        if phase is not None:
-            time.sleep((phase - time.time() % 1.0) % 1.0)
-        for st in steps:
-            if st[0] == "sleep":
-                time.sleep(st[1])
-                continue
-            who, args = st
+    css = [[Conn(port), Conn(port)] for port in servers]
+    outs = [[] for _ in servers]
+    if phase is not None:
+        time.sleep((phase - time.time() % 1.0) % 1.0)
+    for st in steps:
+        if st[0] == "sleep":
+            time.sleep(st[1])
+            continue
+        who, args = st
+        for cs, out in zip(css, outs):
             out.append((" ".join(str(a) for a in args), cmd(cs[who], *args)))
-        outs.append(out)
     a, b = outs
     for (sa, ra), (sb, rb) in zip(a, b):
         if ra != rb:
@@ -172,7 +177,28 @@ ACCESS = [
     (0, ["GET", "bar"]),
     (0, ["OBJECT", "FREQ", "bar"]),
     (0, ["CONFIG", "SET", "lfu-log-factor", "10"]),
+    # a key deleted (DEL, UNLINK, GETDEL) and made again is a new value,
+    # with a counter of 5 (unit/maxmemory's "lru/lfu value of the key just
+    # added"); its value is no small integer, which Redis shares between
+    # keys with the word of its use (OBJ_SHARED_INTEGERS)
+    (0, ["SET", "re", "v"]),
+    (0, ["GET", "re"]),
+    (0, ["OBJECT", "FREQ", "re"]),
+    (0, ["DEL", "re"]),
+    (0, ["SET", "re", "v"]),
+    (0, ["OBJECT", "FREQ", "re"]),
+    (0, ["GET", "re"]),
+    (0, ["UNLINK", "re"]),
+    (0, ["SET", "re", "v"]),
+    (0, ["OBJECT", "FREQ", "re"]),
+    (0, ["GET", "re"]),
+    (0, ["GETDEL", "re"]),
+    (0, ["SET", "re", "w"]),
+    (0, ["OBJECT", "FREQ", "re"]),
     (0, ["CONFIG", "SET", "maxmemory-policy", "allkeys-lru"]),
+    (0, ["DEL", "re"]),
+    (0, ["SET", "re", "v"]),
+    (0, ["OBJECT", "IDLETIME", "re"]),
     (0, ["OBJECT", "FREQ", "bar"]),
     (0, ["CONFIG", "SET", "maxmemory", "1000000000"]),
     (0, ["SET", "n", "100"]),

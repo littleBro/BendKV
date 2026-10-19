@@ -3965,8 +3965,9 @@ random numbers.
 **Where BendKV differs.** The same maxmemory holds another number of keys, since a key
 takes other bytes in BendKV's heap than in Redis's allocator, and the trie's nodes stay
 (above). A word of use is shared by keys whose hashes have the same low twenty bits, in
-any database, and no delete clears it: a new key may find an old key's word, unless
-RESTORE made it (section 3zzx). A request
+any database, and no delete clears it but DEL's, UNLINK's and GETDEL's of a request's
+first key (section 3zzzzzc): a new key may find an old key's word, unless RESTORE made it
+(section 3zzx). A request
 marks its first key alone (MGET's others, MSET's and DEL's are not marked), before its
 batch runs, whether the key is there or not, and a command queued in a transaction marks
 its key as it is queued. Redis marks a key as a command finds it, and not while a child
@@ -11319,6 +11320,168 @@ test of BendKV's read ACL LIST or GETUSER.
 new users with Redis 7.2.16's: one with no rules, one with every kind of rule and a
 selector, one with skip-sanitize-payload, and one reset after it. `tests/start_test.py`
 compares the default user as each server starts. Main's build fails both.
+
+## 3zzzzza. Writes refused for want of replicas (NOREPLICAS), as Redis 7.2.16 refuses them
+
+**What there is.** With `min-replicas-to-write` above 0, Redis 7.2.16 refuses a command
+that writes while fewer good replicas are connected than it asks for
+(`checkGoodReplicasStatus` in `processCommand`), unless `min-replicas-max-lag` is 0, which
+turns the check off. BendKV has no replication, so it has no good replica: with both
+parameters above 0 it refuses every write, `-NOREPLICAS Not enough good replicas to
+write.`, as Redis does with none connected. The check comes right after MISCONF's, and
+it takes only the commands that write: PING, which MISCONF refuses, runs. In MULTI the
+refusal flags the transaction (EXECABORT at EXEC), and an EXEC whose transaction queued a
+write before the parameters changed is refused itself, EXECABORT with NOREPLICAS's text.
+A script whose shebang lets it write is refused before it runs (`scriptPrepareForRun`:
+MISCONF, then a read-only script's writes, then NOREPLICAS, then OOM); a script without a
+shebang is refused at its first write, while it has written nothing yet
+(`scriptVerifyWriteCommandAllow`), its error naming the script. FCALL of a function that
+may write, and FUNCTION's writes, are refused as EVAL's. Each refusal is a rejected
+call, counted in errorstats under NOREPLICAS.
+
+**How it was found.** By Redis's suite ([COMPATIBILITY.md](COMPATIBILITY.md)):
+unit/scripting's "not enough good replicas", whose script with a shebang ran, and
+unit/multi's "exec with write commands and state change", whose EXEC ran the INCR it
+queued before a CONFIG SET of `min-replicas-to-write`.
+
+**How it is built.** `Mm` (`src/session.bend`) keeps whether the writes are refused
+(`nr`), made at the start and at each CONFIG SET from the two parameters
+(`mm.norepl.of`); the tune word's 16 (writes refused) takes it as MISCONF's, so a
+refusing server keeps every batch off the fast way. The general way's gate (`sh.mis`,
+`ShNoRepl`), EXEC's (`bg.exec.oom`), the script's start (`sc.refused`) and a script's
+calls (`sc.call.why`) each look at it after MISCONF.
+
+**Where BendKV differs.** Nothing that a server with no replica shows.
+
+**Tests.** `tests/bgsave_test.py`'s part norepl runs on BendKV and on Redis 7.2.16 and
+compares their transcripts: with `min-replicas-to-write` 1, the writes refused (SET,
+INCR, DEL, FLUSHALL, EXPIRE, SET with GET) and the commands that do not write run (PING,
+GET, EXISTS, PUBLISH, ECHO, DBSIZE); the errors that come first (an unknown command, a
+wrong number of arguments); EXEC of a transaction queued before and of one queued after;
+a subscriber's and a monitor's commands; scripts with no shebang (`redis.call` and
+`redis.pcall`), with one, with `no-writes`, EVAL_RO, in MULTI and queued before;
+functions (FCALL, FCALL_RO, FUNCTION LOAD, DELETE and FLUSH); INFO's counts of each; a
+CONFIG SET of either parameter that lifts the refusal or sets it again, for the commands
+after it in its pipeline; and MISCONF first while a save has failed. Main's build fails
+it.
+
+## 3zzzzzb. MODULE, of a server that loads no module
+
+**What there is.** MODULE answers as a Redis 7.2.16 that loads no module: HELP with its
+lines, LIST with no module, LOAD and LOADEX as a load that fails ("ERR Error loading the
+extension. Please check the server logs.") and UNLOAD as an unload of no module ("ERR
+Error unloading module: no such module with that name"), each with Redis's arity and
+unknown-subcommand errors. LOAD, LOADEX and UNLOAD are protected commands: while
+`enable-module-command` is `no`, its default, `processCommand` refuses them right after
+their name and their number of arguments pass, before every other check (authentication
+among them): "ERR MODULE command not allowed. If the enable-module-command option is set
+to "local", ...", a rejected call, which flags the transaction in MULTI. A script may
+call MODULE HELP but not the others (their `noscript`). COMMAND INFO and DOCS, and the
+statistics of each subcommand, come from the tables generated from Redis's
+(`tools/gen_commands.py`, which lists MODULE among the containers).
+
+**How it was found.** By Redis's suite: unit/other's "Coverage: HELP commands", which
+asks MODULE HELP last of the containers' HELP; and by the client suites: redis-py's
+`test_module_list`, of its asyncio client, which failed on the unknown command, in
+RESP2 and in RESP3 ([COMPATIBILITY.md](COMPATIBILITY.md)).
+
+**How it is built.** The parser (`src/redis.bend`: `parse_module`) answers HELP and LIST
+and makes LOAD, LOADEX and UNLOAD a session op (`SAdmin 18`); the actor refuses that op
+first while `enable-module-command` is `no` (`src/server.bend`: `sh.prot`, `ShProt`), and
+the session answers it (`src/session.bend`: `module.refused`).
+
+**Where BendKV differs.** `local` counts as `yes`, as `enable-protected-configs` does in
+BendKV, which does not tell a local client from another one.
+
+**Tests.** `tests/admin_test.py` compares MODULE with Redis 7.2.16's on the shared
+servers: each subcommand, its arity's errors and an unknown one, in MULTI (LIST and HELP
+queued; UNLOAD refused, and EXECABORT), from scripts (HELP's lines, LIST and LOAD
+refused), COMMAND GETKEYS, and the statistics of each subcommand; main's build differs
+in 26 of its lines. `tests/start_test.py` starts both servers with
+`enable-module-command` `no`, `yes` and `local` and compares LIST, LOAD, LOADEX, UNLOAD,
+HELP and the statistics.
+
+## 3zzzzzc. A key made again after DEL, a new value's word
+
+**What there is.** OBJECT FREQ of a key that DEL, UNLINK or GETDEL deleted and that a
+write made again is 5 under an LFU policy, and OBJECT IDLETIME counts from that write,
+as Redis gives a new value its LFU counter (`LFU_INIT_VAL`) or the clock's second.
+BendKV kept the deleted key's word (section 3zw: the words of use are kept in a table
+outside the heap, by the key's hash), and so the new key carried its counter on.
+
+**How it was found.** By a first run of Redis's suite in its own mode (section 3zzzzz):
+unit/maxmemory's "lru/lfu value of the key just added".
+
+**How it is built.** The generator gives DEL, UNLINK and GETDEL marks of their own in a
+request's hash (`R.stat.mark.del`, `unlink`, `getdel`), and the word their first key
+gets is one never set (`use.gone`), which the next write reads as a new key's. The fast
+way sets a batch's words as before (`use.lru`), and walks the batch again for the marks
+only when its requests' marks, or-ed together as the parser keeps them, hold every bit
+of one of the three (`use.maybe.gone`, `use.lru.gone`).
+
+**Where BendKV differs.** Only a request's first key is cleared: `DEL a b` leaves b's
+word, which a write that makes b again carries on. A request that names the key between
+its delete and the write that makes it again marks the word as a use, as BendKV marks a
+request's first key whether the key is there or not (section 3zw): after `DEL n`, `GET n`
+and `SET n v`, OBJECT FREQ is 6 under an LFU policy, where Redis's is 5. And a value that
+is a small integer (0 to 9999) has a word of its own, where Redis, with `maxmemory` 0,
+shares one object for each such value, with its word, between all the keys that hold it
+(`OBJ_SHARED_INTEGERS`): a key made again with such a value reads the shared object's
+counter there, whatever the key's own history.
+
+**Tests.** `tests/maxmemory_test.py` compares with Redis 7.2.16 OBJECT FREQ of a key read,
+deleted by DEL, by UNLINK and by GETDEL, and made again, under an LFU policy, and its
+OBJECT IDLETIME under an LRU one; main's build fails it. Its servers now take each step
+together, so that both read their clocks in the same second: a key last used under an
+LRU policy is read under an LFU one from its second's bits, which decay to 0 at once but
+for about six hours in every 59 days (the minutes since, as LFU's decay counts them, from
+a word whose minutes are the second's high bits), and in those hours give a counter that
+grows with the second: two servers run one after the other read 23 and 27.
+
+## 3zzzzzd. maxclients, as Redis 7.2.16 holds it
+
+**What there is.** A connection taken while `maxclients` clients are connected is
+refused, as Redis 7.2.16's `acceptCommonHandler` refuses it: the server writes
+`-ERR max number of clients reached` to it, before it reads anything, and closes it.
+The connection gets no client id and is not one of `total_connections_received`; it is
+counted in INFO's `rejected_connections`, which CONFIG RESETSTAT starts again
+(`resetServerStats`). A CONFIG SET of `maxclients` holds for the next connection, the
+clients connected staying.
+
+**How it was found.** By a first run of Redis's suite in its own mode (section 3zzzzz):
+unit/limits's "Check if maxclients works refusing connections", which got its 50
+connections where 10 were allowed.
+
+**How it is built** (`src/server.bend`, section Accepting).
+- **The count of connections** (`Tally`), which the listeners and the connections share
+  in a channel, holds `maxclients` too. A listener takes a connection's id only while
+  fewer than that many are open (`tally.take`); else it writes the error, closes the
+  socket and tells the actor (`Refused`), which counts it (`info.bend`: Cn's `rc`).
+- **The actor holds the channel as well** (Rw's `lis`), with the `maxclients` it gave
+  the listeners last (`cap`). `Mm` keeps the server's (`mc`), made at the start and at
+  each CONFIG SET, and when a group leaves the two apart the actor gives the listeners
+  the new one before it sends the group's answers (`db_answer`, `aof_answer.go`). A
+  client that read the CONFIG SET's answer connects under it.
+
+**Where BendKV differs.** Redis lowers `maxclients` at its start when the limit of open
+files is too low for it ("maxclients has been reduced to ..."), and refuses a CONFIG SET
+of it that the system cannot hold; BendKV takes the value as it is given. A client that
+has closed its connection counts as connected until its connection's task has ended.
+
+**Tests.** `tests/start_test.py` starts BendKV and Redis 7.2.16 with `--maxclients 3` and
+compares: the connections past it refused (each before it sends anything) and those
+under it answering, INFO's `connected_clients`, `rejected_connections` and
+`maxclients`, the connections taken, a CONFIG SET of 5, then of 2 (the clients
+connected answering PING), CONFIG RESETSTAT, and the next client's id, counted from the
+first's. Main's build fails it.
+
+The proofs are as before for the four. No law changed.
+
+**What they cost** (PERFORMANCE.md, section 93). Nothing on a request's path: GET, SET
+and INCR take 3,572, 4,365 and 4,661 instructions a request, where main's take 3,578,
+4,364 and 4,659. The fast way walks a batch's keys a second time only when the marks of
+its requests, or-ed together, may hold a delete's (`use.maybe.gone`); the actor compares
+two counts at each group's end (`rw.capped`); and the refusals take the general way.
 
 ## 4. Where a request's time goes, and hiding the memory waits
 
