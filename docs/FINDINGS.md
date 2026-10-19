@@ -11220,6 +11220,84 @@ is equal or smaller than the target stream top item"); `tests/stream_write_test.
 asks it now. The suite passes 1,764 of the 1,812 tests Redis 7.2.16 passes
 ([COMPATIBILITY.md](COMPATIBILITY.md)).
 
+## 3zzzzy. A client's query buffer, as Redis 7.2.16 keeps it
+
+**What there is.** CLIENT LIST and CLIENT INFO show a client's query buffer as Redis
+7.2.16 keeps it: the bytes it holds (qbuf) and the room left in it (qbuf-free). Before,
+qbuf-free was 0 for every client, and qbuf was the batch's bytes for the client that asks
+and 0 for the others, so that unit/querybuf's two tests, which read the sum of the two,
+failed at their first check. Both pass now.
+
+**Redis's buffer, probed.** It is an sds string, and its sizes are those of jemalloc's
+size classes: made for n bytes, it gets the class of its header, the n bytes and its NUL
+(8 bytes, then multiples of 16 up to 128, then four classes to each doubling), less its
+header (3, 5, 9 or 17 bytes, by whether n fits 8, 16 or 32 bits) and the NUL, at most
+what its type holds (`_sdsMakeRoomFor`, `_sdsnewlen`). A new client's buffer has 4 bytes
+of room; the first read gives it room for 16 KB more (`readQueryFromClient`, without
+greed), 20,474 bytes, which it keeps once its command ran (0 and 20,474). A big argument
+(a bulk of 32 KB or more, `PROTO_MBULK_BIG_ARG`) has the buffer sized to it from its
+length's line on (`processMultibulkBuffer`): room for the bulk and its CRLF, the buffer
+holding the bytes as they come; once it is read, the argument takes the buffer and the
+client gets a new one of that size, empty. The cron (`clientsCronResizeQueryBuffer`,
+each client every 1/hz s) takes back the room of a buffer with more than 4 KB free: all
+of it once its client is idle more than 2 s, or, once the buffer is past 32 KB and twice
+what the client held since the cron's last look, what lies past the bytes held and the
+big argument still awaited. Each was checked on a live 7.2.16 (SET of 400,000 bytes:
+0 and 458,742, then 0 and 0 at the cron's second look; the line of an argument of
+1,000,000 bytes: 0 and 1,048,566, and with half its bytes 500,000 and 548,566).
+
+**How it is built** (`src/server.bend`, section Query buffers; `src/redis.bend`).
+- **No such buffer is read into here**, so the actor reckons it. A client's buffer is a
+  new client's (before its first batch, its channel's mark still unset) or one read into
+  once, which the cron frees once its client is idle 3 s; the sizes are the sds string's
+  in jemalloc's classes (`sds.room`, `je.class`).
+- **A big argument** is told of by the client's connection, which knows where its parse
+  stopped: a read inside one with no request whole (`QbIn`, with the bytes the buffer
+  holds and the argument's with its CRLF, read off the tail the parse leaves:
+  `pend.pin`), and the batch that ends one or ends inside one (Req's `qf`: `QfDone`,
+  `QfWait`; a batch read whole with a big argument in it is scanned for its last:
+  `pend.done`). The actor keeps the buffer it leaves with the client (Cl's `qb`: its
+  room, the bytes held, the argument awaited and the time) until the client's next
+  batch, and a read inside an argument marks the client's channel again with its time,
+  as Redis's read sets the client's `lastinteraction`.
+- **CLIENT LIST reckons the cron's looks** from that time and the hz (`qb.now`): the
+  buffer of a big argument as the cron leaves it two looks later (the first sees the
+  peak of the argument), or once its client is idle 3 s; a plain one as above.
+- **The client that asks** sees its own buffer as its batch holds it: its bytes, and
+  20,474 less them.
+- CLIENT LIST's line has qbuf-free in its place (R.ClLine's `qfree`).
+
+**Where BendKV differs.** A buffer that Redis's reads grow past 20,474 bytes for an
+argument of less than 32 KB (reads of 16 KB that cut it, then greedy ones) is not
+reckoned: after SET of 30,000 bytes Redis shows 0 and 81,910, then 0 and 30,002 at the
+cron's next looks, where BendKV shows 0 and 20,474. A request of another client read in
+part, but for a big argument, shows 0 bytes held, which BendKV's connection holds, not
+the actor. A request within two of the cron's looks after a big argument finds the
+buffer of a plain read, where Redis's keeps the argument's until the cron shrinks it to
+the request's peak. The client that asks sees its buffer as 20,474 bytes whatever its
+reads made it. A request read past a big argument but not whole shows the buffer as the
+last read inside the argument left it, where Redis shows the new one, empty.
+
+The proofs are as before. No law changed.
+
+**What it costs** (PERFORMANCE.md, section 92). GET, SET and INCR take at most 0.3% more
+instructions a request (3,575, 4,355 and 4,654, where main's took 3,563, 4,354 and
+4,643): each batch carries one field more to the actor, and its connection looks at the
+tail its parse leaves for a big argument, which almost every batch ends without.
+
+**Tests.** `tests/querybuf_test.py` runs its scenarios on BendKV and on Redis 7.2.16,
+side by side, and compares the 31 lines of their transcripts, a client's qbuf and
+qbuf-free as another client sees them: a new client's buffer, then after a command, an
+inline one and 1,000 PINGs in one write; the client that asks, in CLIENT INFO and CLIENT
+LIST, alone and with a PING after it in the same write; SET of 400,000, 40,000 (read
+whole with its line), 70,000 and 100,000 bytes (with EX after the value), each at once,
+two of the cron's looks later and after a PING; the line of an argument of 1,000,000
+bytes, then half its bytes, then the rest, and two looks later; a client idle 3 s; and
+unit/querybuf's first test as Redis's suite runs it, with hz 100. All 31 are alike;
+main's build differs in 21. `tests/client_test.py` compares the rest of a client's line
+as before. Redis's own suite passes both tests of unit/querybuf that Redis passes in this
+mode, and 1,766 of the 1,812 tests Redis 7.2.16 passes ([COMPATIBILITY.md](COMPATIBILITY.md)).
+
 ## 4. Where a request's time goes, and hiding the memory waits
 
 With the eight patches, BendKV ran fewer instructions on GET and SET than Redis, missed

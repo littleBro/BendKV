@@ -9227,3 +9227,31 @@ server's state into the file's account (Rof) or the rewrite's (Rws). A group of 
 requests pays them a few times over, a long pipeline's once. Turning the file on costs
 what a BGREWRITEAOF costs (section 47), its slices between the groups as before; while
 it runs, the actor appends to the temporary incremental file without syncing it.
+
+## 92. A client's query buffer, reckoned
+
+FINDINGS 3zzzzy. "Before" is main's build (bcd9f12), "now" this change on it, both
+counted by `tools/perf_guard.sh` on the same machine in the same hour.
+
+**Instructions a request:**
+
+| request | before | now | |
+|---|---:|---:|---:|
+| GET | 3,563 | 3,575 | +0.3% |
+| SET | 4,354 | 4,355 | +0.0% |
+| INCR | 4,643 | 4,654 | +0.2% |
+| GET, 100 clients in BLPOP | 3,669 | 3,685 | +0.4% |
+| SET, 100 clients in BLPOP | 4,513 | 4,530 | +0.4% |
+
+The last-level misses (2.83, 3.10 and 3.32, where main's were 2.84, 3.16 and 3.32) and
+the prefetches (3.68, 3.90 and 3.91, where main's were 3.66, 3.98 and 3.92) are within
+the guard's bounds. What grew is what each batch carries from its connection to the
+actor: the connection looks at the tail its parse leaves for a big argument (`pend.pin`:
+none, when the batch ends with its last request, as almost every batch does), each batch
+takes one field more to the actor (Req's `qf`), and the actor tells the batches that
+bring nothing (`QfNone`) from the others. A batch that ends a big argument or ends inside
+one pays a scan of its bytes for the argument's length (`pend.done`, `pend.bulks`), and a
+read inside one with no request whole sends the actor a message of its own (QbIn), which
+the actor answers by updating its client's entry; a big argument is 32 KB or more, so
+these come once in tens of thousands of bytes. CLIENT LIST reckons each client's buffer
+from its entry, the time and the hz.

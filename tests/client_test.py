@@ -10,8 +10,10 @@ nature put aside: its id, its address and its socket's fd, read as the
 client they are (each test client knows its own from CLIENT INFO), its
 age and idle time (compared as whether they reach two seconds, as the
 boundary of a second may fall between two steps), and the sizes of
-Redis's buffers (qbuf-free, rbs, rbp, obl, tot-mem, multi-mem), which
-BendKV does not keep. The rest is compared as it is: the name, the
+Redis's buffers (rbs, rbp, obl, tot-mem, multi-mem), which BendKV does
+not keep, and the room left in a client's query buffer (qbuf-free),
+which it reckons as Redis keeps it and tests/querybuf_test.py compares.
+The rest is compared as it is: the name, the
 flags, the database, the counts of subscriptions, multi, qbuf, argv-mem
 (of the client that asks, without the lengths of the ids its command
 carries, which differ), events and the last command.

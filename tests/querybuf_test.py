@@ -97,6 +97,7 @@ def scenarios(port, log):
     log("none once idle", pair(b, "test_client"))
     t.close()
     log("hz 10", b.cmd("CONFIG", "SET", "hz", "10"))
+    log("the keys removed", b.cmd("DEL", "k", "a"))
     b.close()
 
 

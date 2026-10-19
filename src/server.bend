@@ -72,9 +72,10 @@ import ./hll.bend as H
 # the file holds before its sync, answered on its channel, and its sync
 # of that (The append-only file); or a read inside a big argument, of a
 # client whose requests are not whole yet: its id, the bytes of the
-# argument read so far and its length with its CRLF (Query buffers). A batch also
-# tells of the big argument it ended or ends inside (qf), and one from a
-# client with a subscription is a SubReq, which runs a command at a time.
+# argument read so far and its length with its CRLF (Query buffers). A
+# batch also tells of the big argument it ended or ends inside (qf), and
+# one from a client with a subscription is a SubReq, which runs a command
+# at a time.
 type Req is Data:
   Req{cn: S.Conn, job: B.Job, back: Chan(Ans), tl: U32, inb: Nat, raw: String, qf: Qf}
   SubReq{cn: S.Conn, job: B.Job, back: Chan(Ans), tl: U32, inb: Nat, raw: String}
@@ -8416,9 +8417,9 @@ def bg.unsub.all(+id: Nat, g: LRun) -> LRun:
 # CLIENT LIST shows a client's query buffer as Redis 7.2.16 keeps it: the
 # bytes it holds (qbuf) and the room left in it (qbuf-free). Redis's buffer
 # is an sds string that its reads grow (networking.c, readQueryFromClient):
-# one with less than 16 KB of room gets room for 16 KB more, just that, in
-# the size class jemalloc gives it with its header and NUL (20,474 bytes
-# from a new client's 4); a big argument (a bulk of 32 KB or more) gets a
+# one of less than 16 KB gets room for 16 KB more, just that, in the size
+# class jemalloc gives it with its header and NUL (20,474 bytes from a new
+# client's 4); a big argument (a bulk of 32 KB or more) gets a
 # buffer sized to it from its length's line on, and once read, a new one
 # of that size (processMultibulkBuffer); and the cron
 # (clientsCronResizeQueryBuffer), at each client every 1/hz s, takes back
