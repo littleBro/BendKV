@@ -68,12 +68,15 @@ type Pe is Data:
 # the databases then (k0), and the bytes a key held then on average
 # (per); the event loop's cycles (info.bend: El), which INFO shows and
 # each group changes, here in a node of a few words rather than in
-# Info's; and hll-sparse-max-bytes (hll), which PFADD and PFMERGE read
-# (server.bend, HyperLogLogs' parameter). MmOf, never built, makes Mm a type that holds itself, which the
+# Info's; hll-sparse-max-bytes (hll), which PFADD and PFMERGE read
+# (server.bend, HyperLogLogs' parameter); and whether the writes are
+# refused for want of replicas (nr, NOREPLICAS: mm.norepl.of), which each
+# command of the general way reads; and maxclients (mc), which the actor
+# gives the listeners once a group changed it. MmOf, never built, makes Mm a type that holds itself, which the
 # compiler makes a node of its own: Srv stays four words, as with the
 # random numbers' word alone.
 type Mm is Data:
-  Mm{rng: U32, max: Nat, pol: Nat, smp: Nat, ten: Nat, lfl: Nat, lfd: Nat, kick: Bool, pool: List<&2, Pe>, next: Nat, h0: Nat, k0: Nat, per: Nat, acl: U.Acl, el: I.El, hll: Nat}
+  Mm{rng: U32, max: Nat, pol: Nat, smp: Nat, ten: Nat, lfl: Nat, lfd: Nat, kick: Bool, pool: List<&2, Pe>, next: Nat, h0: Nat, k0: Nat, per: Nat, acl: U.Acl, el: I.El, hll: Nat, nr: Bool, mc: Nat}
   MmOf{m: Mm}
 
 # the server, besides its database: the requirepass it was last given
@@ -118,29 +121,36 @@ def mm.pol.of(+p: String) -> Nat:
 def mm.get(+cfg: List<&2, C.CItem>, +name: String) -> Nat:
   mm.nat(C.config.get_value(cfg, name))
 
+# whether the writes are refused for want of replicas (NOREPLICAS):
+# min-replicas-to-write and min-replicas-max-lag both above 0, as Redis
+# 7.2.16's checkGoodReplicasStatus refuses them when the good replicas are
+# fewer than the first, and BendKV, which has no replication, has none
+def mm.norepl.of(+cfg: List<&2, C.CItem>) -> Bool:
+  Bool.and(Nat.is_lt(0n, mm.get(cfg, "min-replicas-to-write")), Nat.is_lt(0n, mm.get(cfg, "min-replicas-max-lag")))
+
 # what the server keeps for maxmemory with these parameters, its random
 # numbers at rng, and its users: the default user alone, with requirepass
 # as its password, GENPASS's key the start's secret
 def mm.of(+rng: U32, +cfg: List<&2, C.CItem>, key: String) -> Mm:
-  Mm{rng, mm.get(cfg, "maxmemory"), mm.pol.of(C.config.get_value(cfg, "maxmemory-policy")), mm.get(cfg, "maxmemory-samples"), mm.get(cfg, "maxmemory-eviction-tenacity"), mm.get(cfg, "lfu-log-factor"), mm.get(cfg, "lfu-decay-time"), False{}, Nil{}, 0n, 0n, 0n, 0n, U.acl.new(C.config.get_value(cfg, "requirepass"), key), I.el.zero(), mm.get(cfg, "hll-sparse-max-bytes")}
+  Mm{rng, mm.get(cfg, "maxmemory"), mm.pol.of(C.config.get_value(cfg, "maxmemory-policy")), mm.get(cfg, "maxmemory-samples"), mm.get(cfg, "maxmemory-eviction-tenacity"), mm.get(cfg, "lfu-log-factor"), mm.get(cfg, "lfu-decay-time"), False{}, Nil{}, 0n, 0n, 0n, 0n, U.acl.new(C.config.get_value(cfg, "requirepass"), key), I.el.zero(), mm.get(cfg, "hll-sparse-max-bytes"), mm.norepl.of(cfg), mm.get(cfg, "maxclients")}
 
 def mm.rng(+m: Mm) -> U32:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, el, hll}:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, el, hll, nr, mc}:
       rng
     case MmOf{+n}:
       mm.rng(n)
 
 def mm.max(+m: Mm) -> Nat:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, el, hll}:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, el, hll, nr, mc}:
       max
     case MmOf{+n}:
       mm.max(n)
 
 def mm.pol(+m: Mm) -> Nat:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, el, hll}:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, el, hll, nr, mc}:
       pol
     case MmOf{+n}:
       mm.pol(n)
@@ -148,10 +158,28 @@ def mm.pol(+m: Mm) -> Nat:
 # hll-sparse-max-bytes, as the start and each CONFIG SET leave it
 def mm.hll(+m: Mm) -> Nat:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, el, +hll}:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, el, +hll, nr, mc}:
       hll
     case MmOf{+n}:
       mm.hll(n)
+
+# whether the writes are refused for want of replicas, as the start and
+# each CONFIG SET leave it (mm.norepl.of)
+def mm.nr(+m: Mm) -> Bool:
+  match m:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, el, hll, +nr, mc}:
+      nr
+    case MmOf{+n}:
+      mm.nr(n)
+
+# maxclients, as the start and each CONFIG SET leave it, which the actor
+# gives the listeners (server.bend, Accepting)
+def mm.mc(+m: Mm) -> Nat:
+  match m:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, el, hll, nr, +mc}:
+      mc
+    case MmOf{+n}:
+      mm.mc(n)
 
 # after CONFIG SET: the parameters read again, the random numbers and the
 # eviction's state kept; a maxmemory changed to one (not 0) is to be seen
@@ -159,9 +187,9 @@ def mm.hll(+m: Mm) -> Nat:
 # requirepass changed is the default user's password from then on
 def mm.cfg(+m: Mm, +cfg: List<&2, C.CItem>) -> Mm:
   match m:
-    case Mm{rng, +max, pol, smp, ten, lfl, lfd, +kick, pool, next, h0, k0, per, acl, el, hll}:
+    case Mm{rng, +max, pol, smp, ten, lfl, lfd, +kick, pool, next, h0, k0, per, acl, el, hll, nr, mc}:
       +mx = mm.get(cfg, "maxmemory")
-      Mm{rng, mx, mm.pol.of(C.config.get_value(cfg, "maxmemory-policy")), mm.get(cfg, "maxmemory-samples"), mm.get(cfg, "maxmemory-eviction-tenacity"), mm.get(cfg, "lfu-log-factor"), mm.get(cfg, "lfu-decay-time"), Bool.and(Bool.or(kick, Bool.not(Nat.is_eq(mx, max))), Nat.is_lt(0n, mx)), pool, next, h0, k0, per, U.acl.cfg(acl, C.config.get_value(cfg, "requirepass")), el, mm.get(cfg, "hll-sparse-max-bytes")}
+      Mm{rng, mx, mm.pol.of(C.config.get_value(cfg, "maxmemory-policy")), mm.get(cfg, "maxmemory-samples"), mm.get(cfg, "maxmemory-eviction-tenacity"), mm.get(cfg, "lfu-log-factor"), mm.get(cfg, "lfu-decay-time"), Bool.and(Bool.or(kick, Bool.not(Nat.is_eq(mx, max))), Nat.is_lt(0n, mx)), pool, next, h0, k0, per, U.acl.cfg(acl, C.config.get_value(cfg, "requirepass")), el, mm.get(cfg, "hll-sparse-max-bytes"), mm.norepl.of(cfg), mm.get(cfg, "maxclients")}
     case MmOf{+n}:
       mm.cfg(n, cfg)
 
@@ -169,22 +197,22 @@ def mm.cfg(+m: Mm, +cfg: List<&2, C.CItem>) -> Mm:
 # KV.mix scrambles)
 def mm.rand(m: Mm) -> Mm:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, el, hll}:
-      Mm{U32.add(rng, 2654435769), max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, el, hll}
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, el, hll, nr, mc}:
+      Mm{U32.add(rng, 2654435769), max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, el, hll, nr, mc}
     case MmOf{n}:
       mm.rand(n)
 
 # lfu-log-factor and lfu-decay-time
 def mm.lfl(+m: Mm) -> Nat:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, el, hll}:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, el, hll, nr, mc}:
       lfl
     case MmOf{+n}:
       mm.lfl(n)
 
 def mm.lfd(+m: Mm) -> Nat:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, el, hll}:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, el, hll, nr, mc}:
       lfd
     case MmOf{+n}:
       mm.lfd(n)
@@ -197,7 +225,7 @@ def mm.lfu(+m: Mm) -> Bool:
 # whether a CONFIG SET changed maxmemory
 def mm.kick(+m: Mm) -> Bool:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, el, hll}:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, el, hll, nr, mc}:
       kick
     case MmOf{+n}:
       mm.kick(n)
@@ -208,7 +236,7 @@ def mm.kick(+m: Mm) -> Bool:
 # SET's change of maxmemory first; 2 evict
 def mm.what(+m: Mm, +used: Nat) -> Nat:
   match m:
-    case Mm{rng, +max, pol, smp, ten, lfl, lfd, +kick, pool, next, h0, k0, per, acl, el, hll}:
+    case Mm{rng, +max, pol, smp, ten, lfl, lfd, +kick, pool, next, h0, k0, per, acl, el, hll, nr, mc}:
       Bool.pick(Nat, kick, 1n, Bool.pick(Nat, Bool.and(Nat.is_lt(0n, max), Nat.is_lt(max, used)), 2n, 0n))
     case MmOf{+n}:
       mm.what(n, used)
@@ -219,42 +247,42 @@ def mm.what(+m: Mm, +used: Nat) -> Nat:
 # and CONFIG RESETSTAT
 def mm.cycle(m: Mm, +d: Nat, +n: Nat, +n0: Nat) -> Mm:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, el, hll}:
-      Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, I.el.cycle(el, d, n, n0), hll}
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, el, hll, nr, mc}:
+      Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, I.el.cycle(el, d, n, n0), hll, nr, mc}
     case MmOf{x}:
       mm.cycle(x, d, n, n0)
 
 def mm.cron(m: Mm, +d: Nat) -> Mm:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, el, hll}:
-      Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, I.el.cron(el, d), hll}
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, el, hll, nr, mc}:
+      Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, I.el.cron(el, d), hll, nr, mc}
     case MmOf{x}:
       mm.cron(x, d)
 
 def mm.more(m: Mm, +d: Nat, +n1: Nat) -> Mm:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, el, hll}:
-      Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, I.el.more(el, d, n1), hll}
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, el, hll, nr, mc}:
+      Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, I.el.more(el, d, n1), hll, nr, mc}
     case MmOf{x}:
       mm.more(x, d, n1)
 
 def mm.sample(m: Mm, +ms: Nat) -> Mm:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, el, hll}:
-      Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, I.el.sample(el, ms), hll}
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, el, hll, nr, mc}:
+      Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, I.el.sample(el, ms), hll, nr, mc}
     case MmOf{x}:
       mm.sample(x, ms)
 
 def mm.reset(m: Mm) -> Mm:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, el, hll}:
-      Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, I.el.reset(el), hll}
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, el, hll, nr, mc}:
+      Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, I.el.reset(el), hll, nr, mc}
     case MmOf{x}:
       mm.reset(x)
 
 def mm.el(+m: Mm) -> I.El:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, +el, hll}:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, +el, hll, nr, mc}:
       el
     case MmOf{+n}:
       mm.el(n)
@@ -262,35 +290,35 @@ def mm.el(+m: Mm) -> I.El:
 # the change of maxmemory seen to
 def mm.kicked(m: Mm) -> Mm:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, el, hll}:
-      Mm{rng, max, pol, smp, ten, lfl, lfd, False{}, pool, next, h0, k0, per, acl, el, hll}
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, el, hll, nr, mc}:
+      Mm{rng, max, pol, smp, ten, lfl, lfd, False{}, pool, next, h0, k0, per, acl, el, hll, nr, mc}
     case MmOf{n}:
       mm.kicked(n)
 
 def mm.smp(+m: Mm) -> Nat:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, el, hll}:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, el, hll, nr, mc}:
       smp
     case MmOf{+n}:
       mm.smp(n)
 
 def mm.ten(+m: Mm) -> Nat:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, el, hll}:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, el, hll, nr, mc}:
       ten
     case MmOf{+n}:
       mm.ten(n)
 
 def mm.next(+m: Mm) -> Nat:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, el, hll}:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, el, hll, nr, mc}:
       next
     case MmOf{+n}:
       mm.next(n)
 
 def mm.pool(+m: Mm) -> List<&2, Pe>:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, el, hll}:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, el, hll, nr, mc}:
       pool
     case MmOf{+n}:
       mm.pool(n)
@@ -302,8 +330,8 @@ type Mp is Data:
 
 def mm.pool.take(m: Mm) -> Mp:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, el, hll}:
-      Mp{pool, Mm{rng, max, pol, smp, ten, lfl, lfd, kick, Nil{}, next, h0, k0, per, acl, el, hll}}
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, el, hll, nr, mc}:
+      Mp{pool, Mm{rng, max, pol, smp, ten, lfl, lfd, kick, Nil{}, next, h0, k0, per, acl, el, hll, nr, mc}}
     case MmOf{x}:
       mm.pool.take(x)
 
@@ -315,15 +343,15 @@ def mm.step(+rng: U32, +n: Nat) -> U32:
 # random (the database it picked from), of n databases
 def mm.pool.set(m: Mm, ps: List<&2, Pe>, +n: Nat) -> Mm:
   match m:
-    case Mm{+rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, el, hll}:
-      Mm{mm.step(rng, n), max, pol, smp, ten, lfl, lfd, kick, ps, next, h0, k0, per, acl, el, hll}
+    case Mm{+rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, el, hll, nr, mc}:
+      Mm{mm.step(rng, n), max, pol, smp, ten, lfl, lfd, kick, ps, next, h0, k0, per, acl, el, hll, nr, mc}
     case MmOf{x}:
       mm.pool.set(x, ps, n)
 
 def mm.next.set(m: Mm, +j: Nat, +n: Nat) -> Mm:
   match m:
-    case Mm{+rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, el, hll}:
-      Mm{mm.step(rng, n), max, pol, smp, ten, lfl, lfd, kick, pool, j, h0, k0, per, acl, el, hll}
+    case Mm{+rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, el, hll, nr, mc}:
+      Mm{mm.step(rng, n), max, pol, smp, ten, lfl, lfd, kick, pool, j, h0, k0, per, acl, el, hll, nr, mc}
     case MmOf{x}:
       mm.next.set(x, j, n)
 
@@ -339,8 +367,8 @@ def mm.next.set(m: Mm, +j: Nat, +n: Nat) -> Mm:
 # place counts once the job has ended, when the heap is read as it is.
 def mm.snap(m: Mm, +h: Nat, +k: Nat, +p: Nat) -> Mm:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, el, hll}:
-      Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h, k, p, acl, el, hll}
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, el, hll, nr, mc}:
+      Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h, k, p, acl, el, hll, nr, mc}
     case MmOf{x}:
       mm.snap(x, h, k, p)
 
@@ -373,7 +401,7 @@ def mm.view.of(up: Bool, +h0: Nat, +k0: Nat, +per: Nat, +k: Nat) -> Nat:
 
 def mm.view(+m: Mm, +k: Nat) -> Nat:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, +h0, +k0, +per, acl, el, hll}:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, +h0, +k0, +per, acl, el, hll, nr, mc}:
       mm.view.of(Nat.is_le(k0, k), h0, k0, per, k)
     case MmOf{+n}:
       mm.view(n, k)
@@ -381,15 +409,15 @@ def mm.view(+m: Mm, +k: Nat) -> Nat:
 # the users, and the server with them changed
 def mm.acl(+m: Mm) -> U.Acl:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, +acl, el, hll}:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, +acl, el, hll, nr, mc}:
       acl
     case MmOf{+n}:
       mm.acl(n)
 
 def mm.acl.set(m: Mm, a: U.Acl) -> Mm:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, el, hll}:
-      Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, a, el, hll}
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl, el, hll, nr, mc}:
+      Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, a, el, hll, nr, mc}
     case MmOf{n}:
       mm.acl.set(n, a)
 
@@ -401,35 +429,35 @@ def mm.acl.set(m: Mm, a: U.Acl) -> Mm:
 # back only what they read.
 def mm.open(+m: Mm) -> Bool:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, +acl, el, hll}:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, +acl, el, hll, nr, mc}:
       U.acl.open(acl)
     case MmOf{+n}:
       mm.open(n)
 
 def mm.restricted(+m: Mm, +id: Nat) -> Bool:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, +acl, el, hll}:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, +acl, el, hll, nr, mc}:
       U.acl.restricted(acl, id)
     case MmOf{+n}:
       mm.restricted(n, id)
 
 def mm.acl.any(+m: Mm) -> Bool:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, +acl, el, hll}:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, +acl, el, hll, nr, mc}:
       U.acl.any(acl)
     case MmOf{+n}:
       mm.acl.any(n)
 
 def mm.acl.check(+m: Mm, +n: String, +k: Nat, +argv: List<&2, String>) -> U.Verdict:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, +acl, el, hll}:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, +acl, el, hll, nr, mc}:
       U.acl.check(acl, n, k, argv)
     case MmOf{+x}:
       mm.acl.check(x, n, k, argv)
 
 def mm.acl.sort(+m: Mm, +n: String, +k: Nat, +argv: List<&2, String>) -> Maybe<&2, String>:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, +acl, el, hll}:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, +acl, el, hll, nr, mc}:
       U.acl.sort.err(acl, n, k, argv)
     case MmOf{+x}:
       mm.acl.sort(x, n, k, argv)
@@ -451,9 +479,12 @@ def mm.acl.sort(+m: Mm, +n: String, +k: Nat, +argv: List<&2, String>) -> Maybe<&
 # since, with a counter of 5 (LFU_INIT_VAL), as Redis's values loaded at
 # the start; its first use under an LFU policy gives it a counter of 5,
 # as Redis gives a value it makes. Keys whose hashes have the same low
-# twenty bits share a word, which no key's deletion clears: a key a
-# command makes may find another key's word, but for RESTORE's, which its
-# mark makes anew (server.bend, Access).
+# twenty bits share a word. DEL, UNLINK and GETDEL leave their key's word
+# as one never set, so that a key made again under its name gets a new
+# value's word; no other deletion clears a word (an expiry, an eviction, a
+# collection emptied), and a key a command makes may find the word its
+# name or another key left, but for RESTORE's, which its mark makes anew
+# (server.bend, Access).
 
 def acc.secs(+now: Nat) -> U32:
   U32.from_nat(Nat.div(now, 1000n))
@@ -1227,9 +1258,9 @@ def srv.acl.sort(+s: Srv, +n: String, +k: Nat, +argv: List<&2, String>) -> Maybe
 # general way (server.bend: ps.tune), and for INFO (facts.held), read in
 # place, in one match each of Srv, Mm and INFO: 1 maxmemory set, 2 an LFU
 # policy, 4 a CONFIG SET changed maxmemory (kick), 8 some client
-# restricted, 16 the writes refused (MISCONF: info.bend's rdb.misconf), 32
-# hll-sparse-max-bytes not at its default (server.bend, HyperLogLogs'
-# parameter).
+# restricted, 16 the writes refused (MISCONF: info.bend's rdb.misconf;
+# NOREPLICAS: Mm's nr), 32 hll-sparse-max-bytes not at its default
+# (server.bend, HyperLogLogs' parameter).
 # Read with the readers of one field each, it cost a batch three copies
 # of Mm, 26 words and their children, about 590 instructions each
 # (PERFORMANCE 83): mm.max, mm.kick and mm.acl.any (by way of server.bend's
@@ -1238,8 +1269,8 @@ def srv.acl.sort(+s: Srv, +n: String, +k: Nat, +argv: List<&2, String>) -> Maybe
 # and MISCONF's read through srv.rdb copied INFO's node.
 def mm.tune(+m: Mm) -> U32:
   match m:
-    case Mm{rng, +max, +pol, smp, ten, lfl, lfd, +kick, pool, next, h0, k0, per, +acl, el, +hll}:
-      U32.or(U32.or(U32.or(Bool.pick(U32, Nat.is_lt(0n, max), 1, 0), Bool.pick(U32, Bool.or(Nat.is_eq(pol, 3n), Nat.is_eq(pol, 4n)), 2, 0)), U32.or(Bool.pick(U32, kick, 4, 0), Bool.pick(U32, U.acl.any(acl), 8, 0))), Bool.pick(U32, Nat.is_eq(hll, R.hll.max()), 0, 32))
+    case Mm{rng, +max, +pol, smp, ten, lfl, lfd, +kick, pool, next, h0, k0, per, +acl, el, +hll, +nr, mc}:
+      U32.or(U32.or(U32.or(Bool.pick(U32, Nat.is_lt(0n, max), 1, 0), Bool.pick(U32, Bool.or(Nat.is_eq(pol, 3n), Nat.is_eq(pol, 4n)), 2, 0)), U32.or(Bool.pick(U32, kick, 4, 0), Bool.pick(U32, U.acl.any(acl), 8, 0))), U32.or(Bool.pick(U32, Nat.is_eq(hll, R.hll.max()), 0, 32), Bool.pick(U32, nr, 16, 0)))
     case MmOf{+n}:
       mm.tune(n)
 
@@ -1254,6 +1285,27 @@ def srv.misconf(+s: Srv) -> Bool:
   match s:
     case Srv{pass, cfg, +info, mm}:
       I.info.misconf(info)
+
+# whether the writes are refused for want of replicas (NOREPLICAS), read
+# in place
+def srv.norepl(+s: Srv) -> Bool:
+  match s:
+    case Srv{pass, cfg, info, +mm}:
+      mm.nr(mm)
+
+# whether MODULE's protected subcommands are refused:
+# enable-module-command is no (local counts as yes, as for
+# enable-protected-configs: config.bend, prot_ok)
+def srv.module.off(+s: Srv) -> Bool:
+  match s:
+    case Srv{pass, +cfg, info, mm}:
+      String.eq(C.config.get_value(cfg, "enable-module-command"), "no")
+
+# maxclients, read in place
+def srv.maxclients(+s: Srv) -> Nat:
+  match s:
+    case Srv{pass, cfg, info, +mm}:
+      mm.mc(mm)
 
 # the client of id now the user of name n, among the restricted clients or
 # not (acl.bend: Restricted clients), and the client of id gone
@@ -2679,6 +2731,12 @@ def srv.denied(s: Srv, +w: String) -> Srv:
     case Srv{pass, cfg, info, mm}:
       Srv{pass, cfg, I.info.denied(info, w), mm}
 
+# a connection the listeners refused, for INFO's rejected_connections
+def srv.refused(s: Srv) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.refused(info), mm}
+
 # the ACL LOG with an entry the server makes (a call it refused, an AUTH
 # that failed: server.bend, ACL), as many kept as acllog-max-len says
 def srv.acl.log(s: Srv, e: U.Ent) -> Srv:
@@ -3953,6 +4011,13 @@ def latency.reply.of(+k: Nat, +args: List<&2, String>, +s: Srv, +t: I.Tim, +now:
 def latency.reply(+k: Nat, +args: List<&2, String>, +s: Srv, +ds: R.Ds) -> R.Reply:
   latency.reply.of(k, args, s, I.info.tim(srv.info(s)), Nat.div(R.ds.now(ds), 1000n))
 
+# MODULE LOAD, LOADEX and UNLOAD (sub) once enable-module-command lets
+# them run (while it is no the actor refuses them first: server.bend,
+# sh.prot): a load that fails and an unload of no module, as Redis
+# 7.2.16's moduleCommand answers them, BendKV loading no module
+def module.refused(+sub: String) -> R.Reply:
+  Bool.pick(R.Reply, String.eq(sub, "UNLOAD"), R.RError{"ERR Error unloading module: no such module with that name"}, R.RError{"ERR Error loading the extension. Please check the server logs."})
+
 def admin.reply(+k: Nat, +args: List<&2, String>, +s: Srv, +ds: R.Ds) -> R.Reply:
   match k:
     case 0n:
@@ -3973,6 +4038,8 @@ def admin.reply(+k: Nat, +args: List<&2, String>, +s: Srv, +ds: R.Ds) -> R.Reply
       R.RStatus{"Background saving started"}
     case 17n:
       R.role.reply(I.big.show(srv.off(s)))
+    case 18n:
+      module.refused(arg.first(args))
     case _:
       latency.reply(k, args, s, ds)
 

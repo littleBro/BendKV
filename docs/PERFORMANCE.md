@@ -6389,7 +6389,8 @@ random numbers.
 **Where BendKV differs.** The same maxmemory holds another number of keys, since a key
 takes other bytes in BendKV's heap than in Redis's allocator, and the trie's nodes stay
 (above). A word of use is shared by keys whose hashes have the same low twenty bits, in
-any database, and no delete clears it: a new key may find an old key's word. A request
+any database, and no delete clears it but DEL's, UNLINK's and GETDEL's of a request's
+first key (FINDINGS.md, section 3zzzzzc): a new key may find an old key's word. A request
 marks its first key alone (MGET's others, MSET's and DEL's are not marked), before its
 batch runs, whether the key is there or not, and a command queued in a transaction marks
 its key as it is queued. Redis marks a key as a command finds it, and not while a child
@@ -9257,3 +9258,46 @@ read inside one with no request whole sends the actor a message of its own (QbIn
 the actor answers by updating its client's entry; a big argument is 32 KB or more, so
 these come once in tens of thousands of bytes. CLIENT LIST reckons each client's buffer
 from its entry, the time and the hz.
+
+## 93. NOREPLICAS, MODULE, a remade key's word, and maxclients
+
+FINDINGS 3zzzzza to 3zzzzzd. "Before" is main's build (f58a3f3), "now" this change on it,
+both counted by `tools/perf_guard.sh` on the same machine in the same hour.
+
+**Instructions a request:**
+
+| request | before | now | |
+|---|---:|---:|---:|
+| GET | 3,578 | 3,572 | −0.2% |
+| SET | 4,364 | 4,365 | +0.0% |
+| INCR | 4,659 | 4,661 | +0.0% |
+| GET, 100 clients in BLPOP | 3,683 | 3,682 | −0.0% |
+| SET, 100 clients in BLPOP | 4,527 | 4,525 | −0.0% |
+
+The last-level misses (2.84, 3.16 and 3.34, where main's were 2.84, 3.17 and 3.30) and
+the prefetches (3.68, 3.99 and 3.92, where main's were 3.67, 3.99 and 3.92) are as
+before.
+
+**A remade key's word.** The fast way's walk over a batch's hashes, which sets each key's
+word to the second (`use.lru`), is main's. A request that deletes its key (DEL, UNLINK or
+GETDEL) is told by the mark in its hash's high twelve bits, and the parser already keeps
+a batch's marks or-ed together (`R.tl.add`: the low twelve bits of its count). A batch
+whose marks hold every bit of DEL's, UNLINK's or GETDEL's is walked once more
+(`use.maybe.gone`, `use.lru.gone`): each request's mark is tested against the three, and
+the key of one that deletes it gets a word never set, the others theirs again, in the
+batch's order. A batch of one command's requests holds those bits only when that command
+is one of the three, and so does one of GETs and SETs; one of GETs and INCRs holds them
+all, and walks again for nothing. The second walk reads each hash twice, and a second
+read of a field of the list the walk borrows keeps a reference to it (`slot_keep`, about
+16 instructions a key). A first build tested each mark in the one walk, so every batch
+paid it: GET took 1.0% more instructions than main's, SET and INCR 0.7% more. Under an
+LFU policy, whose walk steps each key's word from its hash, as main's, the mark's test is
+in the step.
+
+**The rest.** At each group's end the actor compares the `maxclients` it gave the
+listeners with the server's (`rw.capped`), one compare a group; a listener compares the
+count of open connections with the limit before it takes a connection's id
+(`tally.take`), and a connection it refuses costs it a write and a close. NOREPLICAS's
+and MODULE's refusals are the general way's: the tune word's bit 16 keeps a refusing
+server's batches off the fast way, and the protected gate looks at MODULE's session op
+alone.

@@ -39,13 +39,14 @@ make suite REDIS_SRC=../redis      # both runs and the table, in build/suite/
 ## The result
 
 Redis 7.2.16, October 2026. Of the 1,812 tests Redis passes in this mode, BendKV passes
-**1,766 (97.5%)**; of the 1,690 in the units of what BendKV has, 1,646 (97.4%), and 120
+**1,769 (97.6%)**; of the 1,690 in the units of what BendKV has, 1,649 (97.6%), and 120
 of the 122 of streams'.
 
 7.2.16's suite runs 148 tests more in this mode than 7.0.15's, and Redis passes 135 more.
 At the move BendKV passed 120 more, 1,676 where it passed 1,556 of the 1,677 that 7.0.15
 passed (92.8%), and since, streams' groups brought 43, their waits 22, the append-only
-file turned on at run time 23 and a client's query buffer 2 (below). The suite
+file turned on at run time 23, a client's query buffer 2 (below), and NOREPLICAS
+and MODULE 3 (sections 3zzzzza and 3zzzzzb of [FINDINGS.md](FINDINGS.md)). The suite
 found six things to fix (section 3zzzzk of
 [FINDINGS.md](FINDINGS.md)), and BendKV passed 1,657 before them:
 - unit/hyperloglog, 27 tests where 7.0.15's had 20, sets a sparse HyperLogLog of 32 MB of
@@ -70,7 +71,8 @@ Of the others that 7.2.16 passes and BendKV did not then:
   stopped at XGROUP before it closed its client, subscribed to every channel, so that the
   three tests of a client that publishes to itself counted one receiver more (run without
   that test, they passed). It passes all 46 since streams' groups.
-- unit/other's test of every HELP subcommand asks MODULE's, and unit/dump's and
+- unit/other's test of every HELP subcommand asks MODULE's, which BendKV answers since
+  MODULE (section 3zzzzzb of [FINDINGS.md](FINDINGS.md)), and unit/dump's and
   unit/type/set's new tests read the replication stream.
 
 One test passed in one run of the suite and failed in another: unit/pubsub's PUNSUBSCRIBE
@@ -365,7 +367,7 @@ source): 9 of the 17. The other 7 need MULTI and WATCH, Lua or lists (then).
 
 | area | units | Redis passes | BendKV passes |
 |---|---|---:|---:|
-| what BendKV has: the protocol, connections and clients and their pause, the keyspace and its databases, strings and their ranges, bits and fields, counters and floats, hashes, lists, sets, sorted sets and the commands that wait on them, SORT, HyperLogLogs, GEO, DUMP and RESTORE, times to live, lazy freeing, transactions, pub/sub and keyspace notifications, introspection and the query buffer, the slow log and the latency monitor, client-side caching, ACL users, Lua scripts and functions | protocol, quit, keyspace, type/string, type/incr, type/hash, type/list, list-2, list-3, type/set, type/zset, sort, hyperloglog, geo, dump, scan, bitops, bitfield, expire, lazyfree, violations, multi, pubsub, pause, introspection, introspection-2, querybuf, other, info-command, latency-monitor, slowlog, tracking, scripting, functions | 1690 | **1646** |
+| what BendKV has: the protocol, connections and clients and their pause, the keyspace and its databases, strings and their ranges, bits and fields, counters and floats, hashes, lists, sets, sorted sets and the commands that wait on them, SORT, HyperLogLogs, GEO, DUMP and RESTORE, times to live, lazy freeing, transactions, pub/sub and keyspace notifications, introspection and the query buffer, the slow log and the latency monitor, client-side caching, ACL users, Lua scripts and functions | protocol, quit, keyspace, type/string, type/incr, type/hash, type/list, list-2, list-3, type/set, type/zset, sort, hyperloglog, geo, dump, scan, bitops, bitfield, expire, lazyfree, violations, multi, pubsub, pause, introspection, introspection-2, querybuf, other, info-command, latency-monitor, slowlog, tracking, scripting, functions | 1690 | **1649** |
 | streams: their values, reads, writes, groups and waits | type/stream, type/stream-cgroups | 122 | **120** |
 
 Of the first row's, unit/lazyfree's first two pass on BendKV's account of its heap, and
@@ -392,8 +394,8 @@ wait):
 | unit/keyspace | 54 | 53 | 53 |
 | unit/latency-monitor | 16 | 14 | 14 |
 | unit/lazyfree | 4 | 4 | 3 |
-| unit/multi | 60 | 53 | 32 |
-| unit/other | 25 | 22 | 21 |
+| unit/multi | 60 | 53 | 33 |
+| unit/other | 25 | 22 | 22 |
 | unit/pause | 17 | 17 | 17 |
 | unit/protocol | 25 | 17 | 17 |
 | unit/pubsub | 46 | 46 | 46 |
@@ -401,7 +403,7 @@ wait):
 | unit/quit | 3 | 3 | 3 |
 | unit/replybufsize | 1 | 0 | 0 |
 | unit/scan | 21 | 18 | 18 |
-| unit/scripting | 120 | 119 | 115 |
+| unit/scripting | 120 | 119 | 116 |
 | unit/slowlog | 17 | 9 | 8 |
 | unit/sort | 53 | 53 | 53 |
 | unit/tracking | 13 | 10 | 10 |
@@ -416,18 +418,18 @@ wait):
 | unit/type/string | 82 | 82 | 79 |
 | unit/type/zset | 303 | 300 | 298 |
 | unit/violations | 1 | 1 | 1 |
-| **all** | **1905** | **1812** | **1766 (97.5%)** |
+| **all** | **1905** | **1812** | **1769 (97.6%)** |
 
-## Why the other 46 fail
+## Why the other 43 fail
 
 Against Redis 7.2.16:
 
-- **30 stop on a command BendKV does not have.** By the number of tests each one stops:
+- **29 stop on a command BendKV does not have.** By the number of tests each one stops:
   - SYNC 26: tests that read the replication stream, 12 of them unit/multi's of what a
     transaction propagates and 3 unit/scripting's of what a script propagates;
-  - MIGRATE 2, REPLICAOF 1 and MODULE 1.
+  - MIGRATE 2 and REPLICAOF 1.
 - **One never ran**: it runs only on a server that names jemalloc as its allocator.
-- **15 fail with another error.**
+- **13 fail with another error.**
   - 3 are streams': the tests that set `stream-node-max-entries`, one of them
     unit/lazyfree's.
   - 7 fail on a client that a test before them left in MULTI: REPLICAOF's, in
@@ -435,8 +437,7 @@ Against Redis 7.2.16:
   - The others fail for what BendKV does not have yet, or has otherwise:
     - COMMAND's entry of a command it does not have: MIGRATE marked movablekeys;
     - the order of a hash Redis keeps in a listpack past the parameters' defaults
-      (2, above);
-    - replication: EXEC's NOREPLICAS, and a script's when it counts good replicas.
+      (2, above).
 
 Against 7.0.15, 121 failed: 64 on a command BendKV does not have, 19 that never ran, and
 38 with another error, CLUSTER's among them (its subcommands in COMMAND LIST, and called
@@ -581,8 +582,8 @@ make clients                       # the three suites, against Redis and build/b
 
 | suite | Redis 7.2.16 passes | BendKV passes |
 |---|---:|---:|
-| redis-py 8.1.0, RESP2 | 2,772 | **2,768 (99.9%)** |
-| redis-py 8.1.0, RESP3 | 2,772 | **2,768 (99.9%)** |
+| redis-py 8.1.0, RESP2 | 2,772 | **2,770 (99.9%)** |
+| redis-py 8.1.0, RESP3 | 2,772 | **2,770 (99.9%)** |
 | go-redis v9.23.0, RESP3 | 463 | **463 (100%)** |
 
 Against Redis 7.0.15 BendKV passed 2,708 of the 2,753 tests it passes in redis-py, and
@@ -600,8 +601,9 @@ alike.)
 
 Every test BendKV fails of those Redis passes fails on what BendKV does not have:
 
-- **A command it does not have:** in redis-py, MODULE 2 and REPLICAOF 1 (3 tests in each
-  protocol); in go-redis, none.
+- **A command it does not have:** in redis-py, REPLICAOF 1 (in each protocol); in
+  go-redis, none. MODULE (section 3zzzzzb of [FINDINGS.md](FINDINGS.md)) brought
+  redis-py's 2 tests of MODULE LIST, of its asyncio client, in each protocol.
   Streams' groups (section 3zzzzt of [FINDINGS.md](FINDINGS.md)) brought redis-py's 45
   tests in each protocol that stopped on XGROUP (40), XACK (3) and XREADGROUP (2), and
   go-redis's 12 of groups (XGROUP's subcommands, XREADGROUP, XACK, XCLAIM, XAUTOCLAIM,

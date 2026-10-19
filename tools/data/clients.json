@@ -1,14 +1,10 @@
 {
  "go-redis-resp3": {},
  "redis-py-resp2": {
-  "tests.test_asyncio.test_commands.TestRedisCommands::test_module_list[pool]": "unknown command 'MODULE'",
-  "tests.test_asyncio.test_commands.TestRedisCommands::test_module_list[single]": "unknown command 'MODULE'",
   "tests.test_command_parser.TestCommandsParser::test_get_moveable_keys": "redis.exceptions.RedisError: MIGRATE command doesn't exist in Redis commands",
   "tests.test_commands.TestRedisCommands::test_replicaof": "unknown command 'REPLICAOF'"
  },
  "redis-py-resp3": {
-  "tests.test_asyncio.test_commands.TestRedisCommands::test_module_list[pool]": "unknown command 'MODULE'",
-  "tests.test_asyncio.test_commands.TestRedisCommands::test_module_list[single]": "unknown command 'MODULE'",
   "tests.test_command_parser.TestCommandsParser::test_get_moveable_keys": "redis.exceptions.RedisError: MIGRATE command doesn't exist in Redis commands",
   "tests.test_commands.TestRedisCommands::test_replicaof": "unknown command 'REPLICAOF'"
  }

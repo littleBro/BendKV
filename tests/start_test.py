@@ -16,8 +16,10 @@ ACL users from the configuration or a file, renamed commands, the
 background, a cluster, a replica, TLS,
 data it cannot read, a supervisor it cannot signal), each with its line;
 a unix socket and systemd's supervision, IPv6's addresses, and a script's
-sandbox under lua-enable-deprecated-api, and the default user as the
-server starts (ACL LIST, ACL GETUSER), against Redis; and what is
+sandbox under lua-enable-deprecated-api, the default user as the
+server starts (ACL LIST, ACL GETUSER), maxclients (the connections past
+it refused and counted, a CONFIG SET of it up and down) and MODULE under
+each enable-module-command, against Redis; and what is
 BendKV's own: --version, --help, the short form, the
 log file, the pid file, protected mode and several addresses.
 
@@ -495,8 +497,112 @@ def default_user_seen(a, cmd):
         s.stop()
 
 
+# a connection taken while the server holds maxclients: what it reads
+# before it sends anything (the refusal, which the server writes as it
+# takes the connection), or else the answer to a PING
+def knock(port):
+    c = Client(port)
+    c.s.settimeout(0.3)
+    try:
+        first = c.s.recv(1 << 16)
+    except socket.timeout:
+        first = None
+    c.s.settimeout(5)
+    if first is not None:
+        c.close()
+        return None, first
+    return c, c.ask("PING")
+
+
+def stat(c, name):
+    for l in c.ask("INFO").decode().split("\r\n"):
+        if l.startswith(name + ":"):
+            return l.split(":", 1)[1]
+    return None
+
+
+# maxclients as a server holds it (--maxclients 3): the connections past
+# it refused, with Redis's error, and counted (rejected_connections), not
+# taken (total_connections_received, the next client's id); a CONFIG SET
+# that raises or lowers it, the clients connected staying; CONFIG
+# RESETSTAT
+def maxclients_seen(a, cmd):
+    s = Server(a, cmd, ["--port", "{port}", "--maxclients", "3"], {}, None, {})
+    try:
+        if s.up() is not None:
+            return {"exit": s.report()}
+        c = Client(s.port)
+        # the start's probe gone (BendKV counts its connection open until
+        # the connection's end)
+        end = time.time() + 5
+        while stat(c, "connected_clients") != "1" and time.time() < end:
+            time.sleep(0.02)
+        id0, took0 = int(c.ask("CLIENT", "ID")[1:]), int(stat(c, "total_connections_received"))
+        seen, open_ = {}, []
+        def take(n, tag):
+            out = []
+            for _ in range(n):
+                x, r = knock(s.port)
+                out.append(r)
+                if x is not None:
+                    open_.append(x)
+            seen[tag] = out
+        take(4, "first")
+        seen["counts"] = [stat(c, k) for k in ("connected_clients", "rejected_connections", "maxclients")]
+        seen["taken"] = int(stat(c, "total_connections_received")) - took0
+        seen["raise"] = c.ask("CONFIG", "SET", "maxclients", "5")
+        take(3, "raised")
+        seen["lower"] = c.ask("CONFIG", "SET", "maxclients", "2")
+        seen["still"] = [x.ask("PING") for x in open_]
+        take(1, "lowered")
+        seen["counts2"] = [stat(c, k) for k in ("connected_clients", "rejected_connections", "maxclients")]
+        seen["reset"] = c.ask("CONFIG", "RESETSTAT")
+        seen["counts3"] = [stat(c, k) for k in ("rejected_connections", "total_connections_received")]
+        for x in open_:
+            x.close()
+        end = time.time() + 5
+        while stat(c, "connected_clients") != "1" and time.time() < end:
+            time.sleep(0.02)
+        seen["back"] = c.ask("CONFIG", "SET", "maxclients", "10000")
+        x, r = knock(s.port)
+        seen["next id"] = int(x.ask("CLIENT", "ID")[1:]) - id0
+        x.close()
+        c.close()
+        return seen
+    finally:
+        s.stop()
+
+
+# MODULE as a server with no modules answers it, enable-module-command at
+# on (no, yes or local: the test's client is local)
+def module_seen(a, cmd, on):
+    s = Server(a, cmd, ["--port", "{port}", "--enable-module-command", on], {}, None, {})
+    try:
+        if s.up() is not None:
+            return {"exit": s.report()}
+        c = Client(s.port)
+        seen = {"list": c.ask("MODULE", "LIST"), "load": c.ask("MODULE", "LOAD", "/nonexistent/m.so"),
+                "loadex": c.ask("MODULE", "LOADEX", "/nonexistent/m.so", "CONFIG", "a", "b", "ARGS", "c"),
+                "unload": c.ask("MODULE", "UNLOAD", "m"), "help": len(c.ask("MODULE", "HELP")),
+                "config": c.ask("CONFIG", "GET", "enable-module-command"),
+                "errors": sorted(l for l in c.ask("INFO", "errorstats").decode().split("\r\n") if l.startswith("errorstat_")),
+                "calls": sorted(re.sub(r"usec=\d+,usec_per_call=[0-9.]+,", "", l)
+                                for l in c.ask("INFO", "commandstats").decode().split("\r\n") if l.startswith("cmdstat_module"))}
+        c.close()
+        return seen
+    finally:
+        s.stop()
+
+
 def against_redis(a):
     ok = True
+    r, b = maxclients_seen(a, a.redis), maxclients_seen(a, a.bin)
+    ok &= check("maxclients, as Redis", r == b and r.get("first", [None])[-1:] == [b"-ERR max number of clients reached\r\n"],
+                "redis %r\n      bendkv %r" % (r, b))
+    for on in ("no", "yes", "local"):
+        r, b = module_seen(a, a.redis, on), module_seen(a, a.bin, on)
+        ok &= check("MODULE with enable-module-command %s, as Redis" % on, r == b and "list" in r,
+                    "redis %r\n      bendkv %r" % (r, b))
     r, b = default_user_seen(a, a.redis), default_user_seen(a, a.bin)
     ok &= check("the default user at the start, as Redis", r == b and "list" in r, "redis %r\n      bendkv %r" % (r, b))
     for on in ("yes", "no"):

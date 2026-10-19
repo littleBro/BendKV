@@ -475,7 +475,11 @@ save points and not with NOSAVE (a save that fails stops nothing, Redis's error
 answered, but with FORCE), the pid file removed, the process ended with code 0 (sections
 3zzl, 3zzzc and 3zzzk of docs/FINDINGS.md). CLUSTER answers as Redis 7.2.16 answers it with
 cluster support disabled, for each of its subcommands, HELP and MYSHARDID among them, once
-its number of arguments is Redis's (section 3zzzzi).
+its number of arguments is Redis's (section 3zzzzi). MODULE answers as a Redis 7.2.16 that
+loads no module, LOAD, LOADEX and UNLOAD refused first while `enable-module-command` is
+`no`, and with `min-replicas-to-write` and `min-replicas-max-lag` above 0 every write is
+refused with NOREPLICAS, as Redis with no replica connected refuses it (sections 3zzzzza
+and 3zzzzzb).
 Times to live: EXPIRE, PEXPIRE, EXPIREAT and PEXPIREAT (with NX, XX, GT, LT), TTL, PTTL,
 EXPIRETIME, PEXPIRETIME, PERSIST; SET with NX, XX, GET, EX, PX, EXAT, PXAT and KEEPTTL;
 SETEX, PSETEX, GETEX (EX, PX, EXAT, PXAT, PERSIST) and GETDEL. Times are read as Redis
@@ -503,7 +507,9 @@ syntax error for an unauthenticated client is NOAUTH); a client is authenticated
 connecting and on RESET if the default user is on and takes no password then, and after
 AUTH or AUTH in HELLO, and nothing else changes that. While it must authenticate, its
 requests are read with Redis's limits: 10 arguments, and bulks of 16384 bytes (section
-3zzzzn of FINDINGS.md).
+3zzzzn of FINDINGS.md). A connection taken while `maxclients` clients are connected is
+refused as Redis refuses it, with its error, no client id and a count in INFO's
+`rejected_connections` (section 3zzzzzd).
 ACL: users as Redis 7.2.16 keeps them, set by ACL SETUSER (selectors, key patterns with
 what each may do, channels, passwords kept as SHA-256, Redis's errors) and read by
 GETUSER, LIST, USERS, WHOAMI, CAT, DRYRUN, GENPASS, LOG and HELP. A call of a client whose
@@ -970,13 +976,13 @@ The translation the kernel reads can be dumped with
   skipped. The reference is the same run on redis-server 7.2.16 with default settings,
   each unit on a freshly started server instance: in this mode 1,905 tests run, and
   Redis passes 1,812 (almost all the others need DEBUG, off by default in 7). BendKV
-  passes 1,766 of them (97.5%), and in the units of what it has (the protocol, the
+  passes 1,769 of them (97.6%), and in the units of what it has (the protocol, the
   connection and clients and their pause, the keyspace and databases, strings with
   ranges, bits and fields, counters, hashes, lists, sets, sorted sets, SORT, HyperLogLogs,
   GEO, DUMP and RESTORE, times to live, lazy freeing, transactions, Pub/Sub and keyspace
   notifications, introspection and the query buffer, the slow log and the latency
-  monitor, client-side caching, ACL users, Lua scripts and functions), 1,646 of 1,690
-  (97.4%); streams' values,
+  monitor, client-side caching, ACL users, Lua scripts and functions), 1,649 of 1,690
+  (97.6%); streams' values,
   reads, writes, groups and waits pass 120 of the 122 tests of `unit/type/stream` and
   `unit/type/stream-cgroups` that Redis passes. The others stop on commands that do not
   exist (30 tests: SYNC, MIGRATE…), do not run on a server without jemalloc (1), or
@@ -1018,9 +1024,9 @@ The translation the kernel reads can be dumped with
   CI's heavy tier, before a pull request merges): redis-py 8.1.0's tests of its sync and asyncio clients, in
   RESP2 and in RESP3, and go-redis v9.23.0's specs, in RESP3, each against Redis 7.2.16
   and against BendKV, each on a server started for it, without their tests of modules,
-  clusters, sentinels and TLS. Of the tests Redis passes, BendKV passes 2,768 of 2,772 in
+  clusters, sentinels and TLS. Of the tests Redis passes, BendKV passes 2,770 of 2,772 in
   redis-py, the same tests in RESP2 and in RESP3, and all 463 in go-redis; every other
-  one fails on what BendKV does not have (MODULE, REPLICAOF, and COMMAND's entry of
+  one fails on what BendKV does not have (REPLICAOF, and COMMAND's entry of
   MIGRATE), none on a command BendKV has
   otherwise. A test Redis passes that BendKV fails, and that is not among the
   known failures of `tools/data/clients.json`, fails CI.
@@ -1643,8 +1649,8 @@ make clients BEND="$B" # redis-py's and go-redis's test suites on Redis and on B
    FLUSHDB, FLUSHALL, keyspace lines per database — with laws and recovery of all the
    databases from the append-only file), the ranges and bits of strings (GETRANGE,
    SETRANGE, GETBIT, SETBIT, BITCOUNT, BITPOS — with a law of SETRANGE and recovery from
-   the append-only file). Redis's suite in external mode: BendKV passes 1,766 of the
-   1,812 tests Redis 7.2.16 itself passes, and 1,646 of 1,690 in the units of what it has
+   the append-only file). Redis's suite in external mode: BendKV passes 1,769 of the
+   1,812 tests Redis 7.2.16 itself passes, and 1,649 of 1,690 in the units of what it has
    ([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)). Start-up as for redis-server (the
    command line and the configuration file). The database as a record with a count of
    keys (DBSIZE in O(1)).
