@@ -244,7 +244,7 @@ def burst(rnd, b, r, k):
 # ------
 
 def errors(b, r):
-    batch(b, r, [cmd("DEL", "e", "es"), cmd("SET", "es", "x"),
+    batch(b, r, [cmd("DEL", "e", "es", "em"), cmd("SET", "es", "x"),
                  cmd("XADD", "e", "%d-1" % BASE, "f", "v")])
     cs = [
         cmd("XADD", "e"), cmd("XADD", "e", "*"), cmd("XADD", "e", "*", "f"),
@@ -255,6 +255,8 @@ def errors(b, r):
         cmd("XADD", "e", "1-2-3", "f", "v"), cmd("XADD", "e", "-*", "f", "v"),
         cmd("XADD", "e", "%d-0" % BASE, "f", "v"), cmd("XADD", "e", "%d-1" % BASE, "f", "v"),
         cmd("XADD", "e", "%d-*" % (BASE - 1), "f", "v"), cmd("XADD", "e", "MAXLEN", "f", "v"),
+        cmd("XADD", "em", "%d-18446744073709551615" % BASE, "f", "v"),
+        cmd("XADD", "em", "%d-*" % BASE, "f", "v"), cmd("XADD", "em", "*", "f", "v"),
         cmd("XADD", "e", "MAXLEN", "-1", "*", "f", "v"), cmd("XADD", "e", "MAXLEN", "x", "*", "f", "v"),
         cmd("XADD", "e", "MAXLEN", "~", "*", "f", "v"), cmd("XADD", "e", "MAXLEN", "=", "*", "f", "v"),
         cmd("XADD", "e", "MAXLEN", "1", "MINID", "1", "*", "f", "v"),

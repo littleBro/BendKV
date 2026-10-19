@@ -331,7 +331,7 @@ Where performance and proof meet: **batched execution under proved laws.**
    groups answer as Redis's (sections 3zzzy, 3zzzza and 3zzzzt), and XREAD and
    XREADGROUP wait as Redis's do (section 3zzzzu). Cluster, replication and modules are
    out of scope. The suite's count: of the 1,812 tests Redis 7.2.16 passes against a
-   server it did not start, BendKV passes 1,741, 1,644 of the 1,688 in what it has
+   server it did not start, BendKV passes 1,764, 1,644 of the 1,688 in what it has
    ([COMPATIBILITY.md](COMPATIBILITY.md)); most of the other 44 need replication's SYNC
    (26) or run after a test that left its client in MULTI with a command BendKV does not
    have (7).

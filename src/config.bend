@@ -129,7 +129,7 @@ def config.table() -> List<&2, CItem>:
     CItem{CParam{"activedefrag", "", False{}, False{}, False{}, False{}, CBool{VDefrag{}}, AppNone{}}, "no"},
     CItem{CParam{"syslog-enabled", "", True{}, False{}, False{}, False{}, CBool{VNone{}}, AppNone{}}, "no"},
     CItem{CParam{"cluster-enabled", "", True{}, False{}, False{}, False{}, CBool{VNone{}}, AppNone{}}, "no"},
-    CItem{CParam{"appendonly", "", False{}, False{}, False{}, False{}, CBool{VNone{}}, AppFixed{"Unable to turn on AOF. Check server logs."}}, "no"},
+    CItem{CParam{"appendonly", "", False{}, False{}, False{}, False{}, CBool{VNone{}}, AppNone{}}, "no"},
     CItem{CParam{"cluster-allow-reads-when-down", "", False{}, False{}, False{}, False{}, CBool{VNone{}}, AppNone{}}, "no"},
     CItem{CParam{"cluster-allow-pubsubshard-when-down", "", False{}, False{}, False{}, False{}, CBool{VNone{}}, AppNone{}}, "yes"},
     CItem{CParam{"crash-log-enabled", "", False{}, False{}, False{}, False{}, CBool{VNone{}}, AppNone{}}, "yes"},
