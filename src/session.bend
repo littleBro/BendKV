@@ -729,6 +729,30 @@ def srv.sync.all(s: Srv) -> Srv:
     case Srv{pass, cfg, info, mm}:
       Srv{pass, cfg, I.info.sync.all(info), mm}
 
+# what the syncer does (info.bend: rof.sv), and the offset synced made 0
+# as the file turns on (rof.unsynced)
+def srv.sv(+s: Srv) -> Nat:
+  match s:
+    case Srv{pass, cfg, +info, mm}:
+      I.info.sv(info)
+
+def srv.sv.set(s: Srv, +v: Nat) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.sv.set(info, v), mm}
+
+def srv.unsynced(s: Srv) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.unsynced(info), mm}
+
+# the file that could not be turned on: appendonly no again, as Redis's
+# CONFIG SET restores the parameter whose change it could not apply
+def srv.aof.refused(s: Srv) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, C.items.put(cfg, "appendonly", "no"), I.info.aof.off(info), mm}
+
 def srv.mine(s: Srv, +id: Nat) -> Srv:
   match s:
     case Srv{pass, cfg, info, mm}:
@@ -768,6 +792,33 @@ def srv.rw.fails(+s: Srv) -> Nat:
     case Srv{pass, cfg, +info, mm}:
       I.rws.fails(I.info.rw(info))
 
+# whether the rewrite that runs turns the file on, and the SHUTDOWNs
+# refused for it, yet to log (info.bend: rws.initial, rws.downs)
+def srv.rw.initial(+s: Srv) -> Bool:
+  match s:
+    case Srv{pass, cfg, +info, mm}:
+      I.rws.initial(I.info.rw(info))
+
+def srv.rw.downs(+s: Srv) -> Nat:
+  match s:
+    case Srv{pass, cfg, +info, mm}:
+      I.rws.downs(I.info.rw(info))
+
+def srv.rw.waiting(s: Srv) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.rw.waiting(info), mm}
+
+def srv.rw.down(s: Srv) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.rw.down(info), mm}
+
+def srv.rw.downs.clear(s: Srv) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.rw.downs.clear(info), mm}
+
 def srv.rw.go(s: Srv, +ms: Nat) -> Srv:
   match s:
     case Srv{pass, cfg, info, mm}:
@@ -777,6 +828,11 @@ def srv.rw.later(s: Srv) -> Srv:
   match s:
     case Srv{pass, cfg, info, mm}:
       Srv{pass, cfg, I.info.rw.later(info), mm}
+
+def srv.rw.again(s: Srv) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.rw.again(info), mm}
 
 def srv.rw.done(s: Srv, +size: Nat, +ms: Nat) -> Srv:
   match s:
@@ -793,6 +849,18 @@ def srv.rw.stop(s: Srv) -> Srv:
   match s:
     case Srv{pass, cfg, info, mm}:
       Srv{pass, cfg, I.info.rw.stop(info), mm}
+
+# a rewrite that could not begin: the last status err (info.bend: rws.err)
+def srv.rw.err(s: Srv) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.rw.err(info), mm}
+
+# the file turned off: the rewrite that runs stopped, none scheduled
+def srv.rw.off(s: Srv) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.rw.off(info), mm}
 
 # The RDB file (info.bend: Rdb; server.bend: The RDB file): a SAVE
 # counted as it runs; a save that ended, well or not, at the second secs;

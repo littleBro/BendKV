@@ -30,15 +30,15 @@ DEFAULTS = {"bind": "127.0.0.1"}
 
 # What a change does in BendKV, by Redis's apply function: hz is capped as
 # Redis caps it, repl-backlog-size is raised to Redis's least backlog,
-# requirepass sets the password; the port, the addresses and
-# the append-only file cannot change while BendKV runs, so a new value fails
-# with the error Redis gives when it cannot apply one. Other parameters are
-# kept and read back, and change nothing else (BendKV has no eviction, no
-# replication, no encodings to tune).
+# requirepass sets the password; the port and the addresses cannot change
+# while BendKV runs, so a new value fails with the error Redis gives when
+# it cannot apply one. appendonly is kept, and the actor turns the file on
+# or off after the command's group (server.bend: Turning the file on and
+# off). Other parameters are kept and read back, and change nothing else
+# (BendKV has no replication, no encodings to tune).
 APPLY = {"updateHZ": "AppHz{}", "updateRequirePass": "AppPass{}",
          "updatePort": 'AppFixed{"Unable to listen on this port. Check server logs."}',
          "applyBind": 'AppFixed{"Failed to bind to specified addresses."}',
-         "updateAppendonly": 'AppFixed{"Unable to turn on AOF. Check server logs."}',
          "updateReplBacklogSize": 'AppMin{"16384"}', "updateLocaleCollate": "AppLocale{}"}
 # BendKV speaks no TLS: its port and the TLS of replication and of the
 # cluster cannot be turned on, which fails as in a Redis with no
