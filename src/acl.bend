@@ -1357,10 +1357,11 @@ type UserR is Data:
   UserOk{u: User}
   UserErr{e: Nat}
 
-# a user new to ACL SETUSER: off, no payload flag, no password, a root
-# selector with no permission (Redis's ACLCreateUser)
+# a user new to ACL SETUSER: off, sanitize-payload (Redis 7.2's
+# ACLCreateUser sets it, and ACL LIST and GETUSER show it), no password,
+# a root selector with no permission
 def user.new(+name: String, +allch: Bool) -> User:
-  User{name, False{}, False{}, 0n, Nil{}, [sel.new(allch)]}
+  User{name, False{}, False{}, 1n, Nil{}, [sel.new(allch)]}
 
 def user.name(+u: User) -> String:
   match u:
@@ -1765,12 +1766,12 @@ def acl.set.named(ok: Bool, a: Acl, +n: String, args: List<&2, String>, +allch: 
 def acl.setuser(a: Acl, +n: String, args: List<&2, String>, +allch: Bool) -> SetR:
   acl.set.named(acl.name.ok(n), a, n, args, allch)
 
-# The ACL from its start: the default user on, with no password, every
-# key, channel and command (Redis's ACLInitDefaultUser), then
-# requirepass as its password
+# The ACL from its start: the default user on, sanitize-payload (as
+# ACLCreateUser makes it), with no password, every key, channel and
+# command (Redis's ACLInitDefaultUser), then requirepass as its password
 def acl.dflt.of(+pass: String) -> User:
   +root = sel.cmds.set(sel.chans.set(sel.keys.set(sel.new(False{}), True{}), True{}), True{})
-  User{"default", True{}, Nat.is_eq(String.length(pass), 0n), 0n, Bool.pick(List<&2, String>, Nat.is_eq(String.length(pass), 0n), Nil{}, [Sha.sha256(pass)]), [root]}
+  User{"default", True{}, Nat.is_eq(String.length(pass), 0n), 1n, Bool.pick(List<&2, String>, Nat.is_eq(String.length(pass), 0n), Nil{}, [Sha.sha256(pass)]), [root]}
 
 # key: GENPASS's secret, random hex digits the server read at its start
 def acl.new(+pass: String, key: String) -> Acl:

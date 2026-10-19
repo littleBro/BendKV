@@ -26,7 +26,8 @@ SUBSCRIBE and PUBLISH refused, and subscribers closed by SETUSER;
 DELUSER of another client's user and of the client's own; CLIENT KILL
 USER and its errors; CLIENT LIST's user; the default user restricted,
 whose plain batches are checked too; the slow log's SETUSER; SORT's BY
-and GET; a refused call's key left unmarked and an allowed call's marked
+and GET; ACL LIST and ACL GETUSER of new users (sanitize-payload, which
+a new user has, skip-sanitize-payload and reset); a refused call's key left unmarked and an allowed call's marked
 (OBJECT IDLETIME, and FREQ under an LFU policy); and EXEC checking again
 the commands queued before an AUTH inside the transaction restricted its
 client. Then checks of BendKV alone: AUTH and HELLO's AUTH with a
@@ -320,6 +321,18 @@ def scenarios(port, log):
     y.raw(b"".join(enc(c) for c in [["MULTI"], ["AUTH", "dave", "pd"], ["SET", "e1", "1"], ["GET", "e1"],
                                     ["SET", "e2", "2"], ["EXEC"]]))
     log("20 auth inside", [y.read() for _ in range(6)], r.cmd("EXISTS", "e1", "e2"))
+    # 21. ACL LIST and ACL GETUSER: a new user has sanitize-payload, as
+    # Redis 7.2's ACLCreateUser gives it, skip-sanitize-payload takes it
+    # away and reset gives it back
+    new = ("gina", "hank", "ivan", "judy")
+    users(r, *new)
+    r.cmd("ACL", "SETUSER", "gina")
+    r.cmd("ACL", "SETUSER", "hank", "on", ">ph", "~k*", "%R~r*", "&ch", "+get", "+set", "(+del ~d*)")
+    r.cmd("ACL", "SETUSER", "ivan", "skip-sanitize-payload")
+    r.cmd("ACL", "SETUSER", "judy", "skip-sanitize-payload", "on", "nopass", "reset")
+    log("21 list", [x for x in r.cmd("ACL", "LIST") if x.split(" ")[1] in new])
+    log("21 getuser", [r.cmd("ACL", "GETUSER", n) for n in new])
+    users(r, *new)
     users(r, "alice", "bob", "carol", "dave", "erin", "fred")
     r.cmd("ACL", "LOG", "RESET")
 

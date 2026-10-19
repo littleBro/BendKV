@@ -16,7 +16,8 @@ ACL users from the configuration or a file, renamed commands, the
 background, a cluster, a replica, TLS,
 data it cannot read, a supervisor it cannot signal), each with its line;
 a unix socket and systemd's supervision, IPv6's addresses, and a script's
-sandbox under lua-enable-deprecated-api, against Redis; and what is
+sandbox under lua-enable-deprecated-api, and the default user as the
+server starts (ACL LIST, ACL GETUSER), against Redis; and what is
 BendKV's own: --version, --help, the short form, the
 log file, the pid file, protected mode and several addresses.
 
@@ -479,8 +480,25 @@ def deprecated_seen(a, cmd, on):
         s.stop()
 
 
+# the default user as a server starts: ACL LIST and ACL GETUSER default
+# (sanitize-payload, which Redis 7.2's ACLCreateUser gives every user)
+def default_user_seen(a, cmd):
+    s = Server(a, cmd, ["--port", "{port}"], {}, None, {})
+    try:
+        if s.up() is not None:
+            return {"exit": s.report()}
+        c = Client(s.port)
+        seen = {"list": c.ask("ACL", "LIST"), "getuser": c.ask("ACL", "GETUSER", "default")}
+        c.close()
+        return seen
+    finally:
+        s.stop()
+
+
 def against_redis(a):
     ok = True
+    r, b = default_user_seen(a, a.redis), default_user_seen(a, a.bin)
+    ok &= check("the default user at the start, as Redis", r == b and "list" in r, "redis %r\n      bendkv %r" % (r, b))
     for on in ("yes", "no"):
         r, b = deprecated_seen(a, a.redis, on), deprecated_seen(a, a.bin, on)
         ok &= check("lua-enable-deprecated-api %s, as Redis" % on,

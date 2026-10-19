@@ -11299,6 +11299,27 @@ main's build differs in 21. `tests/client_test.py` compares the rest of a client
 as before. Redis's own suite passes both tests of unit/querybuf that Redis passes in this
 mode, and 1,766 of the 1,812 tests Redis 7.2.16 passes ([COMPATIBILITY.md](COMPATIBILITY.md)).
 
+## 3zzzzz. A new user's sanitize-payload, as Redis 7.2.16 gives it
+
+**What there is.** Redis 7.2's `ACLCreateUser` gives every user it makes the flag
+sanitize-payload (`USER_FLAG_SANITIZE_PAYLOAD`), the default user too, so ACL LIST and
+ACL GETUSER show it (`user default on nopass sanitize-payload ~* &* +@all`) until
+skip-sanitize-payload takes it away. Redis 7.0.15 made a user with no payload flag, and
+BendKV, whose users followed it, still did: a new user's line had no sanitize-payload,
+nor its flags in GETUSER. It has it now (`src/acl.bend`: `user.new` and `acl.dflt.of`);
+reset gave it already. Nothing else reads the flag: RESTORE checks a payload as deep
+whoever restores it.
+
+**How it was found.** By a first run of Redis's suite in its own mode, BendKV in place
+of its server (COMPATIBILITY.md, What this mode does not test): unit/acl, which needs a
+server of its own and so never ran against BendKV, checks ACL LIST of a new user. No
+test of BendKV's read ACL LIST or GETUSER.
+
+**Tests.** `tests/acl_test.py`'s scenario 21 compares ACL LIST and ACL GETUSER of four
+new users with Redis 7.2.16's: one with no rules, one with every kind of rule and a
+selector, one with skip-sanitize-payload, and one reset after it. `tests/start_test.py`
+compares the default user as each server starts. Main's build fails both.
+
 ## 4. Where a request's time goes, and hiding the memory waits
 
 With the eight patches, BendKV ran fewer instructions on GET and SET than Redis, missed
