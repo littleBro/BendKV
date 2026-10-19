@@ -70,10 +70,13 @@ import ./hll.bend as H
 # whose answer goes back on back (Clients that must authenticate); or,
 # with an append-only file synced each second, the syncer's ask of what
 # the file holds before its sync, answered on its channel, and its sync
-# of that (The append-only file). A batch from a client with a
-# subscription is a SubReq, which runs a command at a time.
+# of that (The append-only file); or a read inside a big argument, of a
+# client whose requests are not whole yet: its id, the bytes of the
+# argument read so far and its length with its CRLF (Query buffers). A batch also
+# tells of the big argument it ended or ends inside (qf), and one from a
+# client with a subscription is a SubReq, which runs a command at a time.
 type Req is Data:
-  Req{cn: S.Conn, job: B.Job, back: Chan(Ans), tl: U32, inb: Nat, raw: String}
+  Req{cn: S.Conn, job: B.Job, back: Chan(Ans), tl: U32, inb: Nat, raw: String, qf: Qf}
   SubReq{cn: S.Conn, job: B.Job, back: Chan(Ans), tl: U32, inb: Nat, raw: String}
   Facts{live: I.Live}
   Tick{ms: Nat}
@@ -85,6 +88,15 @@ type Req is Data:
   Must{cn: S.Conn, back: Chan(Ans)}
   SyncAsk{back: Chan(Ans)}
   Synced{}
+  QbIn{id: Nat, have: Nat, pin: Nat}
+
+# what a batch tells of its client's query buffer (Query buffers, below):
+# nothing, as most batches; that it ended a big argument, of pin bytes
+# with its CRLF; or that it ends inside one, of which it holds have
+type Qf is Data:
+  QfNone{}
+  QfDone{pin: Nat}
+  QfWait{have: Nat, pin: Nat}
 
 # a batch's answer: its replies, encoded (none when CLIENT REPLY held
 # them all back), and the connection's state after it (AnsSub: its
@@ -2760,9 +2772,19 @@ def clf.lver(+f: Clf) -> String:
 # open socket. The monitors (MONITOR, below) are a list, in the order
 # they came, as Redis keeps them; the registry also keeps the pause of
 # CLIENT PAUSE (The pause, below), and a SHUTDOWN asked for in the group
-# (down: SHUTDOWN, below).
+# (down: SHUTDOWN, below). The registry also keeps a client's query buffer
+# as its last big argument left it (qb: Query buffers, below).
 type Cl is Data:
-  Cl{id: Nat, back: Chan(Ans), fd: U32, addr: String, laddr: String, since: Nat, name: String, db: Nat, fl: Clf, r3: Bool, tk: Tk, user: String}
+  Cl{id: Nat, back: Chan(Ans), fd: U32, addr: String, laddr: String, since: Nat, name: String, db: Nat, fl: Clf, r3: Bool, tk: Tk, user: String, qb: Qb}
+
+# a client's query buffer as a big argument left it (Query buffers,
+# below): none, or the room in it (a), the bytes it holds (len), those
+# of the big argument it still waits for with its CRLF (pin: 0 for none),
+# and when (at, ms since 1970: it holds until its client's next batch,
+# whose time is its channel's mark)
+type Qb is Data:
+  QbNone{}
+  QbBig{a: Nat, len: Nat, pin: Nat, at: Nat}
 
 # CLIENT PAUSE's pause (The pause, below): none, or one of the commands
 # that write (all: of every command) until a time (ms since 1970)
@@ -2948,13 +2970,13 @@ def cls.killed(+id: Nat, +cs: Cls) -> Bool:
 # a client's tracking (Tracking), read and set
 def cl.tk(+c: Cl) -> Tk:
   match c:
-    case Cl{id, back, fd, addr, laddr, since, name, db, fl, r3, +kt, user}:
+    case Cl{id, back, fd, addr, laddr, since, name, db, fl, r3, +kt, user, qb}:
       kt
 
 def cl.tk.set(kt: Tk, c: Cl) -> Cl:
   match c:
-    case Cl{id, back, fd, addr, laddr, since, name, db, fl, r3, t0, user}:
-      Cl{id, back, fd, addr, laddr, since, name, db, fl, r3, kt, user}
+    case Cl{id, back, fd, addr, laddr, since, name, db, fl, r3, t0, user, qb}:
+      Cl{id, back, fd, addr, laddr, since, name, db, fl, r3, kt, user, qb}
 
 def cl.tk.of(+m: Maybe<&2, Cl>) -> Tk:
   match m:
@@ -2982,13 +3004,13 @@ def cls.tk.set(+id: Nat, kt: Tk, cs: Cls) -> Cls:
 # a client's user (ACL), read and set
 def cl.user(+c: Cl) -> String:
   match c:
-    case Cl{id, back, fd, addr, laddr, since, name, db, fl, r3, kt, +user}:
+    case Cl{id, back, fd, addr, laddr, since, name, db, fl, r3, kt, +user, qb}:
       user
 
 def cl.user.set(+u: String, c: Cl) -> Cl:
   match c:
-    case Cl{id, back, fd, addr, laddr, since, name, db, fl, r3, kt, user}:
-      Cl{id, back, fd, addr, laddr, since, name, db, fl, r3, kt, u}
+    case Cl{id, back, fd, addr, laddr, since, name, db, fl, r3, kt, user, qb}:
+      Cl{id, back, fd, addr, laddr, since, name, db, fl, r3, kt, u, qb}
 
 def cl.user.of(+m: Maybe<&2, Cl>) -> String:
   match m:
@@ -3033,13 +3055,13 @@ def cls.kills(cs: Cls) -> List<&2, U32> & Cls:
 # a client's name, database and protocol set from its connection
 def cl.conn(+cn: S.Conn, c: Cl) -> Cl:
   match c:
-    case Cl{id, back, fd, addr, laddr, since, name, db, fl, r3, kt, user}:
-      Cl{id, back, fd, addr, laddr, since, S.conn.name(cn), S.conn.db(cn), fl, S.conn.r3(cn), kt, user}
+    case Cl{id, back, fd, addr, laddr, since, name, db, fl, r3, kt, user, qb}:
+      Cl{id, back, fd, addr, laddr, since, S.conn.name(cn), S.conn.db(cn), fl, S.conn.r3(cn), kt, user, qb}
 
 def cl.fl(op: ClfOp, c: Cl) -> Cl:
   match c:
-    case Cl{id, back, fd, addr, laddr, since, name, db, fl, r3, kt, user}:
-      Cl{id, back, fd, addr, laddr, since, name, db, clf.set(op, fl), r3, kt, user}
+    case Cl{id, back, fd, addr, laddr, since, name, db, fl, r3, kt, user, qb}:
+      Cl{id, back, fd, addr, laddr, since, name, db, clf.set(op, fl), r3, kt, user, qb}
 
 def cls.with.if(+id: Nat, m: Maybe<&2, Cl>, +cn: S.Conn, cs: Cls) -> Cls:
   match m:
@@ -3069,7 +3091,7 @@ def cls.fl(+id: Nat, op: ClfOp, cs: Cls) -> Cls:
 # whether the client of a registry's entry has NO-TOUCH on
 def cl.nt.of(+m: Maybe<&2, Cl>) -> Bool:
   match m:
-    case Some{Cl{id, back, fd, addr, laddr, since, name, db, +fl, r3, kt, user}}:
+    case Some{Cl{id, back, fd, addr, laddr, since, name, db, +fl, r3, kt, user, qb}}:
       clf.nt(fl)
     case None{}:
       False{}
@@ -3993,7 +4015,7 @@ def reg.reproto.if(ch: Bool, +id: Nat, +back: Chan(Ans), +r3: Bool, r: Reg) -> R
 
 def ps.reproto(+cn: S.Conn, m: Maybe<&2, Cl>, r: Reg) -> Reg:
   match m:
-    case Some{Cl{id, +back, fd, addr, laddr, since, name, db, fl, +r3, kt, user}}:
+    case Some{Cl{id, +back, fd, addr, laddr, since, name, db, fl, +r3, kt, user, qb}}:
       +now = S.conn.r3(cn)
       reg.reproto.if(Bool.xor(r3, now), S.conn.id(cn), back, now, r)
     case None{}:
@@ -4105,7 +4127,7 @@ def ps.mon.push(+id: Nat, +out: String, pb: Ps) -> Ps:
 # the address of the client of id, as a line shows it
 def cl.addr.or(m: Maybe<&2, Cl>) -> String:
   match m:
-    case Some{Cl{id, back, fd, addr, laddr, since, name, db, fl, r3, kt, user}}:
+    case Some{Cl{id, back, fd, addr, laddr, since, name, db, fl, r3, kt, user, qb}}:
       addr
     case None{}:
       "?:0"
@@ -4137,7 +4159,7 @@ def cl.mon.unix(unix: Bool, +addr: String) -> String:
 
 def cl.mon.or(m: Maybe<&2, Cl>) -> String:
   match m:
-    case Some{Cl{id, back, fd, +addr, +laddr, since, name, db, fl, r3, kt, user}}:
+    case Some{Cl{id, back, fd, +addr, +laddr, since, name, db, fl, r3, kt, user, qb}}:
       cl.mon.unix(String.eq(addr, laddr), addr)
     case None{}:
       "?:0"
@@ -4161,7 +4183,7 @@ def ps.mon.addr(+id: Nat, +pb: Ps) -> String:
 # the name of the client of id (CLIENT SETNAME's), "" for none
 def cl.name.or(m: Maybe<&2, Cl>) -> String:
   match m:
-    case Some{Cl{id, back, fd, addr, laddr, since, name, db, fl, r3, kt, user}}:
+    case Some{Cl{id, back, fd, addr, laddr, since, name, db, fl, r3, kt, user, qb}}:
       name
     case None{}:
       ""
@@ -5025,7 +5047,7 @@ def iv.broken(+id: Nat, +back: Chan(Ans), +r3: Bool, +rd: Nat, +cur: Nat, +out: 
 
 def iv.redir.of(m: Maybe<&2, Cl>, +rd: Nat, +id: Nat, +back: Chan(Ans), +r3: Bool, +p: Pl, +cur: Nat, +out: Maybe<&2, Nat>, v: Iv) -> Iv:
   match m:
-    case Some{Cl{+rid, +rback, fd, addr, laddr, since, name, db, fl, +rr3, kt, user}}:
+    case Some{Cl{+rid, +rback, fd, addr, laddr, since, name, db, fl, +rr3, kt, user, qb}}:
       iv.put(True{}, rid, rback, rr3, p, id, cur, out, v)
     case None{}:
       iv.broken(id, back, r3, rd, cur, out, v)
@@ -5041,7 +5063,7 @@ def iv.to(+rd: Nat, +id: Nat, +back: Chan(Ans), +r3: Bool, +p: Pl, +cur: Nat, +o
 # command runs (0: none), out as iv.route reads it
 def iv.send(+c: Cl, +p: Pl, +cur: Nat, +out: Maybe<&2, Nat>, v: Iv) -> Iv:
   match c:
-    case Cl{+id, +back, fd, addr, laddr, since, name, db, fl, +r3, +kt, user}:
+    case Cl{+id, +back, fd, addr, laddr, since, name, db, fl, +r3, +kt, user, qb}:
       iv.to(tk.redir(kt), id, back, r3, p, cur, out, v)
 
 # a key of the table that changed: each of its clients that hears of it
@@ -5133,7 +5155,7 @@ def iv.key(+k: String, +cur: Nat, +bc: Bool, v: Iv) -> Iv:
 # emptied (trackingInvalidateKeysOnFlush)
 def iv.null.of(m: Maybe<&2, Cl>, +cur: Nat, v: Iv) -> Iv:
   match m:
-    case Some{Cl{+id, +back, fd, addr, laddr, since, name, db, fl, +r3, +kt, user}}:
+    case Some{Cl{+id, +back, fd, addr, laddr, since, name, db, fl, +r3, +kt, user, qb}}:
       iv.to(tk.redir(kt), id, back, r3, PlNull{r3}, cur, None{}, v)
     case None{}:
       v
@@ -8377,6 +8399,297 @@ def bg.unsub.all(+id: Nat, g: LRun) -> LRun:
     case LHeld{h}:
       LHeld{h}
 
+# Query buffers
+# -------------
+# CLIENT LIST shows a client's query buffer as Redis 7.2.16 keeps it: the
+# bytes it holds (qbuf) and the room left in it (qbuf-free). Redis's buffer
+# is an sds string that its reads grow (networking.c, readQueryFromClient):
+# one with less than 16 KB of room gets room for 16 KB more, just that, in
+# the size class jemalloc gives it with its header and NUL (20,474 bytes
+# from a new client's 4); a big argument (a bulk of 32 KB or more) gets a
+# buffer sized to it from its length's line on, and once read, a new one
+# of that size (processMultibulkBuffer); and the cron
+# (clientsCronResizeQueryBuffer), at each client every 1/hz s, takes back
+# the room of a buffer with more than 4 KB free: all of it once its client
+# is idle more than 2 s, or what lies past the bytes held, and past the big
+# argument still awaited, once the buffer is past 32 KB and twice what its
+# client held since the cron's last look. No such buffer is read into here,
+# so the actor reckons it: a client's buffer is a new client's (before its
+# first batch: its channel's mark's word is still 0) or one read into once,
+# freed once its client is idle 3 s; but a big argument, which the
+# client's connection tells of (a read inside one, QbIn; the batch it ends
+# in or ends inside, Req's qf), leaves its buffer with the client (Cl's
+# qb) until the client's next batch, the cron's looks reckoned at each
+# CLIENT LIST from its time and the hz. A buffer grown past 20,474 bytes
+# by an argument of less than 32 KB that Redis's reads of 16 KB cut is not
+# reckoned (README.md, CLIENT LIST).
+
+# jemalloc's size class of s bytes (5.3, 64-bit): 8, multiples of 16 up
+# to 128, then four classes to each doubling (g < s <= 2g, g from 128)
+def je.up(+s: Nat, +q: Nat) -> Nat:
+  Nat.mul(Nat.div(Nat.add(s, Nat.sub(q, 1n)), q), q)
+
+def je.big(fuel: Nat, fit: Bool, +s: Nat, +g: Nat) -> Nat:
+  match fuel fit:
+    case _ True{}:
+      je.up(s, Nat.div(g, 4n))
+    case 1n+f False{}:
+      je.big(f, Nat.is_le(s, Nat.mul(g, 4n)), s, Nat.add(g, g))
+    case 0n False{}:
+      s
+
+def je.class(+s: Nat) -> Nat:
+  Bool.pick(Nat, Nat.is_le(s, 8n), 8n, Bool.pick(Nat, Nat.is_le(s, 128n), je.up(s, 16n), je.big(40n, Nat.is_le(s, 256n), s, 128n)))
+
+# the header of an sds string of n bytes (sds.c, sdsReqType: never type 5
+# for a query buffer), and the most its type holds
+def sds.hdr(+n: Nat) -> Nat:
+  Bool.pick(Nat, Nat.is_lt(n, 256n), 3n, Bool.pick(Nat, Nat.is_lt(n, 65536n), 5n, Bool.pick(Nat, Nat.is_le(n, 4294967295n), 9n, 17n)))
+
+def sds.max(+h: Nat, +r: Nat) -> Nat:
+  Bool.pick(Nat, Nat.is_eq(h, 3n), 255n, Bool.pick(Nat, Nat.is_eq(h, 5n), 65535n, Bool.pick(Nat, Nat.is_eq(h, 9n), 4294967295n, r)))
+
+# the room an sds string made for n bytes gets (_sdsMakeRoomFor,
+# _sdsnewlen): its size class less its header and NUL, at most its type's
+def sds.room(+n: Nat) -> Nat:
+  +h = sds.hdr(n)
+  +r = Nat.sub(je.class(Nat.add(Nat.add(h, n), 1n)), Nat.add(h, 1n))
+  Nat.min(r, sds.max(h, r))
+
+# the room of a buffer read into once (20,474 bytes), and of a big
+# argument's buffer: the buffer kept when it holds pin bytes already
+def qb.read() -> Nat:
+  20474n
+
+def qb.pre(+room: Nat, +pin: Nat) -> Nat:
+  Bool.pick(Nat, Nat.is_le(pin, room), room, sds.room(pin))
+
+# whole seconds between two times in ms, as CLIENT LIST's idle counts them
+def qb.idle(+now: Nat, +t: Nat) -> Nat:
+  Nat.sub(Nat.div(now, 1000n), Nat.div(t, 1000n))
+
+# the room of a big argument's buffer of len bytes as the cron leaves it,
+# its client idle idle s, late once two of the cron's looks came since
+def qb.cron(+a: Nat, +len: Nat, +pin: Nat, late: Bool, +idle: Nat) -> Nat:
+  +held = Nat.max(len, pin)
+  +peak = Bool.pick(Nat, Bool.and(late, Bool.and(Nat.is_lt(32768n, a), Nat.is_lt(held, Nat.div(a, 2n)))), held, a)
+  Bool.pick(Nat, Nat.is_lt(4096n, Nat.sub(a, len)), Bool.pick(Nat, Nat.is_lt(2n, idle), len, peak), a)
+
+# the room of a buffer no big argument left: a new client's (its mark's
+# word still 0), else one read into once, freed once idle 3 s
+def qb.plain(+word: U32, +idle: Nat) -> Nat:
+  Bool.pick(Nat, Nat.is_eq(R.code.key(U32.to_nat(word)), 0n), 4n, Bool.pick(Nat, Nat.is_lt(2n, idle), 0n, qb.read()))
+
+# the bytes a client's query buffer holds at now and the room left in it,
+# its channel marked (word, mark) by its last batch, the cron's looks per
+# ms apart: its big argument's while no batch came since, else a plain one
+def qb.held(+room: Nat, +len: Nat) -> Nat & Nat:
+  (len, Nat.sub(room, len))
+
+def qb.now.at(q: Qb, +word: U32, +mark: Nat, +now: Nat, +per: Nat, +idle: Nat) -> Nat & Nat:
+  match q:
+    case QbBig{+a, +len, +pin, +at}:
+      Bool.pick(Nat & Nat, Nat.is_le(mark, at), qb.held(qb.cron(a, len, pin, Nat.is_le(Nat.add(at, Nat.add(per, per)), now), idle), len), (0n, qb.plain(word, idle)))
+    case QbNone{}:
+      (0n, qb.plain(word, idle))
+
+def qb.now(q: Qb, +word: U32, +mark: Nat, +now: Nat, +per: Nat) -> Nat & Nat:
+  qb.now.at(q, word, mark, now, per, qb.idle(now, mark))
+
+def nat2.fst(p: Nat & Nat) -> Nat:
+  (a, b) = p
+  a
+
+def nat2.snd(p: Nat & Nat) -> Nat:
+  (a, b) = p
+  b
+
+# the cron's looks at a client, 1/hz s apart (hz, as CONFIG SET caps it)
+def qb.per(+srv: S.Srv) -> Nat:
+  Nat.div(1000n, Nat.max(S.cfg.nat(S.srv.cfg(srv), "hz"), 1n))
+
+# a client's buffer as a big argument leaves it, and as a read inside one
+# leaves it, at now: the buffer the cron left it kept if it holds the
+# argument already, its channel marked again with the read's time (Redis's
+# lastinteraction)
+def cl.qb.set(c: Cl, q: Qb) -> Cl:
+  match c:
+    case Cl{id, back, fd, addr, laddr, since, name, db, fl, r3, kt, user, qb}:
+      Cl{id, back, fd, addr, laddr, since, name, db, fl, r3, kt, user, q}
+
+def qb.in.room(hf: Nat & Nat, +have: Nat, +pin: Nat, +now: Nat) -> Qb:
+  (held, free) = hf
+  QbBig{qb.pre(Nat.add(free, held), pin), have, pin, now}
+
+def qb.in.at(+word: U32, +mark: Nat, q: Qb, +have: Nat, +pin: Nat, +now: Nat, +per: Nat) -> Qb:
+  qb.in.room(qb.now(q, word, mark, now, per), have, pin, now)
+
+def qb.in(mk: U32 & Nat, q: Qb, +have: Nat, +pin: Nat, +now: Nat, +per: Nat) -> Qb:
+  (word, mark) = mk
+  qb.in.at(word, mark, q, have, pin, now, per)
+
+# a client's channel marked again as it was, at the time t
+def mark.at.of(+back: Chan(Ans), m: U32 & Nat, +t: Nat) -> Chan(Ans):
+  (w, at) = m
+  Chan.mark(Ans, back, w, t)
+
+def mark.at(+back: Chan(Ans), +t: Nat) -> Chan(Ans):
+  mark.at.of(back, Chan.marked(Ans, back), t)
+
+def cl.qb.in(c: Cl, +have: Nat, +pin: Nat, +now: Nat, +per: Nat) -> Cl:
+  match c:
+    case Cl{id, +back, fd, addr, laddr, since, name, db, fl, r3, kt, user, qb}:
+      +q = qb.in(Chan.marked(Ans, back), qb, have, pin, now, per)
+      Cl{id, mark.at(back, now), fd, addr, laddr, since, name, db, fl, r3, kt, user, q}
+
+def cls.qb.of(m: Maybe<&2, Cl>, +id: Nat, q: Qb, cs: Cls) -> Cls:
+  match m:
+    case Some{c}:
+      cls.put(id, cl.qb.set(c, q), cs)
+    case None{}:
+      cs
+
+def cls.qb.in.of(m: Maybe<&2, Cl>, +id: Nat, +have: Nat, +pin: Nat, +now: Nat, +per: Nat, cs: Cls) -> Cls:
+  match m:
+    case Some{c}:
+      cls.put(id, cl.qb.in(c, have, pin, now, per), cs)
+    case None{}:
+      cs
+
+def ps.qb(+id: Nat, q: Qb, pb: Ps) -> Ps:
+  match pb:
+    case Ps{reg, ev, px, +cs, own}:
+      Ps{reg, ev, px, cls.qb.of(cls.get(id, cs), id, q, cs), own}
+    case PsOf{p}:
+      ps.qb(id, q, p)
+
+def ps.qb.in(+id: Nat, +have: Nat, +pin: Nat, +now: Nat, +per: Nat, pb: Ps) -> Ps:
+  match pb:
+    case Ps{reg, ev, px, +cs, own}:
+      Ps{reg, ev, px, cls.qb.in.of(cls.get(id, cs), id, have, pin, now, per, cs), own}
+    case PsOf{p}:
+      ps.qb.in(id, have, pin, now, per, p)
+
+# the big argument a batch of the client of id ended (pin bytes, its
+# CRLF with them) or ends inside (of which it read have), at now
+def ps.qf(qf: Qf, +id: Nat, +now: Nat, pb: Ps) -> Ps:
+  match qf:
+    case QfNone{}:
+      pb
+    case QfDone{+pin}:
+      ps.qb(id, QbBig{sds.room(pin), 0n, 0n, now}, pb)
+    case QfWait{+have, +pin}:
+      ps.qb(id, QbBig{sds.room(pin), have, pin, now}, pb)
+
+# The bytes a request waits for: the tail a parse leaves, a request not
+# whole yet, may wait inside a big argument, whose length's line lies in
+# the tail before its bytes read so far. The length and its CRLF (pin)
+# are read off the tail's lines and bulks, from the request's start (a
+# '*' line, then a line and a bulk for each argument), or from the bulk's
+# line for a long request read in part (resp.bend: TailPart): the bulk at
+# index i, a '$' and its line's number (nl) read; past the tail's end,
+# the last bulk read (last) is the one not whole yet; 0 when none is
+# found.
+def pend.bulks(fuel: Nat, dollar: Bool, nl: P.NumLine, +last: Nat, +s: String, +i: Nat, +l: Nat) -> Nat:
+  match fuel dollar nl:
+    case 1n+f True{} P.NumOk{+n, +j}:
+      +e = Nat.add(Nat.add(j, n), 2n)
+      pend.bulks(f, U32.is_eq(String.code_at(s, e), 36), P.num_at(s, 1n+e), 2n+n, s, e, l)
+    case _ _ _:
+      Bool.pick(Nat, Nat.is_lt(l, i), last, 0n)
+
+def pend.from(+n: Nat, +s: String, +j: Nat) -> Nat:
+  pend.bulks(n, U32.is_eq(String.code_at(s, j), 36), P.num_at(s, 1n+j), 0n, s, j, String.length(s))
+
+def pend.star(star: Bool, nl: P.NumLine, +s: String) -> Nat:
+  match star nl:
+    case True{} P.NumOk{+n, +j}:
+      pend.from(1n+n, s, j)
+    case _ _:
+      0n
+
+def pend.req(+s: String) -> Nat:
+  pend.star(U32.is_eq(String.code_at(s, 0n), 42), P.num_at(s, 1n), s)
+
+def pend.pin(+t: P.Tail) -> Nat:
+  match t:
+    case P.TailNone{}:
+      0n
+    case P.TailBytes{+r}:
+      pend.req(r)
+    case P.TailPart{p, +r}:
+      pend.from(1n, r, 0n)
+    case P.TailAuth{+u}:
+      pend.pin(u)
+    case P.TailHeld{+u, m}:
+      pend.pin(u)
+
+# A batch of a few requests (four at most) of 32 KB or more read whole may
+# hold a big argument that Redis's reads, of 16 KB, would have cut: the
+# pin of the last one, the requests' elements read from the batch's start
+# (a '*' line, then k bulks; ok when the element at hand starts as it
+# must), 0 for none; a request inline, or not whole, ends the walk
+def pend.ok(+s: String, +i: Nat, +k: Nat) -> Bool:
+  U32.is_eq(String.code_at(s, i), Bool.pick(U32, Nat.is_eq(k, 0n), 42, 36))
+
+def pend.last(fuel: Nat, ok: Bool, k: Nat, nl: P.NumLine, +last: Nat, +s: String, +l: Nat) -> Nat:
+  match fuel ok k nl:
+    case 1n+f True{} 0n P.NumOk{+n, +j}:
+      pend.last(f, pend.ok(s, j, n), n, P.num_at(s, 1n+j), last, s, l)
+    case 1n+f True{} 1n++m P.NumOk{+n, +j}:
+      +e = Nat.add(Nat.add(j, n), 2n)
+      pend.last(f, pend.ok(s, e, m), m, P.num_at(s, 1n+e), Bool.pick(Nat, Bool.and(Nat.is_le(32768n, n), Nat.is_le(e, l)), 2n+n, last), s, l)
+    case _ _ _ _:
+      last
+
+def pend.raw(few: Bool, +s: String) -> Nat:
+  match few:
+    case True{}:
+      +l = String.length(s)
+      pend.last(l, pend.ok(s, 0n, 0n), 0n, P.num_at(s, 1n), 0n, s, l)
+    case False{}:
+      0n
+
+# the big argument a batch ended: the last of its few requests', else
+# the one its tail before waited inside (pin)
+def pend.done(+pin: Nat, +tl: U32, +s: String) -> Nat:
+  +last = pend.raw(Nat.is_le(U32.to_nat(U32.shrn(tl, 12n)), 4n), s)
+  Bool.pick(Nat, Nat.is_eq(last, 0n), pin, last)
+
+# what a batch tells of a big argument: the one its tail waits inside
+# (wait: the tail's pin, of which need bytes are still to come), else the
+# one it ended (pend.done; a batch of less than 32 KB whose tail before
+# waited for none ended none); 0 for none
+def qf.done(big: Bool, +n: Nat) -> Qf:
+  match big:
+    case True{}:
+      QfDone{n}
+    case False{}:
+      QfNone{}
+
+def qf.whole(big: Bool, +pin: Nat, +tl: U32, +raw: String) -> Qf:
+  match big:
+    case True{}:
+      +done = pend.done(pin, tl, raw)
+      qf.done(Nat.is_le(32770n, done), done)
+    case False{}:
+      QfNone{}
+
+def qf.wait(big: Bool, +wait: Nat, +need: Nat, +pin: Nat, +inb: Nat, +tl: U32, +raw: String) -> Qf:
+  match big:
+    case True{}:
+      QfWait{Nat.sub(wait, need), wait}
+    case False{}:
+      qf.whole(Nat.is_le(32770n, Nat.max(pin, inb)), pin, tl, raw)
+
+def qf.of(+t: P.Tail, +need: Nat, +pin: Nat, +inb: Nat, +tl: U32, +raw: String) -> Qf:
+  match t:
+    case P.TailNone{}:
+      qf.whole(Nat.is_le(32770n, Nat.max(pin, inb)), pin, tl, raw)
+    case _:
+      +wait = pend.pin(t)
+      qf.wait(Nat.is_le(32770n, wait), wait, need, pin, inb, tl, raw)
+
 # CLIENT LIST, INFO, KILL and NO-EVICT
 # ------------------------------------
 # A client's line as Redis writes it (R.client.line), from the registry
@@ -8488,20 +8801,20 @@ type Who is Data:
   Me{id: Nat, cn: S.Conn, cmd: String, qbuf: Nat, argv: Nat, ex: Maybe<&2, Nat>}
   Them{}
 
-def cl.line.of(m: Mine, +mo: Bool, +sub: Bool, +x: TxIs, +b: Bool, +wa: Nat, c: Cl, +now: Nat, +word: U32, +at: Nat, w: Who) -> String:
+def cl.line.of(m: Mine, +mo: Bool, +sub: Bool, +x: TxIs, +b: Bool, +wa: Nat, c: Cl, +now: Nat, +per: Nat, +word: U32, +at: Nat, w: Who) -> String:
   match m:
     case Mine{+ch, +pa, +sh}:
       match c:
-        case Cl{id, back, fd, +addr, +laddr, +since, name, db, +fl, r3, +kt, user}:
+        case Cl{id, back, fd, +addr, +laddr, +since, name, db, +fl, r3, +kt, user, +qb}:
           match w:
             case Them{}:
-              R.client.line(R.ClLine{id, addr, laddr, U32.to_nat(fd), name, cl.secs(now, since), cl.secs(now, at), cl.flags(mo, sub, x, b, kt, String.eq(addr, laddr), fl), db, List.length(&2, String, ch), List.length(&2, String, pa), List.length(&2, String, sh), cl.multi(x), 0n, wa, cl.cmd.of(word), user, tk.line.redir(kt), r3, clf.lname(fl), clf.lver(fl)})
-            case Me{i, +cn, cmd, qbuf, argv, ex}:
-              R.client.line(R.ClLine{id, addr, laddr, U32.to_nat(fd), S.conn.name(cn), cl.secs(now, since), 0n, cl.flags(mo, sub, x, b, kt, String.eq(addr, laddr), fl), S.conn.db(cn), List.length(&2, String, ch), List.length(&2, String, pa), List.length(&2, String, sh), cl.multi(x), qbuf, argv, cmd, user, tk.line.redir(kt), S.conn.r3(cn), clf.lname(fl), clf.lver(fl)})
+              R.client.line(R.ClLine{id, addr, laddr, U32.to_nat(fd), name, cl.secs(now, since), cl.secs(now, at), cl.flags(mo, sub, x, b, kt, String.eq(addr, laddr), fl), db, List.length(&2, String, ch), List.length(&2, String, pa), List.length(&2, String, sh), cl.multi(x), nat2.fst(qb.now(qb, word, at, now, per)), nat2.snd(qb.now(qb, word, at, now, per)), wa, cl.cmd.of(word), user, tk.line.redir(kt), r3, clf.lname(fl), clf.lver(fl)})
+            case Me{i, +cn, cmd, +qbuf, argv, ex}:
+              R.client.line(R.ClLine{id, addr, laddr, U32.to_nat(fd), S.conn.name(cn), cl.secs(now, since), 0n, cl.flags(mo, sub, x, b, kt, String.eq(addr, laddr), fl), S.conn.db(cn), List.length(&2, String, ch), List.length(&2, String, pa), List.length(&2, String, sh), cl.multi(x), qbuf, Nat.sub(qb.read(), qbuf), argv, cmd, user, tk.line.redir(kt), S.conn.r3(cn), clf.lname(fl), clf.lver(fl)})
 
-def cl.line.mk(m: Mine, +mo: Bool, +sub: Bool, +x: TxIs, +b: Bool, +wa: Nat, c: Cl, +now: Nat, mk: U32 & Nat, w: Who) -> String:
+def cl.line.mk(m: Mine, +mo: Bool, +sub: Bool, +x: TxIs, +b: Bool, +wa: Nat, c: Cl, +now: Nat, +per: Nat, mk: U32 & Nat, w: Who) -> String:
   (word, at) = mk
-  cl.line.of(m, mo, sub, x, b, wa, c, now, word, at, w)
+  cl.line.of(m, mo, sub, x, b, wa, c, now, per, word, at, w)
 
 # the transaction a line shows: of the client that asks while EXEC runs
 # it (in MULTI, its commands queued, as Redis shows a client in EXEC),
@@ -8521,14 +8834,14 @@ def cl.tx(+w: Who, +id: Nat, +tx: Tx) -> TxIs:
       tx.find(id, tx)
 
 # client c's line, ended by a newline
-def cl.line(c: Cl, +now: Nat, +w: Who, +ws: Waits, +tx: Tx, +pb: Ps) -> String:
+def cl.line(c: Cl, +now: Nat, +per: Nat, +w: Who, +ws: Waits, +tx: Tx, +pb: Ps) -> String:
   match c:
-    case Cl{+id, +back, fd, addr, laddr, since, name, db, fl, r3, kt, user}:
-      cl.line.mk(mine.or(ps.mine(id, pb)), ps.mon.is(id, pb), ps.has(id, pb), cl.tx(w, id, tx), waits.has(id, ws), waits.argv(id, ws), Cl{id, back, fd, addr, laddr, since, name, db, fl, r3, kt, user}, now, Chan.marked(Ans, back), w) ++ "\n"
+    case Cl{+id, +back, fd, addr, laddr, since, name, db, fl, r3, kt, user, qb}:
+      cl.line.mk(mine.or(ps.mine(id, pb)), ps.mon.is(id, pb), ps.has(id, pb), cl.tx(w, id, tx), waits.has(id, ws), waits.argv(id, ws), Cl{id, back, fd, addr, laddr, since, name, db, fl, r3, kt, user, qb}, now, per, Chan.marked(Ans, back), w) ++ "\n"
 
 def cl.id(+c: Cl) -> Nat:
   match c:
-    case Cl{+id, back, fd, addr, laddr, since, name, db, fl, r3, kt, user}:
+    case Cl{+id, back, fd, addr, laddr, since, name, db, fl, r3, kt, user, qb}:
       id
 
 # the registry's clients, in the order of their ids (as Redis lists them
@@ -8611,42 +8924,42 @@ def cl.who(+me: Who, +id: Nat) -> Who:
     case Them{}:
       Them{}
 
-def cl.lines(xs: List<&2, Cl>, +ty: Nat, +now: Nat, +me: Who, +ws: Waits, +tx: Tx, +pb: Ps, acc: String) -> String:
+def cl.lines(xs: List<&2, Cl>, +ty: Nat, +now: Nat, +per: Nat, +me: Who, +ws: Waits, +tx: Tx, +pb: Ps, acc: String) -> String:
   match xs:
     case Nil{}:
       acc
     case Con{+c, rest}:
       +id = cl.id(c)
-      cl.lines(rest, ty, now, me, ws, tx, pb, acc ++ Bool.pick(String, cl.typed(ty, id, pb), cl.line(c, now, cl.who(me, id), ws, tx, pb), ""))
+      cl.lines(rest, ty, now, per, me, ws, tx, pb, acc ++ Bool.pick(String, cl.typed(ty, id, pb), cl.line(c, now, per, cl.who(me, id), ws, tx, pb), ""))
 
-def cl.line.or(m: Maybe<&2, Cl>, +now: Nat, w: Who, +ws: Waits, +tx: Tx, +pb: Ps) -> String:
+def cl.line.or(m: Maybe<&2, Cl>, +now: Nat, +per: Nat, w: Who, +ws: Waits, +tx: Tx, +pb: Ps) -> String:
   match m:
     case Some{c}:
-      cl.line(c, now, w, ws, tx, pb)
+      cl.line(c, now, per, w, ws, tx, pb)
     case None{}:
       ""
 
-def cl.ids(ids: List<&2, Nat>, +now: Nat, +me: Who, +ws: Waits, +tx: Tx, +pb: Ps, acc: String) -> String:
+def cl.ids(ids: List<&2, Nat>, +now: Nat, +per: Nat, +me: Who, +ws: Waits, +tx: Tx, +pb: Ps, acc: String) -> String:
   match ids:
     case Nil{}:
       acc
     case Con{+id, rest}:
-      cl.ids(rest, now, me, ws, tx, pb, acc ++ cl.line.or(cls.get(id, ps.cls(pb)), now, cl.who(me, id), ws, tx, pb))
+      cl.ids(rest, now, per, me, ws, tx, pb, acc ++ cl.line.or(cls.get(id, ps.cls(pb)), now, per, cl.who(me, id), ws, tx, pb))
 
 # CLIENT LIST: all clients, of a type, or of ids (a verbatim text, as
 # Redis answers it)
-def cl.list(+ty: Nat, ids: Maybe<&2, List<&2, Nat>>, +now: Nat, +me: Who, +ws: Waits, +tx: Tx, +pb: Ps) -> R.Reply:
+def cl.list(+ty: Nat, ids: Maybe<&2, List<&2, Nat>>, +now: Nat, +per: Nat, +me: Who, +ws: Waits, +tx: Tx, +pb: Ps) -> R.Reply:
   match ids:
     case Some{xs}:
-      R.RVerb{cl.ids(xs, now, me, ws, tx, pb, "")}
+      R.RVerb{cl.ids(xs, now, per, me, ws, tx, pb, "")}
     case None{}:
-      R.RVerb{cl.lines(cls.all(ps.cls(pb)), ty, now, me, ws, tx, pb, "")}
+      R.RVerb{cl.lines(cls.all(ps.cls(pb)), ty, now, per, me, ws, tx, pb, "")}
 
 # CLIENT INFO: the client's own line
-def cl.info(+now: Nat, +me: Who, +ws: Waits, +tx: Tx, +pb: Ps) -> R.Reply:
+def cl.info(+now: Nat, +per: Nat, +me: Who, +ws: Waits, +tx: Tx, +pb: Ps) -> R.Reply:
   match me:
     case Me{+id, cn, cmd, qbuf, argv, ex}:
-      R.RVerb{cl.ids([id], now, me, ws, tx, pb, "")}
+      R.RVerb{cl.ids([id], now, per, me, ws, tx, pb, "")}
     case Them{}:
       R.RVerb{""}
 
@@ -8668,12 +8981,12 @@ def id.is(m: Maybe<&2, Nat>, +n: Nat) -> Bool:
 # that kills)
 def cl.picked(f: R.Kill, c: Cl, +me: Nat, +pb: Ps) -> Bool:
   match f c:
-    case R.Kill{a, l, i, +ty, +skip, u} Cl{+id, back, fd, +addr, +laddr, since, name, db, fl, r3, kt, +user}:
+    case R.Kill{a, l, i, +ty, +skip, u} Cl{+id, back, fd, +addr, +laddr, since, name, db, fl, r3, kt, +user, qb}:
       Bool.and(Bool.and(Bool.and(Bool.and(opt.is(a, addr), opt.is(l, laddr)), Bool.and(id.is(i, id), cl.typed(ty, id, pb))), opt.is(u, user)), Bool.not(Bool.and(skip, Nat.is_eq(id, me))))
 
 def cl.fd(+c: Cl) -> U32:
   match c:
-    case Cl{id, back, +fd, addr, laddr, since, name, db, fl, r3, kt, user}:
+    case Cl{id, back, +fd, addr, laddr, since, name, db, fl, r3, kt, user, qb}:
       fd
 
 # the clients a filter picks
@@ -8777,12 +9090,12 @@ def bg.conned(g: LRun) -> LRun:
 
 # CLIENT LIST, INFO, KILL and NO-EVICT of the client of id, whose batch
 # came in inb bytes, the command's arguments argv bytes
-def bg.list.r(info: Bool, +ty: Nat, ids: Maybe<&2, List<&2, Nat>>, +now: Nat, +me: Who, +ws: Waits, +tx: Tx, +pb: Ps) -> R.Reply:
+def bg.list.r(info: Bool, +ty: Nat, ids: Maybe<&2, List<&2, Nat>>, +now: Nat, +per: Nat, +me: Who, +ws: Waits, +tx: Tx, +pb: Ps) -> R.Reply:
   match info:
     case True{}:
-      cl.info(now, me, ws, tx, pb)
+      cl.info(now, per, me, ws, tx, pb)
     case False{}:
-      cl.list(ty, ids, now, me, ws, tx, pb)
+      cl.list(ty, ids, now, per, me, ws, tx, pb)
 
 # the command a client's own line shows: EXEC while it runs the client's
 # transaction (Redis's last command), else CLIENT INFO or LIST
@@ -8795,8 +9108,8 @@ def cl.cmd.me(+info: Bool, +ex: Maybe<&2, Nat>) -> String:
 
 def bg.list(+id: Nat, +info: Bool, +ty: Nat, ids: Maybe<&2, List<&2, Nat>>, +argv: Nat, +inb: Nat, +ex: Maybe<&2, Nat>, +code: Nat, g: LRun) -> LRun:
   match g:
-    case LRun{rs, es, +conn, srv, +ds, +ws, up, +tx, +pb}:
-      bg.say(bg.list.r(info, ty, ids, R.ds.now(ds), Me{id, conn, cl.cmd.me(info, ex), inb, argv, ex}, ws, tx, pb), code, LRun{rs, es, conn, srv, ds, ws, up, tx, pb})
+    case LRun{rs, es, +conn, +srv, +ds, +ws, up, +tx, +pb}:
+      bg.say(bg.list.r(info, ty, ids, R.ds.now(ds), qb.per(srv), Me{id, conn, cl.cmd.me(info, ex), inb, argv, ex}, ws, tx, pb), code, LRun{rs, es, conn, srv, ds, ws, up, tx, pb})
     case LHeld{h}:
       LHeld{h}
 
@@ -9515,7 +9828,8 @@ def bg.acl.sort(on: Bool, +id: Nat, +srv: S.Srv, +pb: Ps, +k: Nat, +a: Av, +c: R
 # line then (client-info): its CLIENT LIST line, without the newline,
 # whose command is the call's, or EXEC while EXEC runs its transaction
 # (x: its commands queued; Redis keeps EXEC the last command then, and
-# EXEC's argument as the arguments' bytes)
+# EXEC's argument as the arguments' bytes); a client's own line, which
+# reads no look of the cron's (Query buffers: 0 for their period)
 def maybe.is(+x: Maybe<&2, Nat>) -> Bool:
   match x:
     case Some{n}:
@@ -9534,7 +9848,7 @@ def acl.me(+id: Nat, +cn: S.Conn, +code: Nat, +inb: Nat, +a: Av, +x: Maybe<&2, N
       Me{id, cn, cl.cmd.of(U32.from_nat(code)), inb, S.cl.argv(av.now(a), 0n), None{}}
 
 def acl.info(+id: Nat, +now: Nat, +me: Who, +ws: Waits, +tx: Tx, +pb: Ps) -> String:
-  +s = cl.line.or(cls.get(id, ps.cls(pb)), now, me, ws, tx, pb)
+  +s = cl.line.or(cls.get(id, ps.cls(pb)), now, 0n, me, ws, tx, pb)
   String.take(s, Nat.sub(String.length(s), 1n))
 
 # the entry for a call of the client of id that its user may not make (v:
@@ -12941,10 +13255,21 @@ def grp.aof(g: Grp) -> Grp:
     case Grp{outs, es, +srv, ds, +ws, up, tx, pb}:
       grp.aof.of(Bool.and(S.srv.aof.due(srv), waits.any(ws)), Grp{outs, es, srv, ds, ws, up, tx, pb})
 
+# the big argument a batch of a client in the state cn ended or ends
+# inside (Query buffers), once it ran
+def grp.qf(qf: Qf, +cn: S.Conn, g: Grp) -> Grp:
+  match qf g:
+    case QfNone{} g0:
+      g0
+    case q Grp{outs, es, srv, +ds, ws, up, tx, pb}:
+      Grp{outs, es, srv, ds, ws, up, tx, ps.qf(q, S.conn.id(cn), R.ds.now(ds), pb)}
+
 def group_req(+log: Bool, q: Req, g: Grp) -> Grp:
   match q g:
-    case Req{+cn, job, back, +tl, +inb, raw} g0:
+    case Req{+cn, job, back, +tl, +inb, raw, QfNone{}} g0:
       grp.req(log, cn, job, back, tl, inb, raw, g0)
+    case Req{+cn, job, back, +tl, +inb, raw, qf} g0:
+      grp.qf(qf, cn, grp.req(log, cn, job, back, tl, inb, raw, g0))
     case SubReq{+cn, job, back, tl, +inb, raw} g0:
       grp.sub(cn, job, back, inb, raw, g0)
     case Facts{live} Grp{outs, es, +srv, ds, +ws, up, tx, +pb}:
@@ -12967,11 +13292,13 @@ def group_req(+log: Bool, q: Req, g: Grp) -> Grp:
       +now = R.ds.now(ds)
       +sv = S.srv.acl.client(srv, id, "default")
       +cj = S.conn_join(id, srv)
-      Grp{(back, ans.auth(S.conn.auth(cj), Bool.not(S.authed(cj, srv)), Ans{None{}, cj})) <> outs, es, sv, ds, ws, up, tx, ps.acl.at(ps.join(id, Cl{id, Chan.mark(Ans, back, 0, now), fd, cl.at(srv, addr), cl.at(srv, laddr), now, "", 0n, clf.new(), False{}, TkOff{}, "default"}, pb), acl.on(sv))}
+      Grp{(back, ans.auth(S.conn.auth(cj), Bool.not(S.authed(cj, srv)), Ans{None{}, cj})) <> outs, es, sv, ds, ws, up, tx, ps.acl.at(ps.join(id, Cl{id, Chan.mark(Ans, back, 0, now), fd, cl.at(srv, addr), cl.at(srv, laddr), now, "", 0n, clf.new(), False{}, TkOff{}, "default", QbNone{}}, pb), acl.on(sv))}
     case SyncAsk{back} Grp{outs, es, srv, ds, ws, up, tx, pb}:
       Grp{(back, Push{""}) <> outs, es, S.srv.sync.ask(srv), ds, ws, up, tx, pb}
     case Synced{} Grp{outs, es, srv, ds, ws, up, tx, pb}:
       grp.aof(Grp{outs, es, S.srv.sync.done(srv), ds, ws, up, tx, pb})
+    case QbIn{+id, +have, +pin} Grp{outs, es, +srv, +ds, ws, up, tx, pb}:
+      Grp{outs, es, srv, ds, ws, up, tx, ps.qb.in(id, have, pin, R.ds.now(ds), qb.per(srv), pb)}
 
 # the clock (IO.clock: s and us since 1970) in ms
 def clock.ms(t: U32 & U32) -> Nat:
@@ -13167,8 +13494,12 @@ def group_all(+log: Bool, qs: List<&1, Req>, g: Grp, +s0: U32, +k: U32, +c0: U32
     case Nil{}:
       +x = g
       group_end(grp.calm(x), x, s0, k, c0)
-    case Con{Req{+cn, job, back, +tl, +inb, +raw}, rest}:
+    case Con{Req{+cn, job, back, +tl, +inb, +raw, QfNone{}}, rest}:
       +g1 = grp.req(log, cn, job, back, tl, inb, raw, g)
+      +c1 = grp.clock(g1)
+      group_all(log, rest, grp.timed(S.conn.id(cn), raw, us.of(c0, c1), secs.of(s0, k, c1), g1), s0, k, c1)
+    case Con{Req{+cn, job, back, +tl, +inb, +raw, qf}, rest}:
+      +g1 = grp.qf(qf, cn, grp.req(log, cn, job, back, tl, inb, raw, g))
       +c1 = grp.clock(g1)
       group_all(log, rest, grp.timed(S.conn.id(cn), raw, us.of(c0, c1), secs.of(s0, k, c1), g1), s0, k, c1)
     case Con{SubReq{+cn, job, back, tl, +inb, +raw}, rest}:
@@ -13804,13 +14135,31 @@ def conn_data(s: Socket, eof: Bool, +x: String, rest: P.Tail, got: List<&2, Stri
       conn_more(s, rest, x <> got, h, need, ln, cn, Nat.is_lt(h, need))
 
 @unsafe
-def conn_more(s: Socket, rest: P.Tail, +got: List<&2, String>, have: Nat, need: Nat, +ln: Link, cn: S.Conn, wait: Bool) -> IO(Unit):
+def conn_more(s: Socket, rest: P.Tail, +got: List<&2, String>, have: Nat, +need: Nat, +ln: Link, cn: S.Conn, wait: Bool) -> IO(Unit):
   match wait:
     case True{}:
-      conn_loop(s, rest, got, have, need, ln, cn)
+      +t = rest
+      +pin = pend.pin(t)
+      conn_big(Nat.is_le(32770n, pin), pin, s, t, got, have, need, ln, cn)
     case False{}:
       +inb = got.bytes(got, 0n)
-      conn_batch(s, parse_in(rest, got), inb, ln, cn)
+      +t = rest
+      +pin = pend.pin(t)
+      conn_batch(s, parse_in(t, got), inb, pin, ln, cn)
+
+# A read inside a big argument (big: the tail waits for one, of pin
+# bytes), its request not whole yet, is told to the actor (QbIn: Query
+# buffers) before the next read; and the batch of a parse tells of the
+# big argument its tail waited inside (pin), which the batch ended
+@unsafe
+def conn_big(big: Bool, +pin: Nat, s: Socket, rest: P.Tail, got: List<&2, String>, +have: Nat, +need: Nat, +ln: Link, cn: S.Conn) -> IO(Unit):
+  match big ln:
+    case True{} Link{+db, back, post, tl, +id}:
+      do IO<Unit>:
+        sent : Bool <- Chan.send(Req, db, QbIn{id, Nat.add(Nat.sub(pin, need), have), pin})
+        conn_loop(s, rest, got, have, need, ln, cn)
+    case _ _:
+      conn_loop(s, rest, got, have, need, ln, cn)
 
 # A parsed batch goes to the actor, its replies go out, then the
 # protocol error the requests ended in, if any, and the next read: rest
@@ -13819,18 +14168,32 @@ def conn_more(s: Socket, rest: P.Tail, +got: List<&2, String>, have: Nat, need: 
 # other and conn_loop directly, as the loop's own steps do, rather than
 # through a continuation.
 @unsafe
-def conn_batch(s: Socket, batch: P.Batch, +inb: Nat, +ln: Link, cn: S.Conn) -> IO(Unit):
+def conn_batch(s: Socket, batch: P.Batch, +inb: Nat, +pin: Nat, +ln: Link, cn: S.Conn) -> IO(Unit):
   match batch:
     case P.Batch{reqs, tl, rest, err, need, raw}:
-      conn_send(s, ln, cn, reqs, tl, err, rest, need, inb, raw)
+      conn_send(s, ln, cn, reqs, tl, err, rest, need, inb, pin, raw)
 
 @unsafe
-def conn_send(s: Socket, +ln: Link, cn: S.Conn, reqs: List<&2, B.Req>, tl: U32, err: Maybe<&2, String>, rest: P.Tail, need: Nat, +inb: Nat, raw: String) -> IO(Unit):
+def conn_send(s: Socket, +ln: Link, cn: S.Conn, reqs: List<&2, B.Req>, tl: U32, err: Maybe<&2, String>, rest: P.Tail, +need: Nat, +inb: Nat, +pin: Nat, raw: String) -> IO(Unit):
   match reqs:
     case Nil{}:
-      conn_none(s, ln, cn, err, rest, need)
+      +t = rest
+      +wait = pend.pin(t)
+      conn_none.qb(Nat.is_le(32770n, wait), wait, s, ln, cn, err, t, need)
     case Con{r, rs}:
-      conn_ask(s, ln, cn, r <> rs, tl, err, rest, need, inb, raw)
+      conn_ask(s, ln, cn, r <> rs, tl, err, rest, need, inb, pin, raw)
+
+# a parse with no request whole whose tail waits inside a big argument
+# (of wait bytes), told to the actor (QbIn: Query buffers)
+@unsafe
+def conn_none.qb(big: Bool, +wait: Nat, s: Socket, +ln: Link, cn: S.Conn, err: Maybe<&2, String>, rest: P.Tail, +need: Nat) -> IO(Unit):
+  match big ln:
+    case True{} Link{+db, back, post, tl, +id}:
+      do IO<Unit>:
+        sent : Bool <- Chan.send(Req, db, QbIn{id, Nat.sub(wait, need), wait})
+        conn_none(s, ln, cn, err, rest, need)
+    case _ _:
+      conn_none(s, ln, cn, err, rest, need)
 
 # whether a batch asks for the shell's facts: INFO, or CONFIG RESETSTAT
 # (which counts the connections from then on); only a batch with a
@@ -13862,28 +14225,30 @@ def live.wants(+job: B.Job) -> Bool:
 # a batch that wants them. Each arm sends and waits itself: a step both
 # called would be a segment of its own, entered on every batch.
 @unsafe
-def conn_job(live: Bool, s: Socket, +ln: Link, job: B.Job, cn: S.Conn, n: U32, +inb: Nat, raw: String, err: Maybe<&2, String>, rest: P.Tail, need: Nat) -> IO(Unit):
+def conn_job(live: Bool, s: Socket, +ln: Link, job: B.Job, cn: S.Conn, n: U32, +inb: Nat, raw: String, qf: Qf, err: Maybe<&2, String>, rest: P.Tail, need: Nat) -> IO(Unit):
   match live ln:
     case False{} Link{db, +back, post, tl, id}:
       do IO<Unit>:
-        sent : Bool <- Chan.send(Req, db, Req{cn, job, back, n, inb, raw})
+        sent : Bool <- Chan.send(Req, db, Req{cn, job, back, n, inb, raw, qf})
         got : Maybe<&1, Ans> <- Chan.recv(Ans, back)
         conn_ans(s, ln, got, err, rest, need)
     case True{} Link{+db, +back, post, +tl, id}:
       do IO<Unit>:
         l : I.Live <- live.read(tl)
         sent1 : Bool <- Chan.send(Req, db, Facts{l})
-        sent2 : Bool <- Chan.send(Req, db, Req{cn, job, back, n, inb, raw})
+        sent2 : Bool <- Chan.send(Req, db, Req{cn, job, back, n, inb, raw, qf})
         got : Maybe<&1, Ans> <- Chan.recv(Ans, back)
         conn_ans(s, ln, got, err, rest, need)
 
 # a batch: the parsed requests (newest first) put in order, how many they
-# are and the words of their codes (R.tl.add), and the bytes they came in
-# (how many, and the bytes themselves)
+# are and the words of their codes (R.tl.add), the bytes they came in
+# (how many, and the bytes themselves), and the big argument it ended
+# (pin) or its tail waits inside (Query buffers)
 @unsafe
-def conn_ask(s: Socket, +ln: Link, cn: S.Conn, rs: List<&2, B.Req>, tl: U32, err: Maybe<&2, String>, rest: P.Tail, need: Nat, +inb: Nat, raw: String) -> IO(Unit):
+def conn_ask(s: Socket, +ln: Link, cn: S.Conn, rs: List<&2, B.Req>, +tl: U32, err: Maybe<&2, String>, rest: P.Tail, +need: Nat, +inb: Nat, +pin: Nat, +raw: String) -> IO(Unit):
   +job = B.job(B.unzip(rs, Nil{}, Nil{}))
-  conn_job(live.wants(job), s, ln, job, cn, tl, inb, raw, err, rest, need)
+  +t = rest
+  conn_job(live.wants(job), s, ln, job, cn, tl, inb, raw, qf.of(t, need, pin, inb, tl, raw), err, t, need)
 
 @unsafe
 def conn_ans(s: Socket, +ln: Link, got: Maybe<&1, Ans>, err: Maybe<&2, String>, rest: P.Tail, need: Nat) -> IO(Unit):
