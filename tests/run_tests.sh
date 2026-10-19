@@ -87,7 +87,11 @@
 # stops, one it schedules after a background save, a temporary file that
 # cannot be made, and writes while a BGREWRITEAOF runs with the file on,
 # with Redis's replies, INFO, files, manifests, lines logged and
-# databases after a restart. Then maxmemory and
+# databases after a restart. Then the replies of a client that must
+# authenticate (tests/obuf_test.py): BendKV posting them and sending them
+# from its loop, and Redis, each started with a password, the clients
+# held to 16 KB of replies closed alike and the lines logged for them
+# compared. Then maxmemory and
 # eviction: the refusals past maxmemory (OOM), OBJECT
 # IDLETIME and FREQ and the evicted event against Redis's, Redis's own
 # tests of the policies on both, and BendKV's warnings, an eviction that
@@ -315,6 +319,8 @@ echo "== Redis 7's multi-part append-only file, against Redis"
 python3 tests/aofdir_test.py --bin build/bendkv --bendkv "$PORT" --redis "$((REDIS_PORT + 1))" --dir build/aofdir
 echo "== the append-only file turned on and off at run time, against Redis"
 python3 tests/aof_switch_test.py --bin build/bendkv --bendkv "$PORT" --redis "$((REDIS_PORT + 1))" --dir build/aofswitch
+echo "== the replies of a client that must authenticate, held to 16 KB, against Redis"
+python3 tests/obuf_test.py --bin build/bendkv --bendkv "$PORT" --redis "$((REDIS_PORT + 1))" --dir build/obuf
 echo "== maxmemory and eviction"
 python3 tests/maxmemory_test.py --bin build/bendkv --bendkv "$PORT" --redis "$((REDIS_PORT + 1))" --dir build/maxmemory
 echo "== the RDB file"

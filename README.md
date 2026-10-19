@@ -497,7 +497,14 @@ translation stays in the trusted base.
   protocol error as soon as its line has come, and the connection closes (an inline
   request has none). Where BendKV differs: a RESET followed in the same read by a whole
   request past a limit has that request answered NOAUTH, where Redis refuses it with the
-  protocol error (docs/FINDINGS.md, section 3zzzzn). A connection taken while
+  protocol error (docs/FINDINGS.md, section 3zzzzn). Its replies are held to 16 KB, as
+  Redis 7.2.16 holds them: a batch's replies that would pass that, with those its socket
+  still holds, are not written, the client is closed and Redis's line for it logged
+  (`Client ... scheduled to be closed ASAP for overcoming of output buffer limits.`), so
+  a pipeline of 482 commands it may not send closes it, and so does sending without
+  reading once the socket's buffers are full. Where BendKV differs: with replies sent
+  from the loop (`io-threads 1`, or `send`), a client that sends without reading may stall
+  its own connection rather than be closed (section 3zzzzze). A connection taken while
   `maxclients` clients are connected is refused as Redis 7.2.16 refuses it: written
   `-ERR max number of clients reached` and closed, with no client id, and counted in
   INFO's `rejected_connections`; a CONFIG SET of `maxclients` holds for the next
@@ -1103,7 +1110,10 @@ commands (`tests/admin_test.py`: LASTSAVE, ROLE, WAIT, MEMORY, LOLWUT's drawings
 byte and SHUTDOWN's errors on BendKV and on Redis, then SHUTDOWN on servers of their own,
 the append-only file and the pid file after it, and a SHUTDOWN while a rewrite runs), AUTH
 (`tests/auth_test.py`: scenarios on BendKV and on Redis of when a client must
-authenticate and what it is answered before it does), ACL (`tests/acl_test.py`:
+authenticate and what it is answered before it does; `tests/obuf_test.py`: such a
+client's replies held to 16 KB, on BendKV posting its replies and sending them from its
+loop and on Redis, each started with a password, the clients closed and the lines
+logged for them compared), ACL (`tests/acl_test.py`:
 scenarios on BendKV and on Redis of a user's calls allowed and refused, alone and
 pipelined behind AUTH, ACL LOG, MULTI and EXEC, the clients ACL SETUSER and DELUSER
 close, CLIENT LIST and CLIENT KILL USER, SORT's BY and GET, and the slow log), RESP3 (`tests/resp3_test.py`: 14
@@ -1207,7 +1217,7 @@ away.
 | what | how many | counted in |
 |---|---:|---|
 | laws | 68 | `proof/LAWS.bend` (by group: [What is proved](#what-is-proved)) |
-| patches to the Bend compiler | 38 | `bend-patches/apply.sh` |
+| patches to the Bend compiler | 39 | `bend-patches/apply.sh` |
 | constructors of `Cmd`, a parsed command | 30 | `src/redis.bend` |
 | Redis 7.2.16's parameters, all of which CONFIG serves | 184 | `tools/data/redis-configs.json` |
 

@@ -1,6 +1,6 @@
 # Patches to Bend
 
-Thirty-four patches to the Bend compiler (`bendlang/bend` @ `1cce499`, Bend 2.0.35).
+Thirty-nine patches to the Bend compiler (`bendlang/bend` @ `1cce499`, Bend 2.0.35).
 They apply in order, each on top of the one before:
 
 1. **`lazy-seal.patch`** — lazy sealing of reference counts: `bend2/comp.ts`, +46/−3.
@@ -558,6 +558,22 @@ They apply in order, each on top of the one before:
    ENOENT; on both lanes). A program that calls neither compiles to the C it compiled
    to before. BendKV makes `appenddirname` at a start with `appendonly yes` where it is
    not there, as Redis 7 does (FINDINGS.md, section 3zzzzzf).
+39. **`tcp-held.patch`** — what a socket's writer holds, as an effect. `TCP.held(sock)`
+   gives the bytes posted to `sock` (`TCP.post`) that its loop's writer holds, the
+   socket having had no room for them: what its peer has not read past the socket's
+   buffers, as a Redis client's output buffer holds it. The writer counts them as it
+   holds a post and as it sends what it held (a count for each fd beside the writer's
+   `held`, which the loop reads with an atomic load); 0 when it holds none of `sock`'s,
+   before the loop has a writer, and on JS, whose post waits for its bytes to go.
+   `bend2/base.bend` (+9), `bend2/comp.ts` (+35/−3), `bend2/effs/tcp_held.c` and `.js`
+   (new), and the test `tests/io/tcp_held.bend` (nothing held before a post; a post of
+   1 MiB to a socket whose peer reads nothing, its send buffer made small by an effect
+   of the test's own, `tcp_held_buf.c`, leaves the writer holding part of it, no more
+   than was posted; nothing once the peer has read it all; on C alone). The writer
+   counts in every program that calls `TCP.post`, on the path a post takes only when
+   its socket has no room. BendKV closes a client that must authenticate whose replies
+   would pass 16 KB with what its socket holds, as Redis 7.2.16 does (FINDINGS.md,
+   section 3zzzzze).
 
 What the patches do and what they give is worked through in
 [../PERFORMANCE.md](../docs/PERFORMANCE.md), sections 3–6, 7.7–7.17, 7.23–7.25, 16, 39,
@@ -576,7 +592,7 @@ From the `bendkv/` directory:
 
 ```bash
 git clone https://github.com/bendlang/bend ../bend-patched
-sh bend-patches/apply.sh ../bend-patched   # the bendkv-patches branch from 1cce499 with thirty-eight patches
+sh bend-patches/apply.sh ../bend-patched   # the bendkv-patches branch from 1cce499 with thirty-nine patches
 bun ../bend-patched/bend2/main.ts server.bend -o build/bendkv
 ```
 
@@ -606,8 +622,10 @@ itself, in a program without GPU calls, the thirty-third only adds natives (`F64
 the thirty-fourth changes only a build with AddressSanitizer, the thirty-fifth
 only adds a native (`Clock.us`), and the thirty-sixth changes `TCP.listen` (IPv6) and
 `TCP.name` (unix sockets) and adds the effects `TCP.listen_unix` and `IO.notify`, and
-the thirty-seventh only adds the effect `IO.signal`, and the thirty-eighth only adds
-the effects `File.mkdir` and `File.rmdir`. The theory does not change:
+the thirty-seventh only adds the effect `IO.signal`, the thirty-eighth only adds
+the effects `File.mkdir` and `File.rmdir`, and the thirty-ninth adds the effect
+`TCP.held` and has the writer of a program that calls `TCP.post` count what it holds.
+The theory does not change:
 `String` in the proofs is still a list, and `IO` a function of `R` and `k`.
 
 ## How to reproduce the measurements

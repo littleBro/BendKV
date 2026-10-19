@@ -282,6 +282,11 @@ parts of it are written from 7.2.16's sources:
   aofOpenIfNeededOnServerStart), and the lines of a file of the
   directory that ends cut short or in a transaction left open (aof.c's
   loadSingleAppendOnlyFile), in src/server.bend.
+- The replies of a client that must authenticate held to its buffer of
+  16 KB, the client closed past it with its line logged (networking.c's
+  checkClientOutputBufferLimits and closeClientOnOutputBufferLimitReached,
+  and _addReplyToBuffer and _addReplyProtoToList, where its replies go),
+  in src/server.bend.
 
 Bend (bend-patches/): patches to the Bend compiler and its runtime
 (github.com/bendlang/bend at 1cce499, Bend 2.0.35), Copyright 2026
