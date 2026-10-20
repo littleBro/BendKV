@@ -234,7 +234,7 @@ two stacks, so that adding and removing at either end costs O(1) on average, and
 and LRANGE go from the nearer end; a key holds no empty list. Beside it a list keeps how
 Redis 7.2.16 holds it, a listpack while it is small and a quicklist past 8 KB, each
 node's count and bytes moved as Redis moves its nodes, so that OBJECT ENCODING answers
-`listpack` or `quicklist` and DUMP writes Redis's nodes (README's Lists says where
+`listpack` or `quicklist` and DUMP writes Redis's nodes (docs/COMMANDS.md's Lists says where
 BendKV differs); MEMORY USAGE estimates its size. A
 write to a list is logged as the write itself (LMPOP as an LPOP or RPOP, with a count,
 of the key it popped from; popping the last elements as a DEL of the key); a list made

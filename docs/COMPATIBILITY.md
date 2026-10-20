@@ -256,7 +256,7 @@ UNLINK and FLUSHDB ASYNC give back, now that `used_memory` is what the heap's li
 hold. While a rewrite of the append-only file or a background save runs, the eviction
 and the refusal past maxmemory count the dataset's change by its number of keys, each at
 the average size when the job started, and a value grown in place counts when the job
-ends (README.md, Memory; section 3zzzk of [FINDINGS.md](FINDINGS.md)): Redis's parent
+ends (COMMANDS.md, Memory; section 3zzzk of [FINDINGS.md](FINDINGS.md)): Redis's parent
 counts no page its child keeps, and BendKV's snapshot keeps the values the writes
 replace. MONITOR (section 3zt of
 [FINDINGS.md](FINDINGS.md)) brought 3: unit/introspection passes 25 of its 28 tests, a
@@ -352,7 +352,7 @@ types, or replication), and COMMAND GETKEYS of LCS passes in unit/introspection-
 BITFIELD brought 16, all of unit/bitfield; of unit/bitops's other two tests, one needs
 lists and the other counts the changes since the last save (`rdb_changes_since_last_save`
 in INFO), which BendKV did not keep when the suite last ran (it does since section 3zzzk
-of [FINDINGS.md](FINDINGS.md), counting some writes otherwise than Redis: README.md,
+of [FINDINGS.md](FINDINGS.md), counting some writes otherwise than Redis: COMMANDS.md,
 Persistence). Several databases brought 6 of the 17 tests Redis
 passes that run only without `--singledb`: SET and GET in different databases, DEL in
 database 1, and four of MOVE's five (against a key the target holds, against a database
@@ -493,19 +493,19 @@ where it is in the code, and where it is to be reported.
 
 A difference kept on purpose. `locale-collate`, new in 7.2, names the locale in which SORT's
 ALPHA compares; BendKV compares bytes, as the C locales do, and takes those alone: CONFIG
-SET of another answers "Invalid locale name", and a start with one stops (README's
+SET of another answers "Invalid locale name", and a start with one stops (COMMANDS.md's
 Configuration). No test of the suite sets it. And BendKV has no defragmentation:
 `activedefrag yes` fails as it does in a Redis built without its own jemalloc, where a
-Redis built from its tarball, as the reference is, turns it on (README's Memory).
+Redis built from its tarball, as the reference is, turns it on (COMMANDS.md's Memory).
 
 Encodings. BendKV holds lists and sets as Redis 7.2.16 holds them at the parameters'
 defaults: a small list or set as a listpack, a larger list as a quicklist of the nodes
-Redis's would have (README's Lists and Sets). A test that sets `list-max-listpack-size`,
+Redis's would have (COMMANDS.md's Lists and Sets). A test that sets `list-max-listpack-size`,
 `list-compress-depth` or `set-max-listpack-*` and then checks an encoding sees what the
 defaults give. Redis also turns a listpack into a quicklist on an LSET of an index the
 list does not have and on an LINSERT whose pivot is not there, and a set into a hashtable
 on an SADD that adds nothing, none of which its append-only file holds; BendKV leaves
-those as they were, and checks LMOVE's lists where README says.
+those as they were, and checks LMOVE's lists where COMMANDS.md says.
 
 ## What this mode does not test
 

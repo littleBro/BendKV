@@ -9303,3 +9303,129 @@ count of open connections with the limit before it takes a connection's id
 and MODULE's refusals are the general way's: the tune word's bit 16 keeps a refusing
 server's batches off the fast way, and the protected gate looks at MODULE's session op
 alone.
+
+## 94. The yardstick: Redis 8.10.2 and Valkey 9.1.2
+
+BendKV answers as Redis 7.2.16 does, but its speed is measured against the newest servers:
+Redis 8.10.2 and Valkey 9.1.2, with 7.0.15 beside them (FINDINGS 3zzzzzg says why). This
+is the yardstick of October 2026, first posted in
+[#76](https://github.com/littleBro/BendKV/pull/76#issuecomment-6231747609). The machine
+is an Intel Xeon at 2.80 GHz with 4 vCPUs. BendKV is main 9b513c2 in the timings and
+main ec0fa63 in the instruction counts; the two run the same instructions to within 1.1%.
+Redis 8.10.2 is built from its tarball with `make -C src`, without its modules.
+
+**One core.** Each server is pinned to CPU 3 and redis-benchmark 7.0.15 to CPU 1, with 20
+clients and 100,000 random keys (`tools/bench_pairs.sh`). The servers take turns, and
+each number is the mean of 2 trials. XADD ran apart (`XADD s * f v`), as 7.0.15's
+redis-benchmark has no XADD test.
+
+| requests a second | 7.0.15 | 8.10.2 | Valkey 9.1.2 | BendKV | BendKV / 8.10.2 | BendKV / Valkey |
+|---|---:|---:|---:|---:|---:|---:|
+| **pipeline 16** | | | | | | |
+| SET | 654k | 730k | 674k | 1,023k | 1.40 | 1.52 |
+| GET | 772k | 797k | 942k | 1,175k | 1.47 | 1.25 |
+| INCR | 701k | 873k | 813k | 964k | 1.11 | 1.19 |
+| LPUSH | 936k | 857k | 778k | 558k | 0.65 | 0.72 |
+| LPOP | 843k | 884k | 765k | 762k | 0.86 | 1.00 |
+| SADD | 714k | 801k | 752k | 465k | 0.58 | 0.62 |
+| HSET | 666k | 748k | 682k | 368k | 0.49 | 0.54 |
+| ZADD | 251k | 306k | 302k | 115k | 0.38 | 0.38 |
+| LRANGE_100 | 137k | 181k | 186k | 69k | 0.38 | 0.37 |
+| MSET (10 keys) | 136k | 192k | 185k | 108k | 0.56 | 0.59 |
+| XADD | 584k | 580k | 611k | 69k | 0.12 | 0.11 |
+| **no pipeline** | | | | | | |
+| SET | 111k | 112k | 110k | 131k | 1.17 | 1.20 |
+| GET | 110k | 103k | 106k | 127k | 1.23 | 1.19 |
+| INCR | 105k | 105k | 118k | 113k | 1.08 | 0.96 |
+| LPUSH | 98k | 105k | 109k | 118k | 1.12 | 1.09 |
+| LPOP | 103k | 108k | 118k | 125k | 1.15 | 1.06 |
+| SADD | 104k | 107k | 111k | 126k | 1.17 | 1.13 |
+| HSET | 105k | 112k | 117k | 116k | 1.04 | 0.99 |
+| ZADD | 99k | 120k | 112k | 68k | 0.56 | 0.60 |
+| LRANGE_100 | 75k | 65k | 72k | 50k | 0.77 | 0.69 |
+| MSET (10 keys) | 73k | 84k | 74k | 60k | 0.72 | 0.81 |
+| XADD | 109k | 119k | 114k | 47k | 0.39 | 0.41 |
+
+Two trials on this VM move by up to 10%. BendKV's XADD, timed again with 6 trials, gives
+80k with the pipeline and 57k without it (0.14 and 0.48 of 8.10.2).
+
+**Three cores.** The servers run on CPUs 1 to 3 and `tools/loadgen` on CPU 0
+(`tools/scale_bench.sh`): 1,000,000 keys of 100 bytes, 100 connections, 10 seconds a
+shape after one of warm-up, means of 2 trials. Redis and Valkey run with 1 to 3
+io-threads. BendKV runs as it is: its event loop and its writer thread.
+
+| operations a second | GET, no pipeline | GET, pipeline 10 | half GET, half SET, pipeline 10 |
+|---|---:|---:|---:|
+| 7.0.15 | 139k | 478k | 429k |
+| 7.0.15, 3 io-threads | 211k | 559k | 507k |
+| 8.10.2 | 145k | 676k | 614k |
+| 8.10.2, 2 io-threads | 143k | 984k | 854k |
+| 8.10.2, 3 io-threads | 181k | 1,169k | 1,173k |
+| Valkey 9.1.2 | 140k | 693k | 614k |
+| Valkey 9.1.2, 2 io-threads | 165k | 1,132k | 1,053k |
+| Valkey 9.1.2, 3 io-threads | 204k | 1,188k | 1,060k |
+| BendKV | 198k | 881k | 665k |
+
+**Instructions a request.** Callgrind's counts, as `make perfcheck` takes them
+(`tools/callgrind_req.sh`): 20 clients at pipeline 16, 100,000 keys set first, the caches
+warmed, then 20,000 requests counted. BendKV runs in its mode `send`, as perfcheck runs
+it. Last-level data misses are in brackets, with a 2 MiB last-level cache. The counts do
+not depend on the machine's load, unlike the timings above.
+
+| test | 7.0.15 | 8.10.2 | Valkey 9.1.2 | BendKV | BendKV / 8.10.2 |
+|---|---:|---:|---:|---:|---:|
+| SET | 4,767 (3.3) | 6,205 (2.7) | 7,759 (1.7) | 4,282 (3.2) | 0.69 |
+| GET | 3,626 (3.2) | 4,430 (2.6) | 5,711 (1.7) | 3,570 (3.1) | 0.81 |
+| INCR | 4,031 (2.4) | 4,890 (2.7) | 5,686 (2.1) | 4,602 (3.3) | 0.94 |
+| LPUSH | 4,819 | 5,908 | 7,170 | 11,754 | 1.99 |
+| LPOP | 5,595 | 6,303 | 7,891 | 7,914 | 1.26 |
+| SADD | 4,017 (2.6) | 5,049 (1.9) | 6,300 (1.2) | 8,381 (2.8) | 1.66 |
+| HSET | 4,994 (2.8) | 6,374 (2.0) | 8,218 (1.4) | 12,662 (3.8) | 1.99 |
+| ZADD | 7,828 (18.6) | 8,430 (18.4) | 10,027 (16.1) | 39,885 (26.7) | 4.73 |
+| LRANGE_100 | 76,288 | 54,827 | 55,136 | 125,611 | 2.29 |
+| MSET (10 keys) | 24,552 (35.7) | 35,487 (30.2) | 42,072 (16.4) | 35,267 (32.0) | 0.99 |
+| XADD | 9,986 | 11,060 | 11,889 | 84,546 | 7.64 |
+
+**What it says.**
+
+- **Strings.** BendKV runs the fewest instructions of the four for each request (GET
+  3,570, against 4,430 for 8.10.2 and 5,711 for Valkey). On one core it is the fastest,
+  at 1.11 to 1.52 times 8.10.2's rate with the pipeline, and 1.08 to 1.23 times without
+  it.
+- **The newer servers run more instructions than 7.0.15 and are faster.** 8.10.2 and
+  Valkey take 22% and 58% more instructions for a GET than 7.0.15, but they miss the
+  last-level cache less (Valkey 1.7 times a GET, 7.0.15 3.2), and they mispredict fewer
+  indirect branches (14.2 a GET for 7.0.15, 6.7 for 8.10.2, 2.7 for Valkey). BendKV's
+  misses are about 7.0.15's, so this is room it has not used yet.
+- **Collections and streams.** BendKV runs 1.3 to 2 times 8.10.2's instructions on lists,
+  sets and hashes, 2.3 times on LRANGE, 4.7 times on ZADD and 7.6 times on XADD. The
+  timings follow: 0.38 to 0.86 with the pipeline, and 0.12 to 0.14 on XADD.
+- **Three cores.** Without a pipeline, BendKV (198k) is level with Valkey on three
+  io-threads (204k) and ahead of 8.10.2 (181k). With a pipeline, Redis and Valkey spread
+  the parsing and the replies over their io-threads and reach 1.17 to 1.19 million GETs.
+  BendKV, with one actor that runs every command, reaches 0.88 million (0.74 to 0.75 of
+  them), and 0.57 to 0.63 of them on the half-SET mix.
+- **Valkey and 8.10.2 are close on one core,** at 0.87 to 1.18 of each other.
+
+**No slowdown from scripts.** The counts of three builds, before the Lua engine went in
+(42fc6d5), with it (9b513c2) and after (ec0fa63), differ by little:
+
+| instructions a request | 42fc6d5 | 9b513c2 | ec0fa63 |
+|---|---:|---:|---:|
+| LPUSH | 11,495 | 11,667 | 11,754 (+2.3%) |
+| LPOP | 7,834 | 7,829 | 7,914 (+1.0%) |
+| SADD | 8,206 | 8,299 | 8,381 (+2.1%) |
+| HSET | 12,579 | 12,582 | 12,662 (+0.7%) |
+| ZADD | 39,784 | 39,828 | 39,885 (+0.3%) |
+| XADD | 83,599 | 84,261 | 84,546 (+1.1%) |
+| GET, SET, INCR, LRANGE_100, MSET | | | within ±0.4% |
+
+Timed again with more trials, the three builds are within their noise: XADD with 6
+trials gives 82.6k, 80.3k and 80.4k (±2 to 4%), and LPUSH, SADD, HSET and ZADD with 4
+trials are within ±5% of each other. `make perfcheck` guards GET, SET and INCR only; the
+counts of the collections and of XADD here could join its baseline, so that a change to
+them shows in CI rather than in a benchmark's noise.
+
+README's chart of speed is drawn from the one-core tables here by `docs/img/speed_chart.py`,
+which keeps a copy of their ratios: when these numbers are measured again, change them
+there too and rerun it.

@@ -1,0 +1,71 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="758" height="388" viewBox="0 0 758 388" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+<title>BendKV's requests a second, as a share of Redis 8.10.2's</title>
+<desc>One core each, redis-benchmark with 20 clients and 100,000 keys; docs/PERFORMANCE.md, section 94.</desc>
+<text x="0" y="20" font-size="15" font-weight="600" fill="#0b0b0b">BendKV's requests a second, Redis 8.10.2 = 1</text>
+<text x="0" y="40" font-size="12" fill="#52514e">one core each, redis-benchmark with 20 clients and 100,000 keys</text>
+<text x="46" y="114.0" font-size="12" text-anchor="end" fill="#0b0b0b">SET</text>
+<text x="46" y="142.0" font-size="12" text-anchor="end" fill="#0b0b0b">GET</text>
+<text x="46" y="170.0" font-size="12" text-anchor="end" fill="#0b0b0b">INCR</text>
+<text x="46" y="198.0" font-size="12" text-anchor="end" fill="#0b0b0b">LPUSH</text>
+<text x="46" y="226.0" font-size="12" text-anchor="end" fill="#0b0b0b">LPOP</text>
+<text x="46" y="254.0" font-size="12" text-anchor="end" fill="#0b0b0b">SADD</text>
+<text x="46" y="282.0" font-size="12" text-anchor="end" fill="#0b0b0b">HSET</text>
+<text x="46" y="310.0" font-size="12" text-anchor="end" fill="#0b0b0b">ZADD</text>
+<text x="46" y="338.0" font-size="12" text-anchor="end" fill="#0b0b0b">XADD</text>
+<text x="56" y="74" font-size="13" font-weight="600" fill="#0b0b0b">Pipeline of 16</text>
+<line x1="149.8" y1="92" x2="149.8" y2="348" stroke="#e1e0d9" stroke-width="1"/>
+<line x1="337.2" y1="92" x2="337.2" y2="348" stroke="#e1e0d9" stroke-width="1"/>
+<text x="56.0" y="364" font-size="11" text-anchor="middle" fill="#898781">0</text>
+<text x="149.8" y="364" font-size="11" text-anchor="middle" fill="#898781">0.5</text>
+<text x="243.5" y="364" font-size="11" text-anchor="middle" fill="#898781">1</text>
+<text x="337.2" y="364" font-size="11" text-anchor="middle" fill="#898781">1.5</text>
+<line x1="56" y1="92" x2="56" y2="348" stroke="#898781" stroke-width="1"/>
+<path d="M56.0,102.0h258.5a4,4 0 0 1 4,4v8.0a4,4 0 0 1 -4,4h-258.5z" fill="#2a78d6"><title>SET: 1.40</title></path>
+<path d="M56.0,130.0h271.6a4,4 0 0 1 4,4v8.0a4,4 0 0 1 -4,4h-271.6z" fill="#2a78d6"><title>GET: 1.47</title></path>
+<path d="M56.0,158.0h204.1a4,4 0 0 1 4,4v8.0a4,4 0 0 1 -4,4h-204.1z" fill="#2a78d6"><title>INCR: 1.11</title></path>
+<path d="M56.0,186.0h117.9a4,4 0 0 1 4,4v8.0a4,4 0 0 1 -4,4h-117.9z" fill="#2a78d6"><title>LPUSH: 0.65</title></path>
+<path d="M56.0,214.0h157.2a4,4 0 0 1 4,4v8.0a4,4 0 0 1 -4,4h-157.2z" fill="#2a78d6"><title>LPOP: 0.86</title></path>
+<path d="M56.0,242.0h104.7a4,4 0 0 1 4,4v8.0a4,4 0 0 1 -4,4h-104.7z" fill="#2a78d6"><title>SADD: 0.58</title></path>
+<path d="M56.0,270.0h87.9a4,4 0 0 1 4,4v8.0a4,4 0 0 1 -4,4h-87.9z" fill="#2a78d6"><title>HSET: 0.49</title></path>
+<path d="M56.0,298.0h67.2a4,4 0 0 1 4,4v8.0a4,4 0 0 1 -4,4h-67.2z" fill="#2a78d6"><title>ZADD: 0.38</title></path>
+<path d="M56.0,326.0h18.5a4,4 0 0 1 4,4v8.0a4,4 0 0 1 -4,4h-18.5z" fill="#2a78d6"><title>XADD: 0.12</title></path>
+<line x1="243.5" y1="88" x2="243.5" y2="348" stroke="#52514e" stroke-width="1.5" stroke-dasharray="4 3"/>
+<text x="243.5" y="85" font-size="11" text-anchor="middle" fill="#52514e">Redis 8.10.2 = 1</text>
+<text x="323.5" y="114.0" font-size="11" fill="#52514e" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">1.40</text>
+<text x="336.6" y="142.0" font-size="11" fill="#52514e" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">1.47</text>
+<text x="269.1" y="170.0" font-size="11" fill="#52514e" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">1.11</text>
+<text x="182.9" y="198.0" font-size="11" fill="#52514e" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">0.65</text>
+<text x="222.2" y="226.0" font-size="11" fill="#52514e" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">0.86</text>
+<text x="169.8" y="254.0" font-size="11" fill="#52514e" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">0.58</text>
+<text x="152.9" y="282.0" font-size="11" fill="#52514e" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">0.49</text>
+<text x="132.2" y="310.0" font-size="11" fill="#52514e" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">0.38</text>
+<text x="83.5" y="338.0" font-size="11" fill="#52514e" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">0.12</text>
+<text x="424" y="74" font-size="13" font-weight="600" fill="#0b0b0b">No pipeline</text>
+<line x1="517.8" y1="92" x2="517.8" y2="348" stroke="#e1e0d9" stroke-width="1"/>
+<line x1="705.2" y1="92" x2="705.2" y2="348" stroke="#e1e0d9" stroke-width="1"/>
+<text x="424.0" y="364" font-size="11" text-anchor="middle" fill="#898781">0</text>
+<text x="517.8" y="364" font-size="11" text-anchor="middle" fill="#898781">0.5</text>
+<text x="611.5" y="364" font-size="11" text-anchor="middle" fill="#898781">1</text>
+<text x="705.2" y="364" font-size="11" text-anchor="middle" fill="#898781">1.5</text>
+<line x1="424" y1="92" x2="424" y2="348" stroke="#898781" stroke-width="1"/>
+<path d="M424.0,102.0h215.4a4,4 0 0 1 4,4v8.0a4,4 0 0 1 -4,4h-215.4z" fill="#2a78d6"><title>SET: 1.17</title></path>
+<path d="M424.0,130.0h226.6a4,4 0 0 1 4,4v8.0a4,4 0 0 1 -4,4h-226.6z" fill="#2a78d6"><title>GET: 1.23</title></path>
+<path d="M424.0,158.0h198.5a4,4 0 0 1 4,4v8.0a4,4 0 0 1 -4,4h-198.5z" fill="#2a78d6"><title>INCR: 1.08</title></path>
+<path d="M424.0,186.0h206.0a4,4 0 0 1 4,4v8.0a4,4 0 0 1 -4,4h-206.0z" fill="#2a78d6"><title>LPUSH: 1.12</title></path>
+<path d="M424.0,214.0h211.6a4,4 0 0 1 4,4v8.0a4,4 0 0 1 -4,4h-211.6z" fill="#2a78d6"><title>LPOP: 1.15</title></path>
+<path d="M424.0,242.0h215.4a4,4 0 0 1 4,4v8.0a4,4 0 0 1 -4,4h-215.4z" fill="#2a78d6"><title>SADD: 1.17</title></path>
+<path d="M424.0,270.0h191.0a4,4 0 0 1 4,4v8.0a4,4 0 0 1 -4,4h-191.0z" fill="#2a78d6"><title>HSET: 1.04</title></path>
+<path d="M424.0,298.0h101.0a4,4 0 0 1 4,4v8.0a4,4 0 0 1 -4,4h-101.0z" fill="#2a78d6"><title>ZADD: 0.56</title></path>
+<path d="M424.0,326.0h69.1a4,4 0 0 1 4,4v8.0a4,4 0 0 1 -4,4h-69.1z" fill="#2a78d6"><title>XADD: 0.39</title></path>
+<line x1="611.5" y1="88" x2="611.5" y2="348" stroke="#52514e" stroke-width="1.5" stroke-dasharray="4 3"/>
+<text x="611.5" y="85" font-size="11" text-anchor="middle" fill="#52514e">Redis 8.10.2 = 1</text>
+<text x="648.4" y="114.0" font-size="11" fill="#52514e" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">1.17</text>
+<text x="659.6" y="142.0" font-size="11" fill="#52514e" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">1.23</text>
+<text x="631.5" y="170.0" font-size="11" fill="#52514e" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">1.08</text>
+<text x="639.0" y="198.0" font-size="11" fill="#52514e" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">1.12</text>
+<text x="644.6" y="226.0" font-size="11" fill="#52514e" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">1.15</text>
+<text x="648.4" y="254.0" font-size="11" fill="#52514e" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">1.17</text>
+<text x="624.0" y="282.0" font-size="11" fill="#52514e" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">1.04</text>
+<text x="534.0" y="310.0" font-size="11" fill="#52514e" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">0.56</text>
+<text x="502.1" y="338.0" font-size="11" fill="#52514e" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">0.39</text>
+</svg>
