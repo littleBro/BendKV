@@ -274,9 +274,12 @@ CI runs the proofs, the pure checks, the build and `make perfcheck` on every pus
 
 ## Layout
 
+The six files that the laws are about name the groups of [What is proved](#what-is-proved)
+that state them; the others are tested against `redis-server`.
+
 ```
 src/        the server
-  map.bend      hash trie with string keys                         verified
+  map.bend      hash trie with string keys                         laws: Map, Keys, Key count
   float.bend    doubles and long doubles in software               tested
   hll.bend      HyperLogLogs on a string's bytes, as Redis's       tested
   geo.bend      geohashes, cells, distances and sorts, as Redis's  tested
@@ -284,11 +287,11 @@ src/        the server
   rdb.bend      the RDB format: DUMP, RESTORE and the file         tested
   stream.bend   streams' nodes, as Redis's listpacks hold them     tested
   aofdir.bend   the manifest of Redis 7's append-only directory    tested
-  redis.bend    command semantics: exec(cmd, db) -> (reply, db')   verified
-  batch.bend    a pipelined batch with cache hints                 verified
-  aof.bend      append-only file: effects, encoding, loading       verified
-  session.bend  connection and server state, whole batches         verified
-  config.bend   the parameters, CONFIG GET and SET                 verified
+  redis.bend    command semantics: exec(cmd, db) -> (reply, db')   laws: Commands, Commuting, Databases
+  batch.bend    a pipelined batch with cache hints                 laws: Commands (the hints)
+  aof.bend      append-only file: effects, encoding, loading       laws: Persistence
+  session.bend  connection and server state, whole batches         laws: Sessions
+  config.bend   the parameters, CONFIG GET and SET                 laws: Configuration
   resp.bend     RESP parser, RESP2 and RESP3 reply encoders         tested
   info.bend     INFO's sections and fields, SLOWLOG, LATENCY        tested
   command.bend  COMMAND, with Redis's table of BendKV's commands     tested
