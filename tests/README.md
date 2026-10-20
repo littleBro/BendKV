@@ -127,7 +127,7 @@ RESP=3 python3 tests/hash_test.py --bendkv 6380 --redis 6390                    
 
 | file | what it compares |
 |---|---|
-| [`protocol_test.py`](protocol_test.py) | raw bytes on fresh connections: the cases of Redis's `tests/unit/protocol.tcl` and of the lengths and lines of its `processMultibulkBuffer`, the replies CLIENT REPLY holds back; whether each server closes the connection, seen in its count of clients rather than in a quiet socket |
+| [`protocol_test.py`](protocol_test.py) | raw bytes on fresh connections: the cases of Redis's `tests/unit/protocol.tcl` and of the lengths and lines of its `processMultibulkBuffer`, the replies CLIENT REPLY holds back; whether each server closes the connection, seen in its count of clients rather than in a quiet socket; then, on BendKV alone, one MSET of 200,000 keys timed against as many SETs, sent at once and in pieces of 60 KB |
 | [`session_test.py`](session_test.py) | the commands of a connection, byte for byte |
 | [`resp3_test.py`](resp3_test.py) | HELLO and the switch of protocol (in a pipeline too), the replies RESP3 types, EXEC, blocking commands and Pub/Sub's pushes, a client's own pushes after the reply of what made them |
 | [`auth_test.py`](auth_test.py) | when a client must authenticate, and what it is answered before it does |

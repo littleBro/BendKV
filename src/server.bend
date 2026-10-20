@@ -8758,17 +8758,53 @@ def pend.pin(+t: P.Tail) -> Nat:
 # hold a big argument that Redis's reads, of 16 KB, would have cut: the
 # pin of the last one, the requests' elements read from the batch's start
 # (a '*' line, then k bulks; ok when the element at hand starts as it
-# must), 0 for none; a request inline, or not whole, ends the walk
+# must), 0 for none; a request inline, or not whole, ends the walk. The
+# batch a long request read in part ends in holds the bytes of the reads
+# before it, each a run or more, and a read of a String by index walks its
+# runs from its start: the walk reads the elements through a window
+# (resp.bend's, Long buffers), the window at an element once fewer than 13
+# of the window's bytes are left from it (its '*' or '$', then a line of
+# at most 10 digits and "\r\n") and the batch goes on past the window.
+# Read in place, the elements of one MSET of 200,000 keys took 15 s
+# (issue #146).
 def pend.ok(+s: String, +i: Nat, +k: Nat) -> Bool:
   U32.is_eq(String.code_at(s, i), Bool.pick(U32, Nat.is_eq(k, 0n), 42, 36))
 
-def pend.last(fuel: Nat, ok: Bool, k: Nat, nl: P.NumLine, +last: Nat, +s: String, +l: Nat) -> Nat:
+# a line's number read in the window at base, the index after it in s
+def pend.num(nl: P.NumLine, +base: Nat) -> P.NumLine:
+  match nl:
+    case P.NumOk{n, j}:
+      P.NumOk{n, Nat.add(j, base)}
+    case P.NumMore{}:
+      P.NumMore{}
+    case P.NumBad{}:
+      P.NumBad{}
+
+def pend.re(+w: String, +base: Nat, +e: Nat, +l: Nat) -> Bool:
+  +end = Nat.add(base, String.length(w))
+  Bool.and(Nat.is_lt(end, Nat.add(e, 13n)), Bool.and(Nat.is_lt(end, l), Nat.is_lt(e, l)))
+
+# the element at index e of s read in the window w at base: whether it
+# starts as it must, and its line's number with the index after it in s
+def pend.ok.at(+w: String, +base: Nat, +e: Nat, +k: Nat) -> Bool:
+  pend.ok(w, Nat.sub(e, base), k)
+
+def pend.num.at(+w: String, +base: Nat, +e: Nat) -> P.NumLine:
+  pend.num(P.num_at(w, 1n+Nat.sub(e, base)), base)
+
+def pend.last(fuel: Nat, ok: Bool, k: Nat, nl: P.NumLine, +last: Nat, +s: String, +l: Nat, +w: String, +base: Nat) -> Nat:
   match fuel ok k nl:
     case 1n+f True{} 0n P.NumOk{+n, +j}:
-      pend.last(f, pend.ok(s, j, n), n, P.num_at(s, 1n+j), last, s, l)
+      +re = pend.re(w, base, j, l)
+      +w2 = P.wnd.next(re, w, s, j, l)
+      +b2 = Bool.pick(Nat, re, j, base)
+      pend.last(f, pend.ok.at(w2, b2, j, n), n, pend.num.at(w2, b2, j), last, s, l, w2, b2)
     case 1n+f True{} 1n++m P.NumOk{+n, +j}:
       +e = Nat.add(Nat.add(j, n), 2n)
-      pend.last(f, pend.ok(s, e, m), m, P.num_at(s, 1n+e), Bool.pick(Nat, Bool.and(Nat.is_le(32768n, n), Nat.is_le(e, l)), 2n+n, last), s, l)
+      +re = pend.re(w, base, e, l)
+      +w2 = P.wnd.next(re, w, s, e, l)
+      +b2 = Bool.pick(Nat, re, e, base)
+      pend.last(f, pend.ok.at(w2, b2, e, m), m, pend.num.at(w2, b2, e), Bool.pick(Nat, Bool.and(Nat.is_le(32768n, n), Nat.is_le(e, l)), 2n+n, last), s, l, w2, b2)
     case _ _ _ _:
       last
 
@@ -8776,7 +8812,8 @@ def pend.raw(few: Bool, +s: String) -> Nat:
   match few:
     case True{}:
       +l = String.length(s)
-      pend.last(l, pend.ok(s, 0n, 0n), 0n, P.num_at(s, 1n), 0n, s, l)
+      +w = P.wnd.from(s, 0n, l)
+      pend.last(l, pend.ok.at(w, 0n, 0n, 0n), 0n, pend.num.at(w, 0n, 0n), 0n, s, l, w, 0n)
     case False{}:
       0n
 

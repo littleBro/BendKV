@@ -16,7 +16,8 @@ error under CLIENT REPLY OFF or SKIP, which Redis does not answer, nor
 close the connection after, nor read on; and a long request in several
 reads, cut at each place a bulk can be cut, with requests after it and
 protocol errors in it. Then, on BendKV alone, one MSET of 200,000 keys
-sent at once is timed against a pipeline of as many SETs.
+is timed against a pipeline of as many SETs, each sent at once and then
+in pieces.
 
 Whether the server closed a connection is not taken from a quiet
 socket: a server that keeps one open shows it in INFO's
@@ -328,12 +329,18 @@ def parses(data):
     return None
 
 
-def timed(port, data, replies):
-    """Seconds from sending data at once to its replies' end (each reply
-    here is one line: its LF is counted, which a read never splits)."""
+def timed(port, data, replies, piece=None):
+    """Seconds from sending data at once, or in pieces of piece bytes a
+    millisecond apart, to its replies' end (each reply here is one line:
+    its LF is counted, which a read never splits)."""
     s = socket.create_connection(("127.0.0.1", port), timeout=60)
     t0 = time.time()
-    s.sendall(data)
+    if piece is None:
+        s.sendall(data)
+    else:
+        for i in range(0, len(data), piece):
+            s.sendall(data[i:i + piece])
+            time.sleep(0.001)
     got = 0
     while got < replies:
         chunk = s.recv(1 << 20)
@@ -349,22 +356,28 @@ def long_time(port, ctl, n=200000):
     as a pipeline of n SETs of the same keys (Redis: 0.13 s and 0.10 s
     for 200,000 here). Parsed again from its start after each read of 64
     KB, the MSET took time in proportion to the square of its size: 4.9
-    s, against 0.13 s for the SETs (issue #85). Each is timed twice, the
-    better time kept."""
+    s, against 0.13 s for the SETs (issue #85). Then both again, sent in
+    pieces of 60 KB a millisecond apart, which BendKV reads as a String
+    of many runs: the query buffer's walk of the MSET's elements, each
+    read by index from the String's start, took 15 s (issue #146). Each
+    is timed twice, the better time kept."""
     keys = [b"key:%d" % i for i in range(n)]
     mset = b"*%d\r\n$4\r\nMSET\r\n" % (1 + 2 * n) + b"".join(b"$%d\r\n%s\r\n$1\r\nv\r\n" % (len(k), k) for k in keys)
     sets = b"".join(resp(b"SET", k, b"v") for k in keys)
-    best = []
-    for data, replies in ((mset, 1), (sets, n)):
-        t = []
-        for _ in range(2):
-            ctl.ask(resp(b"FLUSHALL"))
-            t.append(timed(port, data, replies))
-        best.append(min(t))
-    ctl.ask(resp(b"FLUSHALL"))
-    ok = best[0] <= 5 * best[1] + 0.5
-    print("%s one MSET of %d keys at once: %.2f s, a pipeline of as many SETs: %.2f s" %
-          ("ok  " if ok else "FAIL", n, best[0], best[1]))
+    ok = True
+    for piece, how in ((None, "at once"), (61440, "in pieces of 60 KB")):
+        best = []
+        for data, replies in ((mset, 1), (sets, n)):
+            t = []
+            for _ in range(2):
+                ctl.ask(resp(b"FLUSHALL"))
+                t.append(timed(port, data, replies, piece))
+            best.append(min(t))
+        ctl.ask(resp(b"FLUSHALL"))
+        good = best[0] <= 5 * best[1] + 0.5
+        print("%s one MSET of %d keys %s: %.2f s, a pipeline of as many SETs: %.2f s" %
+              ("ok  " if good else "FAIL", n, how, best[0], best[1]))
+        ok &= good
     return ok
 
 
