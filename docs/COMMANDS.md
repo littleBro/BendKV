@@ -707,7 +707,7 @@ section 3zzzzp).
 
 CONFIG GET (names, aliases and glob patterns), SET (several
 parameters at once, all or none), RESETSTAT, REWRITE, HELP, over every parameter of
-Redis 7.2.16 (counted in [In numbers](../README.md#in-numbers)), taken from Redis's own table by
+Redis 7.2.16 (counted in [NUMBERS.md](NUMBERS.md)), taken from Redis's own table by
 `tools/gen_config.py`: every value is
 checked as Redis checks it and read back as Redis prints it (`cluster-announce-ip` an
 IPv4 or IPv6 address as `inet_pton` reads one, `cluster-announce-human-nodename` without

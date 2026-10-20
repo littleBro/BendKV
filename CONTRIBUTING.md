@@ -71,7 +71,7 @@ sends about a million of them to main's server.
   dispatch in `src/redis.bend` by `tools/gen_commands.py` (from
   `tools/data/redis-commands.json`, which it asks a `redis-server` for):
   change the script and rerun it, not the blocks.
-- **The counts** in README.md's [In numbers](README.md#in-numbers) (the laws, the
+- **The counts** in [docs/NUMBERS.md](docs/NUMBERS.md) (the laws, the
   patches, `Cmd`'s constructors, Redis's parameters, the lines of each file) are written
   by `tools/gen_counts.py`; rerun it when `make gencheck` finds one out of date, and link
   to them from another document rather than copy a count into it.
