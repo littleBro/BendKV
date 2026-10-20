@@ -127,13 +127,35 @@ come up most:
 ## How fast it is
 
 BendKV is measured against the newest servers, Redis 8.10.2 and Valkey 9.1.2, on the
-same machine. On one core, with redis-benchmark's 20 clients:
+same machine, one core each, with redis-benchmark's 20 clients and 100,000 keys. Each
+number is a server's requests a second, with Redis 8.10.2's taken as 1: 1.40 is 40% more
+requests a second than Redis 8.10.2 serves, 0.50 half as many.
 
-| BendKV's rate, as a share of theirs | SET | GET | INCR | LPUSH | LPOP | SADD | HSET | ZADD | XADD |
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/speed-dark.svg">
+  <img alt="BendKV's requests a second as a share of Redis 8.10.2's, a bar for each command, with a pipeline of 16 and without one" src="docs/img/speed-light.svg">
+</picture>
+
+With a pipeline of 16:
+
+| server | SET | GET | INCR | LPUSH | LPOP | SADD | HSET | ZADD | XADD |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| Redis 8.10.2, pipeline 16 | **1.40** | **1.47** | **1.11** | 0.65 | 0.86 | 0.58 | 0.49 | 0.38 | 0.12 |
-| Valkey 9.1.2, pipeline 16 | **1.52** | **1.25** | **1.19** | 0.72 | 1.00 | 0.62 | 0.54 | 0.38 | 0.11 |
-| Redis 8.10.2, no pipeline | **1.17** | **1.23** | **1.08** | **1.12** | **1.15** | **1.17** | **1.04** | 0.56 | 0.39 |
+| **BendKV** | **1.40** | **1.47** | **1.11** | **0.65** | **0.86** | **0.58** | **0.49** | **0.38** | **0.12** |
+| Redis 8.10.2 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 |
+| Valkey 9.1.2 | 0.92 | 1.18 | 0.93 | 0.91 | 0.87 | 0.94 | 0.91 | 0.99 | 1.05 |
+| Redis 7.0.15 | 0.90 | 0.97 | 0.80 | 1.09 | 0.95 | 0.89 | 0.89 | 0.82 | 1.01 |
+
+Without a pipeline:
+
+| server | SET | GET | INCR | LPUSH | LPOP | SADD | HSET | ZADD | XADD |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| **BendKV** | **1.17** | **1.23** | **1.08** | **1.12** | **1.15** | **1.17** | **1.04** | **0.56** | **0.39** |
+| Redis 8.10.2 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 |
+| Valkey 9.1.2 | 0.98 | 1.03 | 1.12 | 1.04 | 1.09 | 1.04 | 1.04 | 0.93 | 0.96 |
+| Redis 7.0.15 | 0.99 | 1.07 | 1.00 | 0.93 | 0.95 | 0.97 | 0.94 | 0.82 | 0.92 |
+
+Redis 8.10.2's 1 is 730 thousand SETs and 797 thousand GETs a second with the pipeline,
+112 and 103 thousand without it.
 
 On strings BendKV runs fewer instructions a request than either (GET 3,570, against
 4,430 for Redis 8.10.2 and 5,711 for Valkey); on collections it runs 1.3 to 2 times as

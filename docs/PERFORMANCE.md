@@ -9425,3 +9425,7 @@ trials gives 82.6k, 80.3k and 80.4k (±2 to 4%), and LPUSH, SADD, HSET and ZADD 
 trials are within ±5% of each other. `make perfcheck` guards GET, SET and INCR only; the
 counts of the collections and of XADD here could join its baseline, so that a change to
 them shows in CI rather than in a benchmark's noise.
+
+README's chart of speed is drawn from the one-core tables here by `docs/img/speed_chart.py`,
+which keeps a copy of their ratios: when these numbers are measured again, change them
+there too and rerun it.
