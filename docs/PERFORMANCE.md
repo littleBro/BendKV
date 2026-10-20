@@ -9429,3 +9429,24 @@ them shows in CI rather than in a benchmark's noise.
 README's chart of speed is drawn from the one-core tables here by `docs/img/speed_chart.py`,
 which keeps a copy of their ratios: when these numbers are measured again, change them
 there too and rerun it.
+
+## 95. The query buffer's walk through a window
+
+FINDINGS 3zzzzzh. One MSET of 200,000 keys on BendKV alone, the server's CPU time, main's
+build (0bbca1a) and this change on it started in turn on the same machine, each MSET
+after a FLUSHALL:
+
+| sent | main | this change |
+|---|---:|---:|
+| at once, four times | 0.14, 0.34, 0.45, 12.40 s | 0.15, 0.15, 0.39, 0.45 s |
+| in pieces of 64 KB, a millisecond apart, four times | 0.57 to 0.84 s | 0.55 to 0.75 s |
+| in pieces of 48 KB, twice | 0.84, 0.91 s | 0.84, 0.84 s |
+| in pieces of 60 KB, `tests/protocol_test.py`'s time (wall, the better of two) | 12.42 s | 0.70 s |
+
+The 12.40 s is CI's failure of issue #146 on this machine: the same bytes, sent at once,
+read in pieces that left the batch in many runs. `tests/protocol_test.py`'s pipeline of
+200,000 SETs took 0.12 s and 0.13 s on main and 0.17 s and 0.15 s with this change, at
+once and in pieces, within the machine's noise. The walk runs only for a batch of 32 KB or
+more of at most four requests, so `tools/perf_guard.sh` counts what it counted on main:
+3,573, 4,361 and 4,653 instructions for GET, SET and INCR (section 93: 3,572, 4,365 and
+4,661).

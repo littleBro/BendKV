@@ -11718,6 +11718,29 @@ HyperLogLog edge above is not that fix's effect: both servers have the fix (sect
 **The laws.** Neither move changes a law: what moves is in replies, texts, encodings,
 payloads and introspection, which no statement in `proof/LAWS.bend` covers.
 
+## 3zzzzzh. The query buffer's walk of a long request, through a window
+
+A batch of a few requests of 32 KB or more is walked from its start for the big argument
+that Redis's reads of 16 KB would have cut (section 3zzzzy: `pend.done`). The batch that
+a long request read in part ends in holds the bytes of all the reads before it, for
+MONITOR, joined as they came, in many runs. The walk read each element by index
+(`String.code_at`, `P.num_at`), and a read by index walks a String's runs from its start,
+so the walk's time went as the request's elements times its runs. One MSET of 200,000
+keys (400,001 elements, 4.6 MB) sent in pieces of 60 KB a millisecond apart took 12 to
+17 s of the server's time, where sent at once it took 0.3 s. How many runs the reads
+leave depends on how the bytes come: CI's heavy runs timed the same MSET sent at once at
+0.14 s in most runs, and at 7.2 to 7.7 s in three of four in October 2026 (issue
+[#146](https://github.com/littleBro/BendKV/issues/146)).
+
+The walk now reads the elements through a window of the batch, as the parser reads a
+long request (`wbulks`, resp.bend's Long buffers): a copy of up to 2,048 bytes, taken
+again at an element once fewer than 13 of its bytes are left from it (its `*` or `$`,
+then a line of at most 10 digits and CRLF) and the batch goes on past the window. It
+finds the same argument, at the cost of a copy for each 2 KB of the batch. The MSET in
+pieces now takes 0.70 s, and at once 0.38 s (PERFORMANCE, section 95);
+`tests/protocol_test.py` times both against a pipeline of as many SETs sent the same way,
+and `tests/querybuf_test.py`'s big arguments still leave the buffers Redis leaves.
+
 ## 4. Where a request's time goes, and hiding the memory waits
 
 With the eight patches, BendKV ran fewer instructions on GET and SET than Redis, missed
