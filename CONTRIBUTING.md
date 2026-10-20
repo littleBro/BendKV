@@ -5,7 +5,7 @@ what runs is what is proved, and what is not proved is tested against Redis.
 
 ## Setup
 
-Build the patched Bend once (see [README.md](README.md#building)):
+Build the patched Bend once (see [README.md](README.md#building-and-running)):
 
 ```bash
 git clone https://github.com/bendlang/bend ../bend-patched

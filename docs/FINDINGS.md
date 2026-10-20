@@ -7151,7 +7151,7 @@ the start's code.
 windows: a file that ends inside a transaction and then in an entry cut short. BendKV
 cuts it back to before the MULTI and reverts the transaction at once; Redis cuts the
 entry and leaves the MULTI and the entries it queued for its next start, which reverts
-them. The databases are the same. README.md and COMPATIBILITY.md list it.
+them. The databases are the same. COMMANDS.md and COMPATIBILITY.md list it.
 
 **What is left.**
 
@@ -7584,7 +7584,7 @@ name for each 64 KB would be made anew, without its head, and put in place of
 `dbfilename`. A FLUSHALL or a SHUTDOWN that drops the save closes the writer's channel,
 and the writer closes the file.
 The bytes are SAVE's, AUX fields and all (neither writes `repl-id` or `repl-offset`,
-which Redis keeps from a file it loaded: README.md, Persistence), `ctime` and `used-mem`
+which Redis keeps from a file it loaded: COMMANDS.md, Persistence), `ctime` and `used-mem`
 taken when the actor starts the save. Its lines are Redis's parent's and child's, the
 child's with the role C and the server's pid: "Background saving started by pid N",
 "DB saved on disk" (C), "Background saving terminated with success"; a save that fails
@@ -8874,7 +8874,7 @@ to 134,444 pages of SSCAN on 514 sets.
 7.0.15 cannot read: RESTORE refuses it, as before) and `RDB_TYPE_SET_INTSET`. SMEMBERS,
 SINTER, SUNION, SDIFF and DUMP answer a small set's members in the order they came, where
 the trie answered its own order; a hashtable's order is each server's own, and the tests
-compare such replies as sets. README says so.
+compare such replies as sets. tests/README.md says so.
 
 **The proofs.** `proof/LAWS.bend` and `proof/SPEC.bend` do not change. The lemmas of
 SADD's sizes take the new forms: a member a small set lacks leaves it no smaller, whether
@@ -10232,7 +10232,7 @@ BendKV answers "ERR timeout is out of range" so, an infinity too (`blk.ll`, `blk
 in src/session.bend); -inf and NaN stay negative. Redis 7.2.16 also finds out of range a
 timeout that the time now (in ms) takes past LLONG_MAX, BLPOP's, WAIT's and CLIENT
 PAUSE's; BendKV, whose parse of a timeout does not read the time, lets such a timeout,
-one of more than 292 million years, wait (README).
+one of more than 292 million years, wait (COMMANDS.md).
 
 **The changes a served pop counts.** Redis 7.2.16 serves a blocked client by running
 its command again (`unblockClientOnKey`, `processCommandAndResetClient`), so that a pop
@@ -10344,7 +10344,7 @@ strings as one too; OBJECT ENCODING, DUMP and the files say which.
   more than 128 of them (more than 512 integers) make a hashtable at once, whether they
   are there already or come twice (`sadd.from`; the proofs of SADD take it).
 
-**Where BendKV differs** (README's Lists and Sets, and COMPATIBILITY). Redis makes a few
+**Where BendKV differs** (COMMANDS.md's Lists and Sets, and COMPATIBILITY). Redis makes a few
 turns where its append-only file has nothing: an LSET of an index the list does not
 have and an LINSERT whose pivot is not there turn a listpack that the element would take
 past 8 KB into a quicklist, an LTRIM that takes nothing turns a quicklist of one node of
@@ -10570,7 +10570,7 @@ acknowledged it, or until its time is up, then answers both counts.
   synced, replaces it.
 - ROLE gives the offset.
 
-**Where BendKV differs** (README.md, The server).
+**Where BendKV differs** (COMMANDS.md, The server).
 - The offset counts a group's commands once the group is written, so that an INFO or a
   ROLE in the group of writes before it gives the offset before them, where Redis counts
   each command as it runs. No test of Redis's reads it so, and an exact offset there
@@ -11674,6 +11674,49 @@ a directory removed again.
 The proofs are as before. No law changed.
 
 **What it costs.** Nothing on a request's path: the start makes the directory once.
+
+## 3zzzzzg. Which Redis to follow, and what to measure against
+
+BendKV first followed Redis 7.0.15. In October 2026 the owner split the reference in two:
+
+- **The semantics** is Redis 7.2.16: what BendKV answers, byte for byte, as its tests
+  check it. 7.2.16 (August 2026) is the last Redis under BSD-3 and the base that Valkey
+  forked from (Valkey still reports `redis_version:7.2.4`), so it is the API that most
+  deployments and managed caches share.
+- **The speed** is measured against Redis 8.10.2 and Valkey 9.1.2 (PERFORMANCE, section
+  94). BendKV is first a study of whether code in Bend can keep pace with Redis while its
+  core is proved, and being faster than an older Redis proves little. Redis 8 is only
+  built and run: nothing from Redis 7.4 or later is copied (AGENTS.md, rule 10).
+
+**What moving to 8.10.2 would have cost**, measured first (the full report is in
+[#76](https://github.com/littleBro/BendKV/pull/76#issuecomment-6228666400)): its 240
+commands become 301, its 192 parameters 228, INFO gains three sections and about 50
+fields, RDB's version goes from 10 to 15, and Redis's own suite from about 2,200 tests to
+about 4,100. Of BendKV's differential tests then, 4 of 34 passed against it as they were.
+Most of what 8.10.2 adds comes from code under RSALv2, SSPLv1 or AGPLv3, so it could only
+be written from the documentation and from what the server answers.
+
+**What moving to 7.2.16 cost**, measured on main 9b513c2 (the full report is in
+[#76](https://github.com/littleBro/BendKV/pull/76#issuecomment-6230380710)): 9 of BendKV's
+54 differential tests passed against 7.2.16 as they were, all 54 against 7.0.15. What
+differed fell into ten kinds: the tables the generators copy (COMMAND, CONFIG, INFO, the
+HELP texts, the version), new commands and options (WAITAOF, CLIENT SETINFO and NO-TOUCH,
+ZRANK WITHSCORE, CLUSTER MYSHARDID), doubles written as `fpconv_dtoa` writes them, small
+lists and sets as listpacks, RDB 11, RESP3 pushes after the reply, error texts and checks,
+introspection (ACL LOG's fields, blocked calls' counts), scripts (a blocking command runs
+in a script), and one HyperLogLog edge. Three bugs of 7.2.16 found on the way are not
+copied ([UPSTREAM.md](UPSTREAM.md)). The move went through an integration branch,
+`claude/target-7.2`, whose CI's reference was 7.2.16, in about nine pull requests: the
+sections 3zzzzb to 3zzzzm are its parts.
+
+**One correction.** The 7.0.15 that the tests ran against was Ubuntu's package
+(`5:7.0.15-1ubuntu0.24.04.4`), which has 6 of the 16 CVEs that 7.2.16's release notes
+list since January 2024 backported, CVE-2025-32023 in HyperLogLog among them. So the
+HyperLogLog edge above is not that fix's effect: both servers have the fix (section
+3zzzzi has the edge).
+
+**The laws.** Neither move changes a law: what moves is in replies, texts, encodings,
+payloads and introspection, which no statement in `proof/LAWS.bend` covers.
 
 ## 4. Where a request's time goes, and hiding the memory waits
 
