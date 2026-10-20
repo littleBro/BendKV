@@ -73,7 +73,9 @@ import ./hll.bend as H
 # of that (The append-only file); or a read inside a big argument, of a
 # client whose requests are not whole yet: its id, the bytes of the
 # argument read so far and its length with its CRLF (Query buffers); or a
-# connection the listeners refused (maxclients: Accepting). A
+# connection the listeners refused (maxclients: Accepting); or a client
+# that must authenticate whose replies would pass its output buffer's
+# limit (Over: Clients that must authenticate). A
 # batch also tells of the big argument it ended or ends inside (qf), and
 # one from a client with a subscription is a SubReq, which runs a command
 # at a time.
@@ -92,6 +94,7 @@ type Req is Data:
   Synced{}
   QbIn{id: Nat, have: Nat, pin: Nat}
   Refused{}
+  Over{id: Nat}
 
 # what a batch tells of its client's query buffer (Query buffers, below):
 # nothing, as most batches; that it ended a big argument, of pin bytes
@@ -2782,6 +2785,8 @@ def clf.lver(+f: Clf) -> String:
 # its connection finds its end wherever it waits; until the connection
 # tells the actor it ended (Left), a batch of its that comes is answered
 # Bye and not run, as Redis frees a client with what it had read. A
+# client over its output buffer's limit (Over) is killed so too, Redis's
+# line for it logged as its socket is shut down (Kill's say). A
 # connection closes its socket only once the actor answered its Left
 # (conn_end), so an fd in the registry or in kills is still its client's
 # open socket. The monitors (MONITOR, below) are a list, in the order
@@ -2898,21 +2903,35 @@ def sc.denyoom(+sf: U32) -> Bool:
 def sc.writes(+sf: U32) -> Bool:
   U32.is_eq(U32.and(sf, 113), 32)
 
+# a socket to shut down at the end of the group (kills), and the line
+# logged as it is ("": none)
+type Kill is Data:
+  Kill{fd: U32, say: String}
+
 type Cls is Data:
-  Cls{tab: KV.Trie<Cl>, killed: List<&2, Nat>, kills: List<&2, U32>, mons: List<&2, Mon>, pause: Pz, down: Nat, heed: Hd, scr: Scr}
+  Cls{tab: KV.Trie<Cl>, killed: List<&2, Nat>, kills: List<&2, Kill>, mons: List<&2, Mon>, pause: Pz, down: Nat, heed: Hd, scr: Scr}
 
 def cls.new() -> Cls:
   Cls{KV.empty(Cl), Nil{}, Nil{}, Nil{}, PzOff{}, 0n, Hd{KV.empty(Nat), 0n, 0n, 0n, trk.new()}, scr.new()}
 
 # the bits of Ps's ev that keep the fast way off while a killed client's
-# connection has not ended (the 31st), a client monitors (the 30th),
+# connection has not ended or a socket waits to be shut down at the end of
+# the group (the 31st: so that a group whose client was killed and left in
+# it still shuts its socket down), a client monitors (the 30th),
 # clients are paused (the 25th), or a SHUTDOWN stops the server (the
 # 24th) or a save is asked for (the 23rd), and the tracking's (the 22nd
 # and the 21st: trk.bits): no class of keyspace event has them
-def kill.bit(+kd: List<&2, Nat>) -> U32:
-  match kd:
+def kills.bit(+ks: List<&2, Kill>) -> U32:
+  match ks:
     case Nil{}:
       0
+    case Con{k, rest}:
+      2147483648
+
+def kill.bit(+kd: List<&2, Nat>, +ks: List<&2, Kill>) -> U32:
+  match kd:
+    case Nil{}:
+      kills.bit(ks)
     case Con{i, rest}:
       2147483648
 
@@ -2941,8 +2960,8 @@ def dn.bit(+dn: Nat) -> U32:
 
 def cls.bit(+cs: Cls) -> U32:
   match cs:
-    case Cls{tab, +kd, ks, +ms, +pz, +dn, Hd{hk, sn, ad, bs, +tr}, +scr}:
-      U32.or(U32.or(U32.or(U32.or(U32.or(kill.bit(kd), mon.bit(ms)), pz.bit(pz)), dn.bit(dn)), trk.bits(tr)), scr.bit(scr))
+    case Cls{tab, +kd, +ks, +ms, +pz, +dn, Hd{hk, sn, ad, bs, +tr}, +scr}:
+      U32.or(U32.or(U32.or(U32.or(U32.or(kill.bit(kd, ks), mon.bit(ms)), pz.bit(pz)), dn.bit(dn)), trk.bits(tr)), scr.bit(scr))
 
 def cls.get(+id: Nat, +cs: Cls) -> Maybe<&2, Cl>:
   match cs:
@@ -3061,11 +3080,12 @@ def cls.left(+id: Nat, cs: Cls) -> Cls:
   +c = cs
   cls.left.of(id, cls.tk(id, c), c)
 
-# the fds to shut down taken (at the end of the group)
-def cls.kills(cs: Cls) -> List<&2, U32> & Cls:
+# the sockets to shut down taken (at the end of the group), in the order
+# they came
+def cls.kills(cs: Cls) -> List<&2, Kill> & Cls:
   match cs:
     case Cls{tab, kd, ks, ms, pz, dn, hd, scr}:
-      (ks, Cls{tab, kd, Nil{}, ms, pz, dn, hd, scr})
+      (List.reverse(&2, Kill, ks), Cls{tab, kd, Nil{}, ms, pz, dn, hd, scr})
 
 # a client's name, database and protocol set from its connection
 def cl.conn(+cn: S.Conn, c: Cl) -> Cl:
@@ -4210,20 +4230,44 @@ def ps.name(+id: Nat, +pb: Ps) -> String:
     case PsOf{+p}:
       ps.name(id, p)
 
-# the client of id killed: out of the registry, its fd to be shut down,
-# and the fast way off until its connection ends
-def ps.kill(+id: Nat, +fd: U32, pb: Ps) -> Ps:
+# the client of id killed: out of the registry, its fd to be shut down
+# (say logged then), and the fast way off until its connection ends
+def ps.kill.say(+id: Nat, +fd: U32, +say: String, pb: Ps) -> Ps:
   match pb:
     case Ps{reg, ev, px, Cls{tab, kd, ks, ms, pz, dn, hd, scr}, own}:
-      Ps{reg, U32.or(ev, 2147483648), px, Cls{KV.del(Cl, tab, Nat.show(id)), id <> kd, fd <> ks, ms, pz, dn, hd, scr}, own}
+      Ps{reg, U32.or(ev, 2147483648), px, Cls{KV.del(Cl, tab, Nat.show(id)), id <> kd, Kill{fd, say} <> ks, ms, pz, dn, hd, scr}, own}
     case PsOf{p}:
-      ps.kill(id, fd, p)
+      ps.kill.say(id, fd, say, p)
 
-def ps.kills.of(q: List<&2, U32> & Cls, reg: Reg, ev: U32, px: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, own: List<&2, R.Reply>) -> List<&2, U32> & Ps:
-  (ks, cs) = q
-  (ks, Ps{reg, ev, px, cs, own})
+def ps.kill(+id: Nat, +fd: U32, pb: Ps) -> Ps:
+  ps.kill.say(id, fd, "", pb)
 
-def ps.kills(pb: Ps) -> List<&2, U32> & Ps:
+# the client of id over its output buffer's limit (Over: Clients that must
+# authenticate) killed, as CLIENT KILL kills it, with Redis 7.2.16's line
+# (closeClientOnOutputBufferLimitReached's: s, its line as CLIENT LIST
+# shows it); nothing for a client killed already
+def ps.over.of(m: Maybe<&2, Cl>, +id: Nat, +s: String, pb: Ps) -> Ps:
+  match m:
+    case Some{Cl{i, back, fd, addr, laddr, since, name, db, fl, r3, kt, user, qb}}:
+      ps.kill.say(id, fd, "Client " ++ String.take(s, Nat.sub(String.length(s), 1n)) ++ " scheduled to be closed ASAP for overcoming of output buffer limits.", pb)
+    case None{}:
+      pb
+
+def ps.over(+id: Nat, +s: String, +pb: Ps) -> Ps:
+  ps.over.of(cls.get(id, ps.cls(pb)), id, s, pb)
+
+# the kills taken, the 31st bit left on while a killed client's
+# connection has not ended
+def cls.kill.bit(+cs: Cls) -> U32:
+  match cs:
+    case Cls{tab, +kd, +ks, ms, pz, dn, hd, scr}:
+      kill.bit(kd, ks)
+
+def ps.kills.of(q: List<&2, Kill> & Cls, reg: Reg, ev: U32, px: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, own: List<&2, R.Reply>) -> List<&2, Kill> & Ps:
+  (ks, +cs) = q
+  (ks, Ps{reg, U32.or(U32.and(ev, 2147483647), cls.kill.bit(cs)), px, cs, own})
+
+def ps.kills(pb: Ps) -> List<&2, Kill> & Ps:
   match pb:
     case Ps{reg, ev, px, cs, own}:
       ps.kills.of(cls.kills(cs), reg, ev, px, own)
@@ -13496,6 +13540,8 @@ def group_req(+log: Bool, q: Req, g: Grp) -> Grp:
       Grp{outs, es, srv, ds, ws, up, tx, ps.qb.in(id, have, pin, R.ds.now(ds), qb.per(srv), pb)}
     case Refused{} Grp{outs, es, srv, ds, ws, up, tx, pb}:
       Grp{outs, es, S.srv.refused(srv), ds, ws, up, tx, pb}
+    case Over{+id} Grp{outs, es, +srv, +ds, +ws, up, +tx, +pb}:
+      Grp{outs, es, srv, ds, ws, up, tx, ps.over(id, cl.line.or(cls.get(id, ps.cls(pb)), R.ds.now(ds), qb.per(srv), Them{}, ws, tx, pb), pb)}
 
 # the clock (IO.clock: s and us since 1970) in ms
 def clock.ms(t: U32 & U32) -> Nat:
@@ -14333,16 +14379,18 @@ def db_refused(+srv: S.Srv, ds: R.Ds, ws: Waits, tx: Tx, pb: Ps, +rw: Rw, +reqs:
     db_next(S.srv.rw.downs.clear(srv), ds, ws, tx, pb, rw, reqs)
 
 # the sockets of the clients CLIENT KILL took shut down (TCP.kill), before
-# the group's answers go out
+# the group's answers go out, each after its line (a client over its
+# output buffer's limit: Over)
 @unsafe
-def kill_all(ks: List<&2, U32>) -> IO(Unit):
+def kill_all(ks: List<&2, Kill>, +lg: Log) -> IO(Unit):
   match ks:
     case Nil{}:
       IO.pure(Unit, Unit{})
-    case Con{fd, rest}:
+    case Con{Kill{fd, +say}, rest}:
       do IO<Unit>:
+        Unit <- log.if(Bool.not(String.is_empty(say)), lg, 3, say)
         b : Bool <- TCP.kill(fd)
-        kill_all(rest)
+        kill_all(rest, lg)
 
 # the group's answers; a maxclients the group set goes to the listeners
 # first (Accepting: same says it did not), so that a client that read a
@@ -14362,10 +14410,10 @@ def db_answer(same: Bool, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, +s
         db_next(srv, ds, ws, tx, pb, rw.cap.set(rw, mc), reqs)
 
 @unsafe
-def db_send(p: List<&2, U32> & Ps, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, +srv: S.Srv, ds: R.Ds, ws: Waits, tx: Tx, +rw: Rw, +reqs: Chan(Req)) -> IO(Unit):
+def db_send(p: List<&2, Kill> & Ps, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, +srv: S.Srv, ds: R.Ds, ws: Waits, tx: Tx, +rw: Rw, +reqs: Chan(Req)) -> IO(Unit):
   (ks, pb) = p
   do IO<Unit>:
-    Unit <- kill_all(ks)
+    Unit <- kill_all(ks, down.lg(srv, rw))
     db_answer(rw.capped(rw, srv), outs, srv, ds, ws, tx, pb, rw, reqs)
 
 # while no client was killed (calm), no socket is to be shut down
@@ -14641,8 +14689,8 @@ def conn_ans(s: Socket, +ln: Link, got: Maybe<&1, Ans>, err: Maybe<&2, String>, 
       conn_quit(s, ln, cn, err, rest, need)
     case Some{Ans{Some{out}, cn}}:
       conn_put(s, ln, link.post(ln), out, cn, err, rest, need)
-    case Some{AnsAuth{out, cn, must}}:
-      conn_ans(s, ln, Some{Ans{out, cn}}, err, P.tail.auth(must, rest), need)
+    case Some{AnsAuth{out, cn, +must}}:
+      conn_auth.ans(must, s, ln, out, cn, err, P.tail.auth(must, rest), need)
     case Some{AnsSub{out, cn}}:
       conn_sub.put(s, ln, link.post(ln), out, cn, err, rest, need)
     case Some{Push{out}}:
@@ -14781,6 +14829,29 @@ def conn_oops(on: Bool, s: Socket, +ln: Link, msg: String) -> IO(Unit):
 # one caller each, which a def called from two places loses (entered
 # through the work loop: FINDINGS.md, section 8), so bytes let in go
 # through conn_more, and an AnsAuth through conn_ans as an Ans.
+#
+# The replies to a client that must authenticate are held to 16 KB, as
+# Redis 7.2.16 holds them (checkClientOutputBufferLimits): Redis writes a
+# client's replies once its event loop's round has run what it read, and
+# a client's replies go to its 16 KB buffer first, then to a list; the
+# first block on the list of a client that must authenticate closes it,
+# the replies not written (closeClientOnOutputBufferLimitReached, with
+# its line). So a batch's replies that, with those its socket still holds
+# (TCP.held, the writer's: the bytes of the client's earlier batches the
+# socket had no room for), pass 16 KB are not posted: the socket is set to
+# close abortively (TCP.abort), the actor is told (Over), which logs
+# Redis's line and shuts the socket down as CLIENT KILL does, and the
+# connection ends, reading nothing more. The socket's close then resets
+# the connection whatever its buffers hold, as Redis's close resets it
+# with what the client sent after unread: a close that found nothing
+# unread would queue an end behind the replies the client has not taken,
+# and a client that sends and does not read, its own buffer full, would
+# wait on it with no error (so it went on a runner of CI, whose kernel let
+# such a client's buffer grow to 32 MB, the connection having read all it
+# had sent). A client that does not read is closed so once the socket's
+# buffers are full, and one whose batch alone answers more than 16 KB (482
+# NOAUTH errors: a pipeline it may not send) is closed at once, as in
+# Redis.
 
 # the tail of a client that has not authenticated, after an answer: as
 # any client's once it has, else the bytes it holds, which it may not
@@ -14794,6 +14865,45 @@ def conn_auth.next(auth: Bool, t: P.Tail, s: Socket, +ln: Link, cn: S.Conn, need
       conn_oops(mute.on(S.conn.mode(cn)), s, ln, msg)
     case False{} u:
       conn_loop(s, P.TailAuth{u}, Nil{}, 0n, need, ln, cn)
+
+# the answer to a client that has not authenticated (AnsAuth): to one
+# that must, its replies held to 16 KB with what its socket holds still
+@unsafe
+def conn_auth.ans(must: Bool, s: Socket, +ln: Link, out: Maybe<&2, String>, cn: S.Conn, err: Maybe<&2, String>, rest: P.Tail, need: Nat) -> IO(Unit):
+  match must out:
+    case True{} Some{o}:
+      do IO<Unit>:
+        p : Socket & Nat <- TCP.held(s)
+        conn_auth.held(p, ln, o, cn, err, rest, need)
+    case _ x:
+      conn_ans(s, ln, Some{Ans{x, cn}}, err, rest, need)
+
+@unsafe
+def conn_auth.held(p: Socket & Nat, +ln: Link, +o: String, cn: S.Conn, err: Maybe<&2, String>, rest: P.Tail, need: Nat) -> IO(Unit):
+  (s, +n) = p
+  conn_auth.over(Nat.is_lt(16384n, Nat.add(n, String.length(o))), s, ln, o, cn, err, rest, need)
+
+# past 16 KB, the replies are not posted: the socket is set to reset the
+# connection at its close (TCP.abort), the actor is told (Over), and the
+# connection ends (its socket closes once the actor shut it down)
+@unsafe
+def conn_auth.over(over: Bool, s: Socket, +ln: Link, o: String, cn: S.Conn, err: Maybe<&2, String>, rest: P.Tail, need: Nat) -> IO(Unit):
+  match over:
+    case True{}:
+      do IO<Unit>:
+        p : Socket & Bool <- TCP.abort(s)
+        conn_auth.cut(p, ln)
+    case False{}:
+      conn_ans(s, ln, Some{Ans{Some{o}, cn}}, err, rest, need)
+
+@unsafe
+def conn_auth.cut(p: Socket & Bool, +ln: Link) -> IO(Unit):
+  (s, set) = p
+  match ln:
+    case Link{db, back, post, tl, id}:
+      do IO<Unit>:
+        sent : Bool <- Chan.send(Req, db, Over{id})
+        conn_end(s, ln)
 
 # after a batch's answer, with no protocol error: the bytes the tail held,
 # which an answer as any client's lets in (its client has authenticated,
@@ -16821,18 +16931,18 @@ def sc.busy.held(+aof: Bool, +sc: Sc, +g: Grp) -> Bool:
   Bool.and(Nat.is_eq(grp.down(g), 0n), Bool.or(Bool.not(aof), Bool.and(List.is_empty(&2, A.Ent, sc.es.before(sc)), grp.fi.none(g))))
 
 @unsafe
-def sc.busy.sent(p: List<&2, U32> & Ps, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, srv: S.Srv, ds: R.Ds, ws: Waits, up: List<&2, Up>, tx: Tx) -> IO(Grp):
+def sc.busy.sent(p: List<&2, Kill> & Ps, +lg: Log, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, srv: S.Srv, ds: R.Ds, ws: Waits, up: List<&2, Up>, tx: Tx) -> IO(Grp):
   (ks, pb) = p
   do IO<Grp>:
-    Unit <- kill_all(ks)
+    Unit <- kill_all(ks, lg)
     Unit <- Chan.send_all(Ans, List.reverse(&2, Sigma<&2, &2, Chan(Ans), _ => Ans>, outs))
     IO.pure(Grp, Grp{Nil{}, es, srv, ds, ws, up, tx, pb})
 
 @unsafe
-def sc.busy.out(go: Bool, g: Grp) -> IO(Grp):
+def sc.busy.out(go: Bool, +lg: Log, g: Grp) -> IO(Grp):
   match go g:
     case True{} Grp{outs, es, srv, ds, ws, up, tx, pb}:
-      sc.busy.sent(ps.kills(pb), outs, es, srv, ds, ws, up, tx)
+      sc.busy.sent(ps.kills(pb), lg, outs, es, srv, ds, ws, up, tx)
     case _ g0:
       IO.pure(Grp, g0)
 
@@ -16846,7 +16956,7 @@ def sc.busy.if(first: Bool, +now: Nat, +sc: Sc, +aof: Bool, +pid: U32, g: Grp, +
       +x = grp.sc.on(1, g)
       do IO<Grp>:
         Unit <- log(sc.lg(sc), 3, "Slow script detected: still in execution after " ++ Nat.show(Nat.sub(now, sc.t0(sc))) ++ " milliseconds. You can try killing the script using the " ++ Bool.pick(String, U32.is_ne(U32.and(grp.sc.st(x), 16), 0), "FUNCTION KILL", "SCRIPT KILL") ++ " command. Script name is: " ++ sc.sha(sc) ++ ".")
-        g1 : Grp <- sc.busy.out(sc.busy.held(aof, sc, x), x)
+        g1 : Grp <- sc.busy.out(sc.busy.held(aof, sc, x), sc.lg(sc), x)
         sc.busy.groups(sc, aof, pid, g1, reqs)
     case False{}:
       sc.busy.groups(sc, aof, pid, g, reqs)
@@ -18142,12 +18252,12 @@ def aof_sync(+sync: Sync, f: File, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => 
     case Never{}:
       aof_reply(outs, st, f, Never{}, reqs)
 
-# the fds of the clients CLIENT KILL took, out of the state
-def st.kills.of(p: List<&2, U32> & Ps, srv: S.Srv, ds: R.Ds, +sel: Nat, ws: Waits, tx: Tx, rw: Rw) -> List<&2, U32> & St:
+# the sockets of the clients CLIENT KILL took, out of the state
+def st.kills.of(p: List<&2, Kill> & Ps, srv: S.Srv, ds: R.Ds, +sel: Nat, ws: Waits, tx: Tx, rw: Rw) -> List<&2, Kill> & St:
   (ks, pb) = p
   (ks, St{srv, ds, sel, ws, tx, pb, rw})
 
-def st.kills(st: St) -> List<&2, U32> & St:
+def st.kills(st: St) -> List<&2, Kill> & St:
   match st:
     case St{srv, ds, +sel, ws, tx, pb, rw}:
       st.kills.of(ps.kills(pb), srv, ds, sel, ws, tx, rw)
@@ -18168,11 +18278,11 @@ def st.what(+st: St) -> Nat:
 # are shut down (TCP.kill), as db_send does without the file; then the
 # rewrite's step, if any
 @unsafe
-def aof_answer(p: List<&2, U32> & St, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, f: File, +sync: Sync, +reqs: Chan(Req)) -> IO(Unit):
+def aof_answer(p: List<&2, Kill> & St, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, f: File, +sync: Sync, +reqs: Chan(Req)) -> IO(Unit):
   (ks, st) = p
   +x = st
   do IO<Unit>:
-    Unit <- kill_all(ks)
+    Unit <- kill_all(ks, st.lg(x))
     aof_answer.go(st.capped(x), outs, x, f, sync, reqs)
 
 # the group's answers, a maxclients it set given to the listeners first,

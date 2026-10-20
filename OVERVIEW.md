@@ -507,7 +507,9 @@ syntax error for an unauthenticated client is NOAUTH); a client is authenticated
 connecting and on RESET if the default user is on and takes no password then, and after
 AUTH or AUTH in HELLO, and nothing else changes that. While it must authenticate, its
 requests are read with Redis's limits: 10 arguments, and bulks of 16384 bytes (section
-3zzzzn of FINDINGS.md). A connection taken while `maxclients` clients are connected is
+3zzzzn of FINDINGS.md), and its replies are held to 16 KB: past it the client is closed,
+its replies not written, with Redis's line in the log (section 3zzzzze). A connection
+taken while `maxclients` clients are connected is
 refused as Redis refuses it, with its error, no client id and a count in INFO's
 `rejected_connections` (section 3zzzzzd).
 ACL: users as Redis 7.2.16 keeps them, set by ACL SETUSER (selectors, key patterns with

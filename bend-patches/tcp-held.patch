@@ -1,0 +1,506 @@
+diff --git a/bend2/base.bend b/bend2/base.bend
+index df60b5d..09d3d0d 100644
+--- a/bend2/base.bend
++++ b/bend2/base.bend
+@@ -569,6 +569,23 @@ def TCP.name(sock: Socket) -> IO(Socket & (U32 & (String & String))):
+   import "./effs/tcp_name.c"
+   import "./effs/tcp_name.js"
+ 
++# the bytes posted to sock (TCP.post) that its loop's writer holds, the
++# socket having had no room for them: a peer that stops reading grows it,
++# as a Redis client's output buffer grows. 0 when the writer holds none of
++# sock's, and on a lane with no writer (JS, whose post waits for its bytes
++# to go).
++def TCP.held(sock: Socket) -> IO(Socket & Nat):
++  import "./effs/tcp_held.c"
++  import "./effs/tcp_held.js"
++
++# sock set to close abortively (SO_LINGER on, a time of 0): its close then
++# resets the connection, whatever the socket's buffers hold (what the peer
++# sent and was not read, what was sent and the peer has not taken), so
++# that the peer's next read or send fails at once. True if it was set.
++def TCP.abort(sock: Socket) -> IO(Socket & Bool):
++  import "./effs/tcp_abort.c"
++  import "./effs/tcp_abort.js"
++
+ # Shuts the socket with fd down both ways (shutdown, SHUT_RDWR) when fd is a
+ # socket of the runtime's that is open, so the computation that waits on it
+ # finds its end: True if it was shut. The fd must not be closed while this
+diff --git a/bend2/comp.ts b/bend2/comp.ts
+index f7eff45..9d37aff 100644
+--- a/bend2/comp.ts
++++ b/bend2/comp.ts
+@@ -8274,6 +8274,7 @@ typedef struct IoWriter {
+   u32*            ends;
+   u32             nends;
+   u8*             held;
++  u64*            bytes;
+   u32             room;
+   IoHeld**        holds;
+   u32             nholds;
+@@ -8383,6 +8384,17 @@ static void io_held_watch(IoWriter* W, int fd, bool on) {
+   }
+ }
+ 
++// fd's held bytes, n more (up) or n fewer, for TCP.held to read
++static void io_held_count(IoWriter* W, int fd, u64 n, bool up) {
++  if ((u32)fd < W->room && n != 0) {
++    if (up) {
++      __atomic_add_fetch(&W->bytes[fd], n, __ATOMIC_RELEASE);
++    } else {
++      __atomic_sub_fetch(&W->bytes[fd], n, __ATOMIC_RELEASE);
++    }
++  }
++}
++
+ // Holds a post to fd (its bytes from at on, or a close) after the ones
+ // held before it.
+ static void io_held_add(IoWriter* W, int fd, char* buf, u64 at, u64 len) {
+@@ -8395,6 +8407,9 @@ static void io_held_add(IoWriter* W, int fd, char* buf, u64 at, u64 len) {
+   IoHeld* a = io_mem(malloc(sizeof(IoHeld)));
+   IoHeld* l = W->holds[fd];
+   *a = (IoHeld){ buf, at, len, l != NULL ? l->next : a };
++  if (buf != NULL) {
++    io_held_count(W, fd, len - at, true);
++  }
+   if (l != NULL) {
+     l->next = a;
+   } else {
+@@ -8412,8 +8427,13 @@ static void io_held_send(IoWriter* W, int fd) {
+   bool    shut = false;
+   while (l != NULL) {
+     IoHeld* a = l->next;
+-    if (a->buf != NULL && !io_post_send(fd, a->buf, &a->at, a->len)) {
+-      return;
++    if (a->buf != NULL) {
++      u64  at = a->at;
++      bool ok = io_post_send(fd, a->buf, &a->at, a->len);
++      io_held_count(W, fd, ok ? a->len - at : a->at - at, false);
++      if (!ok) {
++        return;
++      }
+     }
+     shut    = a->buf == NULL;
+     l->next = a->next;
+@@ -8573,7 +8593,8 @@ OUTLINE IoWriter* io_writer_new(void) {
+ #else
+   W->room = 1u << 16;
+ #endif
+-  W->held = io_mem(calloc(W->room, 1));
++  W->held  = io_mem(calloc(W->room, 1));
++  W->bytes = io_mem(calloc(W->room, sizeof(u64)));
+   if (pthread_create(&tid, NULL, io_writer_run, W)) {
+     err_fail("a writer thread failed to start");
+   }
+@@ -8588,6 +8609,17 @@ static bool io_post_held(IoWriter* W, int fd) {
+   return (u32)fd >= W->room || __atomic_load_n(&W->held[fd], __ATOMIC_ACQUIRE);
+ }
+ 
++// The bytes of fd's posts this loop's writer holds, the socket having had
++// no room for them (TCP.held): 0 when it holds none, when the loop has no
++// writer yet, and for an fd past held's room.
++static u64 io_post_bytes(int fd) {
++  IoWriter* W = io_me->post;
++  if (W == NULL || fd < 0 || (u32)fd >= W->room) {
++    return 0;
++  }
++  return __atomic_load_n(&W->bytes[fd], __ATOMIC_ACQUIRE);
++}
++
+ // The loop filled its block of the queue: the next one is the writer's
+ // spare, or a new one.
+ OUTLINE void io_post_block(IoWriter* W) {
+diff --git a/bend2/effs/tcp_abort.c b/bend2/effs/tcp_abort.c
+new file mode 100644
+index 0000000..180c0c9
+--- /dev/null
++++ b/bend2/effs/tcp_abort.c
+@@ -0,0 +1,15 @@
++// TCP
++// ===
++
++// sock set to close abortively (SO_LINGER on, a time of 0), so that its
++// close resets the connection whatever its buffers hold
++Term tcp_abort_run(Env e, Term* f, IoWork* w) {
++  (void)w;
++  struct linger l  = { 1, 0 };
++  bool          ok = setsockopt((int)io_hand_v(f[0]), SOL_SOCKET, SO_LINGER, &l, sizeof l) == 0;
++  return io_tup(e, f[0], term_pak(ok ? CID(True) : CID(False), 0));
++}
++
++static void __attribute__((constructor)) tcp_abort_use(void) {
++  io_eff(CID(TCP.abort), tcp_abort_run);
++}
+diff --git a/bend2/effs/tcp_abort.js b/bend2/effs/tcp_abort.js
+new file mode 100644
+index 0000000..d47d0d2
+--- /dev/null
++++ b/bend2/effs/tcp_abort.js
+@@ -0,0 +1,13 @@
++// TCP
++// ===
++
++// sock set to close abortively (SO_LINGER on, a time of 0), as
++// tcp_abort.c sets it: an int pair, on and the time
++function tcp_abort(socket) {
++  const sys = io_sys();
++  const l = new Int32Array([1, 0]);
++  return io_tup(socket, sys.setsockopt(Number(socket), sys.mac ? 0xffff : 1,
++    sys.mac ? 0x80 : 13, sys.ptr(l), 8) === 0);
++}
++
++io_eff(CID(TCP.abort), tcp_abort);
+diff --git a/bend2/effs/tcp_held.c b/bend2/effs/tcp_held.c
+new file mode 100644
+index 0000000..4f8174d
+--- /dev/null
++++ b/bend2/effs/tcp_held.c
+@@ -0,0 +1,13 @@
++// TCP
++// ===
++
++// The bytes posted to sock that its loop's writer holds (io_post_bytes):
++// what the socket has had no room for, which its peer has not read
++Term tcp_held_run(Env e, Term* f, IoWork* w) {
++  (void)w;
++  return io_tup(e, f[0], (Term)io_post_bytes((int)io_hand_v(f[0])));
++}
++
++static void __attribute__((constructor)) tcp_held_use(void) {
++  io_eff(CID(TCP.held), tcp_held_run);
++}
+diff --git a/bend2/effs/tcp_held.js b/bend2/effs/tcp_held.js
+new file mode 100644
+index 0000000..d32f023
+--- /dev/null
++++ b/bend2/effs/tcp_held.js
+@@ -0,0 +1,10 @@
++// TCP
++// ===
++
++// No writer here: a post waits for its bytes to go (tcp_post.js), so none
++// is held
++function tcp_held(socket) {
++  return io_tup(socket, 0n);
++}
++
++io_eff(CID(TCP.held), tcp_held);
+diff --git a/tests/io/tcp_abort.bend b/tests/io/tcp_abort.bend
+new file mode 100644
+index 0000000..70bc1f5
+--- /dev/null
++++ b/tests/io/tcp_abort.bend
+@@ -0,0 +1,103 @@
++# io (io_tcp_abort): TCP.abort sets a socket to close abortively. A close
++# with nothing unread ends the peer's stream (its read finds the end); a
++# socket set to abort and closed the same way resets the connection, and
++# the peer's read fails.
++import Base
++
++def check(name: String, ok: Bool) -> IO(Unit):
++  match ok:
++    case True{}:
++      IO.print(name)
++    case False{}:
++      IO.die(Unit, 1, "FAIL " ++ name)
++
++# whether a read found the end (eof) or failed (not eof)
++def read.is(+eof: Bool, r: Result<&1, &1, U32 & String, String>) -> Bool:
++  match r:
++    case Done{x}:
++      Bool.and(eof, String.is_empty(x))
++    case Fail{e}:
++      Bool.not(eof)
++
++def read.end(name: String, +eof: Bool, m: Socket & Result<&1, &1, U32 & String, String>) -> IO(Unit):
++  (c, r) = m
++  do IO<Unit>:
++    Unit <- check(name, read.is(eof, r))
++    Socket.close(c)
++
++# what a read of c finds once its peer has closed, set to abort first or not
++def said(+abort: Bool) -> String:
++  match abort:
++    case True{}:
++      "an abortive close resets the connection"
++    case False{}:
++      "a close with nothing unread ends the stream"
++
++# c's peer a closed, set to abort first (abort) or not, then c read
++def pair.close(c: Socket, a: Socket, +abort: Bool) -> IO(Unit):
++  do IO<Unit>:
++    Unit <- Socket.close(a)
++    m : Socket & Result<&1, &1, U32 & String, String> <- TCP.recv_raw(c, 16)
++    read.end(said(abort), Bool.not(abort), m)
++
++def pair.set(c: Socket, p: Socket & Bool) -> IO(Unit):
++  (a, +ok) = p
++  do IO<Unit>:
++    Unit <- check("the socket set to abort", ok)
++    pair.close(c, a, True{})
++
++def pair.go(c: Socket, a: Socket, +abort: Bool) -> IO(Unit):
++  match abort:
++    case True{}:
++      do IO<Unit>:
++        p : Socket & Bool <- TCP.abort(a)
++        pair.set(c, p)
++    case False{}:
++      pair.close(c, a, False{})
++
++def pair.accepted(c: Socket, m: Listener & Result<&1, &1, U32 & String, Socket>, +abort: Bool) -> IO(Listener):
++  (l, r) = m
++  do IO<Listener>:
++    a : Socket <- IO.pass(Socket, r)
++    Unit <- pair.go(c, a, abort)
++    return l
++
++def pair(l: Listener, port: U32, +abort: Bool) -> IO(Listener):
++  do IO<Listener>:
++    c : Socket <- IO.try(Socket, TCP.connect("127.0.0.1", port))
++    m : Listener & Result<&1, &1, U32 & String, Socket> <- TCP.accept(l)
++    pair.accepted(c, m, abort)
++
++def main_go(b: Listener & U32) -> IO(Unit):
++  (l, +port) = b
++  do IO<Unit>:
++    l2 : Listener <- pair(l, port, False{})
++    l3 : Listener <- pair(l2, port, True{})
++    Listener.close(l3)
++
++def tcp_retry(port: U32, r: Result<&1, &1, U32 & String, Listener>, rest: IO(Listener & U32)) ->
++  IO(Listener & U32):
++  match r:
++    case Done{l}:
++      IO.pure(Listener & U32, (l, port))
++    case Fail{e}:
++      rest
++
++def tcp_listen_any(tries: Nat, +port: U32) -> IO(Listener & U32):
++  match tries:
++    case 0n:
++      IO.die(Listener & U32, 1, "no free tcp port")
++    case 1n+t:
++      rest = tcp_listen_any(t, (port + 1 : U32))
++      do IO<Listener & U32>:
++        r : Result<&1, &1, U32 & String, Listener> <- TCP.listen("127.0.0.1", port)
++        tcp_retry(port, r, rest)
++
++def main() -> IO(Unit):
++  do IO<Unit>:
++    b : Listener & U32 <- tcp_listen_any(32n, 20067)
++    main_go(b)
++
++#|a close with nothing unread ends the stream
++#|the socket set to abort
++#|an abortive close resets the connection
+diff --git a/tests/io/tcp_held.bend b/tests/io/tcp_held.bend
+new file mode 100644
+index 0000000..c4aa9aa
+--- /dev/null
++++ b/tests/io/tcp_held.bend
+@@ -0,0 +1,182 @@
++# io (io_tcp_held): TCP.held is what a socket's writer holds of the bytes
++# posted to it. Nothing before a post; a post of 1 MiB to a socket whose
++# peer reads nothing (its send buffer asked down to 4 KB, so that what
++# passes the peer's receive buffer stays with the writer) leaves the writer
++# holding part of it, no more than was posted; once the peer has read the
++# whole MiB, nothing again. C lane alone (an effect of the test's own makes
++# the buffer small): elsewhere a post waits for its bytes to go.
++import Base
++
++def sock.small(fd: U32) -> IO(U32):
++  import "./tcp_held_buf.c"
++
++def dbl(n: Nat, s: String) -> String:
++  match n:
++    case 0n:
++      s
++    case 1n+p:
++      +x = s
++      dbl(p, x ++ x)
++
++def check(name: String, ok: Bool) -> IO(Unit):
++  match ok:
++    case True{}:
++      IO.print(name)
++    case False{}:
++      IO.die(Unit, 1, "FAIL " ++ name)
++
++# s's fd made small (sock.small), and s
++def small(n: Socket & (U32 & (String & String))) -> IO(Socket):
++  (s, rest) = n
++  (fd, names) = rest
++  do IO<Socket>:
++    r : U32 <- sock.small(fd)
++    Unit <- check("the send buffer made small", U32.is_eq(r, 0))
++    return s
++
++# whether n is as wanted: 0 (zero), or more
++def wait.ok(+zero: Bool, +n: Nat) -> Bool:
++  match zero:
++    case True{}:
++      Nat.is_eq(n, 0n)
++    case False{}:
++      Nat.is_lt(0n, n)
++
++# s's held bytes, looked at every 5 ms up to fuel times more, until they
++# are as wanted (wait.ok): the socket and the last count
++def wait.if(ok: Bool, s: Socket, +n: Nat, again: Socket -> IO(Socket & Nat)) -> IO(Socket & Nat):
++  match ok:
++    case True{}:
++      IO.pure(Socket & Nat, (s, n))
++    case False{}:
++      do IO<Socket & Nat>:
++        Unit <- IO.sleep(5)
++        again(s)
++
++def wait.got(h: Socket & Nat, +zero: Bool, again: Socket -> IO(Socket & Nat)) -> IO(Socket & Nat):
++  (s, +n) = h
++  wait.if(wait.ok(zero, n), s, n, again)
++
++def wait(fuel: Nat, s: Socket, +zero: Bool) -> IO(Socket & Nat):
++  match fuel:
++    case 0n:
++      TCP.held(s)
++    case 1n+f:
++      do IO<Socket & Nat>:
++        h : Socket & Nat <- TCP.held(s)
++        wait.got(h, zero, s2 => wait(f, s2, zero))
++
++# s read until left more bytes came (a read at most 65,536 of them), or
++# its end: how many did not come
++def skip.more(eof: Bool, s: Socket, left: Nat, next: Socket -> Nat -> IO(Socket & Nat)) -> IO(Socket & Nat):
++  match eof:
++    case True{}:
++      IO.pure(Socket & Nat, (s, left))
++    case False{}:
++      next(s, left)
++
++def skip.got(m: Socket & Result<&1, &1, U32 & String, String>, +left: Nat, next: Socket -> Nat -> IO(Socket & Nat)) -> IO(Socket & Nat):
++  (s, r) = m
++  match r:
++    case Done{+xs}:
++      skip.more(String.is_empty(xs), s, Nat.sub(left, String.length(xs)), next)
++    case Fail{e}:
++      IO.pure(Socket & Nat, (s, left))
++
++def skip.go(done: Bool, s: Socket, +left: Nat, next: Socket -> Nat -> IO(Socket & Nat)) -> IO(Socket & Nat):
++  match done:
++    case True{}:
++      IO.pure(Socket & Nat, (s, left))
++    case False{}:
++      do IO<Socket & Nat>:
++        m : Socket & Result<&1, &1, U32 & String, String> <- TCP.recv_raw(s, U32.from_nat(Nat.min(65536n, left)))
++        skip.got(m, left, next)
++
++def skip(fuel: Nat, s: Socket, +left: Nat) -> IO(Socket & Nat):
++  match fuel:
++    case 0n:
++      IO.pure(Socket & Nat, (s, left))
++    case 1n+f:
++      skip.go(Nat.is_eq(left, 0n), s, left, s2 => l2 => skip(f, s2, l2))
++
++def talk.end(c: Socket, z: Socket & Nat) -> IO(Unit):
++  (a, +h) = z
++  do IO<Unit>:
++    Unit <- check("nothing held once the peer has read it all", Nat.is_eq(h, 0n))
++    Unit <- Socket.close(a)
++    Socket.close(c)
++
++def talk.read(a: Socket, k: Socket & Nat) -> IO(Unit):
++  (c, +left) = k
++  do IO<Unit>:
++    Unit <- check("the peer reads the whole MiB", Nat.is_eq(left, 0n))
++    z : Socket & Nat <- wait(200n, a, True{})
++    talk.end(c, z)
++
++def talk.held(c: Socket, w: Socket & Nat) -> IO(Unit):
++  (a, +h) = w
++  do IO<Unit>:
++    Unit <- check("the writer holds what the socket has no room for", Nat.is_lt(0n, h))
++    Unit <- check("no more than was posted", Nat.is_le(h, 1048576n))
++    k : Socket & Nat <- skip(100000n, c, 1048576n)
++    talk.read(a, k)
++
++def talk.posted(c: Socket, p: Socket & Nat) -> IO(Unit):
++  (a, +h) = p
++  +big = dbl(14n, "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ-+")
++  do IO<Unit>:
++    Unit <- check("nothing held before a post", Nat.is_eq(h, 0n))
++    a2 : Socket <- TCP.post(a, big)
++    w : Socket & Nat <- wait(200n, a2, False{})
++    talk.held(c, w)
++
++def talk(c: Socket, a: Socket) -> IO(Unit):
++  do IO<Unit>:
++    p : Socket & Nat <- TCP.held(a)
++    talk.posted(c, p)
++
++def accepted(c: Socket, m: Listener & Result<&1, &1, U32 & String, Socket>) -> IO(Unit):
++  (l, r) = m
++  do IO<Unit>:
++    a : Socket <- IO.pass(Socket, r)
++    an : Socket & (U32 & (String & String)) <- TCP.name(a)
++    a2 : Socket <- small(an)
++    Unit <- talk(c, a2)
++    Listener.close(l)
++
++def main_go(b: Listener & U32) -> IO(Unit):
++  (l, port) = b
++  do IO<Unit>:
++    c : Socket <- IO.try(Socket, TCP.connect("127.0.0.1", port))
++    m : Listener & Result<&1, &1, U32 & String, Socket> <- TCP.accept(l)
++    accepted(c, m)
++
++def tcp_retry(port: U32, r: Result<&1, &1, U32 & String, Listener>, rest: IO(Listener & U32)) ->
++  IO(Listener & U32):
++  match r:
++    case Done{l}:
++      IO.pure(Listener & U32, (l, port))
++    case Fail{e}:
++      rest
++
++def tcp_listen_any(tries: Nat, +port: U32) -> IO(Listener & U32):
++  match tries:
++    case 0n:
++      IO.die(Listener & U32, 1, "no free tcp port")
++    case 1n+t:
++      rest = tcp_listen_any(t, (port + 1 : U32))
++      do IO<Listener & U32>:
++        r : Result<&1, &1, U32 & String, Listener> <- TCP.listen("127.0.0.1", port)
++        tcp_retry(port, r, rest)
++
++def main() -> IO(Unit):
++  do IO<Unit>:
++    b : Listener & U32 <- tcp_listen_any(32n, 19967)
++    main_go(b)
++
++#|the send buffer made small
++#|nothing held before a post
++#|the writer holds what the socket has no room for
++#|no more than was posted
++#|the peer reads the whole MiB
++#|nothing held once the peer has read it all
+diff --git a/tests/io/tcp_held_buf.c b/tests/io/tcp_held_buf.c
+new file mode 100644
+index 0000000..04f9abf
+--- /dev/null
++++ b/tests/io/tcp_held_buf.c
+@@ -0,0 +1,16 @@
++#include <sys/socket.h>
++
++// fd's send buffer asked down to 4,096 bytes (SO_SNDBUF), so that a peer
++// that reads nothing leaves the writer holding what passes its receive
++// buffer and a few kilobytes: 0, or the errno
++static Term sock_small_run(Env e, Term* f, IoWork* w) {
++  (void)e;
++  (void)w;
++  int fd = (int)(u32)f[0];
++  int n  = 4096;
++  return (Term)(u32)(setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &n, sizeof n) < 0 ? errno : 0);
++}
++
++static void __attribute__((constructor)) sock_small_use(void) {
++  io_eff(CID(sock.small), sock_small_run);
++}

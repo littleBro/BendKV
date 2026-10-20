@@ -166,11 +166,10 @@ passes, and 27 of the 29 of unit/acl-v2: the others use commands BendKV does not
 3zzzh lists them. Lua scripts and functions brought four of unit/acl's (64 of the 70 on
 main): its test of SCRIPT HELP refused, its test of a script's call in the log, the test
 after the first, which that one's failure left logged in as a user that may run nothing,
-and its test of EVAL_RO, EVALSHA_RO and FCALL_RO. unit/auth, run so too, passes 6 of the
-7 tests Redis passes there, its test of the limits Redis puts on the requests of a
-client that must authenticate among them (section 3zzzzn): the other is its test of such
-a client's output buffer, cut off past 1024 bytes, which needs the accounting of output
-buffers BendKV does not have yet.
+and its test of EVAL_RO, EVALSHA_RO and FCALL_RO. unit/auth, run so too, passes the 7
+tests Redis passes there: its test of the limits Redis puts on the requests of a client
+that must authenticate (section 3zzzzn), and its test of such a client's output buffer,
+which closes the client once its replies pass 16 KB (section 3zzzzze).
 
 The RDB file (section 3zzzc of [FINDINGS.md](FINDINGS.md)) brought 2: unit/other's SAVE
 of a database with a value of every type, and its final SAVE (18 of its 19 then; its BGSAVE
