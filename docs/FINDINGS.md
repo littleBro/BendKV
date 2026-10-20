@@ -2,7 +2,7 @@
 
 BendKV is a Redis-compatible key-value store written in Bend2, with its core proved
 against the laws of [`proof/LAWS.bend`](../proof/LAWS.bend), counted in
-[README.md](../README.md#in-numbers). This file sums up what building it and making it fast
+[NUMBERS.md](NUMBERS.md). This file sums up what building it and making it fast
 showed us. The detailed record, with every table and measurement, is in
 [PERFORMANCE.md](PERFORMANCE.md) (performance, section by section) and
 [OVERVIEW.md](../OVERVIEW.md) (the project, the proofs, how to run). Where the work goes
@@ -15,7 +15,7 @@ Redis's pattern matching, several databases, the ranges and bits of strings and
 BITFIELD's words of 64 bits), sessions (a connection's state and the server's), batch
 hints and an append-only file; handwritten proofs with a specification that they bridge
 to (section 3u), and 16-way case splits written by a script
-([`tools/gen_trie.py`](../tools/gen_trie.py)): [README.md](../README.md#in-numbers)
+([`tools/gen_trie.py`](../tools/gen_trie.py)): [NUMBERS.md](NUMBERS.md)
 counts the lines of each, not counting comments and blank lines, and the laws. Bend
 checks the laws in about 14 s; the BendTT
 kernel, whose soundness is proved in Lean, rechecks them in a minute. Among them: after
@@ -132,7 +132,7 @@ represented data:
 ## 3. The patches to the Bend compiler
 
 All live in [`bend-patches/`](../bend-patches/) (against `bendlang/bend` at `1cce499`,
-Bend 2.0.35; [README.md](../README.md#in-numbers) counts them). The first eight switch on
+Bend 2.0.35; [NUMBERS.md](NUMBERS.md) counts them). The first eight switch on
 by themselves for programs without GPU calls;
 the ninth and tenth work where a program calls them; the eleventh changes every
 program's event loop on Linux; the twelfth and thirteenth only add effects; the
@@ -11953,7 +11953,7 @@ What got in the way:
   the code, and checking them is fast.
 - In a proof, `case other` does not refine the goal: the variable stays abstract ("`c`,
   but not `Get`"), and functions of it do not reduce. Lemmas about commands list every
-  constructor of `Cmd` (counted in [README.md](../README.md#in-numbers)), most of them as
+  constructor of `Cmd` (counted in [NUMBERS.md](NUMBERS.md)), most of them as
   refutations; so commands come in groups (`Own` for those
   of a connection, `Peek` for the reads of one key), one constructor each (section 3m).
 - No 64-bit integers, few effects (stock files have no `fsync`; patch 12 adds it), and

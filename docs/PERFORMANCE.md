@@ -10,7 +10,7 @@ numbers are in [tools/](../tools/README.md).
    heap cell allocations and ~150 atomic reference-count operations. Redis makes a
    handful of allocations per SET.
 2. **Bend itself is fixed by patches to the compiler**
-   ([`bend-patches/`](../bend-patches/), counted in [README.md](../README.md#in-numbers)).
+   ([`bend-patches/`](../bend-patches/), counted in [NUMBERS.md](NUMBERS.md)).
    The first eight switch on by themselves for
    programs without GPU calls `!`, the ninth and tenth where a program calls them, the
    eleventh changes every program's event loop on Linux, the twelfth and thirteenth only

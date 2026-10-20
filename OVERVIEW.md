@@ -27,7 +27,7 @@ where the work goes next), [tools/README.md](tools/README.md) (how it was measur
   server), hints to the processor, an append-only file (AOF) and configuration (CONFIG by
   Redis's table, which a generator writes), with INFO and COMMAND (its command table from
   a generator) beside them, handwritten proofs, 16-way case splits of the trie written by
-  a generator, and the laws: [README.md](README.md#in-numbers) counts the lines of each
+  a generator, and the laws: [docs/NUMBERS.md](docs/NUMBERS.md) counts the lines of each
   file (not counting comments and blank lines) and the laws. Bend checks the proofs in
   about 14 s, and the BendTT kernel (whose soundness is proved in Lean) in about a minute.
   Recovery after a restart is proved too: a server with an append-only file (AOF in
@@ -43,7 +43,7 @@ where the work goes next), [tools/README.md](tools/README.md) (how it was measur
   Bend, when bound by the CPU (pipeline 16), BendKV was 7–21 times slower than Redis and
   needed ~5 times more memory per key. The cause was the memory model of the Bend
   runtime, not verification. Patches to the Bend compiler
-  ([`bend-patches/`](bend-patches/), counted in [README.md](README.md#in-numbers); those
+  ([`bend-patches/`](bend-patches/), counted in [docs/NUMBERS.md](docs/NUMBERS.md); those
   behind the numbers below: lazy sealing of reference counts, packed strings
   with byte I/O, borrowed reads, native string operations, rebuilding a node in place,
   2 MiB pages for the heap, field selection by digit without a jump table, a string of
@@ -523,7 +523,7 @@ and ACL SETUSER that takes a channel away closes the subscribers that had it. Wh
 client's user is restricted, nothing is checked (section 3zzzh of FINDINGS.md).
 Configuration: CONFIG GET (names, alias names, glob patterns), SET (several parameters
 at once, all or none), RESETSTAT, REWRITE, HELP over every parameter of Redis 7.2.16
-(counted in [README.md](README.md#in-numbers)):
+(counted in [docs/NUMBERS.md](docs/NUMBERS.md)):
 `tools/gen_config.py` writes the table from Redis's own `config.c`, each value is
 checked as Redis checks it and read back as Redis prints it. `requirepass` (the
 password), `hz` (with a limit, as in Redis) and `notify-keyspace-events` (which keyspace
@@ -771,7 +771,7 @@ by character, and the proof goes down the representation to the 32 bits of a `U3
 - `frame` — **no command changes a key it does not write, neither its value nor its
   time**: SET/DEL/MSET/INCR/EXPIRE/… touch only the keys they name, FLUSHALL all of
   them. Proved for every kind of command, each constructor of `Cmd` (counted in
-  [README.md](README.md#in-numbers)), with the groups `Peek`, `Upd` and `Own`;
+  [docs/NUMBERS.md](docs/NUMBERS.md)), with the groups `Peek`, `Upd` and `Own`;
 - `reads_keep_db` — read commands (GET, EXISTS, MGET, STRLEN, KEYS, SCAN, DBSIZE, SORT
   without STORE, PING, ECHO, errors) do not change the database as a whole;
 - `get_after_set`, `get_missing` — GET after SET, and GET of a key that is not there
@@ -1487,7 +1487,7 @@ The proofs cover `map.bend`, `redis.bend`, `batch.bend`, `aof.bend`, `session.be
    the C runtime with the patch a chain of byte buffers, and `String.eq`, `String.hash`
    and the other operations on it are C functions. That the runtime agrees with the
    definitions is not proved. The server is built by Bend with the patches of
-   [`bend-patches/`](bend-patches/) (counted in [README.md](README.md#in-numbers)). They
+   [`bend-patches/`](bend-patches/) (counted in [docs/NUMBERS.md](docs/NUMBERS.md)). They
    are in the trusted base too: checked by Bend's test suite, by differential tests
    against Redis and under the sanitizers (`tools/sanitize.sh`), but not proved. The
    same goes for
@@ -1558,7 +1558,7 @@ The proofs cover `map.bend`, `redis.bend`, `batch.bend`, `aof.bend`, `session.be
   covers the remaining constructors, while in a proof the variable stays abstract
   ("`c`, but not `Get`"), and functions of it do not reduce. So the lemmas about
   commands list every constructor of `Cmd` (counted in
-  [README.md](README.md#in-numbers)), most of them by refutations. That is why the
+  [docs/NUMBERS.md](docs/NUMBERS.md)), most of them by refutations. That is why the
   connection commands are gathered into one command `Own`, and reads of one key into
   `Peek`: each group is one constructor in these lemmas, however many commands it holds.
 - **The checker computes `Nat` in unary form.** A constant such as 10^14 overflows the

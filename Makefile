@@ -148,8 +148,8 @@ clients: build
 # proof/LAWS.bend and proof/PROOF.bend (tools/gen_trie.py), the table of parameters in
 # src/config.bend (tools/gen_config.py), the table of commands in
 # src/command.bend and their arities in src/redis.bend
-# (tools/gen_commands.py), and the counts of README.md's In numbers, and
-# of its laws (tools/gen_counts.py)
+# (tools/gen_commands.py), and the counts of docs/NUMBERS.md, and of
+# README.md's laws (tools/gen_counts.py)
 gencheck:
 	python3 tools/gen_trie.py --check
 	python3 tools/gen_config.py --check

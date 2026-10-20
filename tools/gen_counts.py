@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# gen_counts.py: the counts that README.md states in "In numbers" (the
-# block between "<!-- BEGIN gen_counts: numbers -->" and "<!-- END
+# gen_counts.py: the counts that docs/NUMBERS.md states (the block
+# between "<!-- BEGIN gen_counts: numbers -->" and "<!-- END
 # gen_counts: numbers -->"), taken from the files they count, so that a
 # count is stated in one place, which the other documents link to:
 #
@@ -20,14 +20,14 @@
 # A count of lines is written to two significant figures, and is current
 # while it is within a tenth of the file's count: nearly every change to
 # the code changes some file's lines, and counts exact to the line would
-# make each pull request rewrite README.md and conflict with every other
+# make each pull request rewrite docs/NUMBERS.md and conflict with every other
 # open one, for numbers no reader needs to the line. A rewrite keeps the
 # counts of lines that are current, so that it changes only what drifted
 # (empty the block to count every file afresh), and --check fails on one
 # that is not. Every other count must be exact.
 #
-# The block cannot hold the two places where README.md states the laws in
-# its prose, so --check reads them too: "against N laws" in its first
+# README.md states the laws in two places of its own, outside the block,
+# so --check reads them too: "against N laws" in its first
 # paragraph, and the column of laws of the table in "What is proved",
 # which has a row for each section of proof/LAWS.bend (a title over a
 # line of "="), in the same order.
@@ -38,6 +38,7 @@ import difflib, json, re, sys, pathlib
 
 HERE = pathlib.Path(__file__).resolve().parent.parent
 README = HERE / "README.md"
+NUMBERS = HERE / "docs" / "NUMBERS.md"
 LAWS = HERE / "proof" / "LAWS.bend"
 APPLY = HERE / "bend-patches" / "apply.sh"
 REDIS = HERE / "src" / "redis.bend"
@@ -152,7 +153,7 @@ def block(kept):
     cmd = constructors(REDIS.read_text(), "Cmd")
     out = ["| what | how many | counted in |",
            "|---|---:|---|",
-           f"| laws | {sum(n for _, n in sections)} | `proof/LAWS.bend` (by group: [What is proved](#what-is-proved)) |",
+           f"| laws | {sum(n for _, n in sections)} | `proof/LAWS.bend` (by group: [What is proved](../README.md#what-is-proved)) |",
            f"| patches to the Bend compiler | {len(patches())} | `bend-patches/apply.sh` |",
            f"| constructors of `Cmd`, a parsed command | {len(cmd)} | `src/redis.bend` |",
            f"| Redis 7.2.16's parameters, all of which CONFIG serves | {len(json.loads(CONFIGS.read_text()))} | `tools/data/redis-configs.json` |",
@@ -203,22 +204,22 @@ def prose(text):
     return errs
 
 def main(check):
-    text = README.read_text()
+    text = NUMBERS.read_text()
     if text.count(BEGIN) != 1 or text.count(END) != 1 or text.index(BEGIN) > text.index(END):
-        sys.exit("README.md: no block gen_counts: numbers")
+        sys.exit("docs/NUMBERS.md: no block gen_counts: numbers")
     a, b = text.index(BEGIN) + len(BEGIN), text.index(END)
     old = text[a:b]
     new = block(stated(old))
     if not check:
-        README.write_text(text[:a] + new + text[b:])
-        errs = prose(text)
+        NUMBERS.write_text(text[:a] + new + text[b:])
+        errs = prose(README.read_text())
         if errs:
             sys.exit("\n".join(errs))
         return
-    errs = prose(text)
+    errs = prose(README.read_text())
     if new != old:
-        diff = difflib.unified_diff(old.splitlines(), new.splitlines(), "README.md", "counted", lineterm="", n=0)
-        errs.append("README.md's counts are out of date: run tools/gen_counts.py\n"
+        diff = difflib.unified_diff(old.splitlines(), new.splitlines(), "docs/NUMBERS.md", "counted", lineterm="", n=0)
+        errs.append("docs/NUMBERS.md's counts are out of date: run tools/gen_counts.py\n"
                     + "\n".join(l for l in diff if not l.startswith("@@")))
     if errs:
         sys.exit("\n".join(errs))

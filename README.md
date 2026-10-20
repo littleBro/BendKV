@@ -181,7 +181,7 @@ the code that runs is the code that is proved, without a separate model and a
 refinement proof. The answer so far: the verified core is not what makes it slow;
 the data representation of the runtime was, and most of the work went into fixing it
 (the patches to the Bend compiler in [`bend-patches/`](bend-patches/), counted in
-[In numbers](#in-numbers): most speed up its data representation and its runtime, and
+[docs/NUMBERS.md](docs/NUMBERS.md): most speed up its data representation and its runtime, and
 the others add what a server needs from the system, from the process's directory, id
 and clock to the files it cuts, the heap's account and C's doubles, and one lets
 AddressSanitizer check the heap).
@@ -217,7 +217,7 @@ in about two minutes.
 
 **Trust boundary.** The proofs cover `src/map.bend`, `src/redis.bend`, `src/batch.bend`,
 `src/aof.bend`, `src/session.bend` and `src/config.bend`, the files the laws import
-([In numbers](#in-numbers)). Trusted without proof: the Bend compiler and its C runtime
+([docs/NUMBERS.md](docs/NUMBERS.md)). Trusted without proof: the Bend compiler and its C runtime
 (with the patches); the RESP parser and the network shell (`src/resp.bend`,
 `src/server.bend`), the start (`src/startup.bend`), INFO and COMMAND (`src/info.bend`,
 `src/command.bend`), the doubles in software (`src/float.bend`, tested against glibc as
@@ -331,55 +331,9 @@ tools/      measurement scripts, the runners of Redis's test suite and of the cl
             suites, and the generators of the trie, of the parameter table, of the command
             table and of the counts, with the facts they take from Redis (tools/data/)
 bend-patches/  the patches to the Bend compiler and runtime
-docs/       COMMANDS.md, COMPATIBILITY.md, UPSTREAM.md, FINDINGS.md, PERFORMANCE.md, DIRECTIONS.md
+docs/       COMMANDS.md, COMPATIBILITY.md, UPSTREAM.md, FINDINGS.md, PERFORMANCE.md, DIRECTIONS.md,
+            NUMBERS.md
 ```
-
-## In numbers
-
-The counts the other documents link to, written by
-[`tools/gen_counts.py`](tools/gen_counts.py) from the files they count; `make gencheck`
-fails when one is out of date. Lines of code leave out comments and blank lines and are
-rounded to two significant figures; they are out of date once a file's count is a tenth
-away.
-
-<!-- BEGIN gen_counts: numbers -->
-| what | how many | counted in |
-|---|---:|---|
-| laws | 68 | `proof/LAWS.bend` (by group: [What is proved](#what-is-proved)) |
-| patches to the Bend compiler | 39 | `bend-patches/apply.sh` |
-| constructors of `Cmd`, a parsed command | 30 | `src/redis.bend` |
-| Redis 7.2.16's parameters, all of which CONFIG serves | 184 | `tools/data/redis-configs.json` |
-
-| file | lines of code | of them written by a generator | the laws import it |
-|---|---:|---:|---|
-| `src/map.bend` | 5,700 | 1,500 | yes |
-| `src/redis.bend` | 21,000 | 6,800 | yes |
-| `src/batch.bend` | 84 |  | yes |
-| `src/aof.bend` | 1,300 |  | yes |
-| `src/session.bend` | 3,400 |  | yes |
-| `src/config.bend` | 1,400 | 190 | yes |
-| `src/acl.bend` | 2,300 | 760 | no |
-| `src/aofdir.bend` | 360 |  | no |
-| `src/command.bend` | 2,800 | 2,100 | no |
-| `src/float.bend` | 1,600 |  | no |
-| `src/geo.bend` | 870 |  | no |
-| `src/hll.bend` | 1,400 |  | no |
-| `src/info.bend` | 3,200 |  | no |
-| `src/lolwut.bend` | 470 |  | no |
-| `src/rdb.bend` | 3,100 |  | no |
-| `src/resp.bend` | 1,200 |  | no |
-| `src/script.bend` | 51 |  | no |
-| `src/server.bend` | 15,000 |  | no |
-| `src/sha.bend` | 120 |  | no |
-| `src/startup.bend` | 460 |  | no |
-| `src/stream.bend` | 1,700 |  | no |
-| `proof/LAWS.bend` | 920 | 20 |  |
-| `proof/SPEC.bend` | 370 |  |  |
-| `proof/PROOF.bend` | 18,000 | 2,800 |  |
-| `src/`, the 6 files the laws import | 31,000 | 8,200 |  |
-| `src/`, the 15 others | 36,000 | 3,100 |  |
-| `proof/` | 20,000 | 2,800 |  |
-<!-- END gen_counts: numbers -->
 
 ## Documentation
 
@@ -407,14 +361,9 @@ away.
 - [AGENTS.md](AGENTS.md): the rules for coding agents: the laws, the checks, the merging.
 - [tests/README.md](tests/README.md): the tests, and how to run them.
 - [tools/README.md](tools/README.md): the generators and how everything was measured.
+- [docs/NUMBERS.md](docs/NUMBERS.md): the counts the documents cite: laws, patches, lines
+  of code of each file, written by `tools/gen_counts.py`.
 - [bend-patches/README.md](bend-patches/README.md): the patches to the Bend compiler.
-
-## History
-
-BendKV began as a proof of concept inside a fork of HVM4 and moved here once it grew
-into a project of its own. Sharding across cores was built, proved and later taken out
-because it paid too little for its cost ([docs/FINDINGS.md](docs/FINDINGS.md), section
-3l); that version is kept on the [`archive/shards`](https://github.com/littleBro/BendKV/tree/archive/shards) branch.
 
 ## Contributing
 
