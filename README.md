@@ -397,6 +397,8 @@ away.
   with measurements.
 - [docs/DIRECTIONS.md](docs/DIRECTIONS.md): verified databases, compilers, parallelism,
   and where the work goes next.
+- [docs/BEND.md](docs/BEND.md): a review of Bend2 after BendKV: writing in it, how well
+  the language is made, whether it suits coding agents, and what to change.
 - [OVERVIEW.md](OVERVIEW.md): the full project report, including the feasibility study
   (SQLite, Redis, memcached, LMDB in Bend2) and Bend2's limitations met in practice.
 
