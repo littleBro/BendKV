@@ -69,7 +69,7 @@ differs from Redis.
 | [Sets](docs/COMMANDS.md#sets) | SADD, SREM, SMEMBERS, SSCAN, SPOP, SRANDMEMBER, SMOVE, SINTER, SUNION, SDIFF and their STOREs, SINTERCARD |
 | [Sorted sets](docs/COMMANDS.md#sorted-sets) | ZADD, ZINCRBY, ZRANGE in all its forms, ZRANK, ZPOPMIN, ZRANDMEMBER, ZUNION, ZINTER, ZDIFF, ZMPOP and the rest |
 | [Sorting](docs/COMMANDS.md#sorting) | SORT and SORT_RO, with BY, GET, LIMIT, ALPHA and STORE |
-| [HyperLogLogs](docs/COMMANDS.md#hyperloglogs) | PFADD, PFCOUNT, PFMERGE, PFDEBUG, PFSELFTEST, on the s Redis writes |
+| [HyperLogLogs](docs/COMMANDS.md#hyperloglogs) | PFADD, PFCOUNT, PFMERGE, PFDEBUG, PFSELFTEST, on the bytes Redis writes |
 | [GEO](docs/COMMANDS.md#geo) | GEOADD, GEOPOS, GEOHASH, GEODIST, GEORADIUS, GEOSEARCH, GEOSEARCHSTORE |
 | [DUMP and RESTORE](docs/COMMANDS.md#dump-and-restore) | payloads that are Redis's byte for byte, both ways |
 | [Streams](docs/COMMANDS.md#streams) | XADD, XRANGE, XREAD, XTRIM, XDEL, XSETID, XINFO; consumer groups: XGROUP, XREADGROUP, XACK, XCLAIM, XAUTOCLAIM, XPENDING |
