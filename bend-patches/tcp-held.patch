@@ -1,8 +1,8 @@
 diff --git a/bend2/base.bend b/bend2/base.bend
-index df60b5d..35eb6ac 100644
+index df60b5d..09d3d0d 100644
 --- a/bend2/base.bend
 +++ b/bend2/base.bend
-@@ -569,6 +569,15 @@ def TCP.name(sock: Socket) -> IO(Socket & (U32 & (String & String))):
+@@ -569,6 +569,23 @@ def TCP.name(sock: Socket) -> IO(Socket & (U32 & (String & String))):
    import "./effs/tcp_name.c"
    import "./effs/tcp_name.js"
  
@@ -14,6 +14,14 @@ index df60b5d..35eb6ac 100644
 +def TCP.held(sock: Socket) -> IO(Socket & Nat):
 +  import "./effs/tcp_held.c"
 +  import "./effs/tcp_held.js"
++
++# sock set to close abortively (SO_LINGER on, a time of 0): its close then
++# resets the connection, whatever the socket's buffers hold (what the peer
++# sent and was not read, what was sent and the peer has not taken), so
++# that the peer's next read or send fails at once. True if it was set.
++def TCP.abort(sock: Socket) -> IO(Socket & Bool):
++  import "./effs/tcp_abort.c"
++  import "./effs/tcp_abort.js"
 +
  # Shuts the socket with fd down both ways (shutdown, SHUT_RDWR) when fd is a
  # socket of the runtime's that is open, so the computation that waits on it
@@ -102,6 +110,46 @@ index f7eff45..9d37aff 100644
  // The loop filled its block of the queue: the next one is the writer's
  // spare, or a new one.
  OUTLINE void io_post_block(IoWriter* W) {
+diff --git a/bend2/effs/tcp_abort.c b/bend2/effs/tcp_abort.c
+new file mode 100644
+index 0000000..180c0c9
+--- /dev/null
++++ b/bend2/effs/tcp_abort.c
+@@ -0,0 +1,15 @@
++// TCP
++// ===
++
++// sock set to close abortively (SO_LINGER on, a time of 0), so that its
++// close resets the connection whatever its buffers hold
++Term tcp_abort_run(Env e, Term* f, IoWork* w) {
++  (void)w;
++  struct linger l  = { 1, 0 };
++  bool          ok = setsockopt((int)io_hand_v(f[0]), SOL_SOCKET, SO_LINGER, &l, sizeof l) == 0;
++  return io_tup(e, f[0], term_pak(ok ? CID(True) : CID(False), 0));
++}
++
++static void __attribute__((constructor)) tcp_abort_use(void) {
++  io_eff(CID(TCP.abort), tcp_abort_run);
++}
+diff --git a/bend2/effs/tcp_abort.js b/bend2/effs/tcp_abort.js
+new file mode 100644
+index 0000000..d47d0d2
+--- /dev/null
++++ b/bend2/effs/tcp_abort.js
+@@ -0,0 +1,13 @@
++// TCP
++// ===
++
++// sock set to close abortively (SO_LINGER on, a time of 0), as
++// tcp_abort.c sets it: an int pair, on and the time
++function tcp_abort(socket) {
++  const sys = io_sys();
++  const l = new Int32Array([1, 0]);
++  return io_tup(socket, sys.setsockopt(Number(socket), sys.mac ? 0xffff : 1,
++    sys.mac ? 0x80 : 13, sys.ptr(l), 8) === 0);
++}
++
++io_eff(CID(TCP.abort), tcp_abort);
 diff --git a/bend2/effs/tcp_held.c b/bend2/effs/tcp_held.c
 new file mode 100644
 index 0000000..4f8174d
@@ -137,6 +185,115 @@ index 0000000..d32f023
 +}
 +
 +io_eff(CID(TCP.held), tcp_held);
+diff --git a/tests/io/tcp_abort.bend b/tests/io/tcp_abort.bend
+new file mode 100644
+index 0000000..70bc1f5
+--- /dev/null
++++ b/tests/io/tcp_abort.bend
+@@ -0,0 +1,103 @@
++# io (io_tcp_abort): TCP.abort sets a socket to close abortively. A close
++# with nothing unread ends the peer's stream (its read finds the end); a
++# socket set to abort and closed the same way resets the connection, and
++# the peer's read fails.
++import Base
++
++def check(name: String, ok: Bool) -> IO(Unit):
++  match ok:
++    case True{}:
++      IO.print(name)
++    case False{}:
++      IO.die(Unit, 1, "FAIL " ++ name)
++
++# whether a read found the end (eof) or failed (not eof)
++def read.is(+eof: Bool, r: Result<&1, &1, U32 & String, String>) -> Bool:
++  match r:
++    case Done{x}:
++      Bool.and(eof, String.is_empty(x))
++    case Fail{e}:
++      Bool.not(eof)
++
++def read.end(name: String, +eof: Bool, m: Socket & Result<&1, &1, U32 & String, String>) -> IO(Unit):
++  (c, r) = m
++  do IO<Unit>:
++    Unit <- check(name, read.is(eof, r))
++    Socket.close(c)
++
++# what a read of c finds once its peer has closed, set to abort first or not
++def said(+abort: Bool) -> String:
++  match abort:
++    case True{}:
++      "an abortive close resets the connection"
++    case False{}:
++      "a close with nothing unread ends the stream"
++
++# c's peer a closed, set to abort first (abort) or not, then c read
++def pair.close(c: Socket, a: Socket, +abort: Bool) -> IO(Unit):
++  do IO<Unit>:
++    Unit <- Socket.close(a)
++    m : Socket & Result<&1, &1, U32 & String, String> <- TCP.recv_raw(c, 16)
++    read.end(said(abort), Bool.not(abort), m)
++
++def pair.set(c: Socket, p: Socket & Bool) -> IO(Unit):
++  (a, +ok) = p
++  do IO<Unit>:
++    Unit <- check("the socket set to abort", ok)
++    pair.close(c, a, True{})
++
++def pair.go(c: Socket, a: Socket, +abort: Bool) -> IO(Unit):
++  match abort:
++    case True{}:
++      do IO<Unit>:
++        p : Socket & Bool <- TCP.abort(a)
++        pair.set(c, p)
++    case False{}:
++      pair.close(c, a, False{})
++
++def pair.accepted(c: Socket, m: Listener & Result<&1, &1, U32 & String, Socket>, +abort: Bool) -> IO(Listener):
++  (l, r) = m
++  do IO<Listener>:
++    a : Socket <- IO.pass(Socket, r)
++    Unit <- pair.go(c, a, abort)
++    return l
++
++def pair(l: Listener, port: U32, +abort: Bool) -> IO(Listener):
++  do IO<Listener>:
++    c : Socket <- IO.try(Socket, TCP.connect("127.0.0.1", port))
++    m : Listener & Result<&1, &1, U32 & String, Socket> <- TCP.accept(l)
++    pair.accepted(c, m, abort)
++
++def main_go(b: Listener & U32) -> IO(Unit):
++  (l, +port) = b
++  do IO<Unit>:
++    l2 : Listener <- pair(l, port, False{})
++    l3 : Listener <- pair(l2, port, True{})
++    Listener.close(l3)
++
++def tcp_retry(port: U32, r: Result<&1, &1, U32 & String, Listener>, rest: IO(Listener & U32)) ->
++  IO(Listener & U32):
++  match r:
++    case Done{l}:
++      IO.pure(Listener & U32, (l, port))
++    case Fail{e}:
++      rest
++
++def tcp_listen_any(tries: Nat, +port: U32) -> IO(Listener & U32):
++  match tries:
++    case 0n:
++      IO.die(Listener & U32, 1, "no free tcp port")
++    case 1n+t:
++      rest = tcp_listen_any(t, (port + 1 : U32))
++      do IO<Listener & U32>:
++        r : Result<&1, &1, U32 & String, Listener> <- TCP.listen("127.0.0.1", port)
++        tcp_retry(port, r, rest)
++
++def main() -> IO(Unit):
++  do IO<Unit>:
++    b : Listener & U32 <- tcp_listen_any(32n, 20067)
++    main_go(b)
++
++#|a close with nothing unread ends the stream
++#|the socket set to abort
++#|an abortive close resets the connection
 diff --git a/tests/io/tcp_held.bend b/tests/io/tcp_held.bend
 new file mode 100644
 index 0000000..c4aa9aa

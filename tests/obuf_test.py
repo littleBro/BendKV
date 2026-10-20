@@ -24,14 +24,15 @@ line in the log (closeClientOnOutputBufferLimitReached). The scenarios:
    at once (a read's replies pass 16 KB).
 7. A client that does not read and sends a SET to a write, as Redis's
    own test (unit/auth, "For unauthenticated clients output buffer is
-   limited") sends them: closed once the socket's buffers are full,
-   within 64 MB. Not always with BendKV's replies sent from its loop:
-   its connection sends a batch's replies before it reads more, so the
-   client stalls its own connection (its replies wait in the socket),
-   which stays open, unless a read of the connection brings more than
-   481 SETs, whose replies close it as above. Either is checked (and,
-   stalled, that another client is served meanwhile, and that no line
-   is logged for it).
+   limited") sends them: closed once the socket's buffers are full (a
+   kernel may let the client's own grow to 32 MB), within 64 MB. Not
+   always with BendKV's replies sent from its loop: its connection
+   sends a batch's replies before it reads more, so the client stalls
+   its own connection (its replies wait in the socket), which stays
+   open, unless a read of the connection brings more than 481 SETs,
+   whose replies close it as above. Either is checked (and, stalled,
+   that another client is served meanwhile, and that no line is logged
+   for it).
 8. The lines logged: one for each client closed, at WARNING, Redis's
    ("Client <its line in CLIENT LIST> scheduled to be closed ASAP for
    overcoming of output buffer limits."): the fields of the line in
@@ -104,12 +105,36 @@ def bulk(s, quiet=0.5):
         got += b
 
 
-def flood(port, per, limit=64 << 20, idle=2.0):
+# the kernel's view of each connection that stalled (/proc/net/tcp: its
+# state, queues and inode), printed when a comparison fails
+STALLS = []
+STATES = {"01": "ESTABLISHED", "04": "FIN_WAIT1", "05": "FIN_WAIT2", "06": "TIME_WAIT", "07": "CLOSE",
+          "08": "CLOSE_WAIT", "09": "LAST_ACK", "0B": "CLOSING"}
+
+
+def sockets(port):
+    out = []
+    try:
+        rows = open("/proc/net/tcp").read().splitlines()[1:]
+    except OSError:
+        return out
+    for r in rows:
+        p = r.split()
+        a, b = int(p[1].split(":")[1], 16), int(p[2].split(":")[1], 16)
+        if port in (a, b):
+            out.append("%d->%d %s tx:rx=%s inode=%s" % (a, b, STATES.get(p[3], p[3]), p[4], p[9]))
+    return out
+
+
+def flood(port, per, limit=64 << 20, idle=5.0):
     """SETs sent, per to a write, and no reply read, until the connection
-    breaks ("closed"), 64 MB went, or the socket took nothing for 2 s
-    ("stalled")"""
+    breaks ("closed"), 64 MB went, or the socket took nothing for 5 s
+    ("stalled": a reset the client takes only as it sends again comes
+    within its retransmission's timeout, a second or more once it backs
+    off)"""
     s = connect(port)
     s.setblocking(False)
+    me = s.getsockname()[1]
     chunk = enc("SET", "x", "5") * per
     sent, at, last = 0, 0, time.time()
     while sent < limit:
@@ -117,6 +142,7 @@ def flood(port, per, limit=64 << 20, idle=2.0):
             n = s.send(chunk[at:])
         except BlockingIOError:
             if time.time() - last > idle:
+                STALLS.append("flood %d, %d bytes sent: %s" % (per, sent, "; ".join(sockets(me))))
                 return "stalled", s
             time.sleep(0.01)
             continue
@@ -293,6 +319,8 @@ def main():
         bad += 1
         print("FAIL: Redis logged %d lines, not 4: %r" % (len(rl), rl))
     if bad:
+        for l in STALLS:
+            print("  stalled: %s" % l)
         print("FAIL: %d differences" % bad)
         sys.exit(1)
     print("OK: %d lines of scenarios, with replies posted and sent, as Redis answers them" % len(want))

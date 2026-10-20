@@ -162,8 +162,8 @@ an effect, `Clock.us` (section 3zzz); the thirty-sixth listens on IPv6 addresses
 and unix sockets and sends systemd its notifications (section 3zzze); the
 thirty-seventh takes SIGTERM and SIGINT as Redis's handler takes them (section 3zzzf);
 the thirty-eighth makes and removes a directory (section 3zzzzzf); and the
-thirty-ninth tells what a socket's writer holds of the bytes posted to it (section
-3zzzzze).
+thirty-ninth tells what a socket's writer holds of the bytes posted to it and closes a
+socket abortively (section 3zzzzze).
 The sections before 3l
 number the patches as they were then: patch 16 was effect pairs, taken out in 3l with
 `TCP.post_list` of patch 11, and their patches 17–20 are today's 16–19. None changes the
@@ -11513,16 +11513,26 @@ passes the 7 Redis passes there.
 - **Patch 39** (`bend-patches/tcp-held.patch`) adds the effect `TCP.held(sock)`: the
   bytes posted to `sock` that its loop's writer holds, the socket having had no room for
   them (what the peer has not read past the socket's buffers). The writer counts them
-  as it holds a post and as it sends what it held.
+  as it holds a post and as it sends what it held. It adds `TCP.abort(sock)` too: `sock`
+  set to close abortively (`SO_LINGER` on, a time of 0), so that its close resets the
+  connection whatever its buffers hold.
 - **The connection** (Clients that must authenticate: `conn_auth.ans`). An answer to a
   client that must authenticate after its batch (`AnsAuth` with `must`) reads what its
   socket holds before the replies are posted: with them, past 16 KB, they are not
-  posted, the actor is told (`Over`), and the connection ends, reading nothing more:
-  its socket closes once the actor has shut it down, with what the client sent after
-  unread, so that the close resets the connection, as Redis's close does. (A first
-  version read and dropped what came until the socket was shut: the close then found
-  nothing unread, and a client that sends without reading, the window it was last
-  given shut, waited on it with no error, more than 100 s in a run.)
+  posted, the socket is set to close abortively (`TCP.abort`), the actor is told
+  (`Over`), and the connection ends, reading nothing more: its socket closes once the
+  actor has shut it down, and the close resets the connection, as Redis's close resets
+  it with what the client sent after unread. (A first version read and dropped what
+  came until the socket was shut: the close then found nothing unread, and a client
+  that sends without reading, the window it was last given shut, waited on it with no
+  error, more than 100 s in a run. A second left what came unread and counted on it for
+  the reset; on a runner of CI, whose kernel (7.0) let the receive buffer of a client
+  that reads nothing grow to 32 MB, the connection had at times read all the client
+  had sent when its replies passed 16 KB, and the close, finding nothing unread,
+  queued an end behind the replies the client had not taken: the server's socket,
+  closed, stayed in FIN-WAIT-1, and the client, its buffer full and 2.5 MB of SETs not
+  taken, waited with no error, as the sockets showed in a run that dumped them
+  (`/proc/net/tcp`, `ss`), in 10 of 48 floods.)
   Redis's round is a batch: what one read brought, run whole before its replies go, and
   what the socket holds is what Redis's last write left unwritten.
 - **The actor** (`group_req`, `ps.over`) kills the client as CLIENT KILL kills it: out
@@ -11546,6 +11556,9 @@ passes the 7 Redis passes there.
 - The line shows the client as BendKV's CLIENT LIST shows it: `obl`, `oll`, `omem`,
   `tot-mem` and `events` as BendKV has them, not the buffer's (Redis's line has `obl=16384
   oll=1`); the fields and their order are Redis's.
+- The close of a client over its limit always resets the connection; Redis's close
+  resets it when what the client sent is unread at the close, as it is while the
+  client sends, and else ends the stream.
 - With its replies sent from the loop (`io-threads 1`, or `send` in the short form), a
   connection sends a batch's replies before it reads the next batch: a client that
   does not read stalls its own connection, its replies waiting in the socket, and is
@@ -11560,22 +11573,25 @@ answered; RESET and 600 PINGs from a client that had authenticated, closed with 
 reply; a client that came while the password was set answered an ECHO of 20,000 bytes
 once the password is removed; a client that sends SETs 4,096 to a write and does not
 read, closed at once; one that sends a SET to a write, as unit/auth's test sends them,
-closed within 64 MB (with replies sent from the loop: closed, or its connection stalled,
-another client served and no line logged for it); and the lines logged, one for each
+closed within 64 MB, a socket that takes nothing for 5 s counted as stalled (with
+replies sent from the loop: closed, or its connection stalled, another client served
+and no line logged for it); and the lines logged, one for each
 client closed, at WARNING, with Redis's fields in Redis's order and the same flags,
 database, name, subscriptions, transaction, command, user, redirect and protocol.
 Main's build fails 9 of its comparisons. The runtime's own test,
 `tests/io/tcp_held.bend` (on C): nothing held before a post, part of a post of 1 MiB
 held while the peer reads nothing (no more than was posted), nothing once it has read
-it all.
+it all; and `tests/io/tcp_abort.bend` (on both lanes): a close with nothing unread ends
+the peer's stream, and the same close after `TCP.abort` resets the connection, the
+peer's read failing.
 
 The proofs are as before. No law changed.
 
 **What it costs.** Nothing on a request's path: an answer to a client that must
-authenticate reads what its socket holds, and every other answer goes as it went. GET,
-SET and INCR take 3,572, 4,365 and 4,662 instructions a request, where main's take
-3,574, 4,365 and 4,658 (with 100 clients in BLPOP, GET 3,685 and SET 4,524, where main's
-take 3,683 and 4,523).
+authenticate reads what its socket holds, a client over the limit has its socket set to
+abort, and every other answer goes as it went. GET, SET and INCR take 3,571, 4,363 and
+4,655 instructions a request, where main's take 3,574, 4,365 and 4,658 (with 100 clients
+in BLPOP, GET 3,681 and SET 4,522, where main's take 3,683 and 4,523).
 
 ## 3zzzzzf. The append-only directory made at the start, as Redis 7 makes it
 

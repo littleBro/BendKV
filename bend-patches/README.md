@@ -558,22 +558,28 @@ They apply in order, each on top of the one before:
    ENOENT; on both lanes). A program that calls neither compiles to the C it compiled
    to before. BendKV makes `appenddirname` at a start with `appendonly yes` where it is
    not there, as Redis 7 does (FINDINGS.md, section 3zzzzzf).
-39. **`tcp-held.patch`** — what a socket's writer holds, as an effect. `TCP.held(sock)`
-   gives the bytes posted to `sock` (`TCP.post`) that its loop's writer holds, the
-   socket having had no room for them: what its peer has not read past the socket's
-   buffers, as a Redis client's output buffer holds it. The writer counts them as it
-   holds a post and as it sends what it held (a count for each fd beside the writer's
-   `held`, which the loop reads with an atomic load); 0 when it holds none of `sock`'s,
-   before the loop has a writer, and on JS, whose post waits for its bytes to go.
-   `bend2/base.bend` (+9), `bend2/comp.ts` (+35/−3), `bend2/effs/tcp_held.c` and `.js`
-   (new), and the test `tests/io/tcp_held.bend` (nothing held before a post; a post of
-   1 MiB to a socket whose peer reads nothing, its send buffer made small by an effect
-   of the test's own, `tcp_held_buf.c`, leaves the writer holding part of it, no more
-   than was posted; nothing once the peer has read it all; on C alone). The writer
-   counts in every program that calls `TCP.post`, on the path a post takes only when
-   its socket has no room. BendKV closes a client that must authenticate whose replies
-   would pass 16 KB with what its socket holds, as Redis 7.2.16 does (FINDINGS.md,
-   section 3zzzzze).
+39. **`tcp-held.patch`** — what a socket's writer holds, as an effect, and an abortive
+   close. `TCP.held(sock)` gives the bytes posted to `sock` (`TCP.post`) that its
+   loop's writer holds, the socket having had no room for them: what its peer has not
+   read past the socket's buffers, as a Redis client's output buffer holds it. The
+   writer counts them as it holds a post and as it sends what it held (a count for each
+   fd beside the writer's `held`, which the loop reads with an atomic load); 0 when it
+   holds none of `sock`'s, before the loop has a writer, and on JS, whose post waits for
+   its bytes to go. `TCP.abort(sock)` sets `sock` to close abortively (`SO_LINGER` on, a
+   time of 0, on both lanes): its close resets the connection, whatever its buffers
+   hold, where a close with nothing unread would end the stream behind the bytes the
+   peer has not taken. `bend2/base.bend` (+17), `bend2/comp.ts` (+35/−3),
+   `bend2/effs/tcp_held.c` and `.js` and `bend2/effs/tcp_abort.c` and `.js` (new), and
+   the tests `tests/io/tcp_held.bend` (nothing held before a post; a post of 1 MiB to a
+   socket whose peer reads nothing, its send buffer made small by an effect of the
+   test's own, `tcp_held_buf.c`, leaves the writer holding part of it, no more than was
+   posted; nothing once the peer has read it all; on C alone) and
+   `tests/io/tcp_abort.bend` (a close with nothing unread ends the peer's stream; a
+   socket set to abort and closed so resets the connection, the peer's read failing; on
+   both lanes). The writer counts in every program that calls `TCP.post`, on the path a
+   post takes only when its socket has no room. BendKV closes a client that must
+   authenticate whose replies would pass 16 KB with what its socket holds, resetting
+   its connection, as Redis 7.2.16 does (FINDINGS.md, section 3zzzzze).
 
 What the patches do and what they give is worked through in
 [../PERFORMANCE.md](../docs/PERFORMANCE.md), sections 3–6, 7.7–7.17, 7.23–7.25, 16, 39,
@@ -623,8 +629,9 @@ the thirty-fourth changes only a build with AddressSanitizer, the thirty-fifth
 only adds a native (`Clock.us`), and the thirty-sixth changes `TCP.listen` (IPv6) and
 `TCP.name` (unix sockets) and adds the effects `TCP.listen_unix` and `IO.notify`, and
 the thirty-seventh only adds the effect `IO.signal`, the thirty-eighth only adds
-the effects `File.mkdir` and `File.rmdir`, and the thirty-ninth adds the effect
-`TCP.held` and has the writer of a program that calls `TCP.post` count what it holds.
+the effects `File.mkdir` and `File.rmdir`, and the thirty-ninth adds the effects
+`TCP.held` and `TCP.abort` and has the writer of a program that calls `TCP.post` count
+what it holds.
 The theory does not change:
 `String` in the proofs is still a list, and `IO` a function of `R` and `k`.
 

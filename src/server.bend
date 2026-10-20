@@ -14838,15 +14838,20 @@ def conn_oops(on: Bool, s: Socket, +ln: Link, msg: String) -> IO(Unit):
 # the replies not written (closeClientOnOutputBufferLimitReached, with
 # its line). So a batch's replies that, with those its socket still holds
 # (TCP.held, the writer's: the bytes of the client's earlier batches the
-# socket had no room for), pass 16 KB are not posted: the actor is told
-# (Over), which logs Redis's line and shuts the socket down as CLIENT KILL
-# does, and the connection ends, reading nothing more: what the client
-# sent after is left unread, so that the socket's close resets the
-# connection, as Redis's does (a close with nothing unread would leave a
-# client that sends and does not read waiting on a window shut for good).
-# A client that does not read is closed so once the socket's buffers are
-# full, and one whose batch alone answers more than 16 KB (482 NOAUTH
-# errors: a pipeline it may not send) is closed at once, as in Redis.
+# socket had no room for), pass 16 KB are not posted: the socket is set to
+# close abortively (TCP.abort), the actor is told (Over), which logs
+# Redis's line and shuts the socket down as CLIENT KILL does, and the
+# connection ends, reading nothing more. The socket's close then resets
+# the connection whatever its buffers hold, as Redis's close resets it
+# with what the client sent after unread: a close that found nothing
+# unread would queue an end behind the replies the client has not taken,
+# and a client that sends and does not read, its own buffer full, would
+# wait on it with no error (so it went on a runner of CI, whose kernel let
+# such a client's buffer grow to 32 MB, the connection having read all it
+# had sent). A client that does not read is closed so once the socket's
+# buffers are full, and one whose batch alone answers more than 16 KB (482
+# NOAUTH errors: a pipeline it may not send) is closed at once, as in
+# Redis.
 
 # the tail of a client that has not authenticated, after an answer: as
 # any client's once it has, else the bytes it holds, which it may not
@@ -14878,17 +14883,27 @@ def conn_auth.held(p: Socket & Nat, +ln: Link, +o: String, cn: S.Conn, err: Mayb
   (s, +n) = p
   conn_auth.over(Nat.is_lt(16384n, Nat.add(n, String.length(o))), s, ln, o, cn, err, rest, need)
 
-# past 16 KB, the replies are not posted: the actor is told (Over), and
-# the connection ends (its socket closes once the actor shut it down)
+# past 16 KB, the replies are not posted: the socket is set to reset the
+# connection at its close (TCP.abort), the actor is told (Over), and the
+# connection ends (its socket closes once the actor shut it down)
 @unsafe
 def conn_auth.over(over: Bool, s: Socket, +ln: Link, o: String, cn: S.Conn, err: Maybe<&2, String>, rest: P.Tail, need: Nat) -> IO(Unit):
-  match over ln:
-    case True{} Link{db, back, post, tl, id}:
+  match over:
+    case True{}:
+      do IO<Unit>:
+        p : Socket & Bool <- TCP.abort(s)
+        conn_auth.cut(p, ln)
+    case False{}:
+      conn_ans(s, ln, Some{Ans{Some{o}, cn}}, err, rest, need)
+
+@unsafe
+def conn_auth.cut(p: Socket & Bool, +ln: Link) -> IO(Unit):
+  (s, set) = p
+  match ln:
+    case Link{db, back, post, tl, id}:
       do IO<Unit>:
         sent : Bool <- Chan.send(Req, db, Over{id})
         conn_end(s, ln)
-    case False{} Link{db, back, post, tl, id}:
-      conn_ans(s, ln, Some{Ans{Some{o}, cn}}, err, rest, need)
 
 # after a batch's answer, with no protocol error: the bytes the tail held,
 # which an answer as any client's lets in (its client has authenticated,

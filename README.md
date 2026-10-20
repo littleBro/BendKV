@@ -499,12 +499,13 @@ translation stays in the trusted base.
   request past a limit has that request answered NOAUTH, where Redis refuses it with the
   protocol error (docs/FINDINGS.md, section 3zzzzn). Its replies are held to 16 KB, as
   Redis 7.2.16 holds them: a batch's replies that would pass that, with those its socket
-  still holds, are not written, the client is closed and Redis's line for it logged
-  (`Client ... scheduled to be closed ASAP for overcoming of output buffer limits.`), so
-  a pipeline of 482 commands it may not send closes it, and so does sending without
-  reading once the socket's buffers are full. Where BendKV differs: with replies sent
-  from the loop (`io-threads 1`, or `send`), a client that sends without reading may stall
-  its own connection rather than be closed (section 3zzzzze). A connection taken while
+  still holds, are not written, the client is closed, its connection reset, and Redis's
+  line for it logged (`Client ... scheduled to be closed ASAP for overcoming of output
+  buffer limits.`), so a pipeline of 482 commands it may not send closes it, and so does
+  sending without reading once the socket's buffers are full. Where BendKV differs: with
+  replies sent from the loop (`io-threads 1`, or `send`), a client that sends without
+  reading may stall its own connection rather than be closed (section 3zzzzze). A
+  connection taken while
   `maxclients` clients are connected is refused as Redis 7.2.16 refuses it: written
   `-ERR max number of clients reached` and closed, with no client id, and counted in
   INFO's `rejected_connections`; a CONFIG SET of `maxclients` holds for the next

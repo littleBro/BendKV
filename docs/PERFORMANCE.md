@@ -37,7 +37,7 @@ numbers are in [tools/](../tools/README.md).
    the thirty-seventh, SIGTERM and SIGINT (`IO.signal`, FINDINGS.md, section 3zzzf);
    the thirty-eighth, a directory made and removed (`File.mkdir`, `File.rmdir`,
    FINDINGS.md, section 3zzzzzf); the thirty-ninth, what a socket's writer holds
-   (`TCP.held`, FINDINGS.md, section 3zzzzze). The thirty-fourth
+   and an abortive close (`TCP.held`, `TCP.abort`, FINDINGS.md, section 3zzzzze). The thirty-fourth
    changes only a build with AddressSanitizer, whose heap it lets ASan check
    (FINDINGS.md, section 3zzp). Before section 14
    there were twenty patches: the sixteenth (effect pairs) was taken out in section 14,
