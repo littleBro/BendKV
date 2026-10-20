@@ -95,12 +95,15 @@ class Client:
 
 
 def answers(port, host="127.0.0.1"):
+    """whether the server answers a PING: a -LOADING reply is no answer yet,
+    since Redis's loader answers so before it reads the file, which it may
+    then refuse (aof.c runs the events at its first loop)"""
     try:
         c = Client(port, host)
         c.s.sendall(b"PING\r\n")
-        c.line()
+        line = c.line()
         c.close()
-        return True
+        return not line.startswith(b"-LOADING")
     except OSError:
         return False
 
