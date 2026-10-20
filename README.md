@@ -3,7 +3,7 @@
 A Redis-compatible key-value server written in [Bend2](https://github.com/bendlang/bend),
 whose core is formally verified.
 
-BendKV answers as Redis 7.2.16 does, byte for byte, for the commands it has: strings,
+BendKV answers as Redis 7.2.16 does, identically, for the commands it has: strings,
 hashes, lists, sets, sorted sets, streams, HyperLogLogs and GEO with their times to live,
 transactions, Pub/Sub, Lua scripts and functions, ACL users, the append-only file and the
 RDB file. It speaks RESP2 and RESP3, so `redis-cli`, `redis-benchmark` and client
@@ -23,8 +23,8 @@ Its central guarantees are proved against 68 laws:
   answer and write as specified.
 
 Bend checks the proofs, and the BendTT kernel, whose soundness is proved in Lean, checks
-them again. What the other commands answer is tested against a real `redis-server`, byte
-for byte. [What is proved](#what-is-proved) has the laws by group, and what they leave
+them again. What the other commands answer is tested against a real `redis-server`. 
+[What is proved](#what-is-proved) has the laws by group, and what they leave
 out.
 
 > **Status: research prototype.** Of the 1,812 tests of Redis 7.2.16's own suite that
